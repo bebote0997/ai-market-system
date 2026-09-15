@@ -37,3 +37,14 @@ def procesar_operacion(operacion, capital_inicial):
 		"rentabilidad": rentabilidad,
 		"capital_total": capital_total,
 	}
+
+
+def procesar_cartera(operaciones, capital_inicial):
+	resultados = []
+
+	for operacion in operaciones:
+		resultado = procesar_operacion(operacion, capital_inicial)
+		if resultado is not None:
+			resultados.append(resultado)
+
+	return resultados

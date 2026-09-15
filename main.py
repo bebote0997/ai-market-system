@@ -1,18 +1,13 @@
 from operaciones import operaciones
 from reporte import mostrar_resultado
 from config import capital_inicial
-from servicio import procesar_operacion
+from servicio import procesar_cartera
 
 
 def main():
-	# Recorre cada operacion y analiza sus datos.
-	for operacion in operaciones:
-		resultado = procesar_operacion(operacion, capital_inicial)
+	resultados = procesar_cartera(operaciones, capital_inicial)
 
-		if resultado is None:
-			print(f"Se omite {operacion.get('simbolo', '')}.")
-			continue
-
+	for resultado in resultados:
 		mostrar_resultado(
 			resultado,
 			resultado["ganancia_perdida"],

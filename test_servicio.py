@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from servicio import procesar_operacion
+from servicio import procesar_cartera, procesar_operacion
 
 
 class TestProcesarOperacion(unittest.TestCase):
@@ -44,6 +44,36 @@ class TestProcesarOperacion(unittest.TestCase):
 
 		self.assertIsNone(resultado)
 		precio_mock.assert_called_once_with("TEST")
+
+	@patch("servicio.procesar_operacion")
+	def test_procesar_cartera_devuelve_dos_resultados(self, procesar_mock):
+		operaciones = [self.operacion_valida(), self.operacion_valida()]
+		primer_resultado = {"simbolo": "TEST1"}
+		segundo_resultado = {"simbolo": "TEST2"}
+		procesar_mock.side_effect = [primer_resultado, segundo_resultado]
+
+		resultados = procesar_cartera(operaciones, 10000)
+
+		self.assertEqual(resultados, [primer_resultado, segundo_resultado])
+		self.assertEqual(procesar_mock.call_count, 2)
+
+	@patch("servicio.procesar_operacion")
+	def test_procesar_cartera_omite_resultado_none(self, procesar_mock):
+		operaciones = [self.operacion_valida(), self.operacion_valida()]
+		resultado_valido = {"simbolo": "TEST"}
+		procesar_mock.side_effect = [None, resultado_valido]
+
+		resultados = procesar_cartera(operaciones, 10000)
+
+		self.assertEqual(resultados, [resultado_valido])
+		self.assertEqual(procesar_mock.call_count, 2)
+
+	@patch("servicio.procesar_operacion")
+	def test_procesar_cartera_vacia_devuelve_lista_vacia(self, procesar_mock):
+		resultados = procesar_cartera([], 10000)
+
+		self.assertEqual(resultados, [])
+		procesar_mock.assert_not_called()
 
 
 if __name__ == "__main__":
