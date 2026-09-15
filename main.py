@@ -63,7 +63,7 @@ operaciones = [
 		"simbolo": "TSLA",
 		"mercado": "acciones",
 		"precio_entrada": 250,
-		"precio_actual": 225,
+		"precio_actual": obtener_precio_actual("TSLA"),
 		"cantidad": 4,
 	},
 ]
