@@ -21,9 +21,17 @@ def analizar_operacion(capital_inicial, precio_entrada, precio_actual, cantidad_
 
 
 def obtener_precio_actual(simbolo):
-	# Descarga los datos recientes y obtiene el ultimo cierre disponible.
-	datos = yf.Ticker(simbolo).history(period="1d")
-	return float(datos["Close"].iloc[-1])
+	try:
+		# Descarga los datos recientes y obtiene el ultimo cierre disponible.
+		datos = yf.Ticker(simbolo).history(period="1d")
+		if datos.empty or datos["Close"].empty:
+			print(f"No se pudo obtener el precio de {simbolo}.")
+			return None
+
+		return float(datos["Close"].iloc[-1])
+	except Exception as error:
+		print(f"Error al obtener el precio de {simbolo}: {error}")
+		return None
 
 
 capital_inicial = 10000
@@ -62,6 +70,10 @@ operaciones = [
 
 # Recorre cada operacion y analiza sus datos.
 for operacion in operaciones:
+	if operacion["precio_actual"] is None:
+		print(f"Se omite {operacion['simbolo']} por falta de precio.")
+		continue
+
 	_, _, ganancia_perdida, rentabilidad, _ = analizar_operacion(
 		capital_inicial,
 		operacion["precio_entrada"],
