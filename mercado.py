@@ -13,3 +13,15 @@ def obtener_precio_actual(simbolo):
 	except Exception as error:
 		print(f"Error al obtener el precio de {simbolo}: {error}")
 		return None
+
+
+def obtener_historial_precios(simbolo, periodo="1mo"):
+	try:
+		ticker = yf.Ticker(simbolo)
+		datos = ticker.history(period=periodo)
+		if datos.empty or "Close" not in datos.columns:
+			return None
+
+		return datos["Close"].copy()
+	except Exception:
+		return None
