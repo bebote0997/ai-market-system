@@ -34,3 +34,46 @@ def determinar_tendencia(precios, ventana=20):
 	if ultimo_precio < media_movil:
 		return "bajista"
 	return "neutral"
+
+
+def calcular_rsi(precios, periodo=14):
+	if precios is None or periodo <= 0:
+		return None
+
+	precios = list(precios)
+	if len(precios) < periodo + 1:
+		return None
+
+	variaciones = [
+		precios[indice] - precios[indice - 1]
+		for indice in range(1, len(precios))
+	]
+	variaciones = variaciones[-periodo:]
+
+	ganancias = [variacion for variacion in variaciones if variacion > 0]
+	perdidas = [-variacion for variacion in variaciones if variacion < 0]
+	ganancia_media = sum(ganancias) / periodo
+	perdida_media = sum(perdidas) / periodo
+
+	if perdida_media == 0 and ganancia_media > 0:
+		return 100.0
+	if ganancia_media == 0 and perdida_media > 0:
+		return 0.0
+	if ganancia_media == 0 and perdida_media == 0:
+		return 50.0
+
+	rs = ganancia_media / perdida_media
+	return float(100 - (100 / (1 + rs)))
+
+
+def calcular_volatilidad(precios):
+	if precios is None or len(precios) < 2:
+		return None
+
+	rendimientos = precios.pct_change()
+	rendimientos = rendimientos.replace([float("inf"), float("-inf")], float("nan"))
+	rendimientos = rendimientos.dropna()
+	if rendimientos.empty:
+		return None
+
+	return float(rendimientos.std() * 100)
