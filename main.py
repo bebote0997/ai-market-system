@@ -40,36 +40,42 @@ capital_inicial = 10000
 operaciones = [
 	{
 		"simbolo": "AAPL",
+		"ticker": "AAPL",
 		"mercado": "acciones",
 		"precio_entrada": 150,
-		"precio_actual": obtener_precio_actual("AAPL"),
+		"precio_actual": None,
 		"cantidad": 10,
 	},
 	{
 		"simbolo": "BTC",
+		"ticker": "BTC-USD",
 		"mercado": "criptomonedas",
 		"precio_entrada": 60000,
-		"precio_actual": obtener_precio_actual("BTC-USD"),
+		"precio_actual": None,
 		"cantidad": 0.05,
 	},
 	{
 		"simbolo": "EURUSD",
+		"ticker": "EURUSD=X",
 		"mercado": "forex",
 		"precio_entrada": 1.10,
-		"precio_actual": obtener_precio_actual("EURUSD=X"),
+		"precio_actual": None,
 		"cantidad": 1000,
 	},
 	{
 		"simbolo": "TSLA",
+		"ticker": "TSLA",
 		"mercado": "acciones",
 		"precio_entrada": 250,
-		"precio_actual": obtener_precio_actual("TSLA"),
+		"precio_actual": None,
 		"cantidad": 4,
 	},
 ]
 
 # Recorre cada operacion y analiza sus datos.
 for operacion in operaciones:
+	operacion["precio_actual"] = obtener_precio_actual(operacion["ticker"])
+
 	if operacion["precio_actual"] is None:
 		print(f"Se omite {operacion['simbolo']} por falta de precio.")
 		continue
