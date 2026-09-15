@@ -49,7 +49,7 @@ operaciones = [
 		"simbolo": "BTC",
 		"mercado": "criptomonedas",
 		"precio_entrada": 60000,
-		"precio_actual": 63000,
+		"precio_actual": obtener_precio_actual("BTC-USD"),
 		"cantidad": 0.05,
 	},
 	{
