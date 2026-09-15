@@ -3,11 +3,10 @@ from mercado import obtener_precio_actual
 from analisis import analizar_operacion
 from reporte import mostrar_resultado
 from validacion import validar_operacion
+from config import capital_inicial
 
 
 def main():
-	capital_inicial = 10000
-
 	# Recorre cada operacion y analiza sus datos.
 	for operacion in operaciones:
 		if not validar_operacion(operacion):
