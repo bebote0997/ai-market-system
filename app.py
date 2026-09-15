@@ -4,6 +4,12 @@ from operaciones import operaciones
 from config import capital_inicial
 from servicio import procesar_cartera
 from resumen import calcular_resumen_cartera
+from mercado import obtener_historial_precios
+from tecnico import (
+	calcular_variacion_periodo,
+	calcular_media_movil,
+	determinar_tendencia,
+)
 
 
 st.set_page_config(
@@ -74,3 +80,35 @@ else:
 		for resultado in resultados
 	]
 	st.bar_chart(grafico_resultados, x="Símbolo", y="Rentabilidad %")
+
+	st.subheader("Análisis de mercado")
+	simbolos = [resultado["simbolo"] for resultado in resultados]
+	simbolo_seleccionado = st.selectbox("Activo", simbolos)
+	periodo = st.selectbox("Período", ["1mo", "3mo", "6mo", "1y"])
+	resultado_seleccionado = next(
+		resultado
+		for resultado in resultados
+		if resultado["simbolo"] == simbolo_seleccionado
+	)
+	historial = obtener_historial_precios(
+		resultado_seleccionado["ticker"],
+		periodo,
+	)
+
+	if historial is None:
+		st.warning("No se pudo obtener el histórico del activo seleccionado.")
+	else:
+		variacion = calcular_variacion_periodo(historial)
+		media_movil = calcular_media_movil(historial)
+		tendencia = determinar_tendencia(historial)
+		ultimo_precio = float(historial.iloc[-1])
+
+		metrica_ultimo_precio, metrica_variacion, metrica_tendencia = st.columns(3)
+		metrica_ultimo_precio.metric("Último precio", f"${ultimo_precio:,.2f}")
+		metrica_variacion.metric("Variación del período", f"{variacion:.2f}%")
+		metrica_tendencia.metric("Tendencia", tendencia)
+
+		if media_movil is not None:
+			st.write(f"Media móvil 20: ${media_movil:,.2f}")
+
+		st.line_chart(historial)
