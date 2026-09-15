@@ -1,5 +1,5 @@
-import yfinance as yf
 from operaciones import operaciones
+from mercado import obtener_precio_actual
 
 
 def analizar_operacion(capital_inicial, precio_entrada, precio_actual, cantidad_acciones):
@@ -19,20 +19,6 @@ def analizar_operacion(capital_inicial, precio_entrada, precio_actual, cantidad_
 	capital_total = capital_inicial + ganancia_perdida
 
 	return capital_utilizado, valor_actual, ganancia_perdida, rentabilidad, capital_total
-
-
-def obtener_precio_actual(simbolo):
-	try:
-		# Descarga los datos recientes y obtiene el ultimo cierre disponible.
-		datos = yf.Ticker(simbolo).history(period="1d")
-		if datos.empty or datos["Close"].empty:
-			print(f"No se pudo obtener el precio de {simbolo}.")
-			return None
-
-		return float(datos["Close"].iloc[-1])
-	except Exception as error:
-		print(f"Error al obtener el precio de {simbolo}: {error}")
-		return None
 
 
 capital_inicial = 10000
