@@ -56,7 +56,7 @@ operaciones = [
 		"simbolo": "EURUSD",
 		"mercado": "forex",
 		"precio_entrada": 1.10,
-		"precio_actual": 1.12,
+		"precio_actual": obtener_precio_actual("EURUSD=X"),
 		"cantidad": 1000,
 	},
 	{
