@@ -1,32 +1,23 @@
 from operaciones import operaciones
-from mercado import obtener_precio_actual
-from analisis import analizar_operacion
 from reporte import mostrar_resultado
-from validacion import validar_operacion
 from config import capital_inicial
+from servicio import procesar_operacion
 
 
 def main():
 	# Recorre cada operacion y analiza sus datos.
 	for operacion in operaciones:
-		if not validar_operacion(operacion):
-			print(f"Se omite {operacion.get('simbolo', '')} por datos invalidos.")
+		resultado = procesar_operacion(operacion, capital_inicial)
+
+		if resultado is None:
+			print(f"Se omite {operacion.get('simbolo', '')}.")
 			continue
 
-		operacion["precio_actual"] = obtener_precio_actual(operacion["ticker"])
-
-		if operacion["precio_actual"] is None:
-			print(f"Se omite {operacion['simbolo']} por falta de precio.")
-			continue
-
-		_, _, ganancia_perdida, rentabilidad, _ = analizar_operacion(
-			capital_inicial,
-			operacion["precio_entrada"],
-			operacion["precio_actual"],
-			operacion["cantidad"],
+		mostrar_resultado(
+			resultado,
+			resultado["ganancia_perdida"],
+			resultado["rentabilidad"],
 		)
-
-		mostrar_resultado(operacion, ganancia_perdida, rentabilidad)
 
 
 if __name__ == "__main__":
