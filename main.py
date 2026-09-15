@@ -1,6 +1,7 @@
 from operaciones import operaciones
 from mercado import obtener_precio_actual
 from analisis import analizar_operacion
+from reporte import mostrar_resultado
 
 
 def main():
@@ -21,13 +22,7 @@ def main():
 			operacion["cantidad"],
 		)
 
-		print(f"Simbolo: {operacion['simbolo']}")
-		print(f"Mercado: {operacion['mercado']}")
-		print(f"Precio de entrada: {operacion['precio_entrada']}")
-		print(f"Precio actual: {operacion['precio_actual']}")
-		print(f"Ganancia o perdida: ${ganancia_perdida:.2f}")
-		print(f"Rentabilidad: {rentabilidad:.2f}%")
-		print()
+		mostrar_resultado(operacion, ganancia_perdida, rentabilidad)
 
 
 if __name__ == "__main__":
