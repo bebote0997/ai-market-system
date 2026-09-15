@@ -1,3 +1,6 @@
+import yfinance as yf
+
+
 def analizar_operacion(capital_inicial, precio_entrada, precio_actual, cantidad_acciones):
 	# Calcula el capital utilizado para comprar las acciones.
 	capital_utilizado = precio_entrada * cantidad_acciones
@@ -17,6 +20,12 @@ def analizar_operacion(capital_inicial, precio_entrada, precio_actual, cantidad_
 	return capital_utilizado, valor_actual, ganancia_perdida, rentabilidad, capital_total
 
 
+def obtener_precio_actual(simbolo):
+	# Descarga los datos recientes y obtiene el ultimo cierre disponible.
+	datos = yf.Ticker(simbolo).history(period="1d")
+	return float(datos["Close"].iloc[-1])
+
+
 capital_inicial = 10000
 
 # Lista de operaciones, donde cada operacion es un diccionario.
@@ -25,7 +34,7 @@ operaciones = [
 		"simbolo": "AAPL",
 		"mercado": "acciones",
 		"precio_entrada": 150,
-		"precio_actual": 165,
+		"precio_actual": obtener_precio_actual("AAPL"),
 		"cantidad": 10,
 	},
 	{
