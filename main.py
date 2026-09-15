@@ -70,6 +70,14 @@ operaciones = [
 		"precio_actual": None,
 		"cantidad": 4,
 	},
+	{
+		"simbolo": "MSFT",
+		"ticker": "MSFT",
+		"mercado": "acciones",
+		"precio_entrada": 400,
+		"precio_actual": None,
+		"cantidad": 5,
+	},
 ]
 
 # Recorre cada operacion y analiza sus datos.
