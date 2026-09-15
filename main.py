@@ -2,6 +2,7 @@ from operaciones import operaciones
 from mercado import obtener_precio_actual
 from analisis import analizar_operacion
 from reporte import mostrar_resultado
+from validacion import validar_operacion
 
 
 def main():
@@ -9,6 +10,10 @@ def main():
 
 	# Recorre cada operacion y analiza sus datos.
 	for operacion in operaciones:
+		if not validar_operacion(operacion):
+			print(f"Se omite {operacion.get('simbolo', '')} por datos invalidos.")
+			continue
+
 		operacion["precio_actual"] = obtener_precio_actual(operacion["ticker"])
 
 		if operacion["precio_actual"] is None:
