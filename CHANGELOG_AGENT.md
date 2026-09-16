@@ -74,6 +74,20 @@
 
 - `timestamp`: 2026-09-16
 - `agent`: GitHub Copilot
+- `phase`: Fase 4.1 hardening
+- `task`: Eliminar equity hardcodeada, exigir barras cerradas en Trade Planner, validar lineage/run_id, symbol, timeframe y as_of, y conservar PLAN_UNAVAILABLE.
+- `tests_before`: 278 tests OK.
+- `tests_after`: 282 tests OK.
+- `files_created`: ninguno.
+- `files_modified`: `core/timeframes.py`, `agents/structure_agent.py`, `agents/liquidity_agent.py`, `agents/trade_planner.py`, `agents/setup_validator.py`, `floor/orchestrator.py`, `core/contracts.py`, `test_trade_planner.py`, `test_setup_validator.py`, `test_orchestrator.py`, `CHANGELOG_AGENT.md`.
+- `decisions`: equity ahora es argumento explícito del Orchestrator; equity inválida falla cerrado. Barras forming no pueden ser planned entry. Lineage y timestamps inconsistentes producen NO_SETUP. VALID_SETUP sin plan produce PLAN_UNAVAILABLE.
+- `warnings`: warnings legacy de Streamlit/pandas; sin broker, scheduler ni ejecución real.
+- `next_phase`: Fase 5 — Paper Execution y Trade Manager.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
 - `phase`: Pre-Phase-4 Audit
 - `task`: Auditoría integral y hardening de la base Fase 0-3.
 - `tests_before`: 253 tests OK.

@@ -10,7 +10,7 @@ import math
 import pandas as pd
 
 from core.contracts import AgentMessage
-from core.timeframes import AUTHORIZED_TIMEFRAMES
+from core.timeframes import AUTHORIZED_TIMEFRAMES, mask_hasta_as_of
 
 
 REQUIRED_COLUMNS = ("Open", "High", "Low", "Close")
@@ -27,12 +27,10 @@ def _closed_frame(datos, as_of=None):
         return None
     frame = datos.sort_index().copy()
     if as_of is not None:
-        cutoff = pd.Timestamp(as_of)
-        if frame.index.tz is None and cutoff.tzinfo is not None:
-            cutoff = cutoff.tz_localize(None)
-        elif frame.index.tz is not None and cutoff.tzinfo is None:
-            cutoff = cutoff.tz_localize("UTC")
-        frame = frame[frame.index <= cutoff]
+        mask = mask_hasta_as_of(frame.index, as_of)
+        if mask is None:
+            return None
+        frame = frame[mask]
     if "is_closed" in frame.columns:
         frame = frame[frame["is_closed"] == True]  # noqa: E712
     frame = frame[list(REQUIRED_COLUMNS)].apply(pd.to_numeric, errors="coerce")
@@ -144,7 +142,7 @@ def _retracement(frame, highs, lows):
 
 
 def analizar_estructura(datos, symbol="UNKNOWN", timeframe="unknown", run_id="structure", as_of=None):
-    timestamp = datetime.now(timezone.utc)
+    timestamp = as_of if isinstance(as_of, datetime) and as_of.tzinfo is not None else datetime.now(timezone.utc)
     if timeframe not in AUTHORIZED_TIMEFRAMES:
         return AgentMessage("1.0", run_id, timestamp, symbol, timeframe, "structure", "ERROR", warnings=("unsupported_timeframe",))
     frame = _closed_frame(datos, as_of)

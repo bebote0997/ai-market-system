@@ -38,6 +38,13 @@ class TestOrchestrator(unittest.TestCase):
         report = run(self.snapshot(), datetime(2026, 1, 1, 5, tzinfo=timezone.utc), "TEST", InMemoryMacroNewsProvider(), self.instrument(None), crear_configuracion_riesgo_v2())
         self.assertNotEqual(report.final_status, "APPROVED")
 
+    def test_equity_is_explicit_and_invalid_equity_fails_closed(self):
+        as_of = datetime(2026, 1, 1, 5, tzinfo=timezone.utc)
+        report = run(self.snapshot(), as_of, "TEST", InMemoryMacroNewsProvider(), self.instrument(), crear_configuracion_riesgo_v2())
+        self.assertEqual(report.final_status, "NO_SETUP")
+        valid = run(self.snapshot(), as_of, "TEST", InMemoryMacroNewsProvider(), self.instrument(), crear_configuracion_riesgo_v2(), equity=50000.0)
+        self.assertIsNotNone(valid)
+
 
 if __name__ == "__main__":
     unittest.main()

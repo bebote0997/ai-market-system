@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from core.contracts import SetupAssessment, TradePlan
+from core.timeframes import mask_hasta_as_of
 
 
 def crear_trade_plan(setup, datos_5m, symbol, run_id, as_of):
@@ -15,12 +16,13 @@ def crear_trade_plan(setup, datos_5m, symbol, run_id, as_of):
     if frame is None or frame.empty or not isinstance(frame.index, type(frame.index)):
         return None
     frame = frame.sort_index()
-    cutoff = pd.Timestamp(as_of)
-    if frame.index.tz is None and cutoff.tzinfo is not None:
-        cutoff = cutoff.tz_localize(None)
-    elif frame.index.tz is not None and cutoff.tzinfo is None:
-        cutoff = cutoff.tz_localize("UTC")
-    frame = frame[frame.index <= cutoff]
+    mask = mask_hasta_as_of(frame.index, as_of)
+    if mask is None:
+        return None
+    if "is_closed" in frame.columns:
+        frame = frame.loc[mask & (frame["is_closed"] == True)]  # noqa: E712
+    else:
+        frame = frame.loc[mask]
     if frame.empty or "Close" not in frame.columns:
         return None
     entry = frame["Close"].iloc[-1]
@@ -41,4 +43,4 @@ def crear_trade_plan(setup, datos_5m, symbol, run_id, as_of):
         target = entry - 3 * (stop - entry)
     else:
         return None
-    return TradePlan("1.0", symbol, setup.side, "5m", entry, stop, target, 3.0, evidence=setup.evidence, invalidation=str(stop))
+    return TradePlan("1.0", symbol, setup.side, "5m", entry, stop, target, 3.0, evidence=setup.evidence, invalidation=str(stop), run_id=run_id, as_of=as_of)

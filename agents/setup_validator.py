@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from core.contracts import AgentMessage, SetupAssessment
 
 VALID_STATUSES = {"NO_SETUP", "WATCH", "VALID_SETUP"}
@@ -14,6 +16,23 @@ def _payload(message):
     return None
 
 
+def _report_valid(message, run_id, symbol, timeframe, as_of):
+    if not isinstance(message, AgentMessage):
+        return False
+    if message.run_id != run_id or message.symbol != symbol or message.timeframe != timeframe:
+        return False
+    if message.status not in {"OK", "PARTIAL", "NO_DATA", "ERROR"}:
+        return False
+    try:
+        report_time = pd.Timestamp(message.timestamp)
+        cutoff = pd.Timestamp(as_of)
+        if report_time.tzinfo is None or cutoff.tzinfo is None:
+            return False
+        return report_time <= cutoff
+    except (TypeError, ValueError):
+        return False
+
+
 def evaluar_setup(structure_reports, liquidity_reports, macro_report, symbol, run_id, as_of):
     structure_reports = structure_reports or {}
     liquidity_reports = liquidity_reports or {}
@@ -21,6 +40,25 @@ def evaluar_setup(structure_reports, liquidity_reports, macro_report, symbol, ru
     warnings = []
     if len(structure_reports) < 3 or len(liquidity_reports) < 3:
         return SetupAssessment("1.0", run_id, as_of, symbol, "NO_SETUP", None, timeframes, warnings=("missing_timeframe",), data_quality={"structure_timeframes": tuple(structure_reports), "liquidity_timeframes": tuple(liquidity_reports)})
+    if any(
+        not _report_valid(structure_reports.get(tf), run_id, symbol, tf, as_of)
+        or not _report_valid(liquidity_reports.get(tf), run_id, symbol, tf, as_of)
+        for tf in timeframes
+    ):
+        return SetupAssessment("1.0", run_id, as_of, symbol, "NO_SETUP", None, timeframes, warnings=("scout_lineage_invalid",))
+    if macro_report is not None and (
+        not isinstance(macro_report, AgentMessage)
+        or macro_report.run_id != run_id
+        or macro_report.symbol != symbol
+        or macro_report.status not in {"OK", "PARTIAL", "NO_DATA", "ERROR"}
+    ):
+        return SetupAssessment("1.0", run_id, as_of, symbol, "NO_SETUP", None, timeframes, warnings=("macro_lineage_invalid",))
+    if macro_report is not None:
+        try:
+            if pd.Timestamp(macro_report.timestamp) > pd.Timestamp(as_of):
+                return SetupAssessment("1.0", run_id, as_of, symbol, "NO_SETUP", None, timeframes, warnings=("macro_future_timestamp",))
+        except (TypeError, ValueError):
+            return SetupAssessment("1.0", run_id, as_of, symbol, "NO_SETUP", None, timeframes, warnings=("macro_timestamp_invalid",))
     if any(report.status in {"ERROR", "NO_DATA"} for report in list(structure_reports.values()) + list(liquidity_reports.values())):
         return SetupAssessment("1.0", run_id, as_of, symbol, "NO_SETUP", None, timeframes, warnings=("scout_unavailable",))
     if macro_report is not None and macro_report.status == "ERROR":

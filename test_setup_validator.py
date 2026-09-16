@@ -37,6 +37,12 @@ class TestSetupValidator(unittest.TestCase):
         result = evaluar_setup(structure, liquidity, None, "TEST", "run", datetime(2026, 1, 1, tzinfo=timezone.utc))
         self.assertEqual(result.side, "SHORT")
 
+    def test_mismatched_lineage_symbol_timeframe_and_future_fail_closed(self):
+        structure, liquidity = self.scouts()
+        structure["1h"] = AgentMessage("1.0", "other", datetime(2026, 1, 1, tzinfo=timezone.utc), "OTHER", "1h", "structure", "OK", evidence=structure["1h"].evidence)
+        result = evaluar_setup(structure, liquidity, None, "TEST", "run", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        self.assertEqual(result.status, "NO_SETUP")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -79,7 +79,6 @@ Resultado implementado:
 Aceptación: cumplida con `278 tests OK`; ejecución deshabilitada y sin componentes de Fase 5.
 
 ## Pre-Phase-4 Audit — PASSED
-
 Auditoría integral completada antes de iniciar Fase 4. BOS, retracement, liquidez, Macro/News, no-lookahead, timestamps y deduplicación fueron revisados con `268 tests OK`. La deuda restante está documentada en `AUDIT_PRE_PHASE4.md` y no bloquea el inicio de Fase 4.
 
 ## Fase 5 — Paper Execution y Trade Manager

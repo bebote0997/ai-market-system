@@ -13,7 +13,7 @@ class TestTradePlanner(unittest.TestCase):
 
     def datos(self):
         index = pd.date_range("2026-01-01", periods=2, freq="h")
-        return pd.DataFrame({"Close": [100.0, 101.0]}, index=index)
+        return pd.DataFrame({"Close": [100.0, 101.0], "is_closed": [True, True]}, index=index)
 
     def test_long_short_and_rr(self):
         self.assertEqual(crear_trade_plan(self.setup("LONG"), {"data": self.datos()}, "TEST", "run", self.datos().index[-1]).side, "LONG")
@@ -33,6 +33,17 @@ class TestTradePlanner(unittest.TestCase):
         datos = self.datos()
         plan = crear_trade_plan(self.setup("LONG"), {"data": datos}, "TEST", "run", datos.index[0])
         self.assertEqual(plan.entry, 100.0)
+
+    def test_forming_last_bar_is_not_used(self):
+        datos = self.datos()
+        datos.loc[datos.index[-1], "is_closed"] = False
+        plan = crear_trade_plan(self.setup("LONG"), {"data": datos}, "TEST", "run", datos.index[-1])
+        self.assertEqual(plan.entry, 100.0)
+
+    def test_only_forming_bars_return_no_plan(self):
+        datos = self.datos()
+        datos["is_closed"] = False
+        self.assertIsNone(crear_trade_plan(self.setup("LONG"), {"data": datos}, "TEST", "run", datos.index[-1]))
 
 
 if __name__ == "__main__":

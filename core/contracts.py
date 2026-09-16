@@ -45,6 +45,8 @@ class TradePlan:
     invalidation: str = ""
     evidence: tuple = ()
     cancel_conditions: tuple = ()
+    run_id: Optional[str] = None
+    as_of: Optional[datetime] = None
 
 
 @dataclass(frozen=True)
