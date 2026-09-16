@@ -45,13 +45,26 @@ Resultado implementado:
 
 Aceptación: cumplida con `248 tests OK`. No se implementaron order blocks arbitrarios, señales ni órdenes.
 
-## Fase 3 — NEXT: Macro/News Agent
+## Fase 3 — COMPLETADA: Macro/News Agent
 
 Añadir proveedor de noticias/calendario con fuente, timestamp y calidad. La ausencia de información debe producir `NO_DATA`, nunca contexto inventado.
 
+Resultado implementado:
+
+- Contratos versionados `MacroEvent`, `NewsItem` y `MacroNewsReport`.
+- `MacroNewsProvider` y `InMemoryMacroNewsProvider` sin dependencia de red.
+- Normalización UTC y separación entre event/published/source/received timestamps.
+- Freshness `UPCOMING`, `ACTIVE_WINDOW`, `RECENT`, `STALE`.
+- Relevancia determinista para USD/EUR y símbolos objetivo.
+- Impacto desconocido como `UNKNOWN`, sin inventar `HIGH`.
+- Deduplicación determinista por ID o campos disponibles.
+- Estados `OK`, `PARTIAL`, `NO_DATA`, `ERROR` y protección contra look-ahead.
+
+Aceptación: cumplida con `266 tests OK`. No se implementaron componentes de Fase 4.
+
 Aceptación: ninguna noticia sin fuente; datos stale o ausentes quedan visibles como warnings/`NO_DATA`.
 
-## Fase 4 — Setup Validator, Trade Planner y Orchestrator
+## Fase 4 — NEXT: Setup Validator, Trade Planner y Orchestrator
 
 Conectar los tres scouts en un orquestador. Producir `NO_SETUP`, `WATCH` o `VALID_SETUP` y planes LONG/SHORT estructurados. Todo plan pasa por Risk Engine.
 

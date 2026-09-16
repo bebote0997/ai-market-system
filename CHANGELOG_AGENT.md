@@ -49,6 +49,25 @@
 
 - `timestamp`: 2026-09-16
 - `agent`: GitHub Copilot
+- `phase`: Fase 3
+- `task`: Implementar Macro/News Agent determinista con proveedor normalizado, freshness, relevancia y deduplicación.
+- `tests_before`: 253 tests OK.
+- `tests_after`: 266 tests OK.
+- `files_created`: `data/macro_news.py`, `agents/macro_news_agent.py`, `test_macro_news.py`.
+- `files_modified`: `core/contracts.py`, `ROADMAP.md`, `CHANGELOG_AGENT.md`.
+- `provider_contract`: `MacroNewsProvider` con `macro_events()` y `news_items()`; `InMemoryMacroNewsProvider` para tests sin red.
+- `timestamp_policy`: fuente/evento/publicación/recepción separados; timestamps timezone-aware normalizados a UTC; datos futuros rechazados.
+- `no_lookahead_policy`: solo se aceptan datos cuyo `received_at` sea <= `as_of`; actuals sobre eventos futuros se rechazan.
+- `freshness_policy`: ventanas explícitas UPCOMING 24h, ACTIVE_WINDOW 1h, RECENT 24h y STALE posterior.
+- `dedup_policy`: IDs de proveedor cuando existen; fallback estable con campos disponibles.
+- `relevance_policy`: categorías macro explícitas y relevancia USD/EUR/símbolo; sin causalidad ni dirección de precio.
+- `warnings`: warnings legacy de Streamlit y mensajes esperados de tests; sin red ni claves API.
+- `next_phase`: Fase 4 — Setup Validator, Trade Planner y Orchestrator.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
 - `phase`: Fase 2.1 closure gate
 - `task`: Formalizar Break of Structure, retracement y parsing temporal sin warning ambiguo.
 - `tests_before`: 248 tests OK.

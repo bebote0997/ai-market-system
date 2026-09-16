@@ -75,3 +75,48 @@ class AgentMessage:
     data_quality: dict = field(default_factory=dict)
     warnings: tuple = ()
     reasoning_summary: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class MacroEvent:
+    schema_version: str
+    event_id: Optional[str]
+    source: Optional[str]
+    source_timestamp: Optional[datetime]
+    event_timestamp: Optional[datetime]
+    received_at: Optional[datetime]
+    title: Optional[str]
+    category: Optional[str]
+    currency: Optional[str]
+    impact: Optional[str]
+    actual: Optional[Any] = None
+    forecast: Optional[Any] = None
+    previous: Optional[Any] = None
+    data_quality: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    schema_version: str
+    news_id: Optional[str]
+    source: Optional[str]
+    published_at: Optional[datetime]
+    received_at: Optional[datetime]
+    headline: Optional[str]
+    category: Optional[str]
+    symbols: Tuple[str, ...] = ()
+    relevance: Tuple[str, ...] = ()
+    data_quality: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MacroNewsReport:
+    schema_version: str
+    run_id: str
+    timestamp: datetime
+    symbol: str
+    status: str
+    macro_events: Tuple[dict, ...] = ()
+    news_items: Tuple[dict, ...] = ()
+    data_quality: dict = field(default_factory=dict)
+    warnings: Tuple[str, ...] = ()
