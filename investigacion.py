@@ -46,6 +46,46 @@ def ejecutar_investigacion(
 	}
 
 
+def ejecutar_investigacion_multiple(
+	tickers,
+	periodo="2y",
+	minimo_historial=50,
+	horizontes=(1, 5, 10),
+):
+	if not tickers:
+		return {}
+
+	resultados = {}
+	procesados = set()
+	for ticker in tickers:
+		if not isinstance(ticker, str):
+			continue
+		ticker_normalizado = ticker.strip().upper()
+		if not ticker_normalizado or ticker_normalizado in procesados:
+			continue
+
+		procesados.add(ticker_normalizado)
+		try:
+			resultado = ejecutar_investigacion(
+				ticker_normalizado,
+				periodo=periodo,
+				minimo_historial=minimo_historial,
+				horizontes=horizontes,
+			)
+		except Exception:
+			resultado = None
+
+		if resultado is None:
+			resultados[ticker_normalizado] = {
+				"ticker": ticker_normalizado,
+				"error": "datos_no_disponibles",
+			}
+		else:
+			resultados[ticker_normalizado] = resultado
+
+	return resultados
+
+
 def _formatear_porcentaje(valor):
 	return "N/D" if valor is None else f"{valor:.2f}%"
 
@@ -119,15 +159,57 @@ def _mostrar_investigacion(investigacion, horizontes):
 			print()
 
 
+def _mostrar_investigaciones_multiples(investigaciones):
+	nombres_condiciones = {
+		"tendencia": "Tendencia",
+		"rsi": "RSI",
+		"macd": "MACD",
+		"volumen": "Volumen",
+		"estructura_precio": "Estructura de precio",
+	}
+
+	for ticker, investigacion in investigaciones.items():
+		print("=" * 40)
+		print(f"Ticker: {ticker}")
+		if "error" in investigacion:
+			print(f"Error: {investigacion['error']}")
+			print()
+			continue
+
+		print(f"Filas históricas: {investigacion['filas_historicas']}")
+		print(f"Evaluaciones: {investigacion['evaluaciones']}")
+		print("\nRESUMEN POR CONDICIÓN")
+
+		for condicion, estados in investigacion["estadisticas_condiciones"].items():
+			print(f"\n{nombres_condiciones.get(condicion, condicion)}")
+			for estado, grupo in estados.items():
+				estadistica = grupo["horizontes"].get(5)
+				if estadistica is None:
+					continue
+
+				print(f"Estado: {estado}")
+				print(f"Muestras: {estadistica['muestras']}")
+				print(
+					f"Retorno medio 5: "
+					f"{_formatear_porcentaje(estadistica['retorno_medio'])}"
+				)
+				print(
+					f"Retorno mediano 5: "
+					f"{_formatear_porcentaje(estadistica['retorno_mediano'])}"
+				)
+				print(
+					f"Tasa positiva 5: "
+					f"{_formatear_porcentaje(estadistica['tasa_positiva'])}"
+				)
+
+
 if __name__ == "__main__":
+	tickers = ["AAPL", "MSFT", "TSLA", "BTC-USD", "EURUSD=X"]
 	horizontes = (1, 5, 10)
-	investigacion = ejecutar_investigacion(
-		"AAPL",
+	investigaciones = ejecutar_investigacion_multiple(
+		tickers,
 		periodo="2y",
 		minimo_historial=50,
 		horizontes=horizontes,
 	)
-	if investigacion is None:
-		print("No se pudo obtener información histórica para AAPL.")
-	else:
-		_mostrar_investigacion(investigacion, horizontes)
+	_mostrar_investigaciones_multiples(investigaciones)
