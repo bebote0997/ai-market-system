@@ -49,6 +49,8 @@ def calcular_metricas_estrategia(resultado_simulacion):
 		if not isinstance(punto, dict) or not _numero_valido(punto.get("capital")):
 			continue
 		capital = float(punto["capital"])
+		if maximo_previo is None and capital <= 0:
+			return None
 		if maximo_previo is None or capital > maximo_previo:
 			maximo_previo = capital
 		drawdown_pct = (capital - maximo_previo) / maximo_previo * 100

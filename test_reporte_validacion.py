@@ -26,8 +26,12 @@ class TestCrearReporteComparativo(unittest.TestCase):
 					"filas_entrenamiento": 70,
 					"filas_prueba": 30,
 				},
-				"entrenamiento": {"evaluaciones": [1, 2]},
-				"prueba": {"evaluaciones": [3]},
+				"entrenamiento": {"evaluaciones": [1, 2], "estadisticas_condiciones": {
+                    "rsi": {"favorable": {"horizontes": {5: self.estadistica(1.0)}}}
+                }},
+                "prueba": {"evaluaciones": [3], "estadisticas_condiciones": {
+                    "rsi": {"favorable": {"horizontes": {5: self.estadistica(2.0)}}}
+                }},
 			},
 			"resumen": {
 				"comparacion_condiciones": {
@@ -68,9 +72,9 @@ class TestCrearReporteComparativo(unittest.TestCase):
 		})
 		self.assertEqual(repr(investigaciones), original)
 
-	def test_condiciones_ausentes_se_conservan_sin_recalcular(self):
+	def test_metricas_ausentes_se_conservan_en_horizonte_solicitado(self):
 		investigacion = self.investigacion()
-		investigacion["resumen"]["comparacion_condiciones"]["rsi"]["favorable"]["entrenamiento"]["retorno_medio"] = None
+		investigacion["validacion"]["entrenamiento"]["estadisticas_condiciones"]["rsi"]["favorable"]["horizontes"][5]["retorno_medio"] = None
 		reporte = crear_reporte_comparativo({"AAPL": investigacion})
 		self.assertIsNone(
 			reporte["AAPL"]["condiciones"]["rsi"]["favorable"]["entrenamiento"]["retorno_medio"]

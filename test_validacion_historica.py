@@ -68,16 +68,16 @@ class TestDividirDatosCronologicamente(unittest.TestCase):
 	def test_dataset_demasiado_pequeno_devuelve_none(self):
 		self.assertIsNone(dividir_datos_cronologicamente(self.datos(1), 0.70))
 
-	def test_contexto_usa_las_ultimas_49_filas(self):
+	def test_contexto_usa_todo_el_entrenamiento(self):
 		entrenamiento = self.datos(70)
 		prueba = self.datos(70).iloc[:10].copy()
 		prueba.index = pd.date_range("2026-04-01", periods=10, freq="D")
 
 		resultado = preparar_segmento_prueba_con_contexto(entrenamiento, prueba, 50)
 
-		self.assertEqual(resultado["filas_contexto"], 49)
+		self.assertEqual(resultado["filas_contexto"], 70)
 		self.assertEqual(resultado["filas_prueba"], 10)
-		self.assertEqual(list(resultado["datos_con_contexto"].index[:49]), list(entrenamiento.index[-49:]))
+		self.assertEqual(list(resultado["datos_con_contexto"].index[:70]), list(entrenamiento.index))
 		self.assertEqual(list(resultado["indices_prueba"]), list(prueba.index))
 
 	def test_contexto_usa_todas_las_filas_si_entrenamiento_corto(self):
@@ -98,11 +98,12 @@ class TestDividirDatosCronologicamente(unittest.TestCase):
 		resultado = preparar_segmento_prueba_con_contexto(entrenamiento, prueba, 3)
 
 		self.assertTrue(resultado["datos_con_contexto"].index.is_monotonic_increasing)
-		self.assertTrue(set(resultado["datos_con_contexto"].index[:2]).isdisjoint(set(resultado["indices_prueba"])))
+		self.assertTrue(set(resultado["datos_con_contexto"].index[:5]).isdisjoint(set(resultado["indices_prueba"])))
 
 	def test_contexto_no_modifica_originales(self):
 		entrenamiento = self.datos(5).iloc[::-1]
 		prueba = self.datos(3)
+		prueba.index = pd.date_range("2026-02-01", periods=3)
 		original_entrenamiento = entrenamiento.copy(deep=True)
 		original_prueba = prueba.copy(deep=True)
 

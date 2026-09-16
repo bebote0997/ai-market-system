@@ -265,6 +265,19 @@ else:
 			if "validacion_historica" not in st.session_state:
 				st.session_state.validacion_historica = None
 
+			configuracion_validacion = {
+				"ticker": resultado_seleccionado["ticker"],
+				"periodo": periodo_validacion,
+				"proporcion_entrenamiento": proporciones[proporcion_etiqueta],
+				"horizonte": horizonte_validacion,
+			}
+			guardado = st.session_state.validacion_historica
+			if guardado is not None and any(
+				guardado.get(clave) != valor
+				for clave, valor in configuracion_validacion.items()
+			):
+				st.session_state.validacion_historica = None
+
 			if st.button("Ejecutar validación histórica"):
 				with st.spinner("Ejecutando validación histórica..."):
 					resultado_validacion = ejecutar_investigacion_fuera_muestra(
@@ -279,9 +292,7 @@ else:
 					st.warning("No se pudo ejecutar la validación histórica.")
 				else:
 					st.session_state.validacion_historica = {
-						"ticker": resultado_seleccionado["ticker"],
-						"periodo": periodo_validacion,
-						"proporcion": proporciones[proporcion_etiqueta],
+						**configuracion_validacion,
 						"resultado": resultado_validacion,
 					}
 

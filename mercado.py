@@ -39,8 +39,9 @@ def obtener_datos_historicos(simbolo, periodo="1mo"):
 		datos = datos[columnas_requeridas].copy()
 		datos = datos.apply(pd.to_numeric, errors="coerce")
 		datos = datos.replace([float("inf"), float("-inf")], float("nan"))
-		datos = datos.dropna(subset=columnas_requeridas)
-		if datos.empty:
+		# Conservar las barras: borrarlas desplazaría la entrada t+1 y los plazos.
+		# El simulador rechaza Open inválido y falla si no puede valorar un Close.
+		if datos["Close"].notna().sum() == 0:
 			return None
 
 		return datos

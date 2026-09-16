@@ -1,6 +1,24 @@
 import pandas as pd
 
 
+def ordenar_datos_temporales(datos):
+	"""Normaliza fechas sin inventar fechas para índices numéricos ni duplicarlas."""
+	indice = datos.index
+	if isinstance(indice, pd.MultiIndex) or pd.api.types.is_numeric_dtype(indice.dtype):
+		raise ValueError("El índice debe contener fechas interpretables, no posiciones numéricas.")
+	try:
+		fechas = pd.DatetimeIndex(pd.to_datetime(indice, errors="raise"))
+	except (TypeError, ValueError, OverflowError) as error:
+		raise ValueError("Índice temporal no interpretable o con zonas horarias incompatibles.") from error
+	if fechas.hasnans:
+		raise ValueError("El índice temporal contiene fechas ausentes.")
+	if fechas.has_duplicates:
+		raise ValueError("El índice temporal contiene fechas duplicadas.")
+	ordenados = datos.copy()
+	ordenados.index = fechas
+	return ordenados.sort_index()
+
+
 def dividir_datos_cronologicamente(datos, proporcion_entrenamiento=0.70):
 	if datos is None or datos.empty:
 		return None
@@ -13,7 +31,7 @@ def dividir_datos_cronologicamente(datos, proporcion_entrenamiento=0.70):
 	if proporcion_entrenamiento <= 0 or proporcion_entrenamiento >= 1:
 		return None
 
-	datos_ordenados = datos.sort_index().copy()
+	datos_ordenados = ordenar_datos_temporales(datos)
 	punto_division = int(len(datos_ordenados) * proporcion_entrenamiento)
 	entrenamiento = datos_ordenados.iloc[:punto_division].copy()
 	prueba = datos_ordenados.iloc[punto_division:].copy()
@@ -47,10 +65,17 @@ def preparar_segmento_prueba_con_contexto(
 	):
 		return None
 
-	entrenamiento_ordenado = entrenamiento.sort_index().copy()
-	prueba_ordenada = prueba.sort_index().copy()
-	filas_contexto = min(minimo_historial - 1, len(entrenamiento_ordenado))
-	contexto = entrenamiento_ordenado.iloc[-filas_contexto:].copy() if filas_contexto else entrenamiento_ordenado.iloc[0:0].copy()
+	entrenamiento_ordenado = ordenar_datos_temporales(entrenamiento)
+	prueba_ordenada = ordenar_datos_temporales(prueba)
+	if not entrenamiento_ordenado.index.intersection(prueba_ordenada.index).empty:
+		raise ValueError("Entrenamiento y prueba comparten fechas.")
+	try:
+		anterior = entrenamiento_ordenado.index[-1] < prueba_ordenada.index[0]
+	except TypeError as error:
+		raise ValueError("Entrenamiento y prueba tienen zonas horarias incompatibles.") from error
+	if not anterior:
+		raise ValueError("Todo el entrenamiento debe ser estrictamente anterior a prueba.")
+	contexto = entrenamiento_ordenado
 	datos_con_contexto = pd.concat([contexto, prueba_ordenada]).copy()
 
 	return {

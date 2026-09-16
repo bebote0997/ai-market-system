@@ -1,4 +1,9 @@
+from validacion_fuera_muestra import comparar_estadisticas_condiciones
+
+
 def crear_reporte_comparativo(investigaciones, horizonte=5):
+	if isinstance(horizonte, bool) or not isinstance(horizonte, int) or horizonte <= 0:
+		raise ValueError("El horizonte debe ser un entero positivo.")
 	if not investigaciones:
 		return {}
 
@@ -14,14 +19,18 @@ def crear_reporte_comparativo(investigaciones, horizonte=5):
 			continue
 
 		validacion = investigacion.get("validacion")
-		resumen = investigacion.get("resumen")
 		division = validacion.get("division", {}) if isinstance(validacion, dict) else {}
 		entrenamiento = validacion.get("entrenamiento", {}) if isinstance(validacion, dict) else {}
 		prueba = validacion.get("prueba", {}) if isinstance(validacion, dict) else {}
-		comparacion = resumen.get("comparacion_condiciones", {}) if isinstance(resumen, dict) else {}
+		comparacion = comparar_estadisticas_condiciones(
+			entrenamiento.get("estadisticas_condiciones", {}),
+			prueba.get("estadisticas_condiciones", {}),
+			horizonte=horizonte,
+		)
 
 		reporte[ticker] = {
 			"ticker": ticker,
+			"horizonte": horizonte,
 			"datos": {
 				"filas_historicas": investigacion.get("filas_historicas"),
 				"filas_entrenamiento": division.get("filas_entrenamiento"),

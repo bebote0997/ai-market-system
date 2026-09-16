@@ -1,4 +1,9 @@
+import math
+
+
 def validar_operacion(operacion):
+	if not isinstance(operacion, dict):
+		return False
 	claves_requeridas = [
 		"simbolo",
 		"ticker",
@@ -18,7 +23,7 @@ def validar_operacion(operacion):
 
 	for clave in ["precio_entrada", "cantidad"]:
 		valor = operacion[clave]
-		if isinstance(valor, bool) or not isinstance(valor, (int, float)) or valor <= 0:
+		if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not math.isfinite(valor) or valor <= 0:
 			return False
 
 	return True

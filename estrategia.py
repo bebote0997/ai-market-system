@@ -32,6 +32,8 @@ def crear_configuracion_estrategia(
 	elif isinstance(requeridas, str):
 		return None
 	else:
+		if not isinstance(requeridas, (list, tuple, set)):
+			return None
 		resultado_requeridas = []
 		for condicion in requeridas:
 			if condicion not in CONDICIONES_VALIDAS:
@@ -54,6 +56,13 @@ def cumple_estrategia(evaluacion, configuracion):
 		clave in configuracion
 		for clave in ["minimo_favorables", "maximo_desfavorables", "requeridas"]
 	):
+		return None
+
+	configuracion = crear_configuracion_estrategia(**{
+		clave: configuracion[clave]
+		for clave in ["minimo_favorables", "maximo_desfavorables", "requeridas"]
+	})
+	if configuracion is None:
 		return None
 
 	resumen = evaluacion.get("resumen")

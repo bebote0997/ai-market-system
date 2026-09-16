@@ -65,8 +65,12 @@ def ejecutar_multiples_tickers(tickers, **configuracion):
         procesados.add(ticker_normalizado)
         try:
             resultado = ejecutar_para_ticker(ticker_normalizado, **configuracion)
-        except Exception:
-            resultado = None
+        except Exception as error:
+            resultados[ticker_normalizado] = {
+                "ticker": ticker_normalizado, "error": "no_disponible",
+                "detalle": str(error),
+            }
+            continue
         resultados[ticker_normalizado] = (
             resultado
             if resultado is not None
@@ -90,6 +94,8 @@ def _mostrar_resultados(resultados):
         print(f"Ticker: {ticker}")
         if "error" in activo:
             print(f"Error: {activo['error']}")
+            if activo.get("detalle"):
+                print(f"Detalle: {activo['detalle']}")
             continue
         resultado = activo["resultado"]
         division = resultado["division"]
@@ -106,7 +112,15 @@ def _mostrar_resultados(resultados):
             print(f"Eventos: {len(segmento['eventos'])}")
             print(f"Operaciones: {len(simulacion['operaciones'])}")
             print(f"Capital inicial: ${simulacion['capital_inicial']:.2f}")
-            print(f"Capital final: ${simulacion['capital_final']:.2f}")
+            print(f"Equity final: ${simulacion['capital_final']:.2f}")
+            print(f"Capital realizado: ${simulacion['capital_realizado']:.2f}")
+            abierta = simulacion["posicion_abierta"]
+            print(f"Posiciones abiertas: {int(abierta is not None)}")
+            if abierta is not None:
+                print(f"Entrada pendiente de cierre: {abierta['fecha_entrada']}; "
+                      f"cantidad={abierta['cantidad']:.6f}; "
+                      f"precio entrada={abierta['precio_entrada']:.6f}; "
+                      f"último precio={abierta['ultimo_precio']:.6f}")
             print(f"Retorno total: {_mostrar_valor(metricas['retorno_total_pct'])}%")
             print(f"Tasa de acierto: {_mostrar_valor(metricas['tasa_acierto'])}%")
             print(f"Profit factor: {_mostrar_valor(metricas['profit_factor'])}")

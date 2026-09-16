@@ -168,7 +168,7 @@ class TestObtenerDatosHistoricos(unittest.TestCase):
 		ticker_mock.return_value.history.assert_called_once_with(period="1y")
 
 	@patch("mercado.yf.Ticker")
-	def test_elimina_filas_ohlcv_incompletas(self, ticker_mock):
+	def test_conserva_barras_incompletas_para_no_desplazar_plazos(self, ticker_mock):
 		datos = pd.DataFrame(
 			{
 				"Open": [100.0, 101.0, 102.0],
@@ -182,8 +182,8 @@ class TestObtenerDatosHistoricos(unittest.TestCase):
 
 		resultado = obtener_datos_historicos("AAPL")
 
-		self.assertEqual(len(resultado), 2)
-		self.assertFalse(resultado.isna().any().any())
+		self.assertEqual(len(resultado), 3)
+		self.assertTrue(pd.isna(resultado.loc[1, "Close"]))
 
 if __name__ == "__main__":
 	unittest.main()

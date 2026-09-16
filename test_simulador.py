@@ -11,6 +11,7 @@ from simulador import crear_configuracion_simulacion, simular_operaciones
 class TestSimulador(unittest.TestCase):
 	def datos(self, cierres=None):
 		cierres = cierres or [100.0, 110.0, 120.0, 100.0, 80.0, 100.0, 100.0]
+		cierres = [999.0] + list(cierres)
 		indice = pd.date_range("2026-01-01", periods=len(cierres), freq="D")
 		return pd.DataFrame({
 			"Open": cierres,
@@ -66,21 +67,23 @@ class TestSimulador(unittest.TestCase):
 		self.assertEqual(len(resultado["operaciones"]), 1)
 		self.assertAlmostEqual(resultado["operaciones"][0]["capital_utilizado"], 5000)
 
-	def test_no_superposicion_evento_en_salida_se_ignora_y_posterior_se_acepta(self):
+	def test_no_superposicion_y_senal_al_cierre_de_salida_entra_al_dia_siguiente(self):
 		datos = self.datos([100] * 12)
 		eventos = [self.evento(datos, 0), self.evento(datos, 5), self.evento(datos, 6)]
 		resultado = simular_operaciones(datos, eventos, crear_configuracion_simulacion(periodo_salida=5, coste_porcentual=0))
-		self.assertEqual([op["fecha_entrada"] for op in resultado["operaciones"]], [datos.index[0], datos.index[6]])
+		self.assertEqual([op["fecha_entrada"] for op in resultado["operaciones"]], [datos.index[1], datos.index[7]])
 
 	def test_datos_invalidos_no_abren(self):
 		datos = self.datos([100] * 7)
 		config = crear_configuracion_simulacion(periodo_salida=5)
 		eventos = [{"fecha": "no existe"}, self.evento(datos, 0)]
 		datos_nan = datos.copy()
-		datos_nan.loc[datos.index[0], "Close"] = float("nan")
-		self.assertEqual(len(simular_operaciones(datos_nan, [eventos[0]], config)["operaciones"]), 0)
+		datos_nan.loc[datos.index[1], "Open"] = float("nan")
+		self.assertEqual(len(simular_operaciones(datos_nan, eventos, config)["operaciones"]), 0)
 		self.assertEqual(len(simular_operaciones(datos, eventos, config)["operaciones"]), 1)
-		self.assertEqual(len(simular_operaciones(datos, [self.evento(datos, 5)], config)["operaciones"]), 0)
+		pendiente = simular_operaciones(datos, [self.evento(datos, 6)], config)
+		self.assertEqual(len(pendiente["operaciones"]), 0)
+		self.assertEqual(pendiente["posicion_abierta"]["fecha_entrada"], datos.index[7])
 
 	def test_orden_curva_y_originales(self):
 		datos = self.datos([100] * 7)
@@ -89,7 +92,7 @@ class TestSimulador(unittest.TestCase):
 		original = datos.copy(deep=True)
 		resultado = simular_operaciones(datos, [evento], crear_configuracion_simulacion(periodo_salida=2, coste_porcentual=0))
 		self.assertIsNone(resultado["curva_capital"][0]["fecha"])
-		self.assertEqual(len(resultado["curva_capital"]), 2)
+		self.assertEqual(len(resultado["curva_capital"]), len(datos) + 1)
 		pd.testing.assert_frame_equal(datos, original)
 
 	def test_integracion_eventos_simulacion_metricas(self):
