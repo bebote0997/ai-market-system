@@ -5,6 +5,11 @@ from backtest import (
 	generar_evaluaciones_historicas,
 )
 from mercado import obtener_datos_historicos
+from validacion_fuera_muestra import (
+	crear_resumen_validacion,
+	ejecutar_validacion_fuera_muestra,
+)
+from reporte_validacion import crear_reporte_comparativo
 
 
 def ejecutar_investigacion(
@@ -82,6 +87,78 @@ def ejecutar_investigacion_multiple(
 			}
 		else:
 			resultados[ticker_normalizado] = resultado
+
+	return resultados
+
+
+def ejecutar_investigacion_fuera_muestra(
+	ticker,
+	periodo="2y",
+	proporcion_entrenamiento=0.70,
+	minimo_historial=50,
+	horizontes=(1, 5, 10),
+):
+	datos = obtener_datos_historicos(ticker, periodo)
+	if datos is None:
+		return None
+
+	resultado_validacion = ejecutar_validacion_fuera_muestra(
+		datos,
+		proporcion_entrenamiento=proporcion_entrenamiento,
+		minimo_historial=minimo_historial,
+		horizontes=horizontes,
+	)
+	if resultado_validacion is None:
+		return None
+
+	return {
+		"ticker": ticker,
+		"periodo": periodo,
+		"filas_historicas": len(datos),
+		"validacion": resultado_validacion,
+		"resumen": crear_resumen_validacion(resultado_validacion, horizonte=5),
+	}
+
+
+def ejecutar_investigacion_multiple_fuera_muestra(
+	tickers,
+	periodo="2y",
+	proporcion_entrenamiento=0.70,
+	minimo_historial=50,
+	horizontes=(1, 5, 10),
+):
+	if not tickers:
+		return {}
+
+	resultados = {}
+	procesados = set()
+	for ticker in tickers:
+		if not isinstance(ticker, str):
+			continue
+		ticker_normalizado = ticker.strip().upper()
+		if not ticker_normalizado or ticker_normalizado in procesados:
+			continue
+		procesados.add(ticker_normalizado)
+
+		try:
+			resultado = ejecutar_investigacion_fuera_muestra(
+				ticker_normalizado,
+				periodo=periodo,
+				proporcion_entrenamiento=proporcion_entrenamiento,
+				minimo_historial=minimo_historial,
+				horizontes=horizontes,
+			)
+		except Exception:
+			resultado = None
+
+		resultados[ticker_normalizado] = (
+			resultado
+			if resultado is not None
+			else {
+				"ticker": ticker_normalizado,
+				"error": "datos_no_disponibles",
+			}
+		)
 
 	return resultados
 
@@ -203,13 +280,69 @@ def _mostrar_investigaciones_multiples(investigaciones):
 				)
 
 
+def _mostrar_reporte_fuera_muestra(reporte, horizonte=5):
+	for ticker, activo in reporte.items():
+		print("=" * 40)
+		print(f"Ticker: {ticker}")
+		if "error" in activo:
+			print(f"Error: {activo['error']}")
+			continue
+
+		print(f"Filas históricas: {activo['datos']['filas_historicas']}")
+		print(f"Entrenamiento: {activo['datos']['filas_entrenamiento']} filas")
+		print(f"Prueba: {activo['datos']['filas_prueba']} filas")
+		print(
+			"Evaluaciones entrenamiento: "
+			f"{activo['muestras']['evaluaciones_entrenamiento']}"
+		)
+		print(f"Evaluaciones prueba: {activo['muestras']['evaluaciones_prueba']}")
+		print(f"\nVALIDACIÓN FUERA DE MUESTRA — HORIZONTE {horizonte}")
+
+		for condicion, estados in activo["condiciones"].items():
+			for estado, comparacion in estados.items():
+				print(f"\nCondición: {condicion}")
+				print(f"Estado: {estado}")
+				for segmento in ["entrenamiento", "prueba"]:
+					metricas = comparacion[segmento]
+					print(f"\n{segmento.capitalize()}:")
+					print(f"Muestras: {metricas.get('muestras')}")
+					print(
+						f"Retorno medio: "
+						f"{_formatear_porcentaje(metricas.get('retorno_medio'))}"
+					)
+					print(
+						f"Retorno mediano: "
+						f"{_formatear_porcentaje(metricas.get('retorno_mediano'))}"
+					)
+					print(
+						f"Tasa positiva: "
+						f"{_formatear_porcentaje(metricas.get('tasa_positiva'))}"
+					)
+				diferencias = comparacion["diferencias"]
+				print("\nDiferencia prueba - entrenamiento:")
+				print(
+					f"Retorno medio: "
+					f"{_formatear_porcentaje(diferencias.get('retorno_medio'))}"
+				)
+				print(
+					f"Retorno mediano: "
+					f"{_formatear_porcentaje(diferencias.get('retorno_mediano'))}"
+				)
+				print(
+					f"Tasa positiva: "
+					f"{_formatear_porcentaje(diferencias.get('tasa_positiva'))}"
+				)
+
+
 if __name__ == "__main__":
 	tickers = ["AAPL", "MSFT", "TSLA", "BTC-USD", "EURUSD=X"]
 	horizontes = (1, 5, 10)
-	investigaciones = ejecutar_investigacion_multiple(
+	investigaciones = ejecutar_investigacion_multiple_fuera_muestra(
 		tickers,
 		periodo="2y",
+		proporcion_entrenamiento=0.70,
 		minimo_historial=50,
 		horizontes=horizontes,
 	)
-	_mostrar_investigaciones_multiples(investigaciones)
+	_reporte = crear_reporte_comparativo(investigaciones, horizonte=5)
+	_mostrar_reporte_fuera_muestra(_reporte, horizonte=5)

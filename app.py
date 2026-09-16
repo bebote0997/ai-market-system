@@ -6,6 +6,8 @@ from servicio import procesar_cartera
 from resumen import calcular_resumen_cartera
 from mercado import obtener_datos_historicos
 from motor_analisis import analizar_mercado
+from investigacion import ejecutar_investigacion_fuera_muestra
+from reporte_validacion import crear_reporte_comparativo
 
 
 st.set_page_config(
@@ -237,3 +239,92 @@ else:
 			)
 
 			st.line_chart(datos["Close"])
+
+			st.subheader("Validación histórica fuera de muestra")
+			periodo_validacion = st.selectbox(
+				"Período de validación",
+				["1y", "2y", "5y"],
+				index=1,
+			)
+			proporciones = {
+				"60 / 40": 0.60,
+				"70 / 30": 0.70,
+				"80 / 20": 0.80,
+			}
+			proporcion_etiqueta = st.selectbox(
+				"Proporción entrenamiento / prueba",
+				list(proporciones),
+				index=1,
+			)
+			horizonte_validacion = st.selectbox(
+				"Horizonte de visualización",
+				[1, 5, 10],
+				index=1,
+			)
+
+			if "validacion_historica" not in st.session_state:
+				st.session_state.validacion_historica = None
+
+			if st.button("Ejecutar validación histórica"):
+				with st.spinner("Ejecutando validación histórica..."):
+					resultado_validacion = ejecutar_investigacion_fuera_muestra(
+						resultado_seleccionado["ticker"],
+						periodo=periodo_validacion,
+						proporcion_entrenamiento=proporciones[proporcion_etiqueta],
+						minimo_historial=50,
+						horizontes=(1, 5, 10),
+					)
+				if resultado_validacion is None:
+					st.session_state.validacion_historica = None
+					st.warning("No se pudo ejecutar la validación histórica.")
+				else:
+					st.session_state.validacion_historica = {
+						"ticker": resultado_seleccionado["ticker"],
+						"periodo": periodo_validacion,
+						"proporcion": proporciones[proporcion_etiqueta],
+						"resultado": resultado_validacion,
+					}
+
+			guardado = st.session_state.validacion_historica
+			if guardado is not None:
+				reporte = crear_reporte_comparativo(
+					{guardado["ticker"]: guardado["resultado"]},
+					horizonte=horizonte_validacion,
+				)
+				activo = reporte.get(guardado["ticker"])
+				if activo is not None and "error" in activo:
+					st.warning("No hay datos disponibles para la validación histórica.")
+				elif activo is not None:
+					division = activo["datos"]
+					muestras = activo["muestras"]
+					metricas_validacion = st.columns(5)
+					metricas_validacion[0].metric("Filas históricas", division["filas_historicas"])
+					metricas_validacion[1].metric("Filas entrenamiento", division["filas_entrenamiento"])
+					metricas_validacion[2].metric("Filas prueba", division["filas_prueba"])
+					metricas_validacion[3].metric("Evaluaciones entrenamiento", muestras["evaluaciones_entrenamiento"])
+					metricas_validacion[4].metric("Evaluaciones prueba", muestras["evaluaciones_prueba"])
+
+					st.markdown("#### Comparación por condición")
+					st.write(
+						"Esta comparación es descriptiva. El segmento de prueba representa "
+						"datos cronológicamente posteriores que no se utilizan para ajustar las condiciones."
+					)
+					for condicion, estados in activo["condiciones"].items():
+						st.markdown(f"**{condicion}**")
+						for estado, comparacion in estados.items():
+							filas = []
+							for metrica in ["muestras", "retorno_medio", "retorno_mediano", "tasa_positiva"]:
+								entrenamiento = comparacion["entrenamiento"].get(metrica)
+								prueba = comparacion["prueba"].get(metrica)
+								diferencia = comparacion["diferencias"].get(metrica)
+								if metrica != "muestras":
+									entrenamiento = "N/D" if entrenamiento is None else f"{entrenamiento:.2f}%"
+									prueba = "N/D" if prueba is None else f"{prueba:.2f}%"
+									diferencia = "N/D" if diferencia is None else f"{diferencia:.2f}%"
+								else:
+									entrenamiento = "N/D" if entrenamiento is None else entrenamiento
+									prueba = "N/D" if prueba is None else prueba
+									diferencia = "N/D"
+								filas.append({"Métrica": metrica, "Entrenamiento": entrenamiento, "Prueba": prueba, "Diferencia": diferencia})
+							st.markdown(f"Estado: {estado}")
+							st.dataframe(filas, width="stretch", hide_index=True)
