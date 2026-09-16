@@ -14,7 +14,7 @@ class TestLiquidityAgent(unittest.TestCase):
         return pd.DataFrame(data, index=pd.date_range("2026-01-01", periods=len(highs), freq="h"))
 
     def test_equal_highs_lows_and_pools(self):
-        data = self.bars([110, 110, 108, 100], [90, 90, 92, 95])
+        data = self.bars([100, 110, 100, 110, 100, 105], [90, 80, 90, 80, 90, 85])
         report = analizar_liquidez(data, "XAUUSD", "15m")
         self.assertEqual(report.status, "OK")
         payload = report.evidence[0]

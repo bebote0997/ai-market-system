@@ -40,6 +40,17 @@ def _equal_levels(values, timestamps):
     return levels
 
 
+def _confirmed_pivots(frame):
+    highs = []
+    lows = []
+    for index in range(1, len(frame) - 1):
+        if frame["High"].iloc[index] > frame["High"].iloc[index - 1] and frame["High"].iloc[index] > frame["High"].iloc[index + 1]:
+            highs.append((float(frame["High"].iloc[index]), frame.index[index]))
+        if frame["Low"].iloc[index] < frame["Low"].iloc[index - 1] and frame["Low"].iloc[index] < frame["Low"].iloc[index + 1]:
+            lows.append((float(frame["Low"].iloc[index]), frame.index[index]))
+    return highs, lows
+
+
 def analizar_liquidez(datos, symbol="UNKNOWN", timeframe="unknown", run_id="liquidity", as_of=None):
     timestamp = datetime.now(timezone.utc)
     if timeframe not in AUTHORIZED_TIMEFRAMES:
@@ -50,12 +61,11 @@ def analizar_liquidez(datos, symbol="UNKNOWN", timeframe="unknown", run_id="liqu
     if len(frame) < 3:
         return AgentMessage("1.0", run_id, timestamp, symbol, timeframe, "liquidity", "PARTIAL", data_quality={"closed_bars": len(frame)}, warnings=("insufficient_bars",))
 
-    highs = frame["High"].tolist()
-    lows = frame["Low"].tolist()
-    equal_highs = _equal_levels(highs, list(frame.index))
-    equal_lows = _equal_levels(lows, list(frame.index))
-    previous_high = max(highs[:-1])
-    previous_low = min(lows[:-1])
+    pivot_highs, pivot_lows = _confirmed_pivots(frame)
+    equal_highs = _equal_levels([value for value, _ in pivot_highs], [timestamp for _, timestamp in pivot_highs])
+    equal_lows = _equal_levels([value for value, _ in pivot_lows], [timestamp for _, timestamp in pivot_lows])
+    previous_high = max(frame["High"].iloc[:-1])
+    previous_low = min(frame["Low"].iloc[:-1])
     last = frame.iloc[-1]
     sweeps = []
     if last["High"] > previous_high and last["Close"] < previous_high:

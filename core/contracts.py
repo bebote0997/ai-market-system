@@ -93,6 +93,8 @@ class MacroEvent:
     forecast: Optional[Any] = None
     previous: Optional[Any] = None
     data_quality: dict = field(default_factory=dict)
+    result_timestamp: Optional[datetime] = None
+    known_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,7 @@ class NewsItem:
     symbols: Tuple[str, ...] = ()
     relevance: Tuple[str, ...] = ()
     data_quality: dict = field(default_factory=dict)
+    known_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)

@@ -59,7 +59,7 @@ class TestMacroNewsAgent(unittest.TestCase):
 
     def test_future_information_and_actual_gate(self):
         future_received = self.event(received_at=self.as_of(14))
-        future_actual = self.event(event_timestamp=self.as_of(14), actual=1.2)
+        future_actual = self.event(event_id="future-result", event_timestamp=self.as_of(14), actual=1.2)
         report = analizar_macro_news(InMemoryMacroNewsProvider([future_received, future_actual]), "EURUSD", self.as_of())
         self.assertEqual(report.status, "PARTIAL")
         self.assertIn("future_information", report.warnings)
@@ -91,6 +91,12 @@ class TestMacroNewsAgent(unittest.TestCase):
         self.assertEqual(len(report.evidence[0]["macro_events"]), 1)
         self.assertEqual(len(report.evidence[0]["news_items"]), 1)
         self.assertIn("duplicate", report.warnings)
+
+    def test_same_provider_id_different_provider_id_is_not_global_duplicate(self):
+        first = self.event(source="calendar-a")
+        second = self.event(source="calendar-b")
+        report = analizar_macro_news(InMemoryMacroNewsProvider([first, second]), "XAUUSD", self.as_of())
+        self.assertEqual(len(report.evidence[0]["macro_events"]), 2)
 
     def test_same_headline_different_timestamp_not_deduped(self):
         first = self.news()

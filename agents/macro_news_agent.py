@@ -75,9 +75,9 @@ def _window(event_timestamp, as_of):
 def _stable_key(item, kind):
     identifier = item.get("event_id" if kind == "macro" else "news_id")
     if identifier:
-        return kind, identifier
+        return kind, item.get("source"), identifier
     fields = ("source", "event_timestamp", "title", "currency", "category") if kind == "macro" else ("source", "published_at", "headline", "category")
-    return kind, tuple(str(item.get(field)) for field in fields)
+    return kind, item.get("source"), tuple(str(item.get(field)) for field in fields)
 
 
 def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
@@ -105,6 +105,8 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
         source_time = _utc(item.get("source_timestamp"))
         event_time = _utc(item.get("event_timestamp"))
         received = _utc(item.get("received_at"))
+        result_time = _utc(item.get("result_timestamp"))
+        known_at = _utc(item.get("known_at")) or source_time
         if not _valid_source_and_time(item.get("source"), event_time) or event_time is None:
             rejected += 1
             warnings.append("missing_source_or_timestamp")
@@ -117,11 +119,11 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
             rejected += 1
             warnings.append("invalid_timestamp")
             continue
-        if received is not None and received > timestamp:
+        if known_at is not None and known_at > timestamp:
             rejected += 1
             warnings.append("future_information")
             continue
-        if item.get("actual") is not None and event_time > timestamp:
+        if item.get("actual") is not None and (result_time is None or result_time > timestamp):
             rejected += 1
             warnings.append("future_information")
             continue
@@ -130,6 +132,8 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
         item["source_timestamp"] = source_time
         item["event_timestamp"] = event_time
         item["received_at"] = received
+        item["known_at"] = known_at
+        item["result_timestamp"] = result_time
         item["impact"] = _impact(item.get("impact"))
         item["window"] = _window(event_time, timestamp)
         accepted_events.append(item)
@@ -143,11 +147,12 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
         seen.add(key)
         published = _utc(item.get("published_at"))
         received = _utc(item.get("received_at"))
-        if not _valid_source_and_time(item.get("source"), published) or published is None:
+        known_at = _utc(item.get("known_at")) or received or published
+        if not _valid_source_and_time(item.get("source"), published) or published is None or known_at is None:
             rejected += 1
             warnings.append("missing_source_or_timestamp")
             continue
-        if received is not None and received > timestamp:
+        if known_at > timestamp:
             rejected += 1
             warnings.append("future_information")
             continue
@@ -155,6 +160,7 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
             continue
         item["published_at"] = published
         item["received_at"] = received
+        item["known_at"] = known_at
         item["window"] = _window(published, timestamp)
         accepted_news.append(item)
 

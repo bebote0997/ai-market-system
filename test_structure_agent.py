@@ -73,6 +73,12 @@ class TestStructureAgent(unittest.TestCase):
         extended = self.bars([9, 11, 10, 11, 14], [10, 12, 11, 13, 15], [8, 9, 8, 9, 12], [9, 11, 10, 12, 14])
         self.assertIsNone(analizar_estructura(extended, "X", "1h", as_of=extended.index[3]).evidence[0]["bos"])
 
+    def test_bos_selects_latest_of_bullish_and_bearish(self):
+        data = self.bars([9, 11, 10, 11, 14, 10, 8], [10, 12, 11, 13, 15, 12, 9], [8, 9, 8, 9, 12, 7, 5], [9, 11, 10, 12, 14, 8, 6])
+        bos = analizar_estructura(data, "X", "1h").evidence[0]["bos"]
+        self.assertEqual(bos["direction"], "bearish")
+        self.assertEqual(bos["break_timestamp"], data.index[-1])
+
     def test_bullish_retracement_is_heuristic(self):
         data = self.bars([9, 11, 10, 13, 11, 12, 11], [10, 13, 11, 15, 12, 14, 13], [8, 9, 7, 10, 9, 11, 10], [9, 12, 8, 14, 10, 13, 12])
         retracement = analizar_estructura(data, "X", "1h").evidence[0]["retracement"]

@@ -49,6 +49,21 @@
 
 - `timestamp`: 2026-09-16
 - `agent`: GitHub Copilot
+- `phase`: Pre-Phase-4 Audit
+- `task`: Auditoría integral y hardening de la base Fase 0-3.
+- `tests_before`: 253 tests OK.
+- `tests_after`: 268 tests OK.
+- `files_created`: `AUDIT_PRE_PHASE4.md`.
+- `files_modified`: `agents/structure_agent.py`, `agents/liquidity_agent.py`, `agents/macro_news_agent.py`, `core/contracts.py`, `validacion_historica.py`, `test_structure_agent.py`, `test_liquidity_agent.py`, `test_macro_news.py`, `ROADMAP.md`, `CHANGELOG_AGENT.md`.
+- `defects_fixed`: selección temporal incorrecta de BOS; equal highs/lows basados en barras no estructurales; Macro/News sin known_at/result_timestamp; deduplicación sin namespace de source; warning pandas de parsing temporal ambiguo.
+- `known_non_blocking_debt`: dataclasses frozen con contenedores internos mutables; especificaciones contractuales desconocidas; limitaciones intradía de yfinance; warnings ScriptRunContext de Streamlit.
+- `warnings`: no se encontraron secrets; no se conectó red, broker ni dinero real.
+- `next_phase`: Fase 4 — Setup Validator, Trade Planner y Orchestrator.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
 - `phase`: Fase 3
 - `task`: Implementar Macro/News Agent determinista con proveedor normalizado, freshness, relevancia y deduplicación.
 - `tests_before`: 253 tests OK.

@@ -62,12 +62,13 @@ def _classify(highs, lows):
 
 
 def _break_of_structure(frame, highs, lows):
+    candidates = []
     for swing in reversed(highs):
         confirmations = frame.index[frame.index > swing["timestamp"]]
         for timestamp in confirmations:
             close = frame.loc[timestamp, "Close"]
             if close > swing["price"]:
-                return {
+                candidates.append({
                     "type": "BOS",
                     "direction": "bullish",
                     "broken_level": swing["price"],
@@ -75,13 +76,14 @@ def _break_of_structure(frame, highs, lows):
                     "confirmation_timestamp": swing["timestamp"],
                     "break_timestamp": timestamp,
                     "break_close": float(close),
-                }
+                })
+                break
     for swing in reversed(lows):
         confirmations = frame.index[frame.index > swing["timestamp"]]
         for timestamp in confirmations:
             close = frame.loc[timestamp, "Close"]
             if close < swing["price"]:
-                return {
+                candidates.append({
                     "type": "BOS",
                     "direction": "bearish",
                     "broken_level": swing["price"],
@@ -89,8 +91,11 @@ def _break_of_structure(frame, highs, lows):
                     "confirmation_timestamp": swing["timestamp"],
                     "break_timestamp": timestamp,
                     "break_close": float(close),
-                }
-    return None
+                })
+                break
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item["break_timestamp"])
 
 
 def _retracement(frame, highs, lows):
