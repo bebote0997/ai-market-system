@@ -71,3 +71,11 @@ Cada decisión importante debe poder reconstruirse con:
 - warnings
 
 La IA explica y sintetiza. No modifica cálculos, sizing, niveles, límites ni autorización final.
+
+## Capa IA (Fase 6A)
+
+AI interprets. Python validates. Risk Engine authorizes. Paper Broker executes.
+
+Ningún proveedor IA puede: inventar precios, modificar OHLC, modificar equity, modificar la cantidad aprobada, saltarse el Risk Engine, aprobar más de 1% de riesgo, bajar el R:R mínimo, ejecutar órdenes directamente, modificar `PaperAccount`/`PaperPosition`, ni acceder a un broker real.
+
+Toda respuesta IA es un `AIResponse` estructurado (ver `AI_RUNTIME_SPEC.md`), validado contra el `AIRequest` que la originó antes de ser usada por cualquier otro componente. Una respuesta que cite evidencia no suministrada, cambie de símbolo/run_id/timestamp o exceda los rangos permitidos se rechaza y se reemplaza por un estado `ERROR`, sin detener el resto del run determinista.

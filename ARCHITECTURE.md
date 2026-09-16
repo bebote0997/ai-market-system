@@ -100,3 +100,29 @@ Indicadores, estructura formal, niveles, sizing, riesgo, ejecución paper, PnL, 
 ## Compatibilidad temporal
 
 Preservar no-lookahead, train/test, contexto histórico de prueba, mark-to-market, posiciones abiertas, costes una sola vez y política conservadora intrabar.
+
+## Capa de agentes IA (Fase 6A)
+
+```mermaid
+flowchart TD
+    S[Structure Agent] --> SAI[Structure AI]
+    L[Liquidity Agent] --> LAI[Liquidity AI]
+    N[Macro/News Agent] --> MAI[Macro AI]
+    SAI --> SRAI[AI Setup Reviewer]
+    LAI --> SRAI
+    MAI --> SRAI
+    SRAI --> V[Setup Validator]
+    V --> P[Trade Planner]
+    P --> TRAI[AI Trade Reviewer]
+    TRAI --> RE[Deterministic Risk Engine]
+```
+
+Regla central: **AI interprets. Python validates. Risk Engine authorizes. Paper Broker executes.**
+
+- `ai/contracts.py`: `AIRequest`/`AIResponse`/`AIFloorReport` versionados y frozen; `validate_ai_response` es la única puerta de entrada de una respuesta IA hacia el resto del sistema.
+- `ai/provider.py`: interfaz `AIProvider.generate(request) -> AIResponse`; `DeterministicAIProvider` (por defecto, sin red) y `FakeAIProvider` (pruebas). Un proveedor LLM real puede añadirse implementando la misma interfaz sin tocar Risk Engine, Paper Broker ni scouts deterministas.
+- `ai/runtime.py`: invoca al proveedor, valida el grounding, aísla fallos (`ERROR` en vez de excepción propagada), evita llamadas sin evidencia (`NO_DATA`) y registra un `AuditLog` en memoria.
+- `ai/agents/`: Structure AI, Liquidity AI, Macro AI, AI Setup Reviewer y AI Trade Reviewer. Ninguno inventa evidencia; cada uno solo cita `evidence_id` recibidos en el `AIRequest`.
+- `ai/orchestrator.py`: capa de composición sobre un `FloorRunReport` ya calculado por `floor/orchestrator.py` (sin modificarlo). Nunca convierte `NO_SETUP`/`WATCH`/`RISK_REJECTED` en un estado ejecutable; solo puede añadir `AI_CAUTION` cuando un `PLAN_READY` recibe una revisión IA adversa, sin alterar el `RiskDecision`.
+
+`REAL_EXECUTION` permanece `DISABLED`. El módulo `ai/` no importa `execution.paper_broker` ni `execution.trade_manager`.

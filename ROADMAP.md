@@ -108,6 +108,23 @@ Construir resumen operativo y UI especializada con evidencia, calidad de datos, 
 
 Aceptación: cada decisión se puede reconstruir; no hay recomendaciones ocultas ni datos inventados.
 
+## Fase 6A — COMPLETADA: AI Agent Runtime
+
+Construir el motor de agentes IA advisory: contratos versionados, abstracción de proveedor sin red, grounding obligatorio, cinco especialistas (Structure AI, Liquidity AI, Macro AI, AI Setup Reviewer, AI Trade Reviewer) y un orquestador IA que compone sobre el `FloorRunReport` determinista sin modificarlo.
+
+Resultado implementado:
+
+- `ai/contracts.py`, `ai/provider.py`, `ai/runtime.py`, `ai/prompts.py`, `ai/orchestrator.py`, `ai/agents/*`.
+- `AIRequest`/`AIResponse` frozen y versionados; `validate_ai_response` rechaza cualquier respuesta no fundamentada en la evidencia suministrada (symbol, run_id, as_of, agent, evidence_id, confidence, bias, recommendation).
+- `DeterministicAIProvider` sin red como proveedor por defecto; `FakeAIProvider` para pruebas adversariales.
+- Aislamiento de fallos: una excepción de proveedor produce `ERROR` local, nunca detiene el resto del run.
+- Control de costes: sin evidencia determinista no se llama al proveedor (`NO_DATA` inmediato).
+- `AuditLog` en memoria sin secretos.
+- `NO_SETUP`/`WATCH`/`RISK_REJECTED` deterministas nunca se convierten en un estado ejecutable; un `PLAN_READY` con revisión IA adversa se marca `AI_CAUTION` sin alterar el `RiskDecision`.
+- `REAL_EXECUTION` permanece `DISABLED`; el paquete `ai/` no importa el Paper Broker ni el Trade Manager.
+
+Aceptación: cumplida con `381 tests OK`. Detalle de invariantes en `AUDIT_PHASE6A.md`.
+
 ## Regla de avance
 
 Cada fase debe producir algo ejecutable y verificable con tests. No optimizar parámetros con resultados de test ni adelantar fases sin autorización explícita.
