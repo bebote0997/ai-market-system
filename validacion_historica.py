@@ -7,7 +7,7 @@ def ordenar_datos_temporales(datos):
 	if isinstance(indice, pd.MultiIndex) or pd.api.types.is_numeric_dtype(indice.dtype):
 		raise ValueError("El índice debe contener fechas interpretables, no posiciones numéricas.")
 	try:
-		fechas = pd.DatetimeIndex(pd.to_datetime(indice, errors="raise"))
+		fechas = pd.DatetimeIndex(pd.to_datetime(indice, errors="raise", format="mixed"))
 	except (TypeError, ValueError, OverflowError) as error:
 		raise ValueError("Índice temporal no interpretable o con zonas horarias incompatibles.") from error
 	if fechas.hasnans:

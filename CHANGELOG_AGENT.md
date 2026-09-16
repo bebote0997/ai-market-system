@@ -44,3 +44,20 @@
 - `heuristics`: displacement y equal-level detection están marcados `HEURISTIC`; order blocks no se implementaron.
 - `warnings`: warnings preexistentes de Streamlit y pandas durante tests; sin red ni broker.
 - `next_phase`: Fase 3 — Macro/News Agent.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
+- `phase`: Fase 2.1 closure gate
+- `task`: Formalizar Break of Structure, retracement y parsing temporal sin warning ambiguo.
+- `tests_before`: 248 tests OK.
+- `tests_after`: 253 tests OK.
+- `files_created`: ninguno.
+- `files_modified`: `agents/structure_agent.py`, `agents/liquidity_agent.py`, `validacion_historica.py`, `test_structure_agent.py`, `test_liquidity_agent.py`, `ROADMAP.md` sin cambio de estado, `CHANGELOG_AGENT.md`.
+- `BOS_definition`: Ruptura bullish/bearish por cierre de vela cerrada sobre el último swing confirmado; el swing requiere una vela cerrada posterior de confirmación y se registra evidencia completa.
+- `retracement_definition`: Tras impulso confirmado y pivote protegido, el cierre actual queda entre ambos niveles sin invalidar el pivote; resultado marcado `HEURISTIC`.
+- `no_lookahead_tests`: BOS y retracement usan `as_of`; barras futuras no cambian los reportes históricos.
+- `pandas_warning_fix`: `pd.to_datetime(..., format="mixed")` elimina la inferencia ambigua sin silenciar warnings.
+- `warnings_remaining`: warnings legítimos de ScriptRunContext de Streamlit y mensajes legacy esperados; warning temporal ambiguo de pandas eliminado.
+- `next_phase`: Fase 3 — Macro/News Agent.

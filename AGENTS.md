@@ -72,3 +72,24 @@ Nunca inventar precios, noticias, timestamps, especificaciones contractuales, va
 ## Fases
 
 El trabajo debe seguir `ROADMAP.md`. La Fase 0 está completada y la Fase 1 es la siguiente autorizada. No adelantar fases sin autorización explícita.
+
+## Git en entorno local Windows
+
+Git executable:
+
+`C:\Program Files\Git\cmd\git.exe`
+
+Si `git` no está disponible en PATH, los agentes deben usar el ejecutable anterior mediante ruta absoluta.
+
+La ausencia de Git en PATH no significa que Git no esté instalado. Antes de declarar `MANUAL_PUSH_REQUIRED`, se debe probar la ruta absoluta.
+
+Reglas de seguridad:
+
+- Nunca usar `push --force`.
+- Nunca usar `reset --hard`.
+- Nunca usar `clean -fd`.
+- Nunca reescribir historial.
+- Nunca borrar branches.
+- Nunca hacer commit con tests fallando.
+- Revisar `git diff --check` antes del commit.
+- Añadir solamente archivos pertenecientes al trabajo autorizado.

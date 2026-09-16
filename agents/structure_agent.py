@@ -61,6 +61,78 @@ def _classify(highs, lows):
     return "neutral"
 
 
+def _break_of_structure(frame, highs, lows):
+    for swing in reversed(highs):
+        confirmations = frame.index[frame.index > swing["timestamp"]]
+        for timestamp in confirmations:
+            close = frame.loc[timestamp, "Close"]
+            if close > swing["price"]:
+                return {
+                    "type": "BOS",
+                    "direction": "bullish",
+                    "broken_level": swing["price"],
+                    "swing_timestamp": swing["pivot_timestamp"],
+                    "confirmation_timestamp": swing["timestamp"],
+                    "break_timestamp": timestamp,
+                    "break_close": float(close),
+                }
+    for swing in reversed(lows):
+        confirmations = frame.index[frame.index > swing["timestamp"]]
+        for timestamp in confirmations:
+            close = frame.loc[timestamp, "Close"]
+            if close < swing["price"]:
+                return {
+                    "type": "BOS",
+                    "direction": "bearish",
+                    "broken_level": swing["price"],
+                    "swing_timestamp": swing["pivot_timestamp"],
+                    "confirmation_timestamp": swing["timestamp"],
+                    "break_timestamp": timestamp,
+                    "break_close": float(close),
+                }
+    return None
+
+
+def _retracement(frame, highs, lows):
+    if len(highs) < 2 or len(lows) < 2:
+        return None
+    bullish_highs = [high for index, high in enumerate(highs[1:], 1) if high["price"] > highs[index - 1]["price"]]
+    bullish_lows = [low for index, low in enumerate(lows[1:], 1) if low["price"] > lows[index - 1]["price"]]
+    if bullish_highs and bullish_lows:
+        impulse_high = bullish_highs[-1]
+        protected_low = bullish_lows[-1]
+        close = float(frame["Close"].iloc[-1])
+        if protected_low["price"] < close < impulse_high["price"]:
+            return {
+                "direction": "bullish",
+                "classification": "HEURISTIC",
+                "impulse_high": impulse_high["price"],
+                "protected_low": protected_low["price"],
+                "current_close": close,
+                "impulse_timestamp": impulse_high["timestamp"],
+                "protected_timestamp": protected_low["timestamp"],
+                "current_timestamp": frame.index[-1],
+            }
+    bearish_highs = [high for index, high in enumerate(highs[1:], 1) if high["price"] < highs[index - 1]["price"]]
+    bearish_lows = [low for index, low in enumerate(lows[1:], 1) if low["price"] < lows[index - 1]["price"]]
+    if bearish_highs and bearish_lows:
+        impulse_low = bearish_lows[-1]
+        protected_high = bearish_highs[-1]
+        close = float(frame["Close"].iloc[-1])
+        if impulse_low["price"] < close < protected_high["price"]:
+            return {
+                "direction": "bearish",
+                "classification": "HEURISTIC",
+                "impulse_low": impulse_low["price"],
+                "protected_high": protected_high["price"],
+                "current_close": close,
+                "impulse_timestamp": impulse_low["timestamp"],
+                "protected_timestamp": protected_high["timestamp"],
+                "current_timestamp": frame.index[-1],
+            }
+    return None
+
+
 def analizar_estructura(datos, symbol="UNKNOWN", timeframe="unknown", run_id="structure", as_of=None):
     timestamp = datetime.now(timezone.utc)
     if timeframe not in AUTHORIZED_TIMEFRAMES:
@@ -91,7 +163,8 @@ def analizar_estructura(datos, symbol="UNKNOWN", timeframe="unknown", run_id="st
         "swings": {"highs": highs, "lows": lows},
         "levels": {"support": support, "resistance": resistance},
         "displacement": displacement,
-        "retracement": None,
+        "retracement": _retracement(frame, highs, lows),
+        "bos": _break_of_structure(frame, highs, lows),
         "evidence": [dict(evidence)],
         "warnings": [],
         "data_quality": {"closed_bars": len(frame), "definition": "swings require one closed confirmation bar"},

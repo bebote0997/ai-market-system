@@ -51,6 +51,42 @@ class TestStructureAgent(unittest.TestCase):
         new = analizar_estructura(future, "X", "1h", as_of=prefix.index[-1]).evidence[0]["swings"]
         self.assertEqual(old, new)
 
+    def test_bullish_bos_uses_confirmed_swing(self):
+        data = self.bars([9, 11, 10, 11, 14], [10, 12, 11, 13, 15], [8, 9, 8, 9, 12], [9, 11, 10, 12, 14])
+        report = analizar_estructura(data, "X", "1h")
+        bos = report.evidence[0]["bos"]
+        self.assertEqual(bos["direction"], "bullish")
+        self.assertEqual(bos["broken_level"], 12.0)
+        self.assertEqual(bos["confirmation_timestamp"], data.index[2])
+        self.assertEqual(bos["break_timestamp"], data.index[4])
+
+    def test_bearish_bos_uses_confirmed_swing(self):
+        data = self.bars([11, 9, 10, 9, 3], [13, 12, 14, 11, 8], [8, 7, 9, 5, 2], [11, 9, 12, 7, 3])
+        report = analizar_estructura(data, "X", "1h")
+        bos = report.evidence[0]["bos"]
+        self.assertEqual(bos["direction"], "bearish")
+        self.assertEqual(bos["broken_level"], 7.0)
+
+    def test_no_bos_without_closed_break_or_before_confirmation(self):
+        data = self.bars([9, 11, 10], [10, 12, 11], [8, 9, 8], [9, 11, 11])
+        self.assertIsNone(analizar_estructura(data, "X", "1h").evidence[0]["bos"])
+        extended = self.bars([9, 11, 10, 11, 14], [10, 12, 11, 13, 15], [8, 9, 8, 9, 12], [9, 11, 10, 12, 14])
+        self.assertIsNone(analizar_estructura(extended, "X", "1h", as_of=extended.index[3]).evidence[0]["bos"])
+
+    def test_bullish_retracement_is_heuristic(self):
+        data = self.bars([9, 11, 10, 13, 11, 12, 11], [10, 13, 11, 15, 12, 14, 13], [8, 9, 7, 10, 9, 11, 10], [9, 12, 8, 14, 10, 13, 12])
+        retracement = analizar_estructura(data, "X", "1h").evidence[0]["retracement"]
+        self.assertEqual(retracement["direction"], "bullish")
+        self.assertEqual(retracement["classification"], "HEURISTIC")
+        self.assertEqual(retracement["current_timestamp"], data.index[-1])
+
+    def test_bearish_retracement_and_no_evidence(self):
+        data = self.bars([11, 9, 10, 8, 10, 9, 10], [13, 11, 12, 10, 11, 9, 10], [8, 7, 9, 5, 6, 4, 5], [11, 8, 10, 6, 9, 7, 8])
+        retracement = analizar_estructura(data, "X", "1h").evidence[0]["retracement"]
+        self.assertEqual(retracement["direction"], "bearish")
+        short = self.bars([10, 11, 10], [11, 12, 11], [9, 10, 9], [10, 11, 10])
+        self.assertIsNone(analizar_estructura(short, "X", "1h").evidence[0]["retracement"])
+
 
 if __name__ == "__main__":
     unittest.main()
