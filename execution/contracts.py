@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import math
 from typing import Optional
 
 
@@ -14,6 +15,13 @@ class PaperAccount:
     open_positions: dict = field(default_factory=dict)
     closed_trades: list = field(default_factory=list)
 
+    def __post_init__(self):
+        values = (self.starting_equity, self.cash, self.equity, self.realized_pnl, self.unrealized_pnl)
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in values):
+            raise ValueError("PaperAccount numeric fields must be finite non-bool numbers")
+        if self.starting_equity <= 0:
+            raise ValueError("starting_equity must be positive")
+
 
 @dataclass
 class PaperOrder:
@@ -26,6 +34,10 @@ class PaperOrder:
     planned_entry: float
     stop: float
     target: float
+    contract_multiplier: float = 1.0
+    equity_at_submission: Optional[float] = None
+    cost_rate: float = 0.0
+    as_of: Optional[object] = None
     status: str = "PENDING"
 
 
@@ -63,6 +75,9 @@ class PaperPosition:
     opened_at: object
     status: str = "OPEN"
     last_price: Optional[float] = None
+    contract_multiplier: float = 1.0
+    cost_rate: float = 0.0
+    last_processed_at: Optional[object] = None
 
 
 @dataclass

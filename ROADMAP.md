@@ -96,6 +96,8 @@ Resultado implementado:
 
 Aceptación: cumplida con `284 tests OK`. Ejecución real permanece deshabilitada.
 
+Fase 5.1 hardening: post-fill risk, contract multiplier, first-bar fills, closed-bar policy, OHLC validation, symbol isolation, idempotency, state machine, journal y equity multi-symbol reforzados.
+
 Aceptación: idempotencia, estados reproducibles, recuperación ante errores y cero órdenes reales.
 
 ## Fase 6 — NEXT: Floor Assistant y Trading Floor UI

@@ -13,14 +13,22 @@ class TradeManager:
         if not isinstance(bar, dict) or bar.get("timestamp") is None:
             return []
         closed = []
+        bar_symbol = bar.get("symbol")
+        timestamp = bar.get("timestamp")
         for symbol, position in list(self.account.open_positions.items()):
             if position.status != "OPEN":
+                continue
+            if bar_symbol is not None and bar_symbol != symbol:
+                continue
+            if position.last_processed_at is not None and timestamp <= position.last_processed_at:
                 continue
             open_price = bar.get("open")
             high = bar.get("high")
             low = bar.get("low")
             close = bar.get("close")
             if not all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0 for value in (open_price, high, low, close)):
+                continue
+            if not (low <= open_price <= high and low <= close <= high):
                 continue
             if position.side == "LONG":
                 gap_stop = open_price <= position.stop
@@ -44,15 +52,18 @@ class TradeManager:
                 exit_price, reason = position.target, "target"
             if exit_price is None:
                 position.last_price = float(close)
+                position.last_processed_at = timestamp
                 continue
-            gross = ((exit_price - position.entry_price) if position.side == "LONG" else (position.entry_price - exit_price)) * position.quantity
-            cost = 0.0
+            gross = ((exit_price - position.entry_price) if position.side == "LONG" else (position.entry_price - exit_price)) * position.quantity * position.contract_multiplier
+            cost = position.cost_rate * position.quantity * position.entry_price / 100
             net = gross - cost
             trade = ClosedTrade("1.0", str(uuid.uuid4()), position.position_id, position.run_id, position.symbol, position.side, position.entry_price, exit_price, position.quantity, gross, cost, net, bar["timestamp"], reason)
             position.status = "CLOSED"
             self.account.realized_pnl += net
             self.account.closed_trades.append(trade)
             del self.account.open_positions[symbol]
+            if reason in ("stop", "target"):
+                self.broker._event(bar["timestamp"], position.run_id, symbol, trade.trade_id, "STOP_HIT" if reason == "stop" else "TARGET_HIT")
             self.broker._event(bar["timestamp"], position.run_id, symbol, trade.trade_id, "POSITION_CLOSED")
             closed.append(trade)
         self.account.unrealized_pnl = sum(self._unrealized(position) for position in self.account.open_positions.values())
@@ -62,4 +73,4 @@ class TradeManager:
     def _unrealized(self, position):
         if position.last_price is None:
             return 0.0
-        return ((position.last_price - position.entry_price) if position.side == "LONG" else (position.entry_price - position.last_price)) * position.quantity
+        return ((position.last_price - position.entry_price) if position.side == "LONG" else (position.entry_price - position.last_price)) * position.quantity * position.contract_multiplier

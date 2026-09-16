@@ -101,6 +101,20 @@
 
 - `timestamp`: 2026-09-16
 - `agent`: GitHub Copilot
+- `phase`: Fase 5.1 hardening
+- `task`: Auditar y endurecer Paper Broker/Trade Manager antes de Fase 6.
+- `tests_before`: 284 tests OK.
+- `tests_after`: 286 tests OK.
+- `files_created`: `AUDIT_PHASE5.md`.
+- `files_modified`: `execution/contracts.py`, `execution/paper_broker.py`, `execution/trade_manager.py`, `test_execution.py`, `ROADMAP.md`, `CHANGELOG_AGENT.md`.
+- `decisions`: InstrumentSpec/multiplier requerido para ejecución; primera barra cerrada posterior a as_of; post-fill risk/RR/geometry fail-closed; símbolo y timestamp aislados; costes explícitos y journal estructurado.
+- `warnings`: sin broker, red, credenciales ni dinero real.
+- `next_phase`: Fase 6 — Floor Assistant y Trading Floor UI.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
 - `phase`: Fase 4.1 hardening
 - `task`: Eliminar equity hardcodeada, exigir barras cerradas en Trade Planner, validar lineage/run_id, symbol, timeframe y as_of, y conservar PLAN_UNAVAILABLE.
 - `tests_before`: 278 tests OK.
