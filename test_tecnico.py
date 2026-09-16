@@ -3,6 +3,9 @@ import unittest
 import pandas as pd
 
 from tecnico import (
+	calcular_atr,
+	calcular_ema,
+	calcular_macd,
 	calcular_rsi,
 	calcular_media_movil,
 	calcular_variacion_periodo,
@@ -86,6 +89,76 @@ class TestCalcularVolatilidad(unittest.TestCase):
 
 	def test_un_solo_precio_devuelve_none(self):
 		self.assertIsNone(calcular_volatilidad(pd.Series([100.0])))
+
+
+class TestCalcularEma(unittest.TestCase):
+	def test_serie_valida_devuelve_ultimo_valor_ema(self):
+		self.assertAlmostEqual(calcular_ema([10, 20, 30, 40, 50], 3), 40.625)
+
+	def test_datos_insuficientes_devuelve_none(self):
+		self.assertIsNone(calcular_ema([10, 20], 3))
+
+	def test_periodo_cero_devuelve_none(self):
+		self.assertIsNone(calcular_ema([10, 20, 30], 0))
+
+
+class TestCalcularMacd(unittest.TestCase):
+	def test_serie_valida_devuelve_resultado_numerico(self):
+		precios = pd.Series(range(1, 41), dtype=float)
+		resultado = calcular_macd(
+			precios,
+			periodo_rapido=3,
+			periodo_lento=5,
+			periodo_senal=2,
+		)
+		ema_rapida = precios.ewm(span=3, adjust=False).mean()
+		ema_lenta = precios.ewm(span=5, adjust=False).mean()
+		macd = ema_rapida - ema_lenta
+		senal = macd.ewm(span=2, adjust=False).mean()
+
+		self.assertEqual(set(resultado), {"macd", "senal", "histograma"})
+		self.assertAlmostEqual(resultado["macd"], macd.iloc[-1])
+		self.assertAlmostEqual(resultado["senal"], senal.iloc[-1])
+		self.assertAlmostEqual(resultado["histograma"], macd.iloc[-1] - senal.iloc[-1])
+
+	def test_datos_insuficientes_devuelve_none(self):
+		self.assertIsNone(calcular_macd([1, 2, 3], 3, 5, 2))
+
+	def test_periodos_invalidos_devuelve_none(self):
+		self.assertIsNone(calcular_macd([1] * 10, 0, 5, 2))
+		self.assertIsNone(calcular_macd([1] * 10, 5, 5, 2))
+
+
+class TestCalcularAtr(unittest.TestCase):
+	def test_dataframe_ohlc_devuelve_atr(self):
+		datos = pd.DataFrame(
+			{
+				"High": [12.0, 14.0, 13.0],
+				"Low": [9.0, 10.0, 11.0],
+				"Close": [10.0, 12.0, 12.0],
+			}
+		)
+
+		self.assertAlmostEqual(calcular_atr(datos, 3), 3.0)
+
+	def test_datos_insuficientes_devuelve_none(self):
+		datos = pd.DataFrame({"High": [12.0], "Low": [9.0], "Close": [10.0]})
+		self.assertIsNone(calcular_atr(datos, 2))
+
+	def test_falta_columna_requerida_devuelve_none(self):
+		for columna in ["High", "Low", "Close"]:
+			datos = pd.DataFrame(
+				{
+					"High": [12.0, 14.0],
+					"Low": [9.0, 10.0],
+					"Close": [10.0, 12.0],
+				}
+			).drop(columns=columna)
+			self.assertIsNone(calcular_atr(datos, 2))
+
+	def test_periodo_cero_devuelve_none(self):
+		datos = pd.DataFrame({"High": [12.0], "Low": [9.0], "Close": [10.0]})
+		self.assertIsNone(calcular_atr(datos, 0))
 
 
 if __name__ == "__main__":

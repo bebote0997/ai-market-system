@@ -1,3 +1,6 @@
+import pandas as pd
+
+
 def calcular_variacion_periodo(precios):
 	if precios is None:
 		return None
@@ -77,3 +80,66 @@ def calcular_volatilidad(precios):
 		return None
 
 	return float(rendimientos.std() * 100)
+
+
+def calcular_ema(precios, periodo=20):
+	if precios is None or periodo <= 0:
+		return None
+
+	precios = pd.Series(precios)
+	if precios.empty or len(precios) < periodo:
+		return None
+
+	return float(precios.ewm(span=periodo, adjust=False).mean().iloc[-1])
+
+
+def calcular_macd(precios, periodo_rapido=12, periodo_lento=26, periodo_senal=9):
+	if precios is None or not all(
+		periodo > 0
+		for periodo in [periodo_rapido, periodo_lento, periodo_senal]
+	):
+		return None
+	if periodo_rapido >= periodo_lento:
+		return None
+
+	precios = pd.Series(precios)
+	minimo_datos = periodo_lento + periodo_senal - 1
+	if precios.empty or len(precios) < minimo_datos:
+		return None
+
+	ema_rapida = precios.ewm(span=periodo_rapido, adjust=False).mean()
+	ema_lenta = precios.ewm(span=periodo_lento, adjust=False).mean()
+	macd = ema_rapida - ema_lenta
+	senal = macd.ewm(span=periodo_senal, adjust=False).mean()
+	histograma = macd - senal
+
+	return {
+		"macd": float(macd.iloc[-1]),
+		"senal": float(senal.iloc[-1]),
+		"histograma": float(histograma.iloc[-1]),
+	}
+
+
+def calcular_atr(datos, periodo=14):
+	if datos is None or periodo <= 0:
+		return None
+
+	columnas_requeridas = ["High", "Low", "Close"]
+	if datos.empty or not all(
+		columna in datos.columns for columna in columnas_requeridas
+	):
+		return None
+	if len(datos) < periodo:
+		return None
+
+	close_anterior = datos["Close"].shift(1)
+	true_range = pd.concat(
+		[
+			datos["High"] - datos["Low"],
+			(datos["High"] - close_anterior).abs(),
+			(datos["Low"] - close_anterior).abs(),
+		],
+		axis=1,
+	).max(axis=1)
+
+	return float(true_range.rolling(window=periodo).mean().iloc[-1])
