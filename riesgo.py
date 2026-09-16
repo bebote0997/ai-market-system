@@ -117,20 +117,20 @@ def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=Non
 	if plan_data is None or instrumento is None or not isinstance(configuracion, dict):
 		return RiskDecision("1.0", "REJECTED", "", "", None, None, 0.0, 0.0, 0.0, "invalid_input")
 	try:
-		side = plan_data["side"]
+		side = str(plan_data["side"]).upper()
 		entry = float(plan_data["entry"])
 		stop = float(plan_data["stop"])
 		target = float(plan_data["target"])
 		rr = float(plan_data["risk_reward"])
 	except (KeyError, TypeError, ValueError):
 		return RiskDecision("1.0", "REJECTED", plan_data.get("symbol", ""), plan_data.get("side", ""), None, None, 0.0, 0.0, 0.0, "invalid_plan")
-	if side not in ("long", "short") or not validar_timeframe(plan_data.get("timeframe")):
+	if side not in ("LONG", "SHORT") or not validar_timeframe(plan_data.get("timeframe")):
 		return RiskDecision("1.0", "REJECTED", plan_data.get("symbol", ""), side, None, None, entry, stop, target, "invalid_direction_or_timeframe")
 	if not all(_finito(valor) and valor > 0 for valor in (entry, stop, target, capital_actual)):
 		return RiskDecision("1.0", "REJECTED", plan_data.get("symbol", ""), side, None, None, entry, stop, target, "invalid_numeric_value")
 	if instrumento.contract_multiplier is None or not _finito(instrumento.contract_multiplier) or instrumento.contract_multiplier <= 0:
 		return RiskDecision("1.0", "REJECTED", plan_data.get("symbol", ""), side, None, None, entry, stop, target, "instrument_contract_data_unavailable")
-	if (side == "long" and not stop < entry < target) or (side == "short" and not target < entry < stop):
+	if (side == "LONG" and not stop < entry < target) or (side == "SHORT" and not target < entry < stop):
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_level_order")
 	if not _finito(rr) or rr < configuracion["ratio_minimo"]:
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_below_minimum")
@@ -142,4 +142,9 @@ def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=Non
 	quantity = min(quantity_risk, quantity_capital)
 	if quantity <= 0 or not _finito(quantity):
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_quantity")
-	return RiskDecision("1.0", "APPROVED", plan_data["symbol"], side, float(quantity), float(quantity * risk_unitario), entry, stop, target, "approved")
+	return RiskDecision(
+		"1.0", "APPROVED", plan_data["symbol"], side, float(quantity), float(quantity * risk_unitario),
+		entry, stop, target, "approved", equity_at_decision=float(capital_actual),
+		risk_fraction=float(configuracion["riesgo_por_operacion_pct"]) / 100,
+		contract_multiplier=float(instrumento.contract_multiplier),
+	)

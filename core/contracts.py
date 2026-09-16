@@ -62,6 +62,9 @@ class RiskDecision:
     target: float
     reason: str
     warnings: tuple = ()
+    equity_at_decision: Optional[float] = None
+    risk_fraction: Optional[float] = None
+    contract_multiplier: Optional[float] = None
 
 
 @dataclass(frozen=True)

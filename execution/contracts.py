@@ -3,6 +3,14 @@ import math
 from typing import Optional
 
 
+def _valid_multiplier(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
+
+
+def _valid_side(value):
+    return value in {"LONG", "SHORT"}
+
+
 @dataclass
 class PaperAccount:
     schema_version: str
@@ -34,11 +42,15 @@ class PaperOrder:
     planned_entry: float
     stop: float
     target: float
-    contract_multiplier: float = 1.0
+    contract_multiplier: Optional[float] = None
     equity_at_submission: Optional[float] = None
     cost_rate: float = 0.0
     as_of: Optional[object] = None
     status: str = "PENDING"
+
+    def __post_init__(self):
+        if not _valid_side(self.side):
+            raise ValueError("PaperOrder side must be LONG or SHORT")
 
 
 @dataclass
@@ -75,9 +87,13 @@ class PaperPosition:
     opened_at: object
     status: str = "OPEN"
     last_price: Optional[float] = None
-    contract_multiplier: float = 1.0
+    contract_multiplier: Optional[float] = None
     cost_rate: float = 0.0
     last_processed_at: Optional[object] = None
+
+    def __post_init__(self):
+        if not _valid_side(self.side):
+            raise ValueError("PaperPosition side must be LONG or SHORT")
 
 
 @dataclass

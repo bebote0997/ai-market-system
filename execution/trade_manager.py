@@ -1,7 +1,16 @@
 import math
 import uuid
+from datetime import datetime
 
 from execution.contracts import ClosedTrade
+
+
+def _aware(value):
+    return isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _valid_multiplier(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
 
 
 class TradeManager:
@@ -15,13 +24,18 @@ class TradeManager:
         closed = []
         bar_symbol = bar.get("symbol")
         timestamp = bar.get("timestamp")
+        if bar_symbol is None or not _aware(timestamp) or bar.get("is_closed") is not True:
+            return []
         for symbol, position in list(self.account.open_positions.items()):
-            if position.status != "OPEN":
+            if position.status != "OPEN" or position.side not in {"LONG", "SHORT"}:
                 continue
-            if bar_symbol is not None and bar_symbol != symbol:
+            if bar_symbol != symbol or not _aware(position.opened_at) or not _valid_multiplier(position.contract_multiplier):
                 continue
-            if position.last_processed_at is not None and timestamp <= position.last_processed_at:
+            if timestamp <= position.opened_at:
                 continue
+            if position.last_processed_at is not None:
+                if not _aware(position.last_processed_at) or timestamp <= position.last_processed_at:
+                    continue
             open_price = bar.get("open")
             high = bar.get("high")
             low = bar.get("low")
@@ -71,6 +85,6 @@ class TradeManager:
         return closed
 
     def _unrealized(self, position):
-        if position.last_price is None:
+        if position.last_price is None or not _valid_multiplier(position.contract_multiplier):
             return 0.0
         return ((position.last_price - position.entry_price) if position.side == "LONG" else (position.entry_price - position.last_price)) * position.quantity * position.contract_multiplier
