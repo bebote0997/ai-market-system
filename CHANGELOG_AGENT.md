@@ -1,5 +1,17 @@
 # Agent Changelog
 
+## 2026-09-16 — Fase 6B
+
+- `agent`: Codex
+- `task`: Implementar Hybrid Trading Floor UI en Streamlit y Plotly, preservando `app.py` legacy.
+- `tests_before`: 381 OK.
+- `tests_after`: 389 OK.
+- `files_created`: `ui/`, `test_ui.py`, `requirements-ui.txt`, `UI_SPEC.md`, `AUDIT_PHASE6B.md`.
+- `files_modified`: `ROADMAP.md`, `CHANGELOG_AGENT.md`.
+- `integration`: `FloorRunReport → AIFloorReport → FloorViewModel`; renderers de solo lectura.
+- `safety`: PAPER MODE, REAL EXECUTION DISABLED, RiskDecision como única autoridad, SAMPLE / DEMO aislado.
+- `next_phase`: Fase 6C, no implementada.
+
 ## 2026-09-16
 
 - `timestamp`: 2026-09-16

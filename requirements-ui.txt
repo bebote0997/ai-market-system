@@ -1,0 +1,3 @@
+# Optional floor UI; legacy app.py remains separate.
+streamlit>=1.40,<2
+plotly>=5.0,<8
