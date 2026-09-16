@@ -31,13 +31,21 @@ Aceptación:
 
 Todos los criterios de Fase 1 están cumplidos. La suite pasó 237 tests.
 
-## Fase 2 — NEXT: Structure y Liquidity Agents
+## Fase 2 — COMPLETADA: Structure y Liquidity Agents
 
 Implementar primero definiciones deterministas y testeables de swings, estructura, desplazamiento, retrocesos, liquidity sweeps y order blocks. Etiquetar heurísticas explícitamente.
 
-Aceptación: evidencia reproducible, timestamps correctos, `NO_DATA` cuando falten barras y sin look-ahead.
+Resultado implementado:
 
-## Fase 3 — Macro/News Agent
+- `agents/structure_agent.py` determinista con swings, HH/HL/LH/LL, bias, niveles, desplazamiento heurístico y corte temporal `as_of`.
+- `agents/liquidity_agent.py` determinista con equal highs/lows, pools y sweeps; equal-leveles marcados como `HEURISTIC`.
+- Contrato `AgentMessage` versionado con estado, evidencia, calidad de datos y warnings.
+- Soporte explícito para `1h`, `15m`, `5m`, UTC, velas cerradas y estados `OK`, `PARTIAL`, `NO_DATA`, `ERROR`.
+- Tests de multi-timeframe, datos incompletos, duplicados y no-lookahead.
+
+Aceptación: cumplida con `248 tests OK`. No se implementaron order blocks arbitrarios, señales ni órdenes.
+
+## Fase 3 — NEXT: Macro/News Agent
 
 Añadir proveedor de noticias/calendario con fuente, timestamp y calidad. La ausencia de información debe producir `NO_DATA`, nunca contexto inventado.
 

@@ -29,3 +29,18 @@
 - `decisions`: Mantener las APIs legacy; añadir una ruta V2 explícita. Rechazar instrumentos sin multiplicador contractual conocido. Mantener UTC y timeframes 1h/15m/5m. Usar APPROVED/REJECTED determinista y soportar LONG/SHORT.
 - `warnings`: Warnings existentes de Streamlit y pandas durante la suite; no se conectó red ni broker.
 - `next_step`: Fase 2: Structure Agent y Liquidity Agent deterministas.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
+- `phase`: Fase 2
+- `task`: Implementar Structure Agent y Liquidity Agent deterministas con contrato AgentMessage versionado.
+- `tests_before`: 237 tests OK.
+- `tests_after`: 248 tests OK.
+- `files_created`: `agents/__init__.py`, `agents/structure_agent.py`, `agents/liquidity_agent.py`, `test_structure_agent.py`, `test_liquidity_agent.py`.
+- `files_modified`: `core/contracts.py`, `ROADMAP.md`, `CHANGELOG_AGENT.md`.
+- `definitions_used`: swings confirmados con una barra cerrada posterior; HH/HL/LH/LL por comparación de swings; soporte/resistencia como extremos de swings; displacement como cuerpo/rango >= 0.6; equal levels con tolerancia relativa 0.1%; sweep high/low por ruptura del extremo previo y cierre de vuelta dentro.
+- `heuristics`: displacement y equal-level detection están marcados `HEURISTIC`; order blocks no se implementaron.
+- `warnings`: warnings preexistentes de Streamlit y pandas durante tests; sin red ni broker.
+- `next_phase`: Fase 3 — Macro/News Agent.

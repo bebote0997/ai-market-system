@@ -60,3 +60,18 @@ class RiskDecision:
     target: float
     reason: str
     warnings: tuple = ()
+
+
+@dataclass(frozen=True)
+class AgentMessage:
+    schema_version: str
+    run_id: str
+    timestamp: datetime
+    symbol: str
+    timeframe: str
+    agent: str
+    status: str
+    evidence: tuple = ()
+    data_quality: dict = field(default_factory=dict)
+    warnings: tuple = ()
+    reasoning_summary: Optional[str] = None
