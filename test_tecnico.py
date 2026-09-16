@@ -4,7 +4,9 @@ import pandas as pd
 
 from tecnico import (
 	calcular_atr,
+	calcular_contexto_volumen,
 	calcular_ema,
+	calcular_estructura_precio,
 	calcular_macd,
 	calcular_rsi,
 	calcular_media_movil,
@@ -159,6 +161,90 @@ class TestCalcularAtr(unittest.TestCase):
 	def test_periodo_cero_devuelve_none(self):
 		datos = pd.DataFrame({"High": [12.0], "Low": [9.0], "Close": [10.0]})
 		self.assertIsNone(calcular_atr(datos, 0))
+
+
+class TestCalcularContextoVolumen(unittest.TestCase):
+	def test_datos_validos_producen_valores_esperados(self):
+		datos = pd.DataFrame({"Volume": [100.0, 200.0, 300.0]})
+
+		resultado = calcular_contexto_volumen(datos, 2)
+
+		self.assertAlmostEqual(resultado["volumen_actual"], 300.0)
+		self.assertAlmostEqual(resultado["volumen_medio"], 250.0)
+		self.assertAlmostEqual(resultado["ratio_volumen"], 1.2)
+
+	def test_volumen_medio_cero_produce_ratio_none(self):
+		datos = pd.DataFrame({"Volume": [0.0, 0.0]})
+
+		resultado = calcular_contexto_volumen(datos, 2)
+
+		self.assertIsNone(resultado["ratio_volumen"])
+
+	def test_datos_insuficientes_devuelve_none(self):
+		datos = pd.DataFrame({"Volume": [100.0]})
+		self.assertIsNone(calcular_contexto_volumen(datos, 2))
+
+	def test_falta_volume_devuelve_none(self):
+		datos = pd.DataFrame({"Close": [100.0, 101.0]})
+		self.assertIsNone(calcular_contexto_volumen(datos, 2))
+
+	def test_ventana_cero_devuelve_none(self):
+		datos = pd.DataFrame({"Volume": [100.0]})
+		self.assertIsNone(calcular_contexto_volumen(datos, 0))
+
+
+class TestCalcularEstructuraPrecio(unittest.TestCase):
+	def test_datos_validos_producen_estructura_esperada(self):
+		datos = pd.DataFrame(
+			{
+				"High": [110.0, 130.0, 120.0],
+				"Low": [90.0, 100.0, 80.0],
+				"Close": [100.0, 120.0, 110.0],
+			}
+		)
+
+		resultado = calcular_estructura_precio(datos, 3)
+
+		self.assertAlmostEqual(resultado["precio_actual"], 110.0)
+		self.assertAlmostEqual(resultado["maximo_reciente"], 130.0)
+		self.assertAlmostEqual(resultado["minimo_reciente"], 80.0)
+		self.assertAlmostEqual(resultado["posicion_rango"], 60.0)
+
+	def test_rango_constante_produce_posicion_cincuenta(self):
+		datos = pd.DataFrame(
+			{
+				"High": [100.0, 100.0],
+				"Low": [100.0, 100.0],
+				"Close": [100.0, 100.0],
+			}
+		)
+
+		resultado = calcular_estructura_precio(datos, 2)
+
+		self.assertAlmostEqual(resultado["posicion_rango"], 50.0)
+
+	def test_datos_insuficientes_devuelve_none(self):
+		datos = pd.DataFrame(
+			{"High": [110.0], "Low": [90.0], "Close": [100.0]}
+		)
+		self.assertIsNone(calcular_estructura_precio(datos, 2))
+
+	def test_falta_columna_requerida_devuelve_none(self):
+		for columna in ["High", "Low", "Close"]:
+			datos = pd.DataFrame(
+				{
+					"High": [110.0, 120.0],
+					"Low": [90.0, 80.0],
+					"Close": [100.0, 110.0],
+				}
+			).drop(columns=columna)
+			self.assertIsNone(calcular_estructura_precio(datos, 2))
+
+	def test_ventana_cero_devuelve_none(self):
+		datos = pd.DataFrame(
+			{"High": [110.0], "Low": [90.0], "Close": [100.0]}
+		)
+		self.assertIsNone(calcular_estructura_precio(datos, 0))
 
 
 if __name__ == "__main__":

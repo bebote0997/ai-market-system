@@ -143,3 +143,54 @@ def calcular_atr(datos, periodo=14):
 	).max(axis=1)
 
 	return float(true_range.rolling(window=periodo).mean().iloc[-1])
+
+
+def calcular_contexto_volumen(datos, ventana=20):
+	if datos is None or datos.empty or ventana <= 0:
+		return None
+	if "Volume" not in datos.columns or len(datos) < ventana:
+		return None
+
+	volumen_actual = float(datos["Volume"].iloc[-1])
+	volumen_medio = float(datos["Volume"].iloc[-ventana:].mean())
+	if volumen_medio == 0:
+		ratio_volumen = None
+	else:
+		ratio_volumen = float(volumen_actual / volumen_medio)
+
+	return {
+		"volumen_actual": volumen_actual,
+		"volumen_medio": volumen_medio,
+		"ratio_volumen": ratio_volumen,
+	}
+
+
+def calcular_estructura_precio(datos, ventana=20):
+	if datos is None or datos.empty or ventana <= 0:
+		return None
+
+	columnas_requeridas = ["High", "Low", "Close"]
+	if not all(columna in datos.columns for columna in columnas_requeridas):
+		return None
+	if len(datos) < ventana:
+		return None
+
+	ultimos_datos = datos.iloc[-ventana:]
+	maximo_reciente = float(ultimos_datos["High"].max())
+	minimo_reciente = float(ultimos_datos["Low"].min())
+	precio_actual = float(ultimos_datos["Close"].iloc[-1])
+
+	if maximo_reciente == minimo_reciente:
+		posicion_rango = 50.0
+	else:
+		posicion_rango = (
+			(precio_actual - minimo_reciente)
+			/ (maximo_reciente - minimo_reciente)
+		) * 100
+
+	return {
+		"precio_actual": precio_actual,
+		"maximo_reciente": maximo_reciente,
+		"minimo_reciente": minimo_reciente,
+		"posicion_rango": float(posicion_rango),
+	}
