@@ -1,4 +1,4 @@
-def render(st, vm):
+def render(st, vm, durable_rows=()):
     st.header("JOURNAL")
     st.caption("In-memory snapshot only · durable persistence deferred")
     c = st.columns(5)
@@ -8,9 +8,11 @@ def render(st, vm):
     event = c[3].text_input("Event")
     date = c[4].date_input("Date", value=None)
     rows = []
-    for item in vm.journal:
+    for item in (vm.journal if vm.sample else durable_rows):
         row = {"timestamp": str(item.timestamp), "run_id": item.run_id, "symbol": item.symbol,
-               "source": item.entity_id, "event": item.event_type, "details": str(item.details)}
+               "source": item.entity_id, "event": item.event_type, "details": str(item.details)} if vm.sample else {
+               "timestamp": item["timestamp"], "run_id": item["run_id"], "symbol": item["symbol"],
+               "source": item["source"], "event": item["event_type"], "details": item["payload"]}
         if symbol != "ALL" and row["symbol"] != symbol:
             continue
         if run_id and run_id not in row["run_id"]:

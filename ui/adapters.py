@@ -1,6 +1,9 @@
 """Pure snapshot-to-view-model conversion. No analysis or execution occurs here."""
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from storage.codec import parse_utc
 from typing import Optional
 
 MARKETS = ("XAUUSD", "NAS100", "EURUSD")
@@ -107,6 +110,35 @@ def empty_market(symbol):
     return FloorViewModel(None, symbol, None, "NO_DATA", "NO_SETUP", None, (), None,
                           None, "NOT CALLED", None, tuple(_agent(n, None) for n in AGENT_NAMES),
                           (), (f"{symbol}: NO_DATA", "Risk Engine: NOT CALLED"), (), "NO_DATA")
+
+
+def from_persisted_snapshot(payload, *, now=None, max_age_seconds=900):
+    if payload.get("schema_version") != "1.0" or payload.get("symbol") not in MARKETS:
+        raise ValueError("incompatible UI snapshot")
+    vm = empty_market(payload["symbol"])
+    agents = tuple(AgentView(a["name"], a["status"], a["bias"], a.get("confidence"),
+        a.get("recommendation"), tuple(a.get("evidence") or ()), tuple(a.get("conflicts") or ()),
+        tuple(a.get("warnings") or ()), parse_utc(a["timestamp"]) if a.get("timestamp") else None,
+        a.get("reasoning_summary"), tuple(a.get("observations") or ())) for a in payload.get("agents", ()))
+    as_of = parse_utc(payload["as_of"]) if payload.get("as_of") else None
+    freshness = payload.get("freshness", "NO_DATA")
+    warnings = tuple(payload.get("warnings") or ())
+    if freshness == "CURRENT" and as_of and ((now or datetime.now(timezone.utc)) - as_of).total_seconds() > max_age_seconds:
+        freshness = "STALE_DATA"
+        warnings += ("CRITICAL — STALE DATA",)
+    return replace(vm, run_id=payload.get("run_id"),
+        as_of=as_of,
+        state=payload["state"], setup_status=payload.get("setup_status", "NO_SETUP"),
+        setup_side=payload.get("setup_side"), setup_evidence=tuple(payload.get("setup_evidence") or ()),
+        setup_invalidation=payload.get("setup_invalidation"),
+        plan=SimpleNamespace(**payload["plan"]) if payload.get("plan") else None,
+        risk_status=payload.get("risk_status", "NOT CALLED"),
+        risk_decision=SimpleNamespace(**payload["risk_decision"]) if payload.get("risk_decision") else None,
+        agents=agents or vm.agents, warnings=warnings,
+        facts=tuple(payload.get("facts") or ()), interpretation=tuple(payload.get("interpretation") or ()),
+        freshness=freshness,
+        prompt_versions=tuple(tuple(x) for x in payload.get("prompt_versions") or ()),
+        schema_version=payload["schema_version"])
 
 
 def state_label(state):

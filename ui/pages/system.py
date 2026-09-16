@@ -1,7 +1,7 @@
-def render(st, vm):
+def render(st, vm, operational_health=None):
     st.header("SYSTEM")
     st.caption("Read-only service inventory")
-    st.dataframe([
+    rows = [
         {"service": "Market data provider", "status": "NOT CONFIGURED"},
         {"service": "AI provider", "status": "NOT STARTED"},
         {"service": "Scheduler", "status": "NOT CONFIGURED"},
@@ -9,7 +9,10 @@ def render(st, vm):
         {"service": "Persistence", "status": "NOT CONFIGURED"},
         {"service": "Last successful run", "status": "NO_DATA"},
         {"service": "Freshness", "status": vm.freshness},
-    ], hide_index=True, use_container_width=True)
+    ]
+    if operational_health and not vm.sample:
+        rows = [{"service": key.replace("_", " ").title(), "status": value} for key, value in operational_health.items()]
+    st.dataframe(rows, hide_index=True, use_container_width=True)
     st.write("Warnings:", vm.warnings or "—")
     st.write("Prompt versions:", dict(vm.prompt_versions) if vm.prompt_versions else "NO_DATA")
     st.write("Schema version:", vm.schema_version or "NO_DATA")

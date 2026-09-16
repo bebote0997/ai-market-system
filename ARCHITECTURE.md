@@ -1,5 +1,9 @@
 # Trading Floor V2 — Architecture
 
+## Operational layer (Fase 6C)
+
+`runtime.service.OperationalRuntime` coordinates the session scheduler, closed-bar freshness gate, deterministic Floor Orchestrator, AI Orchestrator, final PAPER policy gate, existing Paper Broker and Trade Manager, and SQLite repository. `storage.database.Store` persists reports, paper state, journal, slots, health, and read-only UI snapshots. `runtime.scheduler` uses `zoneinfo` for London/New York analysis windows. The UI reads SQLite read-only and never triggers a cycle. The scheduler triggers but never authorizes. Only `PLAN_READY` with RiskDecision APPROVED and valid review can reach the Paper Broker; AI_CAUTION blocks progression. Details: `OPERATIONAL_RUNTIME_SPEC.md`.
+
 ## Diagrama
 
 ```mermaid

@@ -20,4 +20,8 @@ The header always displays `PAPER MODE`, `REAL EXECUTION DISABLED`, symbol, stat
 
 The page uses wide layout and native columns; Streamlit stacks columns on narrow displays. CSS styles only the app background and owned markup, not private Streamlit class names. At compact widths the global safety header remains above every page. Streamlit cannot provide exact breakpoint-dependent column restructuring without a custom component, so the layout is adaptive rather than pixel-locked at 1600/1440/1100. The pipeline is a concise text preview; no custom JavaScript synchronization is used. Charts use `st.plotly_chart(..., use_container_width=True, theme=None)` supported by installed Streamlit 1.64.0. No fragments, cache, or rerun calls are used.
 
-Experiment and System show explicit `NOT STARTED`, `NOT CONFIGURED`, or `NO_DATA` for unconnected services. Journal filters operate only on in-memory events supplied with a snapshot. Durable persistence and scheduler are Phase 6C work.
+Experiment and System show explicit `NOT STARTED`, `NOT CONFIGURED`, or `NO_DATA` for unconnected services. In SAMPLE / DEMO, Journal filters operate on in-memory events supplied with a snapshot.
+
+## Fase 6C operational read
+
+When SAMPLE / DEMO is off, `ui.state.operational_store` opens `AI_FLOOR_DB_PATH` (or the default relative DB) using SQLite `mode=ro`. FLOOR and MARKETS read persisted UI snapshots and paper account/order/position state, JOURNAL reads durable events, and SYSTEM reads health. A missing DB remains `NO_DATA`/`NOT CONFIGURED`; no sample fallback occurs. Streamlit reruns perform reads only. CURRENT persisted snapshots are reclassified as `CRITICAL — STALE DATA` when old. The official experiment remains unstarted.

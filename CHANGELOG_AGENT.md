@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-09-16 — Fase 6C
+
+- `agent`: Codex
+- `task`: Implementar runtime PAPER durable con SQLite, scheduler, recovery, health y compuerta final de ejecución.
+- `tests_before`: 389 OK.
+- `tests_after`: 405 OK.
+- `files_created`: `storage/`, `runtime/`, `test_runtime.py`, `OPERATIONAL_RUNTIME_SPEC.md`, `AUDIT_PHASE6C.md`.
+- `files_modified`: `.gitignore`, `ui/adapters.py`, `ui/state.py`, `ui/app.py`, `ui/pages/journal.py`, `ui/pages/system.py`, `ARCHITECTURE.md`, `ROADMAP.md`, `UI_SPEC.md`, `CHANGELOG_AGENT.md`.
+- `safety`: PAPER only; `AI_CAUTION` bloquea progresión incluso con riesgo APPROVED; datos stale, barras abiertas y fallos bloquean nuevos paper orders.
+- `next_phase`: preparación Fase 7, no implementada.
+
 ## 2026-09-16 — Fase 6B
 
 - `agent`: Codex

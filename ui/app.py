@@ -11,7 +11,7 @@ from ui.adapters import MARKETS
 from ui.components import panels
 from ui.fixtures.demo_floor import demo_market
 from ui.pages import experiment, floor, journal, markets, positions, system
-from ui.state import current_market
+from ui.state import current_market, operational_store
 from ui.theme import apply
 
 st.set_page_config(page_title="AI Trading Floor · PAPER", layout="wide", page_icon="📊")
@@ -34,11 +34,22 @@ elif page == "MARKETS":
 elif page == "POSITIONS":
     positions.render(st, vm)
 elif page == "JOURNAL":
-    journal.render(st, vm)
+    store = operational_store() if not vm.sample else None
+    try:
+        journal.render(st, vm, store.journal(limit=500) if store else ())
+    finally:
+        if store:
+            store.close()
 elif page == "EXPERIMENT":
     experiment.render(st, vm)
 else:
-    system.render(st, vm)
+    store = operational_store() if not vm.sample else None
+    try:
+        from runtime.health import health
+        system.render(st, vm, health(store) if store else None)
+    finally:
+        if store:
+            store.close()
 
 if vm.run_id:
     with st.expander(f"AI MEETING · {vm.run_id}"):

@@ -127,7 +127,11 @@ Aceptación: cumplida con `381 tests OK`. Detalle de invariantes en `AUDIT_PHASE
 
 ## Fase 6B — COMPLETADA: Hybrid Trading Floor UI
 
-Interfaz Streamlit/Plotly separada del dashboard legacy, con FLOOR, MARKETS, POSITIONS, JOURNAL, EXPERIMENT, SYSTEM y AI MEETING contextual. La adaptación `AIFloorReport → FloorViewModel` es read-only. El modo SAMPLE / DEMO es explícito y aislado. Los estados de riesgo proceden exclusivamente de `RiskDecision`; ejecución real deshabilitada. Suite final: 389 tests OK. La siguiente fase autorizable es 6C; no está implementada aquí.
+Interfaz Streamlit/Plotly separada del dashboard legacy, con FLOOR, MARKETS, POSITIONS, JOURNAL, EXPERIMENT, SYSTEM y AI MEETING contextual. La adaptación `AIFloorReport → FloorViewModel` es read-only. El modo SAMPLE / DEMO es explícito y aislado. Los estados de riesgo proceden exclusivamente de `RiskDecision`; ejecución real deshabilitada. Suite de cierre de 6B: 389 tests OK.
+
+## Fase 6C — COMPLETADA: Operational Runtime
+
+Persistencia SQLite versionada, journal durable, scheduler configurable con sesiones London/New York y DST, slots idempotentes, frescura de barras cerradas, política final de PAPER, recuperación, heartbeat, health y lectura operacional de UI. Cuenta/posición paper sobreviven reinicio. Suite: 405 tests OK. El experimento oficial de 14 días y el proveedor IA externo no se iniciaron.
 
 ## Regla de avance
 
