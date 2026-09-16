@@ -42,3 +42,69 @@ def generar_evaluaciones_historicas(datos, minimo_historial=50):
 		)
 
 	return evaluaciones
+
+
+def calcular_resultados_futuros(datos, evaluaciones, horizontes=(1, 5, 10)):
+	if datos is None or datos.empty or not evaluaciones:
+		return []
+	if "Close" not in datos.columns or not horizontes:
+		return []
+
+	horizontes_validos = [
+		horizonte
+		for horizonte in horizontes
+		if isinstance(horizonte, int)
+		and not isinstance(horizonte, bool)
+		and horizonte > 0
+	]
+	if not horizontes_validos:
+		return []
+
+	datos_ordenados = datos.sort_index().copy()
+	close = pd.to_numeric(datos_ordenados["Close"], errors="coerce")
+	resultados = []
+
+	for evaluacion in evaluaciones:
+		fecha = evaluacion["fecha"]
+		posiciones = [
+			posicion
+			for posicion, indice in enumerate(datos_ordenados.index)
+			if indice == fecha
+		]
+		if not posiciones:
+			continue
+
+		posicion_actual = posiciones[0]
+		precio_base = pd.to_numeric(
+			pd.Series([evaluacion.get("precio_cierre")]), errors="coerce"
+		).iloc[0]
+		if pd.isna(precio_base) or precio_base == 0:
+			precio_base = None
+
+		retornos_futuros = {}
+		for horizonte in horizontes_validos:
+			posicion_futura = posicion_actual + horizonte
+			if precio_base is None or posicion_futura >= len(datos_ordenados):
+				retornos_futuros[horizonte] = None
+				continue
+
+			precio_futuro = close.iloc[posicion_futura]
+			if pd.isna(precio_futuro):
+				retornos_futuros[horizonte] = None
+				continue
+
+			retornos_futuros[horizonte] = float(
+				((precio_futuro - precio_base) / precio_base) * 100
+			)
+
+		resultados.append(
+			{
+				"fecha": evaluacion["fecha"],
+				"precio_cierre": evaluacion["precio_cierre"],
+				"analisis": evaluacion["analisis"],
+				"evaluacion": evaluacion["evaluacion"],
+				"retornos_futuros": retornos_futuros,
+			}
+		)
+
+	return resultados
