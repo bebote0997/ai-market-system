@@ -6,9 +6,18 @@ Auditoría del prototipo, baseline de tests, motor técnico, backtesting histór
 
 Resultado conocido: baseline actual de `230 tests OK` antes de esta documentación.
 
-## Fase 1 — NEXT: contratos, datos y LONG/SHORT
+## Fase 1 — COMPLETADA: contratos, datos y LONG/SHORT
 
 Crear contratos versionados, timeframes, resolver de símbolos y proveedor de datos desacoplado. Adaptar el Risk Engine para LONG/SHORT y formalizar validaciones de SL/TP, R:R, sizing y límites.
+
+Resultado implementado:
+
+- Contratos versionados `InstrumentSpec`, `MarketBar`, `TradePlan` y `RiskDecision`.
+- Timeframes autorizados `1h`, `15m`, `5m` y timezone UTC.
+- Catálogo explícito para `XAUUSD`, `NAS100` y `EURUSD`; especificaciones contractuales desconocidas quedan como `None` y el Risk Engine rechaza si son necesarias.
+- Risk Engine V2 con LONG/SHORT, límite de riesgo, R:R mínimo y estados `APPROVED`/`REJECTED`.
+- Ruta explícita de simulación V2 con SHORT; la ruta legacy permanece compatible.
+- Tests de integración TradePlan -> Risk Engine -> simulación para aprobación y rechazo.
 
 Aceptación:
 
@@ -20,7 +29,9 @@ Aceptación:
 - El simulador legacy sigue pasando sus tests.
 - No hay broker ni órdenes reales.
 
-## Fase 2 — Structure y Liquidity Agents
+Todos los criterios de Fase 1 están cumplidos. La suite pasó 237 tests.
+
+## Fase 2 — NEXT: Structure y Liquidity Agents
 
 Implementar primero definiciones deterministas y testeables de swings, estructura, desplazamiento, retrocesos, liquidity sweeps y order blocks. Etiquetar heurísticas explícitamente.
 
