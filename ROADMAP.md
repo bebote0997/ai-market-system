@@ -81,13 +81,24 @@ Aceptación: cumplida con `278 tests OK`; ejecución deshabilitada y sin compone
 ## Pre-Phase-4 Audit — PASSED
 Auditoría integral completada antes de iniciar Fase 4. BOS, retracement, liquidez, Macro/News, no-lookahead, timestamps y deduplicación fueron revisados con `268 tests OK`. La deuda restante está documentada en `AUDIT_PRE_PHASE4.md` y no bloquea el inicio de Fase 4.
 
-## Fase 5 — Paper Execution y Trade Manager
+## Fase 5 — COMPLETADA: Paper Execution y Trade Manager
 
 Crear Paper Broker, estados de órdenes y Trade Manager para fills, cancelaciones, SL/TP y posiciones. Sin conexión real.
 
+Resultado implementado:
+
+- `PaperAccount`, `PaperOrder`, `PaperFill`, `PaperPosition`, `ClosedTrade` y journal estructurado.
+- Paper Broker idempotente, sin red ni APIs externas.
+- Fill conservador en próxima barra mediante `Open`.
+- Trade Manager LONG/SHORT con gaps, stop-first intrabar, target y PnL.
+- Equity realizada/no realizada y posiciones abiertas.
+- Coste y ejecución exclusivamente paper.
+
+Aceptación: cumplida con `284 tests OK`. Ejecución real permanece deshabilitada.
+
 Aceptación: idempotencia, estados reproducibles, recuperación ante errores y cero órdenes reales.
 
-## Fase 6 — Floor Assistant y Trading Floor UI
+## Fase 6 — NEXT: Floor Assistant y Trading Floor UI
 
 Construir resumen operativo y UI especializada con evidencia, calidad de datos, setups, riesgo, órdenes paper, posiciones y eventos. Mantener el dashboard legacy separado durante la transición.
 

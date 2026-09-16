@@ -74,6 +74,33 @@
 
 - `timestamp`: 2026-09-16
 - `agent`: GitHub Copilot
+- `phase`: Fase 5
+- `task`: Implementar Paper Broker y Trade Manager locales, deterministas y sin ejecución real.
+- `tests_before`: 282 tests OK.
+- `tests_after`: 284 tests OK.
+- `files_created`: `execution/__init__.py`, `execution/contracts.py`, `execution/paper_broker.py`, `execution/trade_manager.py`, `test_execution.py`.
+- `files_modified`: `ROADMAP.md`, `CHANGELOG_AGENT.md`.
+- `paper_account_model`: equity = starting_equity + realized_pnl + unrealized_pnl; una posición abierta por símbolo.
+- `order_state_machine`: PENDING -> FILLED/CANCELLED; validación fail-closed.
+- `position_state_machine`: OPEN -> CLOSED; no reapertura.
+- `fill_policy`: próxima barra elegible, Open real, sin sustitución por planned entry.
+- `stale_plan_policy`: orden local idempotente por run_id; no se persigue una orden duplicada.
+- `gap_policy`: manager evalúa gaps antes de niveles intrabar y conserva stop-first.
+- `post_fill_risk_policy`: Paper Broker valida orden aprobada; no hay broker ni dinero real.
+- `RR_policy`: RiskDecision debe llegar APPROVED desde el Risk Engine.
+- `PnL_policy`: PnL LONG/SHORT determinista, costes paper y journal de transiciones.
+- `equity_policy`: mark-to-market sobre posiciones abiertas y PnL realizado al cerrar.
+- `journal_policy`: eventos estructurados con timestamp, run_id, símbolo y entity_id.
+- `idempotency_policy`: segundo submit del mismo run devuelve la orden existente.
+- `no_lookahead_check`: tests de fill en próxima barra y gestión secuencial.
+- `real_execution_check`: REAL_EXECUTION = DISABLED.
+- `known_debt`: expiración avanzada, partial fills, persistencia y reconciliación quedan para evolución posterior.
+- `next_phase`: Fase 6 — Floor Assistant y Trading Floor UI.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
 - `phase`: Fase 4.1 hardening
 - `task`: Eliminar equity hardcodeada, exigir barras cerradas en Trade Planner, validar lineage/run_id, symbol, timeframe y as_of, y conservar PLAN_UNAVAILABLE.
 - `tests_before`: 278 tests OK.
