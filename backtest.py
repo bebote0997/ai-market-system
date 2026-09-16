@@ -1,4 +1,5 @@
 import pandas as pd
+from statistics import mean, median
 
 from motor_analisis import analizar_mercado
 from validador_entrada import evaluar_entrada
@@ -108,3 +109,85 @@ def calcular_resultados_futuros(datos, evaluaciones, horizontes=(1, 5, 10)):
 		)
 
 	return resultados
+
+
+def calcular_estadisticas_por_favorables(resultados, horizontes=(1, 5, 10)):
+	if not resultados or not horizontes:
+		return {}
+
+	horizontes_validos = [
+		horizonte
+		for horizonte in horizontes
+		if isinstance(horizonte, int)
+		and not isinstance(horizonte, bool)
+		and horizonte > 0
+	]
+	if not horizontes_validos:
+		return {}
+
+	grupos = {}
+	for resultado in resultados:
+		if not isinstance(resultado, dict):
+			continue
+		evaluacion = resultado.get("evaluacion")
+		if not isinstance(evaluacion, dict):
+			continue
+		resumen = evaluacion.get("resumen")
+		if not isinstance(resumen, dict):
+			continue
+		favorables = resumen.get("favorables")
+		if isinstance(favorables, bool) or not isinstance(favorables, (int, float)):
+			continue
+		if pd.isna(favorables) or not pd.api.types.is_number(favorables):
+			continue
+
+		grupos.setdefault(favorables, []).append(resultado)
+
+	estadisticas = {}
+	for favorables, grupo in grupos.items():
+		estadisticas_horizontes = {}
+		for horizonte in horizontes_validos:
+			retornos = []
+			for resultado in grupo:
+				retornos_futuros = resultado.get("retornos_futuros")
+				if not isinstance(retornos_futuros, dict):
+					continue
+				retorno = retornos_futuros.get(horizonte)
+				if isinstance(retorno, bool) or not isinstance(retorno, (int, float)):
+					continue
+				if pd.isna(retorno) or not pd.api.types.is_number(retorno):
+					continue
+				retornos.append(float(retorno))
+
+			muestras = len(retornos)
+			if muestras == 0:
+				estadisticas_horizontes[horizonte] = {
+					"muestras": 0,
+					"retorno_medio": None,
+					"retorno_mediano": None,
+					"positivos": 0,
+					"negativos": 0,
+					"neutros": 0,
+					"tasa_positiva": None,
+				}
+				continue
+
+			positivos = sum(retorno > 0 for retorno in retornos)
+			negativos = sum(retorno < 0 for retorno in retornos)
+			neutros = sum(retorno == 0 for retorno in retornos)
+			estadisticas_horizontes[horizonte] = {
+				"muestras": muestras,
+				"retorno_medio": float(mean(retornos)),
+				"retorno_mediano": float(median(retornos)),
+				"positivos": positivos,
+				"negativos": negativos,
+				"neutros": neutros,
+				"tasa_positiva": (positivos / muestras) * 100,
+			}
+
+		estadisticas[favorables] = {
+			"total_evaluaciones": len(grupo),
+			"horizontes": estadisticas_horizontes,
+		}
+
+	return estadisticas

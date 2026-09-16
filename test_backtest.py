@@ -3,7 +3,11 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from backtest import calcular_resultados_futuros, generar_evaluaciones_historicas
+from backtest import (
+	calcular_estadisticas_por_favorables,
+	calcular_resultados_futuros,
+	generar_evaluaciones_historicas,
+)
 
 
 class TestGenerarEvaluacionesHistoricas(unittest.TestCase):
@@ -221,6 +225,109 @@ class TestCalcularResultadosFuturos(unittest.TestCase):
 
 		analizar_mock.assert_not_called()
 		evaluar_mock.assert_not_called()
+
+
+class TestCalcularEstadisticasPorFavorables(unittest.TestCase):
+	def resultados(self):
+		return [
+			{
+				"evaluacion": {"resumen": {"favorables": 3}},
+				"retornos_futuros": {1: 10.0, 5: -5.0, 10: 0.0},
+			},
+			{
+				"evaluacion": {"resumen": {"favorables": 3}},
+				"retornos_futuros": {1: 20.0, 5: None, 10: 5.0},
+			},
+			{
+				"evaluacion": {"resumen": {"favorables": 4}},
+				"retornos_futuros": {1: -10.0, 5: 5.0, 10: float("nan")},
+			},
+		]
+
+	def test_agrupa_y_calcula_estadisticas(self):
+		resultado = calcular_estadisticas_por_favorables(self.resultados(), (1, 5, 10))
+
+		self.assertEqual(resultado[3]["total_evaluaciones"], 2)
+		self.assertEqual(resultado[4]["total_evaluaciones"], 1)
+		estadistica = resultado[3]["horizontes"][1]
+		self.assertEqual(estadistica["muestras"], 2)
+		self.assertAlmostEqual(estadistica["retorno_medio"], 15.0)
+		self.assertAlmostEqual(estadistica["retorno_mediano"], 15.0)
+		self.assertEqual(estadistica["positivos"], 2)
+		self.assertEqual(estadistica["negativos"], 0)
+		self.assertEqual(estadistica["neutros"], 0)
+		self.assertAlmostEqual(estadistica["tasa_positiva"], 100.0)
+
+		estadistica = resultado[3]["horizontes"][5]
+		self.assertEqual(estadistica["muestras"], 1)
+		self.assertAlmostEqual(estadistica["retorno_medio"], -5.0)
+		self.assertAlmostEqual(estadistica["retorno_mediano"], -5.0)
+		self.assertEqual(estadistica["positivos"], 0)
+		self.assertEqual(estadistica["negativos"], 1)
+		self.assertEqual(estadistica["neutros"], 0)
+		self.assertAlmostEqual(estadistica["tasa_positiva"], 0.0)
+
+	def test_horizonte_sin_muestras_devuelve_none_en_metricas(self):
+		resultados = [
+			{
+				"evaluacion": {"resumen": {"favorables": 5}},
+				"retornos_futuros": {1: None},
+			}
+		]
+
+		estadistica = calcular_estadisticas_por_favorables(resultados, (1,))
+
+		self.assertEqual(estadistica[5]["horizontes"][1], {
+			"muestras": 0,
+			"retorno_medio": None,
+			"retorno_mediano": None,
+			"positivos": 0,
+			"negativos": 0,
+			"neutros": 0,
+			"tasa_positiva": None,
+		})
+
+	def test_horizontes_invalidos_y_entradas_vacias(self):
+		resultados = self.resultados()
+		self.assertEqual(calcular_estadisticas_por_favorables(None), {})
+		self.assertEqual(calcular_estadisticas_por_favorables([]), {})
+		self.assertEqual(calcular_estadisticas_por_favorables(resultados, None), {})
+		self.assertEqual(calcular_estadisticas_por_favorables(resultados, []), {})
+		resultado = calcular_estadisticas_por_favorables(
+			resultados, (0, -1, "5", True, 1)
+		)
+		self.assertEqual(set(resultado[3]["horizontes"]), {1})
+		self.assertEqual(
+			calcular_estadisticas_por_favorables(resultados, (0, -1)),
+			{},
+		)
+
+	def test_resultados_malformados_se_omiten(self):
+		resultados = self.resultados() + [
+			{},
+			{"evaluacion": {}},
+			{"evaluacion": {"resumen": {"favorables": float("nan")}}},
+			{"evaluacion": {"resumen": {"favorables": "3"}}},
+		]
+
+		resultado = calcular_estadisticas_por_favorables(resultados, (1,))
+
+		self.assertEqual(set(resultado), {3, 4})
+		self.assertEqual(resultado[3]["total_evaluaciones"], 2)
+
+	def test_no_modifica_resultados_originales(self):
+		resultados = self.resultados()
+		original = [
+			{
+				"evaluacion": dict(resultado["evaluacion"]),
+				"retornos_futuros": dict(resultado["retornos_futuros"]),
+			}
+			for resultado in resultados
+		]
+
+		calcular_estadisticas_por_favorables(resultados, (1, 5))
+
+		self.assertEqual(resultados, original)
 
 
 if __name__ == "__main__":
