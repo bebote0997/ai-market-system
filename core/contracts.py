@@ -123,3 +123,34 @@ class MacroNewsReport:
     news_items: Tuple[dict, ...] = ()
     data_quality: dict = field(default_factory=dict)
     warnings: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SetupAssessment:
+    schema_version: str
+    run_id: str
+    timestamp: datetime
+    symbol: str
+    status: str
+    side: Optional[str]
+    timeframes: Tuple[str, ...]
+    evidence: tuple = ()
+    invalidation: Optional[float] = None
+    warnings: Tuple[str, ...] = ()
+    data_quality: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FloorRunReport:
+    schema_version: str
+    run_id: str
+    as_of: datetime
+    symbol: str
+    structure_reports: dict
+    liquidity_reports: dict
+    macro_news_report: Optional[AgentMessage]
+    setup_assessment: SetupAssessment
+    trade_plan: Optional[TradePlan]
+    risk_decision: Optional[RiskDecision]
+    final_status: str
+    warnings: Tuple[str, ...] = ()

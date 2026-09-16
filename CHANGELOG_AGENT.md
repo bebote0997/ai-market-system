@@ -49,6 +49,31 @@
 
 - `timestamp`: 2026-09-16
 - `agent`: GitHub Copilot
+- `phase`: Fase 4
+- `task`: Implementar Setup Validator, Trade Planner y Orchestrator deterministas.
+- `tests_before`: 266 tests OK.
+- `tests_after`: 278 tests OK.
+- `files_created`: `agents/setup_validator.py`, `agents/trade_planner.py`, `floor/__init__.py`, `floor/orchestrator.py`, `test_setup_validator.py`, `test_trade_planner.py`, `test_orchestrator.py`.
+- `files_modified`: `core/contracts.py`, `agents/structure_agent.py`, `agents/liquidity_agent.py`, `agents/trade_planner.py`, `ROADMAP.md`, `CHANGELOG_AGENT.md`, `AUDIT_PRE_PHASE4.md`.
+- `setup_policy`: requiere los tres timeframes explícitos; estructura compatible; evidencia 15m y liquidez 5m; macro HIGH ACTIVE_WINDOW bloquea; estados NO_SETUP/WATCH/VALID_SETUP.
+- `multi_timeframe_policy`: 1h contexto, 15m setup, 5m confirmación; faltantes fallan cerrado.
+- `liquidity_policy`: utiliza únicamente sweeps y pools/equal levels existentes; order blocks no implementados.
+- `macro_filter_policy`: macro actúa como filtro de contexto; no genera dirección ni orden.
+- `entry_policy`: último Close cerrado del timeframe 5m hasta `as_of`.
+- `stop_policy`: invalidación estructural del SetupAssessment; no se inventa fallback.
+- `target_policy`: target matemático mínimo R:R 3.0.
+- `risk_handoff`: todo TradePlan se entrega al Risk Engine; Orchestrator nunca convierte VALID_SETUP directamente en APPROVED.
+- `orchestrator_flow`: scouts -> SetupAssessment -> TradePlan -> RiskDecision -> FloorRunReport; no ejecución.
+- `run_id_policy`: un UUID por run se propaga a scouts y reporte.
+- `as_of_policy`: un instante lógico compartido por todos los scouts y planner.
+- `fail_closed_policy`: datos faltantes, errores o evidencia insuficiente producen NO_SETUP/WATCH/RISK_REJECTED.
+- `warnings`: warnings legacy de Streamlit/pandas; sin broker ni dinero real.
+- `next_phase`: Fase 5 — Paper Execution y Trade Manager.
+
+## 2026-09-16
+
+- `timestamp`: 2026-09-16
+- `agent`: GitHub Copilot
 - `phase`: Pre-Phase-4 Audit
 - `task`: Auditoría integral y hardening de la base Fase 0-3.
 - `tests_before`: 253 tests OK.

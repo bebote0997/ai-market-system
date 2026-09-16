@@ -21,7 +21,12 @@ def _closed_frame(datos, as_of=None):
         return None
     frame = datos.sort_index().copy()
     if as_of is not None:
-        frame = frame[frame.index <= as_of]
+        cutoff = pd.Timestamp(as_of)
+        if frame.index.tz is None and cutoff.tzinfo is not None:
+            cutoff = cutoff.tz_localize(None)
+        elif frame.index.tz is not None and cutoff.tzinfo is None:
+            cutoff = cutoff.tz_localize("UTC")
+        frame = frame[frame.index <= cutoff]
     if "is_closed" in frame.columns:
         frame = frame[frame["is_closed"] == True]  # noqa: E712
     frame = frame[["High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce")

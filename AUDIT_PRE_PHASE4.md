@@ -3,7 +3,7 @@
 ## Baseline
 
 - Commit auditado: `29603d0` (`Crea agente macro y noticias`)
-- Tests antes: `253 OK`
+- Tests antes: `266 OK`
 - Tests después: `268 OK`
 - Resultado: `PASSED`
 

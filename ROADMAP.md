@@ -64,11 +64,19 @@ Aceptación: cumplida con `266 tests OK`. No se implementaron componentes de Fas
 
 Aceptación: ninguna noticia sin fuente; datos stale o ausentes quedan visibles como warnings/`NO_DATA`.
 
-## Fase 4 — NEXT: Setup Validator, Trade Planner y Orchestrator
+## Fase 4 — COMPLETADA: Setup Validator, Trade Planner y Orchestrator
 
 Conectar los tres scouts en un orquestador. Producir `NO_SETUP`, `WATCH` o `VALID_SETUP` y planes LONG/SHORT estructurados. Todo plan pasa por Risk Engine.
 
-Aceptación: no se fuerza operación, no hay señales ambiguas ni bypass de riesgo, y cada decisión es auditable por `run_id`.
+Resultado implementado:
+
+- `SetupAssessment` y `FloorRunReport` versionados.
+- Setup Validator determinista con `NO_SETUP`, `WATCH`, `VALID_SETUP`.
+- Trade Planner LONG/SHORT con entrada desde Close cerrado, invalidación estructural y R:R base 3.
+- Orchestrator con un único `run_id` y `as_of`, scouts 1h/15m/5m y handoff explícito al Risk Engine.
+- Risk `APPROVED`/`REJECTED` propagado sin ejecución de broker.
+
+Aceptación: cumplida con `278 tests OK`; ejecución deshabilitada y sin componentes de Fase 5.
 
 ## Pre-Phase-4 Audit — PASSED
 
