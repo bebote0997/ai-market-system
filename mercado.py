@@ -25,3 +25,16 @@ def obtener_historial_precios(simbolo, periodo="1mo"):
 		return datos["Close"].copy()
 	except Exception:
 		return None
+
+
+def obtener_datos_historicos(simbolo, periodo="1mo"):
+	columnas_requeridas = ["Open", "High", "Low", "Close", "Volume"]
+
+	try:
+		datos = yf.Ticker(simbolo).history(period=periodo)
+		if datos.empty or not all(columna in datos.columns for columna in columnas_requeridas):
+			return None
+
+		return datos[columnas_requeridas].copy()
+	except Exception:
+		return None
