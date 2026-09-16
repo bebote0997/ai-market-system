@@ -9,6 +9,8 @@ from tecnico import (
 	calcular_variacion_periodo,
 	calcular_media_movil,
 	determinar_tendencia,
+	calcular_rsi,
+	calcular_volatilidad,
 )
 
 
@@ -69,7 +71,7 @@ else:
 		for resultado in resultados
 	]
 
-	st.dataframe(tabla_resultados, use_container_width=True, hide_index=True)
+	st.dataframe(tabla_resultados, width="stretch", hide_index=True)
 
 	st.subheader("Rendimiento por activo")
 	grafico_resultados = [
@@ -101,14 +103,33 @@ else:
 		variacion = calcular_variacion_periodo(historial)
 		media_movil = calcular_media_movil(historial)
 		tendencia = determinar_tendencia(historial)
+		rsi = calcular_rsi(historial)
+		volatilidad = calcular_volatilidad(historial)
 		ultimo_precio = float(historial.iloc[-1])
 
-		metrica_ultimo_precio, metrica_variacion, metrica_tendencia = st.columns(3)
+		metrica_ultimo_precio, metrica_variacion, metrica_media_movil = st.columns(3)
 		metrica_ultimo_precio.metric("Último precio", f"${ultimo_precio:,.2f}")
-		metrica_variacion.metric("Variación del período", f"{variacion:.2f}%")
-		metrica_tendencia.metric("Tendencia", tendencia)
+		metrica_variacion.metric(
+			"Variación del período",
+			f"{variacion:.2f}%" if variacion is not None else "N/D",
+		)
+		metrica_media_movil.metric(
+			"Media móvil 20",
+			f"${media_movil:,.2f}" if media_movil is not None else "N/D",
+		)
 
-		if media_movil is not None:
-			st.write(f"Media móvil 20: ${media_movil:,.2f}")
+		metrica_rsi, metrica_volatilidad, metrica_tendencia = st.columns(3)
+		metrica_rsi.metric(
+			"RSI 14",
+			f"{rsi:.2f}" if rsi is not None else "N/D",
+		)
+		metrica_volatilidad.metric(
+			"Volatilidad",
+			f"{volatilidad:.2f}%" if volatilidad is not None else "N/D",
+		)
+		metrica_tendencia.metric(
+			"Tendencia",
+			tendencia if tendencia is not None else "N/D",
+		)
 
 		st.line_chart(historial)
