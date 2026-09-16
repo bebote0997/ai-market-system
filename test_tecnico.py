@@ -247,5 +247,61 @@ class TestCalcularEstructuraPrecio(unittest.TestCase):
 		self.assertIsNone(calcular_estructura_precio(datos, 0))
 
 
+class TestDatosConNaN(unittest.TestCase):
+	def test_close_con_nan_al_final_usa_ultimo_valido(self):
+		self.assertAlmostEqual(
+			calcular_variacion_periodo(pd.Series([100.0, 110.0, float("nan")])),
+			10.0,
+		)
+
+	def test_nan_intermedio_no_contamina_media_movil(self):
+		resultado = calcular_media_movil(
+			pd.Series([10.0, float("nan"), 20.0, 30.0]),
+			3,
+		)
+
+		self.assertAlmostEqual(resultado, 20.0)
+		self.assertFalse(pd.isna(resultado))
+
+	def test_tendencia_devuelve_none_si_los_datos_validos_son_insuficientes(self):
+		self.assertIsNone(
+			determinar_tendencia(pd.Series([10.0, float("nan")]), 2)
+		)
+
+	def test_ohlc_con_fila_incompleta_no_produce_atr_nan(self):
+		datos = pd.DataFrame(
+			{
+				"High": [12.0, float("nan"), 14.0],
+				"Low": [9.0, 10.0, 11.0],
+				"Close": [10.0, 12.0, 13.0],
+			}
+		)
+
+		resultado = calcular_atr(datos, 2)
+
+		self.assertAlmostEqual(resultado, 3.5)
+		self.assertFalse(pd.isna(resultado))
+
+	def test_volume_con_nan_usa_solo_datos_validos(self):
+		datos = pd.DataFrame({"Volume": [100.0, float("nan"), 300.0]})
+
+		resultado = calcular_contexto_volumen(datos, 2)
+
+		self.assertAlmostEqual(resultado["volumen_actual"], 300.0)
+		self.assertAlmostEqual(resultado["volumen_medio"], 200.0)
+		self.assertAlmostEqual(resultado["ratio_volumen"], 1.5)
+
+	def test_datos_insuficientes_despues_de_limpiar_devuelven_none(self):
+		datos = pd.DataFrame(
+			{
+				"High": [12.0, float("nan")],
+				"Low": [9.0, 10.0],
+				"Close": [10.0, 12.0],
+			}
+		)
+
+		self.assertIsNone(calcular_estructura_precio(datos, 2))
+
+
 if __name__ == "__main__":
 	unittest.main()

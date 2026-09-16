@@ -1,3 +1,4 @@
+import pandas as pd
 import yfinance as yf
 
 
@@ -35,6 +36,13 @@ def obtener_datos_historicos(simbolo, periodo="1mo"):
 		if datos.empty or not all(columna in datos.columns for columna in columnas_requeridas):
 			return None
 
-		return datos[columnas_requeridas].copy()
+		datos = datos[columnas_requeridas].copy()
+		datos = datos.apply(pd.to_numeric, errors="coerce")
+		datos = datos.replace([float("inf"), float("-inf")], float("nan"))
+		datos = datos.dropna(subset=columnas_requeridas)
+		if datos.empty:
+			return None
+
+		return datos
 	except Exception:
 		return None

@@ -1,37 +1,62 @@
 import pandas as pd
 
 
-def calcular_variacion_periodo(precios):
+def _limpiar_precios(precios):
 	if precios is None:
 		return None
 
-	precios = list(precios)
-	if not precios or precios[0] == 0:
+	serie = pd.Series(precios)
+	serie = pd.to_numeric(serie, errors="coerce")
+	serie = serie.replace([float("inf"), float("-inf")], float("nan"))
+	return serie.dropna()
+
+
+def _limpiar_columnas(datos, columnas):
+	if datos is None or datos.empty or not all(
+		columna in datos.columns for columna in columnas
+	):
 		return None
 
-	primero = precios[0]
-	ultimo = precios[-1]
-	return ((ultimo - primero) / primero) * 100
+	limpios = datos[columnas].apply(pd.to_numeric, errors="coerce")
+	limpios = limpios.replace([float("inf"), float("-inf")], float("nan"))
+	return limpios.dropna(subset=columnas)
+
+
+def calcular_variacion_periodo(precios):
+	precios = _limpiar_precios(precios)
+	if precios is None:
+		return None
+
+	if precios.empty or precios.iloc[0] == 0:
+		return None
+
+	resultado = ((precios.iloc[-1] - precios.iloc[0]) / precios.iloc[0]) * 100
+	if pd.isna(resultado) or resultado in [float("inf"), float("-inf")]:
+		return None
+	return float(resultado)
 
 
 def calcular_media_movil(precios, ventana=20):
+	precios = _limpiar_precios(precios)
 	if precios is None or ventana <= 0:
 		return None
 
-	precios = list(precios)
-	if len(precios) < ventana:
+	if precios.empty or len(precios) < ventana:
 		return None
 
-	return float(sum(precios[-ventana:]) / ventana)
+	resultado = precios.iloc[-ventana:].mean()
+	return None if pd.isna(resultado) else float(resultado)
 
 
 def determinar_tendencia(precios, ventana=20):
+	precios = _limpiar_precios(precios)
 	media_movil = calcular_media_movil(precios, ventana)
-	if media_movil is None:
+	if precios is None or precios.empty or media_movil is None:
 		return None
 
-	precios = list(precios)
-	ultimo_precio = precios[-1]
+	ultimo_precio = precios.iloc[-1]
+	if pd.isna(ultimo_precio):
+		return None
 	if ultimo_precio > media_movil:
 		return "alcista"
 	if ultimo_precio < media_movil:
@@ -40,15 +65,15 @@ def determinar_tendencia(precios, ventana=20):
 
 
 def calcular_rsi(precios, periodo=14):
+	precios = _limpiar_precios(precios)
 	if precios is None or periodo <= 0:
 		return None
 
-	precios = list(precios)
 	if len(precios) < periodo + 1:
 		return None
 
 	variaciones = [
-		precios[indice] - precios[indice - 1]
+		precios.iloc[indice] - precios.iloc[indice - 1]
 		for indice in range(1, len(precios))
 	]
 	variaciones = variaciones[-periodo:]
@@ -66,10 +91,12 @@ def calcular_rsi(precios, periodo=14):
 		return 50.0
 
 	rs = ganancia_media / perdida_media
-	return float(100 - (100 / (1 + rs)))
+	resultado = float(100 - (100 / (1 + rs)))
+	return None if pd.isna(resultado) else resultado
 
 
 def calcular_volatilidad(precios):
+	precios = _limpiar_precios(precios)
 	if precios is None or len(precios) < 2:
 		return None
 
@@ -79,18 +106,20 @@ def calcular_volatilidad(precios):
 	if rendimientos.empty:
 		return None
 
-	return float(rendimientos.std() * 100)
+	resultado = rendimientos.std() * 100
+	return None if pd.isna(resultado) else float(resultado)
 
 
 def calcular_ema(precios, periodo=20):
+	precios = _limpiar_precios(precios)
 	if precios is None or periodo <= 0:
 		return None
 
-	precios = pd.Series(precios)
 	if precios.empty or len(precios) < periodo:
 		return None
 
-	return float(precios.ewm(span=periodo, adjust=False).mean().iloc[-1])
+	resultado = precios.ewm(span=periodo, adjust=False).mean().iloc[-1]
+	return None if pd.isna(resultado) else float(resultado)
 
 
 def calcular_macd(precios, periodo_rapido=12, periodo_lento=26, periodo_senal=9):
@@ -102,7 +131,7 @@ def calcular_macd(precios, periodo_rapido=12, periodo_lento=26, periodo_senal=9)
 	if periodo_rapido >= periodo_lento:
 		return None
 
-	precios = pd.Series(precios)
+	precios = _limpiar_precios(precios)
 	minimo_datos = periodo_lento + periodo_senal - 1
 	if precios.empty or len(precios) < minimo_datos:
 		return None
@@ -112,11 +141,14 @@ def calcular_macd(precios, periodo_rapido=12, periodo_lento=26, periodo_senal=9)
 	macd = ema_rapida - ema_lenta
 	senal = macd.ewm(span=periodo_senal, adjust=False).mean()
 	histograma = macd - senal
+	valores = [macd.iloc[-1], senal.iloc[-1], histograma.iloc[-1]]
+	if any(pd.isna(valor) for valor in valores):
+		return None
 
 	return {
-		"macd": float(macd.iloc[-1]),
-		"senal": float(senal.iloc[-1]),
-		"histograma": float(histograma.iloc[-1]),
+		"macd": float(valores[0]),
+		"senal": float(valores[1]),
+		"histograma": float(valores[2]),
 	}
 
 
@@ -124,10 +156,8 @@ def calcular_atr(datos, periodo=14):
 	if datos is None or periodo <= 0:
 		return None
 
-	columnas_requeridas = ["High", "Low", "Close"]
-	if datos.empty or not all(
-		columna in datos.columns for columna in columnas_requeridas
-	):
+	datos = _limpiar_columnas(datos, ["High", "Low", "Close"])
+	if datos is None:
 		return None
 	if len(datos) < periodo:
 		return None
@@ -142,17 +172,20 @@ def calcular_atr(datos, periodo=14):
 		axis=1,
 	).max(axis=1)
 
-	return float(true_range.rolling(window=periodo).mean().iloc[-1])
+	resultado = true_range.rolling(window=periodo).mean().iloc[-1]
+	return None if pd.isna(resultado) else float(resultado)
 
 
 def calcular_contexto_volumen(datos, ventana=20):
 	if datos is None or datos.empty or ventana <= 0:
 		return None
-	if "Volume" not in datos.columns or len(datos) < ventana:
+
+	volumen = _limpiar_columnas(datos, ["Volume"])
+	if volumen is None or len(volumen) < ventana:
 		return None
 
-	volumen_actual = float(datos["Volume"].iloc[-1])
-	volumen_medio = float(datos["Volume"].iloc[-ventana:].mean())
+	volumen_actual = float(volumen["Volume"].iloc[-1])
+	volumen_medio = float(volumen["Volume"].iloc[-ventana:].mean())
 	if volumen_medio == 0:
 		ratio_volumen = None
 	else:
@@ -169,8 +202,8 @@ def calcular_estructura_precio(datos, ventana=20):
 	if datos is None or datos.empty or ventana <= 0:
 		return None
 
-	columnas_requeridas = ["High", "Low", "Close"]
-	if not all(columna in datos.columns for columna in columnas_requeridas):
+	datos = _limpiar_columnas(datos, ["High", "Low", "Close"])
+	if datos is None:
 		return None
 	if len(datos) < ventana:
 		return None
@@ -187,6 +220,17 @@ def calcular_estructura_precio(datos, ventana=20):
 			(precio_actual - minimo_reciente)
 			/ (maximo_reciente - minimo_reciente)
 		) * 100
+
+	if any(
+		pd.isna(valor)
+		for valor in [
+			precio_actual,
+			maximo_reciente,
+			minimo_reciente,
+			posicion_rango,
+		]
+	):
+		return None
 
 	return {
 		"precio_actual": precio_actual,

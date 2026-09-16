@@ -4,14 +4,8 @@ from operaciones import operaciones
 from config import capital_inicial
 from servicio import procesar_cartera
 from resumen import calcular_resumen_cartera
-from mercado import obtener_historial_precios
-from tecnico import (
-	calcular_variacion_periodo,
-	calcular_media_movil,
-	determinar_tendencia,
-	calcular_rsi,
-	calcular_volatilidad,
-)
+from mercado import obtener_datos_historicos
+from motor_analisis import analizar_mercado
 
 
 st.set_page_config(
@@ -92,44 +86,154 @@ else:
 		for resultado in resultados
 		if resultado["simbolo"] == simbolo_seleccionado
 	)
-	historial = obtener_historial_precios(
+	datos = obtener_datos_historicos(
 		resultado_seleccionado["ticker"],
 		periodo,
 	)
 
-	if historial is None:
-		st.warning("No se pudo obtener el histórico del activo seleccionado.")
+	if datos is None:
+		st.warning("No se pudieron obtener los datos del activo seleccionado.")
 	else:
-		variacion = calcular_variacion_periodo(historial)
-		media_movil = calcular_media_movil(historial)
-		tendencia = determinar_tendencia(historial)
-		rsi = calcular_rsi(historial)
-		volatilidad = calcular_volatilidad(historial)
-		ultimo_precio = float(historial.iloc[-1])
+		analisis = analizar_mercado(datos)
 
-		metrica_ultimo_precio, metrica_variacion, metrica_media_movil = st.columns(3)
-		metrica_ultimo_precio.metric("Último precio", f"${ultimo_precio:,.2f}")
-		metrica_variacion.metric(
-			"Variación del período",
-			f"{variacion:.2f}%" if variacion is not None else "N/D",
-		)
-		metrica_media_movil.metric(
-			"Media móvil 20",
-			f"${media_movil:,.2f}" if media_movil is not None else "N/D",
-		)
+		if analisis is None:
+			st.warning("No se pudo analizar el activo seleccionado.")
+		else:
+			tendencia = analisis["tendencia"]
+			momentum = analisis["momentum"]
+			volatilidad = analisis["volatilidad"]
+			volumen = analisis["volumen"]
+			estructura = analisis["estructura_precio"]
+			macd = momentum["macd"]
 
-		metrica_rsi, metrica_volatilidad, metrica_tendencia = st.columns(3)
-		metrica_rsi.metric(
-			"RSI 14",
-			f"{rsi:.2f}" if rsi is not None else "N/D",
-		)
-		metrica_volatilidad.metric(
-			"Volatilidad",
-			f"{volatilidad:.2f}%" if volatilidad is not None else "N/D",
-		)
-		metrica_tendencia.metric(
-			"Tendencia",
-			tendencia if tendencia is not None else "N/D",
-		)
+			st.subheader("Resumen técnico")
+			(
+				metrica_ultimo_precio,
+				metrica_variacion,
+				metrica_tendencia,
+				metrica_rsi,
+				metrica_volatilidad,
+				metrica_atr,
+			) = st.columns(6)
+			metrica_ultimo_precio.metric(
+				"Último precio",
+				f"${analisis['precio_actual']:,.2f}"
+				if analisis["precio_actual"] is not None
+				else "N/D",
+			)
+			metrica_variacion.metric(
+				"Variación del período",
+				f"{analisis['rendimiento']['variacion_periodo']:.2f}%"
+				if analisis["rendimiento"]["variacion_periodo"] is not None
+				else "N/D",
+			)
+			metrica_tendencia.metric(
+				"Tendencia",
+				tendencia["estado"] if tendencia["estado"] is not None else "N/D",
+			)
+			metrica_rsi.metric(
+				"RSI 14",
+				f"{momentum['rsi_14']:.2f}"
+				if momentum["rsi_14"] is not None
+				else "N/D",
+			)
+			metrica_volatilidad.metric(
+				"Volatilidad",
+				f"{volatilidad['porcentaje']:.2f}%"
+				if volatilidad["porcentaje"] is not None
+				else "N/D",
+			)
+			metrica_atr.metric(
+				"ATR 14",
+				f"${volatilidad['atr_14']:,.2f}"
+				if volatilidad["atr_14"] is not None
+				else "N/D",
+			)
 
-		st.line_chart(historial)
+			st.subheader("Tendencia")
+			metrica_sma, metrica_ema_20, metrica_ema_50 = st.columns(3)
+			metrica_sma.metric(
+				"SMA 20",
+				f"${tendencia['sma_20']:,.2f}"
+				if tendencia["sma_20"] is not None
+				else "N/D",
+			)
+			metrica_ema_20.metric(
+				"EMA 20",
+				f"${tendencia['ema_20']:,.2f}"
+				if tendencia["ema_20"] is not None
+				else "N/D",
+			)
+			metrica_ema_50.metric(
+				"EMA 50",
+				f"${tendencia['ema_50']:,.2f}"
+				if tendencia["ema_50"] is not None
+				else "N/D",
+			)
+
+			st.subheader("Momentum")
+			metrica_rsi_momentum, metrica_macd, metrica_senal, metrica_histograma = st.columns(4)
+			metrica_rsi_momentum.metric(
+				"RSI 14",
+				f"{momentum['rsi_14']:.2f}"
+				if momentum["rsi_14"] is not None
+				else "N/D",
+			)
+			metrica_macd.metric(
+				"MACD",
+				f"{macd['macd']:.4f}" if macd is not None else "N/D",
+			)
+			metrica_senal.metric(
+				"Señal MACD",
+				f"{macd['senal']:.4f}" if macd is not None else "N/D",
+			)
+			metrica_histograma.metric(
+				"Histograma MACD",
+				f"{macd['histograma']:.4f}" if macd is not None else "N/D",
+			)
+
+			st.subheader("Volumen")
+			metrica_volumen_actual, metrica_volumen_medio, metrica_ratio = st.columns(3)
+			metrica_volumen_actual.metric(
+				"Volumen actual",
+				f"{volumen['volumen_actual']:,.2f}" if volumen is not None else "N/D",
+			)
+			metrica_volumen_medio.metric(
+				"Volumen medio 20",
+				f"{volumen['volumen_medio']:,.2f}" if volumen is not None else "N/D",
+			)
+			metrica_ratio.metric(
+				"Ratio de volumen",
+				f"{volumen['ratio_volumen']:.4f}"
+				if volumen is not None and volumen["ratio_volumen"] is not None
+				else "N/D",
+			)
+
+			st.subheader("Estructura de precio")
+			metrica_maximo, metrica_precio, metrica_minimo, metrica_posicion = st.columns(4)
+			metrica_maximo.metric(
+				"Máximo reciente",
+				f"${estructura['maximo_reciente']:,.2f}"
+				if estructura is not None
+				else "N/D",
+			)
+			metrica_precio.metric(
+				"Precio actual",
+				f"${estructura['precio_actual']:,.2f}"
+				if estructura is not None
+				else "N/D",
+			)
+			metrica_minimo.metric(
+				"Mínimo reciente",
+				f"${estructura['minimo_reciente']:,.2f}"
+				if estructura is not None
+				else "N/D",
+			)
+			metrica_posicion.metric(
+				"Posición dentro del rango %",
+				f"{estructura['posicion_rango']:.2f}%"
+				if estructura is not None
+				else "N/D",
+			)
+
+			st.line_chart(datos["Close"])

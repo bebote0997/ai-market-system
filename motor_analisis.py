@@ -1,3 +1,5 @@
+import pandas as pd
+
 from tecnico import (
 	calcular_atr,
 	calcular_contexto_volumen,
@@ -20,7 +22,11 @@ def analizar_mercado(datos):
 	if not all(columna in datos.columns for columna in columnas_requeridas):
 		return None
 
-	precios = datos["Close"]
+	precios = pd.to_numeric(datos["Close"], errors="coerce")
+	precios = precios.replace([float("inf"), float("-inf")], float("nan"))
+	precios = precios.dropna()
+	if precios.empty:
+		return None
 	variacion_periodo = calcular_variacion_periodo(precios)
 	sma_20 = calcular_media_movil(precios, 20)
 	ema_20 = calcular_ema(precios, 20)

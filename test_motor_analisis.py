@@ -92,6 +92,16 @@ class TestAnalizarMercado(unittest.TestCase):
 		datos = self.datos_ohlcv().drop(columns="Volume")
 		self.assertIsNone(analizar_mercado(datos))
 
+	def test_usa_el_ultimo_close_valido(self):
+		datos = self.datos_ohlcv()
+		datos.loc[2, "Close"] = float("nan")
+		datos.loc[1, "Close"] = 12.5
+
+		resultado = analizar_mercado(datos)
+
+		self.assertAlmostEqual(resultado["precio_actual"], 12.5)
+		self.assertFalse(pd.isna(resultado["precio_actual"]))
+
 	@patch("motor_analisis.calcular_variacion_periodo", return_value=None)
 	@patch("motor_analisis.calcular_media_movil", return_value=None)
 	@patch("motor_analisis.determinar_tendencia", return_value=None)
