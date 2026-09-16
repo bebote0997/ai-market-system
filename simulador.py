@@ -2,6 +2,7 @@ import math
 
 import pandas as pd
 
+from riesgo import calcular_plan_riesgo
 from validacion_historica import ordenar_datos_temporales
 
 
@@ -146,4 +147,129 @@ def simular_operaciones(datos, eventos, configuracion):
         "posicion_abierta": abierta,
         "operaciones": operaciones,
         "curva_capital": curva,
+    }
+
+
+def simular_operaciones_con_riesgo(datos, eventos, configuracion, configuracion_riesgo):
+    if datos is None or not isinstance(datos, pd.DataFrame) or datos.empty:
+        return None
+    if not isinstance(eventos, list) or not isinstance(configuracion, dict):
+        return None
+    if not isinstance(configuracion_riesgo, dict):
+        return None
+    if not all(columna in datos.columns for columna in ("Open", "High", "Low", "Close")):
+        raise ValueError("La simulación con riesgo requiere Open, High, Low y Close.")
+    datos_ordenados = ordenar_datos_temporales(datos)
+    config = crear_configuracion_simulacion(**{
+        clave: configuracion[clave]
+        for clave in ("capital_inicial", "porcentaje_capital_por_operacion", "periodo_salida", "coste_porcentual")
+    })
+    if config is None:
+        return None
+    capital = config["capital_inicial"]
+    operaciones = []
+    curva = [{"fecha": None, "capital": capital}]
+    abierta = None
+    ultima_salida = -1
+    eventos_por_fecha = {
+        evento.get("fecha"): evento
+        for evento in eventos
+        if isinstance(evento, dict) and evento.get("fecha") in datos_ordenados.index
+    }
+
+    for posicion, fecha in enumerate(datos_ordenados.index):
+        if abierta is None and posicion > 0 and posicion - 1 > ultima_salida:
+            evento = eventos_por_fecha.get(datos_ordenados.index[posicion - 1])
+            if evento is not None:
+                precio_entrada = datos_ordenados["Open"].iloc[posicion]
+                plan = calcular_plan_riesgo(
+                    capital, precio_entrada, configuracion_riesgo, evento.get("atr_senal")
+                )
+                if plan is not None:
+                    abierta = {
+                        **plan,
+                        "fecha_senal": datos_ordenados.index[posicion - 1],
+                        "fecha_entrada": fecha,
+                        "efectivo_no_utilizado": capital - plan["capital_utilizado"],
+                        "stop_inicial": plan["stop"],
+                        "target_inicial": plan["target"],
+                        "posicion_entrada": posicion,
+                        "posicion_salida_limite": posicion + config["periodo_salida"],
+                        "capital_antes": capital,
+                        "atr_senal": evento.get("atr_senal"),
+                        "ultimo_precio": None,
+                        "ultima_fecha": None,
+                        "equity_actual": capital - plan["capital_utilizado"],
+                    }
+
+        if abierta is not None:
+            close = datos_ordenados["Close"].iloc[posicion]
+            if _precio_valido(close):
+                abierta["ultimo_precio"] = float(close)
+                abierta["ultima_fecha"] = fecha
+                abierta["equity_actual"] = (
+                    abierta["efectivo_no_utilizado"]
+                    + abierta["cantidad"] * abierta["ultimo_precio"]
+                )
+                equity = abierta["equity_actual"]
+            else:
+                equity = capital
+            if posicion > abierta["posicion_entrada"]:
+                open_price = datos_ordenados["Open"].iloc[posicion]
+                high = datos_ordenados["High"].iloc[posicion]
+                low = datos_ordenados["Low"].iloc[posicion]
+                exit_price = None
+                motivo = None
+                salida_gap = False
+                if _precio_valido(open_price) and float(open_price) <= abierta["stop"]:
+                    exit_price, motivo, salida_gap = float(open_price), "stop", True
+                elif _precio_valido(open_price) and float(open_price) >= abierta["target"]:
+                    exit_price, motivo, salida_gap = float(open_price), "target", True
+                elif _precio_valido(low) and float(low) <= abierta["stop"]:
+                    exit_price, motivo = abierta["stop"], "stop"
+                elif _precio_valido(high) and float(high) >= abierta["target"]:
+                    exit_price, motivo = abierta["target"], "target"
+                elif posicion >= abierta["posicion_salida_limite"] and _precio_valido(close):
+                    exit_price, motivo = float(close), "tiempo"
+
+                if exit_price is not None:
+                    bruto = abierta["cantidad"] * exit_price - abierta["capital_utilizado"]
+                    coste = abierta["capital_utilizado"] * config["coste_porcentual"] / 100
+                    neto = bruto - coste
+                    capital = abierta["capital_antes"] + neto
+                    operacion = {
+                        clave: abierta[clave]
+                        for clave in ("fecha_senal", "fecha_entrada", "precio_entrada", "cantidad", "capital_antes", "capital_utilizado", "riesgo_monetario_maximo", "riesgo_unitario", "stop", "target", "metodo_stop", "atr_senal")
+                    }
+                    operacion.update({
+                        "fecha_salida": fecha, "precio_salida": exit_price,
+                        "stop_inicial": abierta["stop_inicial"], "target_inicial": abierta["target_inicial"],
+                        "riesgo_monetario_planeado": abierta["riesgo_monetario_maximo"],
+                        "motivo_salida": motivo, "salida_por_gap": salida_gap,
+                        "resultado_bruto": bruto, "coste": coste, "resultado_neto": neto,
+                        "retorno_bruto_pct": bruto / abierta["capital_utilizado"] * 100,
+                        "retorno_neto_pct": neto / abierta["capital_utilizado"] * 100,
+                        "capital_despues": capital,
+                    })
+                    operaciones.append(operacion)
+                    ultima_salida = posicion
+                    abierta = None
+                    equity = capital
+        else:
+            equity = capital
+        curva.append({"fecha": fecha, "capital": float(equity)})
+
+    if abierta is not None:
+        abierta = {
+            clave: valor
+            for clave, valor in abierta.items()
+            if not clave.startswith("posicion_")
+        }
+    return {
+        "capital_inicial": config["capital_inicial"],
+        "capital_final": float(curva[-1]["capital"]),
+        "capital_realizado": float(capital),
+        "operaciones": operaciones,
+        "curva_capital": curva,
+        "posicion_abierta": abierta,
     }

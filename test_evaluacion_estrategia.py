@@ -6,7 +6,9 @@ import pandas as pd
 from evaluacion_estrategia import (
     comparar_metricas_estrategia,
     evaluar_estrategia_en_datos,
+    evaluar_estrategia_en_datos_con_riesgo,
     ejecutar_validacion_estrategia,
+    ejecutar_validacion_estrategia_con_riesgo,
 )
 
 
@@ -69,6 +71,28 @@ class TestEvaluacionEstrategia(unittest.TestCase):
     def test_invalid_validation(self):
         self.assertIsNone(ejecutar_validacion_estrategia(None, self.config(), self.sim_config()))
         self.assertIsNone(comparar_metricas_estrategia(None))
+
+    @patch("evaluacion_estrategia.calcular_metricas_estrategia", return_value={"r": 1})
+    @patch("evaluacion_estrategia.simular_operaciones_con_riesgo", return_value={"sim": 1})
+    @patch("evaluacion_estrategia.generar_eventos_estrategia", return_value=[])
+    @patch("evaluacion_estrategia.generar_evaluaciones_historicas", return_value=[])
+    def test_evaluacion_con_riesgo_reutiliza_pipeline(self, gen, eventos, sim, metricas):
+        result = evaluar_estrategia_en_datos_con_riesgo(self.datos(), self.config(), self.sim_config(), {"metodo_stop": "atr"})
+        self.assertEqual(result["simulacion"], {"sim": 1})
+        sim.assert_called_once()
+
+    @patch("evaluacion_estrategia.preparar_segmento_prueba_con_contexto")
+    @patch("evaluacion_estrategia.evaluar_estrategia_en_datos_con_riesgo")
+    @patch("evaluacion_estrategia.dividir_datos_cronologicamente")
+    def test_validacion_con_riesgo_separa_capas(self, dividir, evaluar, preparar):
+        datos = self.datos()
+        division = {"entrenamiento": datos.iloc[:4], "prueba": datos.iloc[4:], "total_filas": 6, "filas_entrenamiento": 4, "filas_prueba": 2, "proporcion_entrenamiento": .7}
+        dividir.return_value = division
+        preparar.return_value = {"datos_con_contexto": datos, "indices_prueba": datos.index[4:]}
+        evaluar.side_effect = [{"segmento": "train"}, {"segmento": "test"}]
+        result = ejecutar_validacion_estrategia_con_riesgo(datos, self.config(), self.sim_config(), {"metodo_stop": "atr"}, .7, 3)
+        self.assertEqual(result["prueba"], {"segmento": "test"})
+        self.assertEqual(result["configuracion_riesgo"], {"metodo_stop": "atr"})
 
 
 if __name__ == "__main__":

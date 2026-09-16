@@ -110,6 +110,14 @@ def generar_eventos_estrategia(evaluaciones_historicas, configuracion):
 				"fecha": evaluacion_historica["fecha"],
 				"precio": evaluacion_historica["precio_cierre"],
 				"evaluacion": evaluacion,
+				"analisis": evaluacion_historica.get("analisis"),
+				"atr_senal": (
+					evaluacion_historica.get("analisis", {})
+					.get("volatilidad", {})
+					.get("atr_14")
+					if isinstance(evaluacion_historica.get("analisis"), dict)
+					else None
+				),
 			}
 		)
 

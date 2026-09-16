@@ -63,6 +63,15 @@ def calcular_metricas_estrategia(resultado_simulacion):
 		(punto["drawdown_pct"] for punto in curva_drawdown),
 		default=0.0,
 	)
+	riesgos = [
+		operacion["resultado_neto"] / operacion["riesgo_monetario_planeado"]
+		for operacion in validas
+		if _numero_valido(operacion.get("riesgo_monetario_planeado"))
+		and operacion["riesgo_monetario_planeado"] > 0
+	]
+	stop_count = sum(operacion.get("motivo_salida") == "stop" for operacion in validas)
+	target_count = sum(operacion.get("motivo_salida") == "target" for operacion in validas)
+	tiempo_count = sum(operacion.get("motivo_salida") == "tiempo" for operacion in validas)
 
 	return {
 		"numero_operaciones": numero_operaciones,
@@ -81,4 +90,17 @@ def calcular_metricas_estrategia(resultado_simulacion):
 		"expectativa": float(mean(operacion["resultado_neto"] for operacion in validas)) if validas else None,
 		"max_drawdown_pct": float(max_drawdown_pct),
 		"curva_drawdown": curva_drawdown,
+		"riesgo_planeado_total": float(sum(
+			operacion.get("riesgo_monetario_planeado", 0)
+			for operacion in validas
+			if _numero_valido(operacion.get("riesgo_monetario_planeado"))
+		)),
+		"resultado_en_r_total": float(sum(riesgos)) if riesgos else None,
+		"r_medio": float(mean(riesgos)) if riesgos else None,
+		"stop_count": stop_count,
+		"target_count": target_count,
+		"tiempo_count": tiempo_count,
+		"porcentaje_stop": stop_count / numero_operaciones * 100 if numero_operaciones else 0.0,
+		"porcentaje_target": target_count / numero_operaciones * 100 if numero_operaciones else 0.0,
+		"porcentaje_tiempo": tiempo_count / numero_operaciones * 100 if numero_operaciones else 0.0,
 	}

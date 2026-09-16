@@ -69,6 +69,29 @@ class TestMetricasEstrategia(unittest.TestCase):
 		calcular_metricas_estrategia(resultado)
 		self.assertEqual(resultado, original)
 
+	def test_metricas_de_riesgo_y_motivos(self):
+		operaciones = [
+			{
+				"resultado_neto": 100, "retorno_neto_pct": 10,
+				"riesgo_monetario_planeado": 50, "motivo_salida": "target",
+			},
+			{
+				"resultado_neto": -50, "retorno_neto_pct": -5,
+				"riesgo_monetario_planeado": 50, "motivo_salida": "stop",
+			},
+			{
+				"resultado_neto": 0, "retorno_neto_pct": 0,
+				"riesgo_monetario_planeado": 50, "motivo_salida": "tiempo",
+			},
+		]
+		metricas = calcular_metricas_estrategia(self.resultado(operaciones))
+		self.assertAlmostEqual(metricas["riesgo_planeado_total"], 150)
+		self.assertAlmostEqual(metricas["resultado_en_r_total"], 1)
+		self.assertAlmostEqual(metricas["r_medio"], 1 / 3)
+		self.assertEqual(metricas["stop_count"], 1)
+		self.assertEqual(metricas["target_count"], 1)
+		self.assertEqual(metricas["tiempo_count"], 1)
+
 
 if __name__ == "__main__":
 	unittest.main()
