@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from backtest import (
+	calcular_estadisticas_por_condicion,
 	calcular_estadisticas_por_favorables,
 	calcular_resultados_futuros,
 	generar_evaluaciones_historicas,
@@ -328,6 +329,127 @@ class TestCalcularEstadisticasPorFavorables(unittest.TestCase):
 		calcular_estadisticas_por_favorables(resultados, (1, 5))
 
 		self.assertEqual(resultados, original)
+
+
+class TestCalcularEstadisticasPorCondicion(unittest.TestCase):
+	def resultados(self):
+		return [
+			{
+				"evaluacion": {
+					"condiciones": {
+						"tendencia": {"estado": "favorable"},
+						"rsi": {"estado": "favorable"},
+						"macd": {"estado": "desfavorable"},
+						"volumen": {"estado": "no_disponible"},
+					}
+				},
+				"retornos_futuros": {1: 10.0, 5: -5.0},
+			},
+			{
+				"evaluacion": {
+					"condiciones": {
+						"tendencia": {"estado": "favorable"},
+						"rsi": {"estado": "desfavorable"},
+						"macd": {"estado": "desfavorable"},
+						"volumen": {"estado": "favorable"},
+						"estructura_precio": {"estado": "favorable"},
+					}
+				},
+				"retornos_futuros": {1: 20.0, 5: 0.0},
+			},
+			{
+				"evaluacion": {
+					"condiciones": {
+						"tendencia": {"estado": "no_disponible"},
+						"rsi": {"estado": "favorable"},
+						"macd": {"estado": "desfavorable"},
+						"volumen": {"estado": "no_disponible"},
+						"estructura_precio": {"estado": "favorable"},
+					}
+				},
+				"retornos_futuros": {1: float("nan"), 5: 5.0},
+			},
+		]
+
+	def test_agrupa_condiciones_y_calcula_metricas(self):
+		resultado = calcular_estadisticas_por_condicion(self.resultados(), (1, 5))
+
+		tendencia = resultado["tendencia"]["favorable"]
+		self.assertEqual(tendencia["total_evaluaciones"], 2)
+		self.assertEqual(tendencia["horizontes"][1]["muestras"], 2)
+		self.assertAlmostEqual(tendencia["horizontes"][1]["retorno_medio"], 15.0)
+		self.assertAlmostEqual(tendencia["horizontes"][1]["retorno_mediano"], 15.0)
+		self.assertEqual(tendencia["horizontes"][1]["positivos"], 2)
+		self.assertEqual(tendencia["horizontes"][1]["negativos"], 0)
+		self.assertEqual(tendencia["horizontes"][1]["neutros"], 0)
+		self.assertAlmostEqual(tendencia["horizontes"][1]["tasa_positiva"], 100.0)
+
+		self.assertEqual(resultado["macd"]["desfavorable"]["total_evaluaciones"], 3)
+		self.assertEqual(resultado["rsi"]["favorable"]["total_evaluaciones"], 2)
+		self.assertEqual(resultado["volumen"]["no_disponible"]["total_evaluaciones"], 2)
+
+	def test_horizontes_independientes_y_none_nan_ignorados(self):
+		resultado = calcular_estadisticas_por_condicion(self.resultados(), (1, 5, 10))
+		estadistica = resultado["tendencia"]["favorable"]["horizontes"][5]
+
+		self.assertEqual(estadistica["muestras"], 2)
+		self.assertAlmostEqual(estadistica["retorno_medio"], -2.5)
+		self.assertAlmostEqual(estadistica["retorno_mediano"], -2.5)
+		self.assertEqual(estadistica["positivos"], 0)
+		self.assertEqual(estadistica["negativos"], 1)
+		self.assertEqual(estadistica["neutros"], 1)
+		self.assertAlmostEqual(estadistica["tasa_positiva"], 0.0)
+
+		estadistica = resultado["tendencia"]["favorable"]["horizontes"][10]
+		self.assertEqual(estadistica["muestras"], 0)
+		self.assertIsNone(estadistica["retorno_medio"])
+		self.assertIsNone(estadistica["retorno_mediano"])
+		self.assertIsNone(estadistica["tasa_positiva"])
+
+	def test_no_disponible_falta_y_estado_invalido_se_omiten(self):
+		resultados = self.resultados()
+		resultados.append({
+			"evaluacion": {
+				"condiciones": {
+					"rsi": {"estado": "desconocido"},
+					"macd": {"estado": "favorable"},
+				}
+			},
+			"retornos_futuros": {1: 30.0},
+		})
+
+		resultado = calcular_estadisticas_por_condicion(resultados, (1,))
+
+		self.assertNotIn("desconocido", resultado["rsi"])
+		self.assertEqual(resultado["macd"]["favorable"]["total_evaluaciones"], 1)
+		self.assertEqual(resultado["estructura_precio"]["favorable"]["total_evaluaciones"], 2)
+
+	def test_entradas_invalidas_y_horizontes_invalidos(self):
+		resultados = self.resultados()
+		self.assertEqual(calcular_estadisticas_por_condicion(None), {})
+		self.assertEqual(calcular_estadisticas_por_condicion([]), {})
+		self.assertEqual(calcular_estadisticas_por_condicion(resultados, None), {})
+		self.assertEqual(calcular_estadisticas_por_condicion(resultados, []), {})
+		resultado = calcular_estadisticas_por_condicion(resultados, (0, -1, "5", True, 1))
+		self.assertEqual(set(resultado["tendencia"]["favorable"]["horizontes"]), {1})
+		self.assertEqual(calcular_estadisticas_por_condicion(resultados, (0, -1)), {})
+
+	def test_resultados_malformados_no_rompen_y_no_se_modifican(self):
+		resultados = self.resultados()
+		original = [
+			{
+				"evaluacion": {
+					"condiciones": dict(resultado["evaluacion"]["condiciones"])
+				},
+				"retornos_futuros": dict(resultado["retornos_futuros"]),
+			}
+			for resultado in resultados
+		]
+		resultados.extend([None, {}, {"evaluacion": None}, {"evaluacion": {"condiciones": None}}])
+
+		calcular_estadisticas_por_condicion(resultados, (1,))
+
+		self.assertEqual(resultados[:3], original)
 
 
 if __name__ == "__main__":

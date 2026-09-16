@@ -191,3 +191,94 @@ def calcular_estadisticas_por_favorables(resultados, horizontes=(1, 5, 10)):
 		}
 
 	return estadisticas
+
+
+def calcular_estadisticas_por_condicion(resultados, horizontes=(1, 5, 10)):
+	if not resultados or not horizontes:
+		return {}
+
+	horizontes_validos = [
+		horizonte
+		for horizonte in horizontes
+		if isinstance(horizonte, int)
+		and not isinstance(horizonte, bool)
+		and horizonte > 0
+	]
+	if not horizontes_validos:
+		return {}
+
+	condiciones = ["tendencia", "rsi", "macd", "volumen", "estructura_precio"]
+	estados_validos = {"favorable", "desfavorable", "no_disponible"}
+	grupos = {condicion: {} for condicion in condiciones}
+
+	for resultado in resultados:
+		if not isinstance(resultado, dict):
+			continue
+		evaluacion = resultado.get("evaluacion")
+		if not isinstance(evaluacion, dict):
+			continue
+		condiciones_resultado = evaluacion.get("condiciones")
+		if not isinstance(condiciones_resultado, dict):
+			continue
+
+		for condicion in condiciones:
+			condicion_resultado = condiciones_resultado.get(condicion)
+			if not isinstance(condicion_resultado, dict):
+				continue
+			estado = condicion_resultado.get("estado")
+			if estado not in estados_validos:
+				continue
+			grupos[condicion].setdefault(estado, []).append(resultado)
+
+	estadisticas = {}
+	for condicion, estados in grupos.items():
+		if not estados:
+			continue
+		estadisticas[condicion] = {}
+		for estado, grupo in estados.items():
+			estadisticas_horizontes = {}
+			for horizonte in horizontes_validos:
+				retornos = []
+				for resultado in grupo:
+					retornos_futuros = resultado.get("retornos_futuros")
+					if not isinstance(retornos_futuros, dict):
+						continue
+					retorno = retornos_futuros.get(horizonte)
+					if isinstance(retorno, bool) or not isinstance(retorno, (int, float)):
+						continue
+					if pd.isna(retorno) or not pd.api.types.is_number(retorno):
+						continue
+					retornos.append(float(retorno))
+
+				muestras = len(retornos)
+				if muestras == 0:
+					estadisticas_horizontes[horizonte] = {
+						"muestras": 0,
+						"retorno_medio": None,
+						"retorno_mediano": None,
+						"positivos": 0,
+						"negativos": 0,
+						"neutros": 0,
+						"tasa_positiva": None,
+					}
+					continue
+
+				positivos = sum(retorno > 0 for retorno in retornos)
+				negativos = sum(retorno < 0 for retorno in retornos)
+				neutros = sum(retorno == 0 for retorno in retornos)
+				estadisticas_horizontes[horizonte] = {
+					"muestras": muestras,
+					"retorno_medio": float(mean(retornos)),
+					"retorno_mediano": float(median(retornos)),
+					"positivos": positivos,
+					"negativos": negativos,
+					"neutros": neutros,
+					"tasa_positiva": (positivos / muestras) * 100,
+				}
+
+			estadisticas[condicion][estado] = {
+				"total_evaluaciones": len(grupo),
+				"horizontes": estadisticas_horizontes,
+			}
+
+	return estadisticas

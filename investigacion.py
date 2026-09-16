@@ -1,4 +1,5 @@
 from backtest import (
+	calcular_estadisticas_por_condicion,
 	calcular_estadisticas_por_favorables,
 	calcular_resultados_futuros,
 	generar_evaluaciones_historicas,
@@ -29,6 +30,10 @@ def ejecutar_investigacion(
 		resultados,
 		horizontes=horizontes,
 	)
+	estadisticas_condiciones = calcular_estadisticas_por_condicion(
+		resultados,
+		horizontes=horizontes,
+	)
 
 	return {
 		"ticker": ticker,
@@ -37,6 +42,7 @@ def ejecutar_investigacion(
 		"evaluaciones": len(evaluaciones),
 		"resultados": resultados,
 		"estadisticas": estadisticas,
+		"estadisticas_condiciones": estadisticas_condiciones,
 	}
 
 
@@ -76,6 +82,41 @@ def _mostrar_investigacion(investigacion, horizontes):
 				f"{_formatear_porcentaje(estadistica['tasa_positiva'])}"
 			)
 		print()
+
+	print("ESTADÍSTICAS POR CONDICIÓN")
+	nombres_condiciones = {
+		"tendencia": "Tendencia",
+		"rsi": "RSI",
+		"macd": "MACD",
+		"volumen": "Volumen",
+		"estructura_precio": "Estructura de precio",
+	}
+	for condicion, estados in investigacion["estadisticas_condiciones"].items():
+		for estado, grupo in estados.items():
+			print(f"Condición: {nombres_condiciones.get(condicion, condicion)}")
+			print(f"Estado: {estado}")
+			print(f"Total evaluaciones: {grupo['total_evaluaciones']}")
+
+			for horizonte in horizontes:
+				estadistica = grupo["horizontes"].get(horizonte)
+				if estadistica is None:
+					continue
+
+				print(f"\nHorizonte {horizonte}:")
+				print(f"Muestras: {estadistica['muestras']}")
+				print(
+					f"Retorno medio: "
+					f"{_formatear_porcentaje(estadistica['retorno_medio'])}"
+				)
+				print(
+					f"Retorno mediano: "
+					f"{_formatear_porcentaje(estadistica['retorno_mediano'])}"
+				)
+				print(
+					f"Tasa positiva: "
+					f"{_formatear_porcentaje(estadistica['tasa_positiva'])}"
+				)
+			print()
 
 
 if __name__ == "__main__":
