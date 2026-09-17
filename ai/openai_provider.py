@@ -7,7 +7,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ai.contracts import AIResponse
+from ai.contracts import AIResponse, VALID_RECOMMENDATIONS, evidence_ids
 from ai.provider import AIProvider
 from ai import prompts
 from runtime.retry_after import retry_after_seconds
@@ -162,6 +162,12 @@ class OpenAIProvider(AIProvider):
                             ("run_id", request.run_id), ("as_of", request.as_of.isoformat()),
                             ("symbol", request.symbol), ("agent_name", request.agent_name)):
             properties[name] = {"type": "string", "enum": [value]}
+        properties["recommendation"] = {"type": ["string", "null"],
+                                         "enum": [None, *sorted(VALID_RECOMMENDATIONS)]}
+        allowed_evidence = sorted(evidence_ids(request.deterministic_evidence))
+        if allowed_evidence:
+            for name in ("supporting_evidence", "conflicting_evidence"):
+                properties[name] = {"type": "array", "items": {"type": "string", "enum": allowed_evidence}}
         response_schema = {**RESPONSE_SCHEMA, "properties": properties}
         payload = {
             "model": self.model, "store": False,

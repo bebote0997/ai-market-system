@@ -130,3 +130,9 @@ Regla central: **AI interprets. Python validates. Risk Engine authorizes. Paper 
 - `ai/orchestrator.py`: capa de composición sobre un `FloorRunReport` ya calculado por `floor/orchestrator.py` (sin modificarlo). Nunca convierte `NO_SETUP`/`WATCH`/`RISK_REJECTED` en un estado ejecutable; solo puede añadir `AI_CAUTION` cuando un `PLAN_READY` recibe una revisión IA adversa, sin alterar el `RiskDecision`.
 
 `REAL_EXECUTION` permanece `DISABLED`. El módulo `ai/` no importa `execution.paper_broker` ni `execution.trade_manager`.
+
+## Demo Runner PAPER (Fase 7)
+
+`runtime.demo_runner.DemoRunner` coordina el runtime existente por slot de 15 minutos con un `run_id` durable, provider Twelve Data, cinco roles IA OpenAI cuando existe evidencia, validación/setup, Risk Engine y Paper Broker. El scheduler sigue deshabilitado para el experimento. `dry_run` bloquea todas las mutaciones de Paper Broker y Trade Manager durante diagnóstico live. No hay ejecución real.
+
+SQLite schema 2 agrega `review_reports` y `notification_events`. Los resúmenes y referencias de evidencia permiten reconstruir la decisión sin almacenar razonamiento privado. Los eventos se derivan del journal y se guardan antes de enviarlos por `NotificationSink`; la UI abre la base solo en modo lectura. La migración desde schema 1 preserva runs, cuenta y journal. Detalles de contratos y gates: `DEMO_RUNNER_SPEC.md`; procedimiento de verificación: `PHASE7_CERTIFICATION.md`.

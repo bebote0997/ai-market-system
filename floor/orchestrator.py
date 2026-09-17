@@ -10,8 +10,8 @@ from core.contracts import FloorRunReport, RiskDecision
 from riesgo import evaluar_trade_plan
 
 
-def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, equity=None):
-    run_id = str(uuid.uuid4())
+def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, equity=None, run_id=None):
+    run_id = run_id or str(uuid.uuid4())
     if not isinstance(equity, (int, float)) or isinstance(equity, bool) or equity <= 0:
         from datetime import datetime, timezone
         from core.contracts import SetupAssessment

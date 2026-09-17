@@ -4,9 +4,11 @@ import logging
 import os
 import re
 import json
+import uuid
 
 from ai.orchestrator import run as run_ai
 from ai.provider import DeterministicAIProvider
+from ai.runtime import AuditLog
 from data.macro_news import InMemoryMacroNewsProvider
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
@@ -25,8 +27,11 @@ LOG = logging.getLogger("ai_floor.runtime")
 
 class OperationalRuntime:
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
-                 instruments=None, clock=None, risk_config=None):
+                 instruments=None, clock=None, risk_config=None, paper_enabled=True,
+                 diagnostic_outside_session=False):
         self.config = config or RuntimeConfig.from_env()
+        self.paper_enabled = bool(paper_enabled)
+        self.diagnostic_outside_session = bool(diagnostic_outside_session) and not self.paper_enabled
         if market_provider is None and self.config.market_provider_mode == "massive":
             from data.massive_provider import MassiveMarketDataProvider
             market_provider = MassiveMarketDataProvider(timeout=float(os.environ.get("MASSIVE_TIMEOUT_SECONDS", "15")))
@@ -92,8 +97,8 @@ class OperationalRuntime:
                 "interpretation": vm.interpretation, "freshness": vm.freshness,
                 "agents": [vars(a) for a in vm.agents], "prompt_versions": vm.prompt_versions}
 
-    def _status_snapshot(self, symbol, slot, state, warning):
-        return {"schema_version": "1.0", "run_id": None, "symbol": symbol, "as_of": utc(slot),
+    def _status_snapshot(self, symbol, slot, state, warning, run_id=None):
+        return {"schema_version": "1.0", "run_id": run_id, "symbol": symbol, "as_of": utc(slot),
                 "state": state, "setup_status": "NO_SETUP", "setup_side": None,
                 "setup_evidence": [], "setup_invalidation": None, "risk_status": "NOT CALLED",
                 "warnings": [warning], "facts": [f"{symbol}: {state}", "Risk Engine: NOT CALLED"],
@@ -106,7 +111,8 @@ class OperationalRuntime:
             raise ValueError("symbol disabled by configuration")
         slot = slot_at(scheduled_at, self.config.cadence_minutes)
         key = slot_key(symbol, slot, self.config.cadence_minutes)
-        if not self.store.claim_slot(key, symbol, slot, self.clock()):
+        run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+        if not self.store.claim_slot(key, symbol, slot, self.clock(), run_id=run_id):
             return "DUPLICATE"
         stage = "startup"
         try:
@@ -116,13 +122,15 @@ class OperationalRuntime:
                 raise ValueError("invalid AI_FLOOR_GIT_COMMIT")
             self.store.save_run_metadata(key, self.config.fingerprint(), account_for_metadata.starting_equity,
                                          git_commit=commit)
-            if not set(session_names(slot)) & set(self.config.sessions):
-                self.store.event(self.clock(), None, symbol, "scheduler", "SESSION_SKIPPED")
+            if not set(session_names(slot)) & set(self.config.sessions) and not self.diagnostic_outside_session:
+                self.store.event(self.clock(), run_id, symbol, "scheduler", "SESSION_SKIPPED")
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "SESSION_SKIPPED"
+            if not set(session_names(slot)) & set(self.config.sessions):
+                self.store.event(self.clock(), run_id, symbol, "scheduler", "DIAGNOSTIC_OUTSIDE_SESSION", "INFO")
             if self.market_provider is None:
-                self.store.event(self.clock(), None, symbol, "market_data", "DATA_UNAVAILABLE", "WARNING")
-                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", "provider_not_configured"))
+                self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_UNAVAILABLE", "WARNING")
+                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", "provider_not_configured", run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "NO_DATA"
             stage = "market_data"
@@ -136,8 +144,8 @@ class OperationalRuntime:
                 provider_state = provider_error.kind
                 with self.store.transaction():
                     self.store.set_state("market_data_provider", provider_state)
-                self.store.event(self.clock(), None, symbol, "market_data", provider_state, "WARNING")
-                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", provider_state))
+                self.store.event(self.clock(), run_id, symbol, "market_data", provider_state, "WARNING")
+                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", provider_state, run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "NO_DATA"
             fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, slot, self.config.max_age_seconds)
@@ -147,10 +155,10 @@ class OperationalRuntime:
                 fresh, data_state = False, "STALE_DATA"
             with self.store.transaction():
                 self.store.set_state("market_data_provider", "CURRENT" if fresh else data_state)
-            self.store.event(self.clock(), None, symbol, "market_data", "DATA_CHECK", "INFO" if fresh else "WARNING", {"state": data_state})
+            self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_CHECK", "INFO" if fresh else "WARNING", {"state": data_state})
             if not fresh:
-                self.store.event(self.clock(), None, symbol, "market_data", "DATA_STALE" if data_state == "STALE_DATA" else "DATA_UNAVAILABLE", "WARNING")
-                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, data_state, "freshness_gate_blocked"))
+                self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_STALE" if data_state == "STALE_DATA" else "DATA_UNAVAILABLE", "WARNING")
+                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, data_state, "freshness_gate_blocked", run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", data_state)
                 return data_state
             broker = self._broker(symbol)
@@ -162,17 +170,20 @@ class OperationalRuntime:
                    "open": float(last_bar["Open"]), "high": float(last_bar["High"]),
                    "low": float(last_bar["Low"]), "close": float(last_bar["Close"]), "is_closed": True}
             had_open = bool(broker.account.open_positions)
-            TradeManager(broker.account, broker).process_bar(bar)
-            if had_open or broker.journal:
+            if self.paper_enabled:
+                TradeManager(broker.account, broker).process_bar(bar)
+            if self.paper_enabled and (had_open or broker.journal):
                 self.store.save_paper(broker, owner_key=key, symbol=symbol)
             stage = "deterministic"
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
-                                      self.instruments.get(symbol), self.risk_config, equity=broker.account.equity)
+                                      self.instruments.get(symbol), self.risk_config,
+                                      equity=broker.account.equity, run_id=run_id)
             stage = "ai"
-            ai = run_ai(deterministic, self.ai_provider)
+            audit = AuditLog()
+            ai = run_ai(deterministic, self.ai_provider, audit)
             if not self.store.owns_slot(key, symbol):
                 raise RuntimeError("slot ownership lost")
-            self.store.save_reports(key, deterministic, ai)
+            self.store.save_reports(key, deterministic, ai, audit.entries)
             self.store.record_analysis_events(self.clock(), deterministic, ai)
             provider_failed = any(r is not None and r.status == "ERROR" for r in (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review, ai.ai_trade_review))
             with self.store.transaction():
@@ -181,17 +192,19 @@ class OperationalRuntime:
                 self.store.event(self.clock(), ai.run_id, symbol, "ai_provider", "PROVIDER_FAILURE", "ERROR")
             ai_healthy = all(r is not None and r.status in {"OK", "PARTIAL"} for r in
                 (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review))
-            if ai_healthy and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}:
+            if self.paper_enabled and ai_healthy and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
                 for order in tuple(broker.orders.values()):
                     if order.symbol == symbol and order.status == "PENDING" and bar["timestamp"] > order.as_of:
                         broker.process_next_bar(order, bar)
-            if broker.journal:
+            if self.paper_enabled and broker.journal:
                 self.store.save_paper(broker, owner_key=key, symbol=symbol)
             eligible = paper_policy(ai)
             stage = "paper"
-            if eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
+            if eligible and not self.paper_enabled:
+                self.store.event(self.clock(), run_id, symbol, "policy", "PAPER_DIAGNOSTIC_BLOCKED", "INFO")
+            elif eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
                 order = broker.submit_plan(deterministic, snapshot, slot)
@@ -208,8 +221,8 @@ class OperationalRuntime:
                      ai.run_id, symbol, utc(slot), ai.final_status)
             return ai.final_status
         except Exception as exc:
-            LOG.exception("run_id=unknown symbol=%s scheduled_slot=%s component=runtime event=RUN_FAILED status=ERROR",
-                          symbol, utc(slot))
+            LOG.error("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_FAILED status=ERROR error_type=%s",
+                      run_id, symbol, utc(slot), type(exc).__name__)
             if stage in {"market_data", "ai"}:
                 with self.store.transaction():
                     self.store.set_state("market_data_provider" if stage == "market_data" else "ai_provider", "ERROR")

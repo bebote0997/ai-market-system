@@ -49,7 +49,9 @@ else:
     store = operational_store() if not vm.sample else None
     try:
         from runtime.health import health
-        system.render(st, vm, health(store) if store else None)
+        system.render(st, vm, health(store) if store else None,
+                      store.latest_review(symbol) if store else None,
+                      store.notification_events() if store else ())
     finally:
         if store:
             store.close()

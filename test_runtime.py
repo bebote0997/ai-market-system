@@ -19,7 +19,7 @@ from runtime.health import health
 from runtime.scheduler import Scheduler, session_names, slot_at, slot_key
 from runtime.service import OperationalRuntime
 from storage.codec import parse_utc, public_metadata, utc
-from storage.database import Store
+from storage.database import Store, SCHEMA_VERSION
 from ui.state import current_market
 from ui.adapters import from_persisted_snapshot
 from ui.fixtures.demo_floor import demo_market
@@ -42,7 +42,7 @@ class TemporaryDB(unittest.TestCase):
 class TestStorage(TemporaryDB):
     def test_schema_reopen_journal_and_timezone(self):
         s = self.store()
-        self.assertEqual(s.db.execute("SELECT version FROM schema_info").fetchone()[0], 1)
+        self.assertEqual(s.db.execute("SELECT version FROM schema_info").fetchone()[0], SCHEMA_VERSION)
         s.event(T, "r1", "XAUUSD", "test", "RUN_STARTED", payload={"safe": True})
         s.close()
         s = self.store()

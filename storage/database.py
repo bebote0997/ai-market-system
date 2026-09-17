@@ -4,10 +4,19 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
+import uuid
 
 from storage.codec import paper_decode, paper_encode, public_metadata, safe_json, utc, parse_utc
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+PHASE7_SCHEMA = """
+CREATE TABLE IF NOT EXISTS review_reports(
+  run_id TEXT PRIMARY KEY, slot_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL,
+  FOREIGN KEY(slot_key) REFERENCES runs(slot_key));
+CREATE TABLE IF NOT EXISTS notification_events(
+  event_id TEXT PRIMARY KEY, journal_id INTEGER NOT NULL UNIQUE, payload TEXT NOT NULL,
+  FOREIGN KEY(journal_id) REFERENCES journal(id));
+"""
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info(version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS runs(
@@ -39,12 +48,13 @@ CREATE TABLE IF NOT EXISTS run_metadata(slot_key TEXT PRIMARY KEY,git_commit TEX
   config_fingerprint TEXT NOT NULL,experiment_id TEXT,starting_equity REAL NOT NULL,
   schema_version INTEGER NOT NULL, FOREIGN KEY(slot_key) REFERENCES runs(slot_key));
 CREATE TABLE IF NOT EXISTS symbol_locks(symbol TEXT PRIMARY KEY,slot_key TEXT NOT NULL);
-"""
+""" + PHASE7_SCHEMA
 
 
 class Store:
     def __init__(self, path, *, readonly=False):
         self.path = Path(path)
+        self.readonly = readonly
         if not readonly:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(f"file:{self.path.resolve().as_posix()}?mode=ro" if readonly else str(self.path),
@@ -62,7 +72,7 @@ class Store:
         version_table = self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_info'").fetchone()
         if version_table:
             rows = self.db.execute("SELECT version FROM schema_info").fetchall()
-            if len(rows) != 1 or rows[0][0] != SCHEMA_VERSION:
+            if len(rows) != 1 or rows[0][0] not in {1, SCHEMA_VERSION}:
                 raise RuntimeError("incompatible database schema")
             required = {"runs", "agent_decisions", "setups", "risk_decisions", "paper_accounts",
                         "paper_orders", "paper_fills", "paper_positions", "closed_trades",
@@ -70,10 +80,18 @@ class Store:
             actual = {r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not required <= actual:
                 raise RuntimeError("incomplete database schema")
+            if rows[0][0] == 1:
+                if self.readonly:
+                    raise RuntimeError("database schema upgrade required")
+                self.db.executescript("BEGIN IMMEDIATE;" + PHASE7_SCHEMA +
+                                      f"UPDATE schema_info SET version={SCHEMA_VERSION};COMMIT;")
+            else:
+                if not {"review_reports", "notification_events"} <= actual:
+                    raise RuntimeError("incomplete database schema")
         elif self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone():
             raise RuntimeError("unversioned database schema")
         else:
-            if self.db.execute("PRAGMA query_only").fetchone()[0]:
+            if self.readonly:
                 raise RuntimeError("database schema missing")
             self.db.executescript("BEGIN IMMEDIATE;" + SCHEMA +
                 f"INSERT INTO schema_info(version) VALUES({SCHEMA_VERSION});COMMIT;")
@@ -91,17 +109,18 @@ class Store:
     def close(self):
         self.db.close()
 
-    def claim_slot(self, key, symbol, as_of, started_at):
+    def claim_slot(self, key, symbol, as_of, started_at, run_id=None):
+        run_id = run_id or str(uuid.uuid5(uuid.NAMESPACE_URL, key))
         with self.transaction():
             if self.db.execute("SELECT 1 FROM symbol_locks WHERE symbol=?", (symbol,)).fetchone():
                 return False
             try:
-                self.db.execute("INSERT INTO runs(slot_key,symbol,as_of,started_at,status) VALUES(?,?,?,?,?)",
-                                (key, symbol, utc(as_of), utc(started_at), "RUNNING"))
+                self.db.execute("INSERT INTO runs(slot_key,run_id,symbol,as_of,started_at,status) VALUES(?,?,?,?,?,?)",
+                                (key, run_id, symbol, utc(as_of), utc(started_at), "RUNNING"))
             except sqlite3.IntegrityError:
                 return False
             self.db.execute("INSERT INTO symbol_locks(symbol,slot_key) VALUES(?,?)", (symbol, key))
-            self._event(started_at, None, symbol, "runtime", "RUN_STARTED", "INFO", {"slot_key": key})
+            self._event(started_at, run_id, symbol, "runtime", "RUN_STARTED", "INFO", {"slot_key": key})
             return True
 
     def owns_slot(self, key, symbol):
@@ -116,7 +135,8 @@ class Store:
         with self.transaction():
             self._event(timestamp, run_id, symbol, source, event_type, severity, payload)
 
-    def save_reports(self, key, deterministic, ai):
+    def save_reports(self, key, deterministic, ai, audit_entries=()):
+        from runtime.review import build_review
         setup = deterministic.setup_assessment
         plan = deterministic.trade_plan
         risk = deterministic.risk_decision
@@ -140,6 +160,9 @@ class Store:
                 self.db.execute("INSERT OR REPLACE INTO risk_decisions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (key, risk.status, risk.reason, risk.equity_at_decision, risk.risk_fraction,
                      risk.quantity, risk.capital_at_risk, risk.entry, risk.stop, risk.target, risk.contract_multiplier))
+            review = build_review(key, deterministic, ai, audit_entries)
+            self.db.execute("INSERT INTO review_reports(run_id,slot_key,payload) VALUES(?,?,?)",
+                            (ai.run_id, key, safe_json(review.payload())))
 
     def save_run_metadata(self, key, fingerprint, equity, git_commit=None, experiment_id=None):
         with self.transaction():
@@ -173,7 +196,21 @@ class Store:
             self.db.execute("UPDATE runs SET completed_at=?,status=?,final_status=?,error=? WHERE slot_key=?",
                             (utc(completed_at), status, final_status, error, key))
             self.db.execute("DELETE FROM symbol_locks WHERE slot_key=?", (key,))
-            row = self.db.execute("SELECT run_id,symbol FROM runs WHERE slot_key=?", (key,)).fetchone()
+            row = self.db.execute("SELECT run_id,symbol,as_of FROM runs WHERE slot_key=?", (key,)).fetchone()
+            existing_review = self.db.execute("SELECT payload FROM review_reports WHERE run_id=?", (row["run_id"],)).fetchone()
+            if existing_review:
+                review = json.loads(existing_review[0])
+                review["final_status"] = final_status
+                review["error"] = error
+            else:
+                review = {"schema_version": "1.0", "run_id": row["run_id"],
+                          "slot_key": key, "symbol": row["symbol"], "as_of": row["as_of"],
+                          "final_status": final_status, "setup_status": "NOT_REACHED",
+                          "agents": [], "risk_decision": None, "paper": {},
+                          "warnings": [], "error": error}
+            self.db.execute("INSERT INTO review_reports(run_id,slot_key,payload) VALUES(?,?,?) "
+                            "ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload",
+                            (row["run_id"], key, safe_json(review)))
             self._event(completed_at, row["run_id"], row["symbol"], "runtime",
                         "RUN_COMPLETED" if status == "COMPLETED" else "RUN_FAILED", "INFO" if status == "COMPLETED" else "ERROR",
                         {"final_status": final_status, "error": error})
@@ -206,6 +243,50 @@ class Store:
         sql = "SELECT * FROM journal WHERE (? IS NULL OR symbol=?) AND (? IS NULL OR run_id=?) AND (? IS NULL OR source=?) AND (? IS NULL OR event_type=?) AND (? IS NULL OR substr(timestamp,1,10)=?) ORDER BY id DESC LIMIT ?"
         return [dict(r) for r in self.db.execute(sql, (symbol, symbol, run_id, run_id, source, source, event, event, date, date, limit))]
 
+    def capture_notifications(self, *, run_id=None):
+        """Persist eligible journal events before a caller may deliver them."""
+        from runtime.notifications import NotificationEvent
+        from runtime.scheduler import session_names
+        selected = {"RUN_FAILED", "STATE_INCONSISTENCY", "RECOVERY_STARTED",
+                    "RECOVERY_COMPLETED", "PROVIDER_FAILURE", "AUTH_ERROR",
+                    "ENTITLEMENT_ERROR", "RATE_LIMITED", "SETUP_VALID_SETUP",
+                    "RISK_REJECTED", "ORDER_SUBMITTED", "POSITION_OPENED",
+                    "POSITION_CLOSED", "DAILY_SUMMARY"}
+        events = []
+        with self.transaction():
+            rows = self.db.execute("SELECT * FROM journal WHERE (? IS NULL OR run_id=?) ORDER BY id",
+                                   (run_id, run_id)).fetchall()
+            for row in rows:
+                if row["event_type"] not in selected:
+                    continue
+                event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"journal:{row['id']}"))
+                if self.db.execute("SELECT 1 FROM notification_events WHERE event_id=?", (event_id,)).fetchone():
+                    continue
+                review = self.review_report(row["run_id"]) if row["run_id"] else None
+                agents = tuple({"agent": a["agent"], "status": a["status"],
+                                "reasoning_summary": a["reasoning_summary"]}
+                               for a in review.get("agents", ())) if review else ()
+                evidence = tuple(dict.fromkeys(e for a in review.get("agents", ())
+                                                for e in a.get("evidence_received", ())
+                                                if e is not None)) if review else ()
+                entity = row["source"]
+                event = NotificationEvent(
+                    "1.0", event_id, row["run_id"] or "system", row["timestamp"],
+                    row["severity"], row["event_type"], row["symbol"],
+                    session_names(parse_utc(row["timestamp"])), agents,
+                    review.get("risk_decision") if review else None,
+                    (entity,) if row["event_type"] in {"ORDER_SUBMITTED", "POSITION_OPENED"} else (),
+                    (entity,) if row["event_type"] == "POSITION_CLOSED" else (), evidence)
+                self.db.execute("INSERT INTO notification_events VALUES(?,?,?)",
+                                (event_id, row["id"], safe_json(event.payload())))
+                events.append(event)
+        return events
+
+    def notification_events(self, *, run_id=None):
+        rows = self.db.execute("SELECT payload FROM notification_events ORDER BY journal_id").fetchall()
+        events = [json.loads(row[0]) for row in rows]
+        return [event for event in events if run_id is None or event["run_id"] == run_id]
+
     def save_paper(self, broker, *, owner_key=None, symbol=None):
         account = broker.account
         with self.transaction():
@@ -227,7 +308,33 @@ class Store:
             for event in broker.journal:
                 self._event(event.timestamp or datetime.now(timezone.utc), event.run_id, event.symbol,
                             event.entity_id, event.event_type, "INFO", event.details)
+            run_ids = {item.run_id for item in broker.orders.values()}
+            run_ids.update(item.run_id for item in broker.fills.values())
+            run_ids.update(item.run_id for item in account.closed_trades)
+            for run_id in run_ids:
+                row = self.db.execute("SELECT payload FROM review_reports WHERE run_id=?", (run_id,)).fetchone()
+                if row is None:
+                    continue
+                review = json.loads(row[0])
+                review["paper"] = {
+                    "orders": [{"order_id": o.order_id, "status": o.status} for o in broker.orders.values() if o.run_id == run_id],
+                    "fills": [f.fill_id for f in broker.fills.values() if f.run_id == run_id],
+                    "open_positions": [p.position_id for p in account.open_positions.values() if p.run_id == run_id],
+                    "closed_trades": [{"trade_id": t.trade_id, "net_pnl": t.net_pnl} for t in account.closed_trades if t.run_id == run_id],
+                    "equity": account.equity, "realized_pnl": account.realized_pnl,
+                    "unrealized_pnl": account.unrealized_pnl}
+                self.db.execute("UPDATE review_reports SET payload=? WHERE run_id=?", (safe_json(review), run_id))
         broker.journal.clear()
+
+    def review_report(self, run_id):
+        row = self.db.execute("SELECT payload FROM review_reports WHERE run_id=?", (run_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def latest_review(self, symbol=None):
+        row = self.db.execute("SELECT rr.payload FROM review_reports rr JOIN runs r ON r.slot_key=rr.slot_key "
+                              "WHERE (? IS NULL OR r.symbol=?) ORDER BY r.started_at DESC LIMIT 1",
+                              (symbol, symbol)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def load_paper(self, account_id):
         row = self.db.execute("SELECT payload FROM paper_accounts WHERE account_id=?", (account_id,)).fetchone()
@@ -248,9 +355,21 @@ class Store:
             rows = [row for row in self.db.execute("SELECT slot_key,symbol,run_id,started_at FROM runs WHERE status='RUNNING'")
                     if (at - parse_utc(row["started_at"])).total_seconds() >= stale_after_seconds]
             for row in rows:
-                self.db.execute("UPDATE runs SET status='FAILED',final_status='ERROR',completed_at=?,error='interrupted_run' WHERE slot_key=?", (utc(at), row["slot_key"]))
+                run_id = row["run_id"] or str(uuid.uuid5(uuid.NAMESPACE_URL, row["slot_key"]))
+                self.db.execute("UPDATE runs SET run_id=?,status='FAILED',final_status='ERROR',completed_at=?,error='interrupted_run' WHERE slot_key=?", (run_id, utc(at), row["slot_key"]))
                 self.db.execute("DELETE FROM symbol_locks WHERE slot_key=?", (row["slot_key"],))
-                self._event(at, row["run_id"], row["symbol"], "runtime", "STATE_INCONSISTENCY", "ERROR", {"slot_key": row["slot_key"], "reason": "interrupted_run"})
+                review_row = self.db.execute("SELECT payload FROM review_reports WHERE run_id=?", (run_id,)).fetchone()
+                if review_row:
+                    review = json.loads(review_row[0])
+                    review.update(final_status="ERROR", error="interrupted_run")
+                    self.db.execute("UPDATE review_reports SET payload=? WHERE run_id=?", (safe_json(review), run_id))
+                else:
+                    review = {"schema_version": "1.0", "run_id": run_id, "slot_key": row["slot_key"],
+                              "symbol": row["symbol"], "as_of": None, "final_status": "ERROR",
+                              "setup_status": "NOT_REACHED", "agents": [], "risk_decision": None,
+                              "paper": {}, "warnings": [], "error": "interrupted_run"}
+                    self.db.execute("INSERT INTO review_reports VALUES(?,?,?)", (run_id, row["slot_key"], safe_json(review)))
+                self._event(at, run_id, row["symbol"], "runtime", "STATE_INCONSISTENCY", "ERROR", {"slot_key": row["slot_key"], "reason": "interrupted_run"})
             self._event(at, None, None, "runtime", "RECOVERY_COMPLETED", "INFO", {"unfinished_runs": len(rows)})
             self.set_state("recovery_at", utc(at))
         return len(rows)
