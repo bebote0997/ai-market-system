@@ -204,7 +204,16 @@ class TestGates(unittest.TestCase):
 
 class TestRuntime(TemporaryDB):
     def config(self, enabled=False):
-        return RuntimeConfig(db_path=self.path, scheduler_enabled=enabled, symbols=("XAUUSD",))
+        return RuntimeConfig(db_path=self.path, scheduler_enabled=enabled, enabled_symbols=("XAUUSD",))
+
+    def test_supported_disabled_symbol_cannot_start_cycle(self):
+        runtime = OperationalRuntime(self.config(), clock=lambda: T)
+        try:
+            with self.assertRaisesRegex(ValueError, "disabled by configuration"):
+                runtime.run_cycle("NAS100", T)
+            self.assertEqual(runtime.store.db.execute("SELECT count(*) FROM paper_orders").fetchone()[0], 0)
+        finally:
+            runtime.close()
 
     def test_no_provider_safe_cycle_restart_health_and_ui_read(self):
         runtime = OperationalRuntime(self.config(), clock=lambda: T)

@@ -7,6 +7,13 @@ from storage.codec import parse_utc
 from typing import Optional
 
 MARKETS = ("XAUUSD", "NAS100", "EURUSD")
+SUPPORTED_SYMBOLS = MARKETS
+
+
+def symbol_enablement(symbol, enabled_symbols):
+    if symbol not in SUPPORTED_SYMBOLS:
+        raise ValueError("unsupported floor market")
+    return "ENABLED" if symbol in enabled_symbols else "SUPPORTED · NOT ENABLED"
 SAFETY_LABELS = ("PAPER MODE", "REAL EXECUTION DISABLED")
 AGENT_NAMES = ("Structure AI", "Liquidity AI", "Macro AI", "Setup Reviewer", "Trade Reviewer")
 STATES = {"NO_DATA", "NO_SETUP", "WATCH", "VALID_SETUP", "AI_CAUTION", "RISK_REJECTED", "PLAN_READY", "LOADING", "EMPTY", "STALE_DATA", "PROVIDER_FAILURE", "PARTIAL_AI_FAILURE", "STATE_INCONSISTENCY", "CHART_ERROR", "ERROR"}

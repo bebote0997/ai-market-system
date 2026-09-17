@@ -51,4 +51,4 @@ class Scheduler:
             self.runtime.store.set_state("scheduler_slot", utc(slot))
         if not set(session_names(slot)) & set(config.sessions):
             return []
-        return [self.runtime.run_cycle(symbol, slot) for symbol in config.symbols]
+        return [self.runtime.run_cycle(symbol, slot) for symbol in config.enabled_symbols]

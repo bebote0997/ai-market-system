@@ -2,7 +2,10 @@ def render(st, vm, operational_health=None):
     st.header("SYSTEM")
     st.caption("Read-only service inventory")
     rows = [
-        {"service": "Market data provider", "status": "NOT CONFIGURED"},
+        {"service": "Supported symbols", "status": "XAUUSD, NAS100, EURUSD"},
+        {"service": "Enabled symbols", "status": "XAUUSD, EURUSD"},
+        {"service": "Market data provider", "status": "Twelve Data configured for PAPER"},
+        {"service": "Massive adapter", "status": "SUPPORTED / NOT ACTIVE"},
         {"service": "AI provider", "status": "NOT STARTED"},
         {"service": "Scheduler", "status": "NOT CONFIGURED"},
         {"service": "Paper broker", "status": "NOT STARTED"},

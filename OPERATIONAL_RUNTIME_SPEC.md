@@ -1,8 +1,18 @@
 # Operational Runtime — Fase 6C
 
+## Fase 6D: proveedores reales
+
+El runtime admite `AI_FLOOR_MARKET_PROVIDER=twelve_data` como modo de mercado activo para la demo PAPER; `massive` sigue soportado/configurable pero no participa en la certificación activa. `AI_FLOOR_AI_PROVIDER=openai` habilita OpenAI. Las credenciales se leen del entorno o de `.env.local` ignorado; `.env.example` contiene solo nombres y valores no secretos. `OPENAI_MODEL` es configurable y comienza en `gpt-5.6-terra`. Los timeouts son configurables. Véase `PROVIDER_INTEGRATION_SPEC.md`.
+
+SUPPORTED_SYMBOLS es XAUUSD, NAS100, EURUSD. AI_FLOOR_ENABLED_SYMBOLS define la selección operativa; para el experimento aprobado su valor predeterminado es XAUUSD,EURUSD. NAS100 permanece soportado con mapping I:NDX, pero desactivado. El scheduler y los ciclos manuales rechazan símbolos no habilitados. La UI muestra el catálogo completo y etiqueta cada símbolo como ENABLED o SUPPORTED · NOT ENABLED; no inicia ciclos. El certificador prueba solamente enabled_symbols y registra NAS100 como NOT_ENABLED/NOT_CERTIFIED. Un PASS de dos símbolos no certifica NAS100 para una futura reactivación.
+
+El modo de mercado predeterminado es `twelve_data`; la IA sigue determinista hasta configurar `openai`. El scheduler permanece deshabilitado. Ejecutar `python -m runtime.certify_providers --json` antes de cualquier demo operacional con proveedores reales. La certificación activa requiere OpenAI y Twelve Data para ambos símbolos; Massive inactivo y NAS100 desactivado no bloquean PASS. Un proveedor fallido o sin entitlement devuelve `NO_DATA` y bloquea nuevas órdenes PAPER; no hay fallback a fixtures.
+
+La demo oficial de 14 días sigue sin iniciar. Véase AUDIT_PHASE6D.md para la matriz de capacidades y fuentes.
+
 ## Lifecycle and launch
 
-From the repository root, run `python -m runtime --recover-only` to initialize and inspect durable state, `python -m runtime --once XAUUSD` for one PAPER cycle, or `AI_FLOOR_SCHEDULER=1 python -m runtime` for the continuous scheduler. By default the scheduler is disabled. On Windows PowerShell, set `$env:AI_FLOOR_SCHEDULER='1'` before launching. Stop with Ctrl+C. Streamlit is a separate read-only process (`streamlit run ui/app.py`). No market provider is bundled; without an injected `MarketDataProvider`, cycles end `NO_DATA`. No demo fixture is used by the runtime.
+From the repository root, run `python -m runtime --recover-only` to initialize and inspect durable state, `python -m runtime --once XAUUSD` for one PAPER cycle, or `AI_FLOOR_SCHEDULER=1 python -m runtime` for the continuous scheduler. By default the scheduler is disabled. On Windows PowerShell, set `$env:AI_FLOOR_SCHEDULER='1'` before launching. Stop with Ctrl+C. Streamlit is a separate read-only process (`streamlit run ui/app.py`). Twelve Data is the configured market provider; absent credentials or provider data end a cycle in `NO_DATA`. No demo fixture is used by the runtime.
 
 Configuration is `RuntimeConfig` (`runtime/config.py`). `AI_FLOOR_DB_PATH` overrides the default relative `data/runtime/trading_floor.db`; `AI_FLOOR_GIT_COMMIT` can record a reproducibility identifier. Symbols are limited to XAUUSD, NAS100, EURUSD. Cadence defaults to 15 minutes, risk remains capped by the existing deterministic Risk Engine, and execution is PAPER only. Instrument mechanics must be injected as real `InstrumentSpec` values; unknown multipliers are never filled in.
 

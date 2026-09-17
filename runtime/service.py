@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import logging
 import os
 import re
+import json
 
 from ai.orchestrator import run as run_ai
 from ai.provider import DeterministicAIProvider
@@ -26,6 +27,15 @@ class OperationalRuntime:
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
                  instruments=None, clock=None, risk_config=None):
         self.config = config or RuntimeConfig.from_env()
+        if market_provider is None and self.config.market_provider_mode == "massive":
+            from data.massive_provider import MassiveMarketDataProvider
+            market_provider = MassiveMarketDataProvider(timeout=float(os.environ.get("MASSIVE_TIMEOUT_SECONDS", "15")))
+        if market_provider is None and self.config.market_provider_mode == "twelve_data":
+            from data.twelve_data_provider import TwelveDataMarketDataProvider
+            market_provider = TwelveDataMarketDataProvider(timeout=float(os.environ.get("TWELVE_DATA_TIMEOUT_SECONDS", "15")))
+        if ai_provider is None and self.config.ai_provider_mode == "openai":
+            from ai.openai_provider import OpenAIProvider
+            ai_provider = OpenAIProvider(timeout=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "30")))
         self.market_provider = market_provider
         self.ai_provider = ai_provider or DeterministicAIProvider()
         self.macro_provider = macro_provider or InMemoryMacroNewsProvider()
@@ -51,6 +61,8 @@ class OperationalRuntime:
                 raise RuntimeError("inconsistent paper position")
         with self.store.transaction():
             self.store.set_state("account_id", self.config.account_id)
+            self.store.set_state("enabled_symbols", json.dumps(self.config.enabled_symbols))
+            self.store.set_state("market_provider_mode", self.config.market_provider_mode)
             self.store.set_state("market_data_provider", "NOT CONFIGURED" if market_provider is None else "CONFIGURED")
             self.store.set_state("ai_provider", "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")
         self.store.heartbeat(self.clock(), "STOPPED")
@@ -88,8 +100,10 @@ class OperationalRuntime:
                 "interpretation": [], "freshness": state, "agents": [], "prompt_versions": []}
 
     def run_cycle(self, symbol, scheduled_at):
-        if symbol not in self.config.symbols or symbol not in MARKETS:
+        if symbol not in MARKETS:
             raise ValueError("unsupported operational symbol")
+        if symbol not in self.config.enabled_symbols:
+            raise ValueError("symbol disabled by configuration")
         slot = slot_at(scheduled_at, self.config.cadence_minutes)
         key = slot_key(symbol, slot, self.config.cadence_minutes)
         if not self.store.claim_slot(key, symbol, slot, self.clock()):
@@ -112,8 +126,25 @@ class OperationalRuntime:
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "NO_DATA"
             stage = "market_data"
-            snapshot = self.market_provider.load_snapshot(symbol, slot)
+            try:
+                snapshot = self.market_provider.load_snapshot(symbol, slot)
+            except Exception as provider_error:
+                from data.massive_provider import MassiveProviderError
+                from data.twelve_data_provider import TwelveDataProviderError
+                if not isinstance(provider_error, (MassiveProviderError, TwelveDataProviderError)):
+                    raise
+                provider_state = provider_error.kind
+                with self.store.transaction():
+                    self.store.set_state("market_data_provider", provider_state)
+                self.store.event(self.clock(), None, symbol, "market_data", provider_state, "WARNING")
+                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", provider_state))
+                self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
+                return "NO_DATA"
             fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, slot, self.config.max_age_seconds)
+            if getattr(self.market_provider, "health_by_asset", {}).get(
+                {"XAUUSD": "METAL", "EURUSD": "FOREX", "NAS100": "INDEX"}[symbol]
+            ) == "STALE":
+                fresh, data_state = False, "STALE_DATA"
             with self.store.transaction():
                 self.store.set_state("market_data_provider", "CURRENT" if fresh else data_state)
             self.store.event(self.clock(), None, symbol, "market_data", "DATA_CHECK", "INFO" if fresh else "WARNING", {"state": data_state})

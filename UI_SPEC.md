@@ -1,5 +1,11 @@
 # AI Trading Floor UI — Fase 6B
 
+La vista SYSTEM muestra el modo de mercado activo leído del runtime y Massive como adapter soportado/no activo. MARKETS distingue el catálogo soportado de `enabled_symbols`; NAS100 permanece visible pero desactivado. La UI no solicita datos externos ni inicia el experimento.
+
+## Fase 6D: símbolos habilitados
+
+La selección operativa predeterminada del experimento PAPER es XAUUSD y EURUSD. La UI mantiene visible NAS100 en el catálogo con la etiqueta SUPPORTED · NOT ENABLED; verlo en el selector o en datos de muestra no lo habilita para runtime ni certificación. La página EXPERIMENT muestra la selección habilitada y los símbolos soportados desactivados. Cuando existe un runtime local, la UI lee su selección persistida en modo solo lectura.
+
 ## Launch
 
 Python 3.13: `python -m pip install -r requirements-ui.txt`, then `streamlit run ui/app.py` from the repository root. The legacy `streamlit run app.py` remains separate. No API key, provider, scheduler, database, broker, or network call is required to start the floor.

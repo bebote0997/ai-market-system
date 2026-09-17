@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .env
+.env.local
+.env.*.local
 data/runtime/
 *.db-wal
 *.db-shm

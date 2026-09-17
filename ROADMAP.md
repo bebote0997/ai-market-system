@@ -133,6 +133,10 @@ Interfaz Streamlit/Plotly separada del dashboard legacy, con FLOOR, MARKETS, POS
 
 Persistencia SQLite versionada, journal durable, scheduler configurable con sesiones London/New York y DST, slots idempotentes, frescura de barras cerradas, política final de PAPER, recuperación, heartbeat, health y lectura operacional de UI. Cuenta/posición paper sobreviven reinicio. Suite: 405 tests OK. El experimento oficial de 14 días y el proveedor IA externo no se iniciaron.
 
+## Fase 6D — COMPLETADA: Real Provider Integration & Certification
+
+Adapters Twelve Data, Massive y OpenAI, modos de runtime, certificador sin trading, pruebas sin red y CI añadidos. Twelve Data es el proveedor activo de mercado para la demo PAPER; Massive queda soportado/configurable y NOT_ACTIVE. Solo XAUUSD y EURUSD están habilitados; NAS100 permanece soportado con I:NDX, desactivado y sin certificación operativa. OpenAI y Twelve Data certificaron PASS en vivo en 5m/15m/1h el 17 de septiembre de 2026. Fase 7 y el experimento de 14 días permanecen sin iniciar.
+
 ## Regla de avance
 
 Cada fase debe producir algo ejecutable y verificable con tests. No optimizar parámetros con resultados de test ni adelantar fases sin autorización explícita.

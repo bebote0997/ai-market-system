@@ -14,7 +14,10 @@ def main():
     parser.add_argument("--recover-only", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    runtime = OperationalRuntime(RuntimeConfig.from_env())
+    config = RuntimeConfig.from_env()
+    if args.once and args.once not in config.enabled_symbols:
+        parser.error(f"{args.once} is supported but disabled by AI_FLOOR_ENABLED_SYMBOLS")
+    runtime = OperationalRuntime(config)
     stop = Event()
     try:
         if args.recover_only:

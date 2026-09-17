@@ -10,7 +10,7 @@ from core.contracts import FloorRunReport, SetupAssessment, TradePlan, RiskDecis
 from data.macro_news import InMemoryMacroNewsProvider
 from floor.orchestrator import run as run_deterministic
 from riesgo import crear_configuracion_riesgo_v2
-from ui.adapters import MARKETS, SAFETY_LABELS, assistant_lines, empty_market, from_ai_report, state_label
+from ui.adapters import MARKETS, SAFETY_LABELS, assistant_lines, empty_market, from_ai_report, state_label, symbol_enablement
 from ui.components.charts import price_action_figure
 from ui.fixtures.demo_floor import SAMPLE_LABEL, demo_market
 
@@ -73,6 +73,8 @@ class TestFloorUI(unittest.TestCase):
         self.assertEqual(figure.data[0].type, "candlestick")
         self.assertEqual(tuple(MARKETS), ("XAUUSD", "NAS100", "EURUSD"))
         self.assertIsNone(demo.risk_decision)
+        self.assertEqual(symbol_enablement("NAS100", ("XAUUSD", "EURUSD")), "SUPPORTED · NOT ENABLED")
+        self.assertEqual(symbol_enablement("XAUUSD", ("XAUUSD", "EURUSD")), "ENABLED")
 
     def test_stale_provider_failure_and_assistant_no_authorization(self):
         ai = run_ai(report(), DeterministicAIProvider())

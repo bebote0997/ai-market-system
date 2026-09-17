@@ -1,9 +1,11 @@
 """In-memory UI snapshot registry. Assignment is explicit; reruns only read."""
 import os
+import json
 from pathlib import Path
 from dataclasses import replace
 
 from ui.adapters import MARKETS, empty_market, from_persisted_snapshot
+from runtime.config import DEFAULT_ENABLED_SYMBOLS
 
 
 def operational_store():
@@ -12,6 +14,19 @@ def operational_store():
         return None
     from storage.database import Store
     return Store(path, readonly=True)
+
+
+def enabled_market_symbols():
+    """Read the runtime's published selection; never infer it from UI fixtures."""
+    store = operational_store()
+    if store is None:
+        return DEFAULT_ENABLED_SYMBOLS
+    try:
+        raw = store.get_state("enabled_symbols")
+        enabled = tuple(json.loads(raw)) if raw else DEFAULT_ENABLED_SYMBOLS
+        return enabled if enabled and set(enabled) <= set(MARKETS) else DEFAULT_ENABLED_SYMBOLS
+    finally:
+        store.close()
 
 
 def current_market(st, symbol, sample_factory):

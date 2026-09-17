@@ -1,13 +1,14 @@
-from ui.adapters import MARKETS
+from ui.adapters import MARKETS, symbol_enablement
 from ui.components import panels
 
 
-def render(st, vm, market_lookup):
+def render(st, vm, market_lookup, enabled_symbols):
     st.header("MARKETS")
     rows = []
     for symbol in MARKETS:
         item = market_lookup(symbol)
-        rows.append({"symbol": symbol, "analysis_state": item.state,
+        rows.append({"symbol": symbol, "experiment": symbol_enablement(symbol, enabled_symbols),
+                     "analysis_state": item.state,
                      "AI contextual bias": next((a.bias for a in item.agents if a.status == "OK"), "UNKNOWN"),
                      "risk_state": item.risk_status, "freshness": item.freshness})
     st.dataframe(rows, use_container_width=True, hide_index=True)
