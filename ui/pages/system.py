@@ -1,4 +1,4 @@
-def render(st, vm, operational_health=None, review=None, notifications=()):
+def render(st, vm, operational_health=None, review=None, notifications=(), evidence_json=None):
     st.header("SYSTEM")
     st.caption("Read-only service inventory")
     rows = [
@@ -32,3 +32,6 @@ def render(st, vm, operational_health=None, review=None, notifications=()):
         st.dataframe([{"timestamp_utc": e["timestamp_utc"], "type": e["type"],
                        "severity": e["severity"], "run_id": e["run_id"]}
                       for e in notifications[-20:]], hide_index=True, use_container_width=True)
+        if evidence_json is not None:
+            st.download_button("Download review evidence (JSON)", evidence_json,
+                               file_name="paper-review-evidence.json", mime="application/json")

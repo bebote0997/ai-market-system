@@ -9,7 +9,7 @@ import uuid
 from ai.orchestrator import run as run_ai
 from ai.provider import DeterministicAIProvider
 from ai.runtime import AuditLog
-from data.macro_news import InMemoryMacroNewsProvider
+from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
 from execution.trade_manager import TradeManager
@@ -43,7 +43,14 @@ class OperationalRuntime:
             ai_provider = OpenAIProvider(timeout=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "30")))
         self.market_provider = market_provider
         self.ai_provider = ai_provider or DeterministicAIProvider()
-        self.macro_provider = macro_provider or InMemoryMacroNewsProvider()
+        if macro_provider is None and self.config.macro_provider_mode == "finnhub":
+            from data.finnhub_macro_provider import FinnhubMacroDataProvider
+            macro_provider = FinnhubMacroDataProvider()
+        if macro_provider is None and self.config.macro_provider_mode == "official_hybrid":
+            from data.official_macro_provider import OfficialMacroProvider
+            macro_provider = OfficialMacroProvider()
+        self.macro_provider = macro_provider or (NoMacroDataProvider() if self.config.macro_provider_mode == "none"
+                                                 else InMemoryMacroNewsProvider())
         self.instruments = instruments or {}
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
@@ -70,6 +77,8 @@ class OperationalRuntime:
             self.store.set_state("market_provider_mode", self.config.market_provider_mode)
             self.store.set_state("market_data_provider", "NOT CONFIGURED" if market_provider is None else "CONFIGURED")
             self.store.set_state("ai_provider", "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")
+            self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
+            self.store.set_state("macro_provider_mode", self.config.macro_provider_mode)
         self.store.heartbeat(self.clock(), "STOPPED")
 
     def close(self):
@@ -178,6 +187,16 @@ class OperationalRuntime:
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
                                       self.instruments.get(symbol), self.risk_config,
                                       equity=broker.account.equity, run_id=run_id)
+            with self.store.transaction():
+                self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
+            macro_report = deterministic.macro_news_report
+            if macro_report and macro_report.status == "ERROR":
+                self.store.event(self.clock(), run_id, symbol, "macro_news", "PROVIDER_FAILURE", "ERROR",
+                                 {"provider": self.config.macro_provider_mode})
+            if (self.config.macro_provider_mode in {"finnhub", "official_hybrid"} and macro_report and
+                    macro_report.status in {"OK", "PARTIAL"} and macro_report.evidence):
+                self.store.record_macro_awareness(self.clock(), run_id, symbol,
+                                                  macro_report.evidence[0].get("macro_events", ()))
             stage = "ai"
             audit = AuditLog()
             ai = run_ai(deterministic, self.ai_provider, audit)

@@ -8,7 +8,16 @@ import uuid
 
 from storage.codec import paper_decode, paper_encode, public_metadata, safe_json, utc, parse_utc
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+PHASE8_SCHEMA = """
+CREATE TABLE IF NOT EXISTS notification_deliveries(
+  event_id TEXT PRIMARY KEY, status TEXT NOT NULL, attempted_at TEXT NOT NULL,
+  completed_at TEXT, error_type TEXT,
+  FOREIGN KEY(event_id) REFERENCES notification_events(event_id));
+CREATE TABLE IF NOT EXISTS macro_awareness(
+  event_id TEXT NOT NULL, symbol TEXT NOT NULL, first_run_id TEXT NOT NULL,
+  PRIMARY KEY(event_id,symbol));
+"""
 PHASE7_SCHEMA = """
 CREATE TABLE IF NOT EXISTS review_reports(
   run_id TEXT PRIMARY KEY, slot_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL,
@@ -48,7 +57,7 @@ CREATE TABLE IF NOT EXISTS run_metadata(slot_key TEXT PRIMARY KEY,git_commit TEX
   config_fingerprint TEXT NOT NULL,experiment_id TEXT,starting_equity REAL NOT NULL,
   schema_version INTEGER NOT NULL, FOREIGN KEY(slot_key) REFERENCES runs(slot_key));
 CREATE TABLE IF NOT EXISTS symbol_locks(symbol TEXT PRIMARY KEY,slot_key TEXT NOT NULL);
-""" + PHASE7_SCHEMA
+""" + PHASE7_SCHEMA + PHASE8_SCHEMA
 
 
 class Store:
@@ -72,7 +81,7 @@ class Store:
         version_table = self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_info'").fetchone()
         if version_table:
             rows = self.db.execute("SELECT version FROM schema_info").fetchall()
-            if len(rows) != 1 or rows[0][0] not in {1, SCHEMA_VERSION}:
+            if len(rows) != 1 or rows[0][0] not in {1, 2, SCHEMA_VERSION}:
                 raise RuntimeError("incompatible database schema")
             required = {"runs", "agent_decisions", "setups", "risk_decisions", "paper_accounts",
                         "paper_orders", "paper_fills", "paper_positions", "closed_trades",
@@ -84,10 +93,17 @@ class Store:
                 if self.readonly:
                     raise RuntimeError("database schema upgrade required")
                 self.db.executescript("BEGIN IMMEDIATE;" + PHASE7_SCHEMA +
+                                      "UPDATE schema_info SET version=2;COMMIT;")
+            if rows[0][0] <= 2:
+                if self.readonly:
+                    raise RuntimeError("database schema upgrade required")
+                self.db.executescript("BEGIN IMMEDIATE;" + PHASE8_SCHEMA +
                                       f"UPDATE schema_info SET version={SCHEMA_VERSION};COMMIT;")
-            else:
+            if rows[0][0] >= 2:
                 if not {"review_reports", "notification_events"} <= actual:
                     raise RuntimeError("incomplete database schema")
+            if rows[0][0] == SCHEMA_VERSION and not {"notification_deliveries", "macro_awareness"} <= actual:
+                raise RuntimeError("incomplete database schema")
         elif self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone():
             raise RuntimeError("unversioned database schema")
         else:
@@ -210,7 +226,10 @@ class Store:
                           "warnings": [], "error": error}
             self.db.execute("INSERT INTO review_reports(run_id,slot_key,payload) VALUES(?,?,?) "
                             "ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload",
-                            (row["run_id"], key, safe_json(review)))
+                            (row["run_id"], key, safe_json({**review, "provider_health": {
+                                "market": self.get_state("market_data_provider"),
+                                "ai": self.get_state("ai_provider"),
+                                "macro": self.get_state("macro_provider")}})))
             self._event(completed_at, row["run_id"], row["symbol"], "runtime",
                         "RUN_COMPLETED" if status == "COMPLETED" else "RUN_FAILED", "INFO" if status == "COMPLETED" else "ERROR",
                         {"final_status": final_status, "error": error})
@@ -251,7 +270,8 @@ class Store:
                     "RECOVERY_COMPLETED", "PROVIDER_FAILURE", "AUTH_ERROR",
                     "ENTITLEMENT_ERROR", "RATE_LIMITED", "SETUP_VALID_SETUP",
                     "RISK_REJECTED", "ORDER_SUBMITTED", "POSITION_OPENED",
-                    "POSITION_CLOSED", "DAILY_SUMMARY"}
+                    "POSITION_CLOSED", "DAILY_SUMMARY", "MACRO_HIGH_IMPORTANCE",
+                    "MACRO_HIGH_RELEVANCE"}
         events = []
         with self.transaction():
             rows = self.db.execute("SELECT * FROM journal WHERE (? IS NULL OR run_id=?) ORDER BY id",
@@ -269,6 +289,10 @@ class Store:
                 evidence = tuple(dict.fromkeys(e for a in review.get("agents", ())
                                                 for e in a.get("evidence_received", ())
                                                 if e is not None)) if review else ()
+                if row["event_type"] in {"MACRO_HIGH_IMPORTANCE", "MACRO_HIGH_RELEVANCE"}:
+                    macro_id = json.loads(row["payload"]).get("event_id")
+                    if macro_id:
+                        evidence = tuple(dict.fromkeys((*evidence, macro_id)))
                 entity = row["source"]
                 event = NotificationEvent(
                     "1.0", event_id, row["run_id"] or "system", row["timestamp"],
@@ -286,6 +310,41 @@ class Store:
         rows = self.db.execute("SELECT payload FROM notification_events ORDER BY journal_id").fetchall()
         events = [json.loads(row[0]) for row in rows]
         return [event for event in events if run_id is None or event["run_id"] == run_id]
+
+    def claim_notification_delivery(self, event_id, at):
+        """At-most-once external attempt; a crash may leave an alert unsent."""
+        with self.transaction():
+            if not self.db.execute("SELECT 1 FROM notification_events WHERE event_id=?", (event_id,)).fetchone():
+                raise ValueError("notification must be persisted before delivery")
+            result = self.db.execute("INSERT OR IGNORE INTO notification_deliveries(event_id,status,attempted_at) VALUES(?,?,?)",
+                                     (event_id, "CLAIMED", utc(at)))
+            return result.rowcount == 1
+
+    def complete_notification_delivery(self, event_id, at, error_type=None):
+        with self.transaction():
+            self.db.execute("UPDATE notification_deliveries SET status=?,completed_at=?,error_type=? WHERE event_id=? AND status='CLAIMED'",
+                            ("FAILED" if error_type else "DELIVERED", utc(at), error_type, event_id))
+
+    def record_macro_awareness(self, at, run_id, symbol, events):
+        with self.transaction():
+            for event in events:
+                source_high = event.get("impact") == "HIGH"
+                policy_high = (event.get("data_quality") or {}).get("policy_relevance") == "HIGH"
+                if not (source_high or policy_high) or event.get("window") not in {
+                    "UPCOMING", "ACTIVE_WINDOW", "DATE_ONLY_UPCOMING", "DATE_ONLY_TODAY"}:
+                    continue
+                event_id = event.get("event_id")
+                if not event_id:
+                    continue
+                inserted = self.db.execute("INSERT OR IGNORE INTO macro_awareness VALUES(?,?,?)",
+                                           (event_id, symbol, run_id)).rowcount
+                if inserted:
+                    self._event(at, run_id, symbol, "macro_news",
+                                "MACRO_HIGH_IMPORTANCE" if source_high else "MACRO_HIGH_RELEVANCE", "WARNING",
+                                {"event_id": event_id, "event_time_utc": event.get("event_timestamp"),
+                                 "event_date": event.get("event_date"),
+                                 "impact": "HIGH" if source_high else None,
+                                 "policy_relevance": "HIGH" if policy_high else None})
 
     def save_paper(self, broker, *, owner_key=None, symbol=None):
         account = broker.account

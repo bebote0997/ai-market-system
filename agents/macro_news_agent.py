@@ -1,7 +1,8 @@
 """Deterministic Macro/News scout over normalized provider data only."""
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import math
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from core.contracts import AgentMessage, MacroEvent, NewsItem
 from data.macro_news import macro_event_to_dict, news_item_to_dict
@@ -86,7 +87,8 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
         return AgentMessage("1.0", run_id, datetime.now(timezone.utc), symbol or "", "context", "macro_news", "ERROR", warnings=("invalid_context",))
     symbol = symbol.upper()
     try:
-        raw_events = [macro_event_to_dict(item) for item in provider.macro_events()]
+        events = provider.macro_events_at(as_of) if hasattr(provider, "macro_events_at") else provider.macro_events()
+        raw_events = [macro_event_to_dict(item) for item in events]
         raw_news = [news_item_to_dict(item) for item in provider.news_items()]
     except Exception as error:
         return AgentMessage("1.0", run_id, timestamp, symbol, "context", "macro_news", "ERROR", warnings=(f"provider_error:{type(error).__name__}",))
@@ -105,9 +107,19 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
         source_time = _utc(item.get("source_timestamp"))
         event_time = _utc(item.get("event_timestamp"))
         received = _utc(item.get("received_at"))
+        fetched_at = _utc(item.get("fetched_at"))
         result_time = _utc(item.get("result_timestamp"))
         known_at = _utc(item.get("known_at")) or source_time
-        if not _valid_source_and_time(item.get("source"), event_time) or event_time is None:
+        event_date = None
+        if item.get("event_date") is not None:
+            try:
+                event_date = date.fromisoformat(item["event_date"])
+            except (TypeError, ValueError):
+                event_date = None
+        date_timezone = (item.get("data_quality") or {}).get("event_timezone")
+        if event_date is not None and date_timezone not in {"Europe/Luxembourg", "America/New_York"}:
+            event_date = None
+        if not item.get("source") or (event_time is None and event_date is None):
             rejected += 1
             warnings.append("missing_source_or_timestamp")
             continue
@@ -118,6 +130,15 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
         if item.get("received_at") is not None and received is None:
             rejected += 1
             warnings.append("invalid_timestamp")
+            continue
+        if item.get("fetched_at") is not None and fetched_at is None:
+            rejected += 1
+            warnings.append("invalid_timestamp")
+            continue
+        if any(value is not None and value > timestamp for value in
+               (source_time, received, fetched_at)):
+            rejected += 1
+            warnings.append("future_information")
             continue
         if known_at is not None and known_at > timestamp:
             rejected += 1
@@ -134,8 +155,13 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
         item["received_at"] = received
         item["known_at"] = known_at
         item["result_timestamp"] = result_time
-        item["impact"] = _impact(item.get("impact"))
-        item["window"] = _window(event_time, timestamp)
+        item["impact"] = (None if (item.get("data_quality") or {}).get("importance_origin") == "INTERNAL_POLICY"
+                          and item.get("impact") is None else _impact(item.get("impact")))
+        if event_time is None:
+            days = (event_date - timestamp.astimezone(ZoneInfo(date_timezone)).date()).days
+            item["window"] = "DATE_ONLY_TODAY" if days == 0 else "DATE_ONLY_UPCOMING" if 0 < days <= 1 else "DATE_ONLY_SCHEDULED" if days > 1 else "DATE_ONLY_PAST"
+        else:
+            item["window"] = _window(event_time, timestamp)
         accepted_events.append(item)
 
     seen = set()
@@ -167,6 +193,10 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
     status = "OK" if accepted_events or accepted_news else ("PARTIAL" if rejected else "NO_DATA")
     if rejected and status == "OK":
         status = "PARTIAL"
+    if getattr(provider, "health", None) == "PARTIAL":
+        warnings.append("provider_partial")
+        if status == "OK":
+            status = "PARTIAL"
     quality = {"accepted_macro": len(accepted_events), "accepted_news": len(accepted_news), "rejected": rejected}
     evidence = ({"macro_events": tuple(accepted_events), "news_items": tuple(accepted_news)},)
     return AgentMessage("1.0", run_id, timestamp, symbol, "context", "macro_news", status, evidence=evidence, data_quality=quality, warnings=tuple(dict.fromkeys(warnings)))

@@ -1,0 +1,47 @@
+previews:
+  generation: off
+
+services:
+  - type: web
+    name: ai-market-system-paper
+    runtime: python
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: off
+    buildCommand: pip install -r requirements-ci.txt
+    startCommand: python -m runtime.cloud
+    healthCheckPath: /_stcore/health
+    maxShutdownDelaySeconds: 120
+    disk:
+      name: paper-state
+      mountPath: /opt/render/project/src/data/runtime
+      sizeGB: 1
+    envVars:
+      - key: AI_FLOOR_DB_PATH
+        value: /opt/render/project/src/data/runtime/trading_floor.db
+      - key: AI_FLOOR_DURABLE_MOUNT
+        value: /opt/render/project/src/data/runtime
+      - key: AI_FLOOR_INSTANCE_COUNT
+        value: "1"
+      - key: AI_FLOOR_CLOUD_RUNNER
+        value: "0"
+      - key: AI_FLOOR_SCHEDULER
+        value: "0"
+      - key: AI_FLOOR_MARKET_PROVIDER
+        value: twelve_data
+      - key: AI_FLOOR_AI_PROVIDER
+        value: openai
+      - key: AI_FLOOR_MACRO_PROVIDER
+        value: none
+      - key: AI_FLOOR_ENABLED_SYMBOLS
+        value: XAUUSD,EURUSD
+      - key: OPENAI_MODEL
+        value: gpt-5.6-terra
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+      - key: AI_FLOOR_DASHBOARD_PASSWORD
+        sync: false

@@ -100,6 +100,11 @@ class MacroEvent:
     data_quality: dict = field(default_factory=dict)
     result_timestamp: Optional[datetime] = None
     known_at: Optional[datetime] = None
+    country: Optional[str] = None
+    fetched_at: Optional[datetime] = None
+    importance: Optional[str] = None
+    consensus: Optional[Any] = None
+    event_date: Optional[str] = None
 
 
 @dataclass(frozen=True)

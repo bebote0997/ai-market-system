@@ -81,11 +81,17 @@ class DemoRunner:
 
     def _deliver(self, events):
         for event in events:
+            durable = getattr(self.sink, "durable_delivery", False)
+            if durable and not self.store.claim_notification_delivery(event.event_id, self.clock()):
+                continue
             try:
                 self.sink.deliver(event)
-            except Exception:
+                if durable:
+                    self.store.complete_notification_delivery(event.event_id, self.clock())
+            except Exception as exc:
                 # The persisted event and trading outcome are the source of truth.
-                pass
+                if durable:
+                    self.store.complete_notification_delivery(event.event_id, self.clock(), type(exc).__name__)
 
     def run_cycle(self, symbol, scheduled_at):
         return self.run_once(symbol, scheduled_at)["status"]

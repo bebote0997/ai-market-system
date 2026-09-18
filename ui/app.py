@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import streamlit as st
+from ui.auth import remote_dashboard_enabled, require_dashboard_access
 
 from ui.adapters import MARKETS, symbol_enablement
 from ui.components import panels
@@ -15,6 +16,7 @@ from ui.state import current_market, enabled_market_symbols, operational_store
 from ui.theme import apply
 
 st.set_page_config(page_title="AI Trading Floor · PAPER", layout="wide", page_icon="📊")
+require_dashboard_access(st)
 apply(st)
 
 with st.sidebar:
@@ -24,7 +26,8 @@ with st.sidebar:
     symbol = st.selectbox("Market", MARKETS,
                           format_func=lambda market: f"{market} · {symbol_enablement(market, enabled_symbols)}")
     st.caption("Enabled for experiment: " + ", ".join(enabled_symbols))
-    st.toggle("SAMPLE / DEMO", value=True, key="sample_mode")
+    st.toggle("SAMPLE / DEMO", value=not remote_dashboard_enabled(), key="sample_mode")
+    st.caption("PAPER · REAL EXECUTION DISABLED")
     st.caption("Observation only · no live orders")
 
 vm = current_market(st, symbol, demo_market)
@@ -49,9 +52,11 @@ else:
     store = operational_store() if not vm.sample else None
     try:
         from runtime.health import health
+        from runtime.review_export import review_bundle_json
         system.render(st, vm, health(store) if store else None,
                       store.latest_review(symbol) if store else None,
-                      store.notification_events() if store else ())
+                      store.notification_events() if store else (),
+                      review_bundle_json(store) if store else None)
     finally:
         if store:
             store.close()

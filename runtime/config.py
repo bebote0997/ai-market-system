@@ -22,6 +22,7 @@ class RuntimeConfig:
     max_age_seconds: tuple = (("1h", 7200), ("15m", 1800), ("5m", 600))
     market_provider_mode: str = "twelve_data"
     ai_provider_mode: str = "deterministic"
+    macro_provider_mode: str = "none"
 
     def __post_init__(self):
         if (self.cadence_minutes <= 0 or 60 % self.cadence_minutes or
@@ -32,6 +33,8 @@ class RuntimeConfig:
             raise ValueError("invalid sessions or equity")
         if self.market_provider_mode not in {"none", "massive", "twelve_data"} or self.ai_provider_mode not in {"deterministic", "openai"}:
             raise ValueError("invalid provider mode")
+        if self.macro_provider_mode not in {"none", "finnhub", "official_hybrid"}:
+            raise ValueError("invalid macro provider mode")
 
     def fingerprint(self):
         content = {"cadence_minutes": self.cadence_minutes, "enabled_symbols": self.enabled_symbols,
@@ -39,7 +42,8 @@ class RuntimeConfig:
                    "sessions": self.sessions, "scheduler_enabled": self.scheduler_enabled,
                    "max_age_seconds": self.max_age_seconds, "paper_mode": True,
                    "market_provider_mode": self.market_provider_mode,
-                   "ai_provider_mode": self.ai_provider_mode}
+                   "ai_provider_mode": self.ai_provider_mode,
+                   "macro_provider_mode": self.macro_provider_mode}
         return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
     @classmethod
@@ -52,4 +56,5 @@ class RuntimeConfig:
                    enabled_symbols=enabled,
                    scheduler_enabled=os.environ.get("AI_FLOOR_SCHEDULER", "0") == "1",
                    market_provider_mode=os.environ.get("AI_FLOOR_MARKET_PROVIDER", "twelve_data"),
-                   ai_provider_mode=os.environ.get("AI_FLOOR_AI_PROVIDER", "deterministic"))
+                   ai_provider_mode=os.environ.get("AI_FLOOR_AI_PROVIDER", "deterministic"),
+                   macro_provider_mode=os.environ.get("AI_FLOOR_MACRO_PROVIDER", "none"))

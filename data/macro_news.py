@@ -9,6 +9,11 @@ class MacroNewsProvider(Protocol):
     def news_items(self) -> Sequence[NewsItem]: ...
 
 
+class MacroDataProvider(Protocol):
+    """Calendar-aware provider; results are bounded by the caller's as_of."""
+    def macro_events_at(self, as_of) -> Sequence[MacroEvent]: ...
+
+
 class InMemoryMacroNewsProvider:
     def __init__(self, events=(), news=(), error=None):
         self._events = tuple(events)
@@ -24,6 +29,18 @@ class InMemoryMacroNewsProvider:
         if self._error is not None:
             raise self._error
         return self._news
+
+
+class NoMacroDataProvider:
+    """Explicit fail-closed macro source while certification is deferred."""
+    name = "none"
+    health = "NO_DATA"
+
+    def macro_events_at(self, as_of):
+        return ()
+
+    def news_items(self):
+        return ()
 
 
 def macro_event_to_dict(event):
