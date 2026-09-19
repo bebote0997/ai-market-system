@@ -1,5 +1,15 @@
 # AI Market System — Agent Protocol
 
+## Freeze oficial PAPER — 2026-09-19
+
+`EXPERIMENT_FREEZE.md` fija el baseline oficial de código y economía para los 14
+días. Leerlo antes de cualquier cambio en este experimento. Desde el freeze solo
+se permiten fixes técnicos de defectos que invaliden el experimento o su
+integridad, con reproducción, tests y evaluación de comparabilidad. No optimizar
+ni cambiar estrategia/riesgo/prompts/providers/economía durante el período. El
+freeze no autoriza activar runner/scheduler ni iniciar el contador. La política
+detallada del freeze prevalece sobre fases históricas de este documento.
+
 ## Fuente de verdad
 
 Antes de modificar código, todo agente debe leer, en este orden:

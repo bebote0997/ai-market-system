@@ -1,5 +1,17 @@
 # Agent Changelog
 
+## 2026-09-19 — Freeze oficial del experimento PAPER
+
+- `status`: EXPERIMENT_FROZEN; baseline f5032baeb87766ad74905093c1b4195117995092.
+- `economics`: USD, equity 10000, comisión/spread adicional/swap 0; fill al Open
+  siguiente barra elegible y gaps actuales, aprobados expresamente por el usuario.
+- `policy`: Solo fixes técnicos que invaliden experimento/integridad; cambios con
+  impacto económico o decisional requieren evaluar nueva baseline y reinicio.
+- `validation`: 507 tests OK; diff check y secret scan PASS. Este commit es
+  exclusivamente documental y no cambia el ejecutable probado.
+- `activation`: Runner/scheduler apagados; experimento no iniciado; Render sin
+  desplegar la nueva baseline. Ver EXPERIMENT_FREEZE.md para pasos pendientes.
+
 ## 2026-09-19 — Auditoría final y preparación de freeze PAPER
 
 - `agent`: Codex.
