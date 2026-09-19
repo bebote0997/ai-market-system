@@ -97,6 +97,10 @@ class OpenAITests(unittest.TestCase):
         identity = seen[0]["text"]["format"]["schema"]["properties"]
         self.assertEqual(identity["agent_name"]["enum"], ["structure_ai"])
         self.assertEqual(identity["run_id"]["enum"], ["run-1"])
+        self.assertEqual(identity["supporting_evidence"]["items"]["enum"], ["e1"])
+        self.assertEqual(identity["conflicting_evidence"]["items"]["enum"], ["e1"])
+        self.assertIn(None, identity["recommendation"]["enum"])
+        self.assertIn("ACCEPT", identity["recommendation"]["enum"])
         self.assertFalse(seen[0]["store"])
         self.assertNotIn("test-secret", json.dumps(seen))
 

@@ -137,6 +137,14 @@ Persistencia SQLite versionada, journal durable, scheduler configurable con sesi
 
 Adapters Twelve Data, Massive y OpenAI, modos de runtime, certificador sin trading, pruebas sin red y CI añadidos. Twelve Data es el proveedor activo de mercado para la demo PAPER; Massive queda soportado/configurable y NOT_ACTIVE. Solo XAUUSD y EURUSD están habilitados; NAS100 permanece soportado con I:NDX, desactivado y sin certificación operativa. OpenAI y Twelve Data certificaron PASS en vivo en 5m/15m/1h el 17 de septiembre de 2026. Fase 7 y el experimento de 14 días permanecen sin iniciar.
 
+## Fase 7 — Demo Runner end-to-end certification
+
+Demo Runner PAPER durable, doctor, diagnóstico sin órdenes, `ReviewReport`, eventos versionados, UI de solo lectura y pruebas E2E. Preflight y diagnóstico live PASS el 17 de septiembre de 2026; suite 447 tests OK. Ver `PHASE7_CERTIFICATION.md` y `AUDIT_PHASE7.md`. El experimento de 14 días sigue sin iniciarse.
+
+## Post Fase 7 — INFRA_READY para despliegue controlado (sin activación)
+
+Blueprint Render, disco persistente, dashboard privado de solo lectura, supervisor con runner único desactivado, salida Slack y exportación de evidencias preparados offline. Finnhub y EODHD Free respondieron HTTP 403; FRED/ALFRED y el híbrido oficial quedaron insuficientes. Macro provider efectivo `none` entrega `NO_DATA`. El preflight distingue `INFRA_READY` de `EXPERIMENT_READY=false` por `MACRO_PROVIDER_NOT_CERTIFIED`; no hay despliegue, scheduler 24/7, inicio de experimento, commit ni push. Ver `CLOUD_READINESS_SPEC.md`, `FRED_ALFRED_EVALUATION.md` y `AUDIT_POST_PHASE7.md`.
+
 ## Regla de avance
 
 Cada fase debe producir algo ejecutable y verificable con tests. No optimizar parámetros con resultados de test ni adelantar fases sin autorización explícita.

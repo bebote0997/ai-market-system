@@ -14,13 +14,13 @@ from execution.contracts import PaperAccount, PaperOrder, PaperPosition
 from execution.paper_broker import PaperBroker
 from execution.trade_manager import TradeManager
 from runtime.config import RuntimeConfig
-from runtime.cloud_runner import preflight, start_authorized_cycle
+from runtime.demo_runner import DemoRunner, preflight as runner_preflight
 from runtime.gates import fresh_snapshot, paper_policy
 from runtime.health import health
 from runtime.scheduler import Scheduler, session_names, slot_at, slot_key
 from runtime.service import OperationalRuntime
 from storage.codec import parse_utc, public_metadata, utc
-from storage.database import Store
+from storage.database import Store, SCHEMA_VERSION
 from ui.state import current_market
 from ui.adapters import from_persisted_snapshot
 from ui.fixtures.demo_floor import demo_market
@@ -43,7 +43,7 @@ class TemporaryDB(unittest.TestCase):
 class TestStorage(TemporaryDB):
     def test_schema_reopen_journal_and_timezone(self):
         s = self.store()
-        self.assertEqual(s.db.execute("SELECT version FROM schema_info").fetchone()[0], 1)
+        self.assertEqual(s.db.execute("SELECT version FROM schema_info").fetchone()[0], SCHEMA_VERSION)
         s.event(T, "r1", "XAUUSD", "test", "RUN_STARTED", payload={"safe": True})
         s.close()
         s = self.store()
@@ -89,24 +89,16 @@ class TestStorage(TemporaryDB):
         self.assertTrue(any(e["event_type"] == "STATE_INCONSISTENCY" for e in s.journal()))
         s.close()
 
-    def test_experiment_start_requires_owned_slot_and_is_idempotent(self):
+    def test_experiment_start_is_durable_and_idempotent(self):
         s = self.store()
-        key = slot_key("XAUUSD", T, 15)
         sha = "a" * 40
-        with self.assertRaisesRegex(RuntimeError, "slot ownership"):
-            s.start_experiment_if_unstarted(key, "XAUUSD", T, sha)
-        self.assertIsNone(s.get_state("experiment_started"))
-        self.assertTrue(s.claim_slot(key, "XAUUSD", T, T))
-        self.assertTrue(s.start_experiment_if_unstarted(key, "XAUUSD", T, sha))
+        freeze = "b" * 40
+        self.assertTrue(s.start_experiment_if_unstarted(T, sha, freeze))
         self.assertEqual(s.get_state("experiment_started"), "1")
         self.assertEqual(s.get_state("experiment_started_at_utc"), utc(T))
         self.assertEqual(s.get_state("experiment_baseline_sha"), sha)
-        self.assertEqual(s.get_state("experiment_freeze_sha"), sha)
-        self.assertTrue(s.finish(key, T, "COMPLETED", "NO_DATA"))
-        next_slot = T + timedelta(minutes=15)
-        next_key = slot_key("XAUUSD", next_slot, 15)
-        self.assertTrue(s.claim_slot(next_key, "XAUUSD", next_slot, next_slot))
-        self.assertFalse(s.start_experiment_if_unstarted(next_key, "XAUUSD", next_slot, "b" * 40))
+        self.assertEqual(s.get_state("experiment_freeze_sha"), freeze)
+        self.assertFalse(s.start_experiment_if_unstarted(T + timedelta(minutes=15), "c" * 40, "d" * 40))
         self.assertEqual(s.get_state("experiment_started_at_utc"), utc(T))
         self.assertEqual(s.get_state("experiment_baseline_sha"), sha)
         s.close()
@@ -238,23 +230,30 @@ class TestRuntime(TemporaryDB):
         finally:
             runtime.close()
 
-    def test_cloud_runner_preflight_and_authorized_start_lifecycle(self):
-        env = {"AI_FLOOR_EXPERIMENT_AUTHORIZED": "1", "AI_FLOOR_GIT_COMMIT": "c" * 40}
-        status = preflight(env)
-        self.assertTrue(status["authorized"])
-        self.assertTrue(status["baseline_sha_present"])
-        self.assertFalse(status["scheduler_enabled"])
-        runtime = OperationalRuntime(self.config(), clock=lambda: T)
+    def test_runner_preflight_does_not_mark_and_startup_is_idempotent(self):
+        config = self.config()
+        self.assertTrue(runner_preflight(config).checks["experiment_not_started"])
+        store = Store(self.path)
+        self.assertIsNone(store.get_state("experiment_started"))
+        store.close()
+        baseline = "a" * 40
+        freeze = "b" * 40
+        runner = DemoRunner(config, clock=lambda: T, experiment_baseline_sha=baseline,
+                            experiment_freeze_sha=freeze)
         try:
-            with self.assertRaises(PermissionError):
-                start_authorized_cycle(runtime, "XAUUSD", T, {})
-            self.assertIsNone(runtime.store.get_state("experiment_started"))
-            self.assertEqual(start_authorized_cycle(runtime, "XAUUSD", T, env), "NO_DATA")
-            self.assertEqual(runtime.store.get_state("experiment_started"), "1")
-            self.assertEqual(start_authorized_cycle(runtime, "XAUUSD", T, env), "DUPLICATE")
-            self.assertEqual(runtime.store.get_state("experiment_baseline_sha"), "c" * 40)
+            self.assertEqual(runner.store.get_state("experiment_started"), "1")
+            self.assertEqual(runner.store.get_state("experiment_started_at_utc"), utc(T))
+            self.assertEqual(runner.store.get_state("experiment_baseline_sha"), baseline)
+            self.assertEqual(runner.store.get_state("experiment_freeze_sha"), freeze)
         finally:
-            runtime.close()
+            runner.close()
+        restarted = DemoRunner(config, clock=lambda: T + timedelta(minutes=15),
+                               experiment_baseline_sha="c" * 40, experiment_freeze_sha="d" * 40)
+        try:
+            self.assertEqual(restarted.store.get_state("experiment_baseline_sha"), baseline)
+            self.assertEqual(restarted.store.get_state("experiment_freeze_sha"), freeze)
+        finally:
+            restarted.close()
 
     def test_no_provider_safe_cycle_restart_health_and_ui_read(self):
         runtime = OperationalRuntime(self.config(), clock=lambda: T)

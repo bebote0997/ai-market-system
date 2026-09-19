@@ -1,53 +1,67 @@
-"""Explicit cloud experiment startup. Preflight is read-only and never starts a runner."""
-import argparse
-import json
+"""Single continuous PAPER scheduler, disabled until cloud activation."""
+from datetime import datetime, timezone
 import os
+from pathlib import Path
 import re
+import signal
+import time
 
 from runtime.config import RuntimeConfig
-from runtime.scheduler import slot_at
-from runtime.service import OperationalRuntime
+from runtime.cloud import cloud_preflight
+from runtime.demo_runner import DemoRunner
+from runtime.notifications import SlackNotificationSink
+from runtime.paper_contracts import paper_instruments
 
-
+EXPERIMENT_BASELINE_SHA = "f5032baeb87766ad74905093c1b4195117995092"
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
 
 
-def preflight(environ=None):
-    environ = os.environ if environ is None else environ
-    return {
-        "authorized": environ.get("AI_FLOOR_EXPERIMENT_AUTHORIZED") == "1",
-        "baseline_sha_present": bool(SHA_PATTERN.fullmatch(environ.get("AI_FLOOR_GIT_COMMIT", ""))),
-        "scheduler_enabled": RuntimeConfig.from_env().scheduler_enabled,
-    }
-
-
-def start_authorized_cycle(runtime, symbol, scheduled_at, environ=None):
-    environ = os.environ if environ is None else environ
-    if environ.get("AI_FLOOR_EXPERIMENT_AUTHORIZED") != "1":
-        raise PermissionError("cloud experiment start is not authorized")
-    baseline_sha = environ.get("AI_FLOOR_GIT_COMMIT", "")
-    if not SHA_PATTERN.fullmatch(baseline_sha):
-        raise ValueError("AI_FLOOR_GIT_COMMIT must be a SHA for experiment startup")
-    return runtime.run_cycle(symbol, scheduled_at, experiment_baseline_sha=baseline_sha)
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Authorized one-cycle cloud experiment runner")
-    parser.add_argument("--preflight", action="store_true")
-    parser.add_argument("--once", choices=("XAUUSD", "NAS100", "EURUSD"))
-    args = parser.parse_args()
-    if args.preflight:
-        print(json.dumps(preflight(), sort_keys=True))
-        return
+    if os.environ.get("RENDER") != "true" or os.environ.get("AI_FLOOR_CLOUD_RUNNER") != "1":
+        raise RuntimeError("cloud runner not activated")
     config = RuntimeConfig.from_env()
-    symbol = args.once or config.enabled_symbols[0]
-    if symbol not in config.enabled_symbols:
-        parser.error(f"{symbol} is supported but disabled by AI_FLOOR_ENABLED_SYMBOLS")
-    runtime = OperationalRuntime(config)
-    try:
-        print(start_authorized_cycle(runtime, symbol, slot_at(runtime.clock(), config.cadence_minutes)))
-    finally:
-        runtime.close()
+    if not config.scheduler_enabled:
+        raise RuntimeError("scheduler or macro provider not configured")
+    freeze_sha = os.environ.get("AI_FLOOR_GIT_COMMIT", "")
+    if not SHA_PATTERN.fullmatch(freeze_sha):
+        raise RuntimeError("AI_FLOOR_GIT_COMMIT must identify the deployed experiment freeze")
+    from dataclasses import replace
+    activation_env = dict(os.environ, AI_FLOOR_CLOUD_RUNNER="0", AI_FLOOR_SCHEDULER="0")
+    if not cloud_preflight(replace(config, scheduler_enabled=False), env=activation_env).experiment_ready:
+        raise RuntimeError("experiment activation preflight not ready")
+    import fcntl
+    lock_path = Path(config.db_path).with_suffix(".runner.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    stop = False
+
+    def shutdown(*_):
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    with lock_path.open("a+b") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("scheduler authority already active") from None
+        # The exclusive lifetime lock proves no previous authority is alive.
+        # Recover even a recent interrupted run; otherwise its symbol lock can
+        # survive a quick restart forever.
+        runner = DemoRunner(config, notification_sink=SlackNotificationSink(),
+                    recovery_stale_after_seconds=0, instruments=paper_instruments(),
+                    experiment_baseline_sha=EXPERIMENT_BASELINE_SHA,
+                    experiment_freeze_sha=freeze_sha)
+        try:
+            while not stop:
+                runner.tick()
+                runner.daily_summary(datetime.now(timezone.utc))
+                for _ in range(30):
+                    if stop:
+                        break
+                    time.sleep(1)
+        finally:
+            runner.close()
 
 
 if __name__ == "__main__":

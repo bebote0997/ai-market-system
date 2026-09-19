@@ -7,6 +7,97 @@
 - `lifecycle`: preflight es read-only; la marca se realiza solo tras adquirir el slot exclusivo y conserva `experiment_started_at_utc`, baseline SHA y freeze SHA.
 - `safety`: no se modificaron estrategia, riesgo, prompts, proveedores, sesiones, cadence, freshness ni economía; no se añadió configuración que active Render, runner o scheduler.
 
+## 2026-09-19 — Freeze oficial del experimento PAPER
+
+- `status`: EXPERIMENT_FROZEN; baseline f5032baeb87766ad74905093c1b4195117995092.
+- `economics`: USD, equity 10000, comisión/spread adicional/swap 0; fill al Open
+  siguiente barra elegible y gaps actuales, aprobados expresamente por el usuario.
+- `policy`: Solo fixes técnicos que invaliden experimento/integridad; cambios con
+  impacto económico o decisional requieren evaluar nueva baseline y reinicio.
+- `validation`: 507 tests OK; diff check y secret scan PASS. Este commit es
+  exclusivamente documental y no cambia el ejecutable probado.
+- `activation`: Runner/scheduler apagados; experimento no iniciado; Render sin
+  desplegar la nueva baseline. Ver EXPERIMENT_FREEZE.md para pasos pendientes.
+
+## 2026-09-19 — Auditoría final y preparación de freeze PAPER
+
+- `agent`: Codex.
+- `base`: f9ae6ce79deb9baaa0dab0faa0271e462599d843.
+- `bugs`: Frescura/sesión solo por slot, ausencia de contratos en cloud,
+  recuperación incompleta tras reinicio rápido, awareness FXMacroData omitido,
+  y SESSION_SKIPPED contado por DAILY_SUMMARY. Reproducidos con fixtures offline.
+- `fixes`: Doble gate temporal con reloj real; recuperación reciente solo bajo
+  lock cloud exclusivo; awareness y conteo corregidos. Contratos PAPER aprobados
+  con multiplier=1 y quantity grid inferior, sin modificar Risk Engine ni precios.
+- `validation`: 489 tests baseline; 507 tests finales OK (18 nuevos);
+  ver AUDIT_FREEZE.md y PAPER_EXECUTION_SPEC.md.
+- `economics`: Usuario confirmó USD, equity 10000, comisión/spread adicional/swap
+  0, fill al Open de siguiente barra elegible y gaps SL/TP existentes.
+- `state`: Preparado para freeze oficial de código; sin activar runner/scheduler/
+  experimento. Render sigue desplegado en f3af0c3; no se despliega en esta misión.
+
+## 2026-09-19 — DAILY_SUMMARY y validación de notificaciones
+
+- `agent`: Codex.
+- `task`: Resumen del día UTC anterior completo desde SQLite: ciclos/símbolo,
+  setups/riesgo, órdenes/posiciones PAPER, PnL/equity, problemas de proveedor,
+  macro HIGH y estado operativo persistido. Contrato y ejemplo en DAILY_SUMMARY.md.
+- `delivery`: Snapshot confirmado antes de Slack; deduplicación por día durable,
+  incluso concurrente y tras reinicio; transporte fallido aislado del trading.
+- `scope`: Solo supervisión y tests; sin cambios en estrategia, agentes/prompts,
+  riesgo, gates, providers, sesiones ni ejecución PAPER. Sin activar experimento.
+- `validation`: Baseline aislada 480 tests; final 489 tests OK, con 9 nuevos
+  tests offline; Slack falso; git diff --check y secret scan por patrones.
+- `workspace`: Cambios previos no committed de proveedores excluidos del commit.
+
+## 2026-09-19 — Cloud preflight para FXMacroData certificado
+
+- `agent`: Codex.
+- `task`: Reconocer `fxmacrodata` como proveedor macro certificado cuando su clave existe, manteniendo `none` solo para infraestructura sin readiness de experimento.
+- `safety`: PAPER only; runner/scheduler y experimento siguen apagados; ningún otro gate se relajó.
+- `tests`: añadidos casos de FXMacroData con y sin credencial y preservado el caso `none`.
+
+## 2026-09-19 — FXMacroData macro provider
+
+- `agent`: Codex.
+- `task`: Integrar y certificar calendario USD/EUR, announcements, predictions, changes y research/panel con caché, errores explícitos y no-lookahead por fetch/publicación/vintage.
+- `decision`: `FXMACRODATA_CERTIFIED` live; adapter configurable y todavía no activo. El Blueprint conserva macro `none`.
+- `safety`: runner/scheduler `0`, PAPER only; sin experimento, commit ni push.
+- `tests_after`: 485 OK; certificación live PASS; `git diff --check` y secret scan OK.
+
+## 2026-09-18 — Infraestructura cloud con macro diferido
+
+- `agent`: Codex.
+- `task`: Separar readiness de infraestructura y experimento, fijar macro efectivo `none`/`NO_DATA`, reforzar el gate del supervisor/runner, conservar una sola autoridad PAPER, redacción y límite de exportaciones, y retirar Finnhub de las variables del Blueprint activo.
+- `decision`: INFRA_READY para despliegue controlado con montaje/entorno simulados; EXPERIMENT_READY=false por MACRO_PROVIDER_NOT_CERTIFIED. EODHD Free HTTP 403, sin adapter nuevo ni más consultas macro.
+- `safety`: scheduler y runner apagados, real execution deshabilitada, sin despliegue, experimento, commit ni push.
+- `tests_after`: 470 OK; `git diff --check` y secret scan OK; preflight simulado INFRA_READY/experiment_ready=false. Ver `AUDIT_POST_PHASE7.md`.
+
+## 2026-09-18 — Evaluación del híbrido macro oficial
+
+- `agent`: Codex.
+- `task`: Implementar `OfficialMacroProvider` sobre calendarios ICS BLS/BEA/Eurostat y RSS Fed/BCE, con procedencia, precisión temporal, caché, aislamiento de fallos y evidencia en `ReviewReport`.
+- `decision`: OFFICIAL_MACRO_INSUFFICIENT. BEA, Eurostat, Fed y BCE accesibles; BLS Access Denied. Los RSS monetarios no ofrecen agenda futura FOMC/BCE; Eurostat observado publica solo fecha. USD y EUR siguen PARTIAL.
+- `safety`: Finnhub y FRED inactivos; macro `none` en Blueprint, scheduler apagado; sin despliegue, experimento, commit ni push.
+- `tests_after`: 467 OK; `git diff --check` y secret scan OK; preflight NOT_READY por gate macro y entorno local. Ver `AUDIT_POST_PHASE7.md`.
+
+## 2026-09-17 — Preparación cloud posterior a Fase 7
+
+- `agent`: Codex.
+- `task`: Preparar Render, persistencia durable, dashboard privado, Slack, evidencias compartidas y Finnhub Economic Calendar sin activar el experimento.
+- `tests_before`: 447 OK.
+- `tests_after`: 455 OK offline.
+- `status`: READY_FOR_CLOUD_SETUP; Finnhub live sin certificar por HTTP 403 con la clave presente.
+- `safety`: PAPER, scheduler y runner apagados; sin despliegue, mensajes Slack reales, commit ni push.
+
+## 2026-09-17 — Evaluación FRED/ALFRED
+
+- `agent`: Codex.
+- `task`: Evaluar oficialmente FRED/ALFRED como fuente macro única para XAUUSD/EURUSD y endurecer el gate temporal.
+- `decision`: FRED_INSUFFICIENT; calendario futuro solo por fecha, sin hora/zona, consenso ni importancia; FOMC/ECB no acreditados como cobertura completa. No se creó adapter activo ni se solicitó clave.
+- `status`: Finnhub SUPPORTED/NOT_ACTIVE, macro provider `none`, sin despliegue, scheduler, experimento, commit ni push.
+- `tests_after`: 459 OK; `git diff --check` y secret scan OK.
+
 ## 2026-09-17 — Fase 6D: Twelve Data activo
 
 - `agent`: Codex
@@ -257,3 +348,11 @@
 - Decisión posterior: enabled_symbols predeterminado XAUUSD,EURUSD; NAS100 soportado mediante I:NDX pero NOT_ENABLED/NOT_CERTIFIED. Runtime, scheduler, certificador y UI distinguen selección habilitada del catálogo. La clave OpenAI de Default project fue aceptada; 419 tests offline OK; la certificación live espera MASSIVE_API_KEY.
 - Certificación live solicitada: MASSIVE_API_KEY no aparece en el .env.local indicado ni en el entorno; Massive no se consultó. OpenAI devolvió HTTP 429 RATE_LIMITED para gpt-5.6-terra. Se añadió clasificación segura de cuota agotada y prueba; 420 tests offline OK. Fase 6D sigue PARTIAL y sin commit/push.
 - Reintento posterior con MASSIVE_API_KEY presente: XAUUSD referencia y tres intervalos PASS, pero STALE_DATA; EURUSD referencia PASS, pero RATE_LIMITED antes de certificar barras. NAS100 no se consultó. Massive permanece PARTIAL; OpenAI no se reintentó en esta pasada; no se hace commit/push.
+
+# Fase 7 — Demo Runner PAPER
+
+- Demo Runner durable por slot, preflight local READY/NOT_READY, modo diagnóstico sin órdenes y certificador offline/live.
+- SQLite schema 2 agrega revisiones y notificaciones versionadas; migración desde schema 1, recuperación de ciclos interrumpidos y lectura de UI sin escritura.
+- Tests E2E sintéticos cubren setup LONG/SHORT, riesgo, IA adversa, datos inválidos, fallos de proveedores, duplicados y reinicio/cierre de posición.
+- Proveedores activos de la demo: Twelve Data y OpenAI; Massive soportado/no activo; NAS100 soportado/no habilitado. El experimento no se inicia.
+- Certificación final local: 447 tests OK; preflight READY; diagnóstico live XAUUSD/EURUSD PASS con barras actuales, IA contractual y cero órdenes.
