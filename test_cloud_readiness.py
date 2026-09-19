@@ -150,6 +150,8 @@ class CloudDB(unittest.TestCase):
         self.assertEqual(ready.status, "INFRA_READY")
         self.assertTrue(ready.infra_ready)
         self.assertFalse(ready.experiment_ready)
+        self.assertTrue(ready.checks["macro_provider_disabled"])
+        self.assertTrue(ready.checks["macro_provider_valid"])
         self.assertFalse(ready.checks["macro_provider_certified"])
         self.assertEqual(cloud_preflight(config, env={**env, "OPENAI_API_KEY": ""}, disk_mounted=True).status,
                          "INFRA_READY")
@@ -158,6 +160,42 @@ class CloudDB(unittest.TestCase):
         self.assertEqual(cloud_preflight(RuntimeConfig(db_path=path, ai_provider_mode="openai",
                          macro_provider_mode="finnhub"), env=env, disk_mounted=True).status, "NOT_READY")
         self.assertEqual(cloud_preflight(config, env=env, disk_mounted=False).status, "NOT_READY")
+
+    def test_cloud_preflight_accepts_certified_fxmacrodata_without_starting_experiment(self):
+        mount = self.path.parent.resolve()
+        path = mount / self.path.name
+        config = RuntimeConfig(db_path=path, ai_provider_mode="openai",
+                               macro_provider_mode="fxmacrodata")
+        env = {"AI_FLOOR_DURABLE_MOUNT": str(mount), "AI_FLOOR_INSTANCE_COUNT": "1",
+               "AI_FLOOR_CLOUD_RUNNER": "0", "FXMACRODATA_API_KEY": "present",
+               "OPENAI_API_KEY": "present", "TWELVE_DATA_API_KEY": "present",
+               "SLACK_WEBHOOK_URL": "present",
+               "AI_FLOOR_DASHBOARD_PASSWORD": "present"}
+        ready = cloud_preflight(config, env=env, disk_mounted=True)
+        self.assertEqual(ready.status, "INFRA_READY")
+        self.assertTrue(ready.infra_ready)
+        self.assertTrue(ready.experiment_ready)
+        self.assertFalse(ready.checks["macro_provider_disabled"])
+        self.assertTrue(ready.checks["macro_provider_valid"])
+        self.assertTrue(ready.checks["macro_provider_certified"])
+        self.assertTrue(ready.checks["scheduler_not_started"])
+        self.assertTrue(ready.checks["experiment_not_started"])
+
+    def test_cloud_preflight_rejects_fxmacrodata_without_key(self):
+        mount = self.path.parent.resolve()
+        path = mount / self.path.name
+        config = RuntimeConfig(db_path=path, ai_provider_mode="openai",
+                               macro_provider_mode="fxmacrodata")
+        env = {"AI_FLOOR_DURABLE_MOUNT": str(mount), "AI_FLOOR_INSTANCE_COUNT": "1",
+               "AI_FLOOR_CLOUD_RUNNER": "0", "OPENAI_API_KEY": "present",
+               "TWELVE_DATA_API_KEY": "present", "SLACK_WEBHOOK_URL": "present",
+               "AI_FLOOR_DASHBOARD_PASSWORD": "present"}
+        blocked = cloud_preflight(config, env=env, disk_mounted=True)
+        self.assertEqual(blocked.status, "NOT_READY")
+        self.assertFalse(blocked.infra_ready)
+        self.assertFalse(blocked.experiment_ready)
+        self.assertFalse(blocked.checks["macro_provider_valid"])
+        self.assertFalse(blocked.checks["macro_provider_certified"])
 
     def test_disabled_macro_is_explicitly_no_data(self):
         provider = NoMacroDataProvider()

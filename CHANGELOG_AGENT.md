@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-09-19 — Cloud preflight para FXMacroData certificado
+
+- `agent`: Codex.
+- `task`: Reconocer `fxmacrodata` como proveedor macro certificado cuando su clave existe, manteniendo `none` solo para infraestructura sin readiness de experimento.
+- `safety`: PAPER only; runner/scheduler y experimento siguen apagados; ningún otro gate se relajó.
+- `tests`: añadidos casos de FXMacroData con y sin credencial y preservado el caso `none`.
+
 ## 2026-09-19 — FXMacroData macro provider
 
 - `agent`: Codex.

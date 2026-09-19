@@ -48,14 +48,17 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
     mount = Path(env.get("AI_FLOOR_DURABLE_MOUNT", str(DISK_MOUNT)))
     if disk_mounted is None:
         disk_mounted = os.path.ismount(mount) if cloud else False
+    macro_disabled = config.macro_provider_mode == "none"
+    macro_certified = (config.macro_provider_mode == "fxmacrodata" and
+                       bool(env.get("FXMACRODATA_API_KEY")))
     checks = {
         "paper_only": not REAL_EXECUTION_ENABLED,
         "enabled_symbols": tuple(config.enabled_symbols) == ("XAUUSD", "EURUSD"),
         "market_provider": config.market_provider_mode == "twelve_data",
         "ai_provider": config.ai_provider_mode == "openai" and env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
-        "macro_provider_disabled": config.macro_provider_mode == "none",
-        # No macro source is certified for the experiment in this milestone.
-        "macro_provider_certified": False,
+        "macro_provider_disabled": macro_disabled,
+        "macro_provider_valid": macro_disabled or macro_certified,
+        "macro_provider_certified": macro_certified,
         "scheduler_single_authority": env.get("AI_FLOOR_INSTANCE_COUNT", "1") == "1" and config.cadence_minutes == 15,
         "scheduler_not_started": not config.scheduler_enabled and env.get("AI_FLOOR_CLOUD_RUNNER", "0") == "0",
         "durable_path": path.is_absolute() and (path == mount or mount in path.parents),
@@ -84,7 +87,7 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
             checks["db_writable_schema"] = False
     infrastructure = (
         "paper_only", "enabled_symbols", "market_provider", "ai_provider",
-        "macro_provider_disabled", "scheduler_single_authority", "scheduler_not_started",
+        "macro_provider_valid", "scheduler_single_authority", "scheduler_not_started",
         "durable_path", "durable_mount", "dashboard_auth", "db_writable_schema",
         "experiment_not_started",
     )
