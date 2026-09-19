@@ -49,6 +49,9 @@ class OperationalRuntime:
         if macro_provider is None and self.config.macro_provider_mode == "official_hybrid":
             from data.official_macro_provider import OfficialMacroProvider
             macro_provider = OfficialMacroProvider()
+        if macro_provider is None and self.config.macro_provider_mode == "fxmacrodata":
+            from data.fxmacrodata_provider import FXMacroDataProvider
+            macro_provider = FXMacroDataProvider()
         self.macro_provider = macro_provider or (NoMacroDataProvider() if self.config.macro_provider_mode == "none"
                                                  else InMemoryMacroNewsProvider())
         self.instruments = instruments or {}

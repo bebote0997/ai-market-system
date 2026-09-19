@@ -117,7 +117,7 @@ def analizar_macro_news(provider, symbol, as_of, run_id="macro-news"):
             except (TypeError, ValueError):
                 event_date = None
         date_timezone = (item.get("data_quality") or {}).get("event_timezone")
-        if event_date is not None and date_timezone not in {"Europe/Luxembourg", "America/New_York"}:
+        if event_date is not None and date_timezone not in {"Europe/Luxembourg", "America/New_York", "UTC"}:
             event_date = None
         if not item.get("source") or (event_time is None and event_date is None):
             rejected += 1

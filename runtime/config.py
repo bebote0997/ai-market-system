@@ -33,7 +33,7 @@ class RuntimeConfig:
             raise ValueError("invalid sessions or equity")
         if self.market_provider_mode not in {"none", "massive", "twelve_data"} or self.ai_provider_mode not in {"deterministic", "openai"}:
             raise ValueError("invalid provider mode")
-        if self.macro_provider_mode not in {"none", "finnhub", "official_hybrid"}:
+        if self.macro_provider_mode not in {"none", "finnhub", "official_hybrid", "fxmacrodata"}:
             raise ValueError("invalid macro provider mode")
 
     def fingerprint(self):

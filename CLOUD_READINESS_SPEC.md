@@ -2,6 +2,8 @@
 
 Estado: **INFRA_READY para despliegue controlado**, pendiente de comprobación en Render; **EXPERIMENT_READY=false** por `MACRO_PROVIDER_NOT_CERTIFIED`. Finnhub y EODHD Free devolvieron HTTP 403; FRED/ALFRED y el híbrido oficial no cubren los requisitos del experimento. La búsqueda de proveedor macro queda diferida. Base: `18deed0a9c163c51c66ae8827d8edd5bddd983e4`.
 
+FXMacroData quedó certificado live el 2026-09-19 para eventos futuros USD/EUR, timestamps UTC confirmados/no asumidos, provenance, cambios, predicciones pre-release y research/panel point-in-time. Está integrado como modo `fxmacrodata`, pero permanece **NOT_ACTIVE** hasta una decisión separada de activación; el Blueprint conserva macro `none`, runner y scheduler apagados.
+
 ## Arquitectura propuesta
 
 `render.yaml` define un único servicio web Render Python, una instancia y un disco persistente de 1 GB. `runtime.cloud` inicia Streamlit y supervisa opcionalmente `runtime.cloud_runner`. El dashboard abre la base en modo lectura y nunca ejecuta scheduler ni crea órdenes. El runner, desactivado por `AI_FLOOR_CLOUD_RUNNER=0` y `AI_FLOOR_SCHEDULER=0`, toma un lock exclusivo junto a la SQLite antes de ejecutar. El supervisor termina si muere un proceso hijo y, cuando el runner esté habilitado en una etapa posterior, comprueba su heartbeat. El endpoint `/_stcore/health` comprueba el proceso web; el heartbeat y `runtime.cloud --preflight` comprueban el runner y los gates operativos.

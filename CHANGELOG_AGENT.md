@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-09-19 — FXMacroData macro provider
+
+- `agent`: Codex.
+- `task`: Integrar y certificar calendario USD/EUR, announcements, predictions, changes y research/panel con caché, errores explícitos y no-lookahead por fetch/publicación/vintage.
+- `decision`: `FXMACRODATA_CERTIFIED` live; adapter configurable y todavía no activo. El Blueprint conserva macro `none`.
+- `safety`: runner/scheduler `0`, PAPER only; sin experimento, commit ni push.
+- `tests_after`: 485 OK; certificación live PASS; `git diff --check` y secret scan OK.
+
 ## 2026-09-18 — Infraestructura cloud con macro diferido
 
 - `agent`: Codex.

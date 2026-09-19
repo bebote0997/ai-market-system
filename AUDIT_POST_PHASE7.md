@@ -1,5 +1,17 @@
 # Auditoría post Fase 7 — 2026-09-17
 
+## FXMacroData — certificación controlada (2026-09-19 UTC)
+
+`FXMacroDataProvider` quedó integrado detrás de `MacroDataProvider` como modo configurable, pero continúa **NOT_ACTIVE**: `render.yaml` conserva `AI_FLOOR_MACRO_PROVIDER=none`, `AI_FLOOR_CLOUD_RUNNER=0` y `AI_FLOOR_SCHEDULER=0`. La clave se carga exclusivamente desde entorno/`.env.local` mediante `FXMACRODATA_API_KEY`; no se imprimió, versionó ni incorporó a URLs. El adapter usa `X-API-Key`, caché de seis horas, backoff acotado y estados explícitos para auth, entitlement, rate limit y fallos del proveedor.
+
+Certificación live final a **2026-09-19 15:51:35 UTC: PASS**. `/v1/calendar/{currency}` devolvió 16 filas USD y 12 EUR para la ventana hasta 2026-10-03; 5 USD y 3 EUR pertenecen a la política relevante. Todas tuvieron ID del proveedor, fecha confirmada, timestamp UTC y `release_time_assumed=false`; `release_time_status` fue nulo, permitido por el schema oficial. El arnés mínimo enriqueció una serie por moneda: USD `core_pce` y EUR `unemployment`. Macro Agent aceptó evidencia para XAUUSD y EURUSD con estado `OK`.
+
+`/v1/announcements/changes` devolvió 13 cambios con actual confirmado y procedencia (12 USD, 1 EUR). `/v1/predictions` expuso 581 predicciones pre-release seguras para la serie USD y 164 para EUR; en las series seleccionadas no hubo filas clasificadas como consenso, por lo que `consensus` permanece nulo. `/v1/research/panel` respondió `completed`, `complete=true`, `availability=public`, `value_mode=source`. Las filas seleccionadas no contenían revisiones; la selección de vintages se certificó offline, rechazando revisiones publicadas después de `as_of`. No se reconstruye historia con respuestas futuras: `fetched_at`, publicación confirmada, `generated_at`, `is_pre_release`, compatibilidad del evento y provenance cierran el paso a lookahead.
+
+El resultado acredita cobertura futura USD/EUR, timestamps UTC verificables, IDs estables, actual publicado, forecasts pre-release, changes y research/panel. `actual`, `previous` y `consensus` permanecen nulos cuando la respuesta utilizable no los aporta. Runner, scheduler y experimento siguen apagados; no hubo commit ni push.
+
+Verificación final: **485 tests OK**; los 8 tests específicos cubren límites `fetched_at/as_of`, forecasts posteriores o reconstruidos, vintages y revisiones futuras, horarios asumidos/imprecisos, caché y clasificación de errores. `git diff --check` OK, con avisos CRLF sin errores. Secret scan sobre 180 archivos candidatos comparó cuatro valores secretos locales sin imprimirlos: cero coincidencias exactas. El único patrón genérico corresponde deliberadamente a fixtures falsas de redacción en `test_cloud_readiness.py`. `.env.local` está ignorado, no versionado y no staged; staging vacío.
+
 Estado actual: **INFRA_READY para despliegue controlado / EXPERIMENT_READY=false**. Bloqueo previo al experimento: **MACRO_PROVIDER_NOT_CERTIFIED**. La investigación y los adapters macro permanecen como evidencia histórica e inactivos.
 
 ## Cloud readiness con macro diferido — 2026-09-18 UTC
