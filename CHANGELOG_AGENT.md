@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-09-19 — Experiment lifecycle
+
+- `agent`: GitHub Copilot
+- `task`: Añadir lifecycle durable e idempotente para el primer arranque autorizado del cloud runner.
+- `lifecycle`: preflight es read-only; la marca se realiza solo tras adquirir el slot exclusivo y conserva `experiment_started_at_utc`, baseline SHA y freeze SHA.
+- `safety`: no se modificaron estrategia, riesgo, prompts, proveedores, sesiones, cadence, freshness ni economía; no se añadió configuración que active Render, runner o scheduler.
+
 ## 2026-09-17 — Fase 6D: Twelve Data activo
 
 - `agent`: Codex

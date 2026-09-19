@@ -3,11 +3,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 from storage.codec import paper_decode, paper_encode, public_metadata, safe_json, utc, parse_utc
 
 SCHEMA_VERSION = 1
+SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info(version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS runs(
@@ -145,6 +147,23 @@ class Store:
         with self.transaction():
             self.db.execute("INSERT INTO run_metadata VALUES(?,?,?,?,?,?)",
                 (key, git_commit, fingerprint, experiment_id, equity, SCHEMA_VERSION))
+
+    def start_experiment_if_unstarted(self, key, symbol, started_at, baseline_sha):
+        if not isinstance(baseline_sha, str) or not SHA_PATTERN.fullmatch(baseline_sha):
+            raise ValueError("invalid experiment baseline SHA")
+        with self.transaction():
+            if not self.owns_slot(key, symbol):
+                raise RuntimeError("experiment start without slot ownership")
+            if self.get_state("experiment_started") == "1":
+                return False
+            started_at_utc = utc(started_at)
+            self.set_state("experiment_started", "1")
+            self.set_state("experiment_started_at_utc", started_at_utc)
+            self.set_state("experiment_baseline_sha", baseline_sha)
+            self.set_state("experiment_freeze_sha", baseline_sha)
+            self._event(started_at, None, symbol, "experiment", "EXPERIMENT_STARTED", "INFO",
+                        {"baseline_sha": baseline_sha, "freeze_sha": baseline_sha})
+            return True
 
     def record_analysis_events(self, at, deterministic, ai):
         with self.transaction():

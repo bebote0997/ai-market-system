@@ -14,6 +14,8 @@ La demo oficial de 14 días sigue sin iniciar. Véase AUDIT_PHASE6D.md para la m
 
 From the repository root, run `python -m runtime --recover-only` to initialize and inspect durable state, `python -m runtime --once XAUUSD` for one PAPER cycle, or `AI_FLOOR_SCHEDULER=1 python -m runtime` for the continuous scheduler. By default the scheduler is disabled. On Windows PowerShell, set `$env:AI_FLOOR_SCHEDULER='1'` before launching. Stop with Ctrl+C. Streamlit is a separate read-only process (`streamlit run ui/app.py`). Twelve Data is the configured market provider; absent credentials or provider data end a cycle in `NO_DATA`. No demo fixture is used by the runtime.
 
+`python -m runtime.cloud_runner --preflight` is read-only and does not initialize the runtime or start the experiment. An actual cloud start requires `AI_FLOOR_EXPERIMENT_AUTHORIZED=1` and a valid `AI_FLOOR_GIT_COMMIT`; after its first durable slot claim, it records `experiment_started=1`, `experiment_started_at_utc`, and immutable baseline/freeze SHAs. Repeated starts retain the original values. No Render manifest or scheduler activation is supplied by this lifecycle.
+
 Configuration is `RuntimeConfig` (`runtime/config.py`). `AI_FLOOR_DB_PATH` overrides the default relative `data/runtime/trading_floor.db`; `AI_FLOOR_GIT_COMMIT` can record a reproducibility identifier. Symbols are limited to XAUUSD, NAS100, EURUSD. Cadence defaults to 15 minutes, risk remains capped by the existing deterministic Risk Engine, and execution is PAPER only. Instrument mechanics must be injected as real `InstrumentSpec` values; unknown multipliers are never filled in.
 
 ## Storage and schema

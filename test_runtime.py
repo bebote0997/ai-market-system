@@ -14,6 +14,7 @@ from execution.contracts import PaperAccount, PaperOrder, PaperPosition
 from execution.paper_broker import PaperBroker
 from execution.trade_manager import TradeManager
 from runtime.config import RuntimeConfig
+from runtime.cloud_runner import preflight, start_authorized_cycle
 from runtime.gates import fresh_snapshot, paper_policy
 from runtime.health import health
 from runtime.scheduler import Scheduler, session_names, slot_at, slot_key
@@ -86,6 +87,28 @@ class TestStorage(TemporaryDB):
         self.assertEqual(s.run(key)["status"], "FAILED")
         self.assertFalse(s.claim_slot(key, "XAUUSD", T, T))
         self.assertTrue(any(e["event_type"] == "STATE_INCONSISTENCY" for e in s.journal()))
+        s.close()
+
+    def test_experiment_start_requires_owned_slot_and_is_idempotent(self):
+        s = self.store()
+        key = slot_key("XAUUSD", T, 15)
+        sha = "a" * 40
+        with self.assertRaisesRegex(RuntimeError, "slot ownership"):
+            s.start_experiment_if_unstarted(key, "XAUUSD", T, sha)
+        self.assertIsNone(s.get_state("experiment_started"))
+        self.assertTrue(s.claim_slot(key, "XAUUSD", T, T))
+        self.assertTrue(s.start_experiment_if_unstarted(key, "XAUUSD", T, sha))
+        self.assertEqual(s.get_state("experiment_started"), "1")
+        self.assertEqual(s.get_state("experiment_started_at_utc"), utc(T))
+        self.assertEqual(s.get_state("experiment_baseline_sha"), sha)
+        self.assertEqual(s.get_state("experiment_freeze_sha"), sha)
+        self.assertTrue(s.finish(key, T, "COMPLETED", "NO_DATA"))
+        next_slot = T + timedelta(minutes=15)
+        next_key = slot_key("XAUUSD", next_slot, 15)
+        self.assertTrue(s.claim_slot(next_key, "XAUUSD", next_slot, next_slot))
+        self.assertFalse(s.start_experiment_if_unstarted(next_key, "XAUUSD", next_slot, "b" * 40))
+        self.assertEqual(s.get_state("experiment_started_at_utc"), utc(T))
+        self.assertEqual(s.get_state("experiment_baseline_sha"), sha)
         s.close()
 
     def test_paper_account_order_position_survive_restart(self):
@@ -212,6 +235,24 @@ class TestRuntime(TemporaryDB):
             with self.assertRaisesRegex(ValueError, "disabled by configuration"):
                 runtime.run_cycle("NAS100", T)
             self.assertEqual(runtime.store.db.execute("SELECT count(*) FROM paper_orders").fetchone()[0], 0)
+        finally:
+            runtime.close()
+
+    def test_cloud_runner_preflight_and_authorized_start_lifecycle(self):
+        env = {"AI_FLOOR_EXPERIMENT_AUTHORIZED": "1", "AI_FLOOR_GIT_COMMIT": "c" * 40}
+        status = preflight(env)
+        self.assertTrue(status["authorized"])
+        self.assertTrue(status["baseline_sha_present"])
+        self.assertFalse(status["scheduler_enabled"])
+        runtime = OperationalRuntime(self.config(), clock=lambda: T)
+        try:
+            with self.assertRaises(PermissionError):
+                start_authorized_cycle(runtime, "XAUUSD", T, {})
+            self.assertIsNone(runtime.store.get_state("experiment_started"))
+            self.assertEqual(start_authorized_cycle(runtime, "XAUUSD", T, env), "NO_DATA")
+            self.assertEqual(runtime.store.get_state("experiment_started"), "1")
+            self.assertEqual(start_authorized_cycle(runtime, "XAUUSD", T, env), "DUPLICATE")
+            self.assertEqual(runtime.store.get_state("experiment_baseline_sha"), "c" * 40)
         finally:
             runtime.close()
 

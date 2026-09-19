@@ -99,7 +99,7 @@ class OperationalRuntime:
                 "warnings": [warning], "facts": [f"{symbol}: {state}", "Risk Engine: NOT CALLED"],
                 "interpretation": [], "freshness": state, "agents": [], "prompt_versions": []}
 
-    def run_cycle(self, symbol, scheduled_at):
+    def run_cycle(self, symbol, scheduled_at, *, experiment_baseline_sha=None):
         if symbol not in MARKETS:
             raise ValueError("unsupported operational symbol")
         if symbol not in self.config.enabled_symbols:
@@ -108,6 +108,8 @@ class OperationalRuntime:
         key = slot_key(symbol, slot, self.config.cadence_minutes)
         if not self.store.claim_slot(key, symbol, slot, self.clock()):
             return "DUPLICATE"
+        if experiment_baseline_sha is not None:
+            self.store.start_experiment_if_unstarted(key, symbol, self.clock(), experiment_baseline_sha)
         stage = "startup"
         try:
             account_for_metadata, _, _ = self.store.load_paper(self.config.account_id)
