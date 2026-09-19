@@ -1,5 +1,19 @@
 # Agent Changelog
 
+## 2026-09-19 — DAILY_SUMMARY y validación de notificaciones
+
+- `agent`: Codex.
+- `task`: Resumen del día UTC anterior completo desde SQLite: ciclos/símbolo,
+  setups/riesgo, órdenes/posiciones PAPER, PnL/equity, problemas de proveedor,
+  macro HIGH y estado operativo persistido. Contrato y ejemplo en DAILY_SUMMARY.md.
+- `delivery`: Snapshot confirmado antes de Slack; deduplicación por día durable,
+  incluso concurrente y tras reinicio; transporte fallido aislado del trading.
+- `scope`: Solo supervisión y tests; sin cambios en estrategia, agentes/prompts,
+  riesgo, gates, providers, sesiones ni ejecución PAPER. Sin activar experimento.
+- `validation`: Baseline aislada 480 tests; final 489 tests OK, con 9 nuevos
+  tests offline; Slack falso; git diff --check y secret scan por patrones.
+- `workspace`: Cambios previos no committed de proveedores excluidos del commit.
+
 ## 2026-09-19 — Cloud preflight para FXMacroData certificado
 
 - `agent`: Codex.

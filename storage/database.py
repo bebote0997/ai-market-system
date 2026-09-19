@@ -300,7 +300,8 @@ class Store:
                     session_names(parse_utc(row["timestamp"])), agents,
                     review.get("risk_decision") if review else None,
                     (entity,) if row["event_type"] in {"ORDER_SUBMITTED", "POSITION_OPENED"} else (),
-                    (entity,) if row["event_type"] == "POSITION_CLOSED" else (), evidence)
+                    (entity,) if row["event_type"] == "POSITION_CLOSED" else (), evidence,
+                    json.loads(row["payload"]) if row["event_type"] == "DAILY_SUMMARY" else None)
                 self.db.execute("INSERT INTO notification_events VALUES(?,?,?)",
                                 (event_id, row["id"], safe_json(event.payload())))
                 events.append(event)

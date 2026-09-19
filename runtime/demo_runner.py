@@ -9,6 +9,7 @@ from runtime.notifications import NullNotificationSink
 from runtime.scheduler import Scheduler, slot_at, slot_key
 from runtime.service import OperationalRuntime
 from storage.database import Store
+from storage.daily_summary import build_daily_summary
 
 
 REAL_EXECUTION_ENABLED = False
@@ -75,6 +76,7 @@ class DemoRunner:
         self.clock = self.runtime.clock
         doctor = preflight(config)
         with self.store.transaction():
+            self.store.set_state("runner", "RUNNING")
             self.store.set_state("phase7_readiness", doctor.status)
             self.store.set_state("phase7_preflight_checks", json.dumps(doctor.checks, sort_keys=True))
         self._deliver(self.store.capture_notifications())
@@ -118,17 +120,22 @@ class DemoRunner:
         return Scheduler(self, self.clock).tick()
 
     def daily_summary(self, at=None):
+        """Persist the previous complete UTC day, then attempt notification once."""
         at = at or self.clock()
-        date = at.astimezone(timezone.utc).date().isoformat()
         with self.store.transaction():
-            if self.store.get_state("daily_summary_date") == date:
+            summary = build_daily_summary(self.store, at)
+            date = summary["date_utc"]
+            if self.store.db.execute(
+                "SELECT 1 FROM journal WHERE event_type='DAILY_SUMMARY' AND run_id=?",
+                (f"daily:{date}",)).fetchone():
                 return False
-            count = self.store.db.execute("SELECT count(*) FROM runs WHERE substr(as_of,1,10)=?", (date,)).fetchone()[0]
             self.store.set_state("daily_summary_date", date)
             self.store._event(at, f"daily:{date}", None, "demo_runner", "DAILY_SUMMARY", "INFO",
-                              {"date": date, "cycles": count})
+                              summary)
         self._deliver(self.store.capture_notifications(run_id=f"daily:{date}"))
         return True
 
     def close(self):
+        with self.store.transaction():
+            self.store.set_state("runner", "STOPPED")
         self.runtime.close()

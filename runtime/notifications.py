@@ -22,6 +22,7 @@ class NotificationEvent:
     paper_order_ids: tuple
     paper_trade_ids: tuple
     evidence_refs: tuple
+    daily_summary: dict | None = None
 
     def payload(self):
         return asdict(self)
@@ -82,6 +83,9 @@ class SlackNotificationSink:
             "evidence_refs": event.evidence_refs,
         }
         payload = {"text": "AI Market System PAPER alert\n" + json.dumps(details, sort_keys=True)}
+        if event.type == "DAILY_SUMMARY":
+            payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
+                       json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
         try:
             self.transport(self.webhook_url, payload, self.timeout)
         except HTTPError as exc:
