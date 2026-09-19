@@ -15,7 +15,9 @@ pueda duplicar mensajes. Un crash tras reclamar el intento puede dejarlo sin env
 ## Definiciones
 
 - `cycles`: runs iniciados en el día UTC, incluidos fallidos o aún en curso,
-  excluyendo `SESSION_SKIPPED`. Cada slot persistido cuenta una sola vez.
+  excluyendo `SESSION_SKIPPED` tanto por estado final como por journal (el runtime
+  histórico persiste esos skips con final_status NO_DATA). Cada slot persistido
+  cuenta una sola vez.
 - `cycles_by_symbol`: mismo conteo por símbolo; incluye ceros para los símbolos
   habilitados persistidos. `NO_SETUP`, `WATCH`, `VALID_SETUP` proceden de `setups`;
   `RISK_REJECTED` de `risk_decisions`, para esos runs. VALID_SETUP puede coexistir

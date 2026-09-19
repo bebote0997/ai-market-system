@@ -11,7 +11,9 @@ def build_daily_summary(store, at):
     # Only summarize a closed UTC day, even when called just after midnight.
     date = (at.astimezone(timezone.utc) - timedelta(days=1)).date().isoformat()
     runs = store.db.execute(
-        "SELECT * FROM runs WHERE date(started_at)=? AND coalesce(final_status,'') != 'SESSION_SKIPPED'",
+        "SELECT * FROM runs r WHERE date(started_at)=? "
+        "AND coalesce(final_status,'') != 'SESSION_SKIPPED' "
+        "AND NOT EXISTS (SELECT 1 FROM journal j WHERE j.run_id=r.run_id AND j.event_type='SESSION_SKIPPED')",
         (date,)).fetchall()
     symbols = json.loads(store.get_state("enabled_symbols") or "[]")
     by_symbol = dict.fromkeys(symbols, 0)

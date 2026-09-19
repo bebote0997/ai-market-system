@@ -1,5 +1,22 @@
 # Agent Changelog
 
+## 2026-09-19 — Auditoría final y preparación de freeze PAPER
+
+- `agent`: Codex.
+- `base`: f9ae6ce79deb9baaa0dab0faa0271e462599d843.
+- `bugs`: Frescura/sesión solo por slot, ausencia de contratos en cloud,
+  recuperación incompleta tras reinicio rápido, awareness FXMacroData omitido,
+  y SESSION_SKIPPED contado por DAILY_SUMMARY. Reproducidos con fixtures offline.
+- `fixes`: Doble gate temporal con reloj real; recuperación reciente solo bajo
+  lock cloud exclusivo; awareness y conteo corregidos. Contratos PAPER aprobados
+  con multiplier=1 y quantity grid inferior, sin modificar Risk Engine ni precios.
+- `validation`: 489 tests baseline; 507 tests finales OK (18 nuevos);
+  ver AUDIT_FREEZE.md y PAPER_EXECUTION_SPEC.md.
+- `economics`: Usuario confirmó USD, equity 10000, comisión/spread adicional/swap
+  0, fill al Open de siguiente barra elegible y gaps SL/TP existentes.
+- `state`: Preparado para freeze oficial de código; sin activar runner/scheduler/
+  experimento. Render sigue desplegado en f3af0c3; no se despliega en esta misión.
+
 ## 2026-09-19 — DAILY_SUMMARY y validación de notificaciones
 
 - `agent`: Codex.

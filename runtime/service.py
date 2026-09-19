@@ -17,6 +17,7 @@ from floor.orchestrator import run as run_floor
 from riesgo import crear_configuracion_riesgo_v2
 from runtime.config import RuntimeConfig
 from runtime.gates import fresh_snapshot, paper_policy
+from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
 from storage.codec import utc
 from storage.database import Store
@@ -28,7 +29,7 @@ LOG = logging.getLogger("ai_floor.runtime")
 class OperationalRuntime:
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
                  instruments=None, clock=None, risk_config=None, paper_enabled=True,
-                 diagnostic_outside_session=False):
+                 diagnostic_outside_session=False, recovery_stale_after_seconds=120):
         self.config = config or RuntimeConfig.from_env()
         self.paper_enabled = bool(paper_enabled)
         self.diagnostic_outside_session = bool(diagnostic_outside_session) and not self.paper_enabled
@@ -58,7 +59,7 @@ class OperationalRuntime:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
         self.store = Store(self.config.db_path)
-        self.store.recover(self.clock())
+        self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
         account, orders, _ = self.store.load_paper(self.config.account_id)
         if account is None:
             if orders or self.store.db.execute("SELECT 1 FROM paper_positions LIMIT 1").fetchone():
@@ -134,7 +135,9 @@ class OperationalRuntime:
                 raise ValueError("invalid AI_FLOOR_GIT_COMMIT")
             self.store.save_run_metadata(key, self.config.fingerprint(), account_for_metadata.starting_equity,
                                          git_commit=commit)
-            if not set(session_names(slot)) & set(self.config.sessions) and not self.diagnostic_outside_session:
+            if (not self.diagnostic_outside_session and
+                    (not set(session_names(slot)) & set(self.config.sessions) or
+                     not set(session_names(self.clock())) & set(self.config.sessions))):
                 self.store.event(self.clock(), run_id, symbol, "scheduler", "SESSION_SKIPPED")
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "SESSION_SKIPPED"
@@ -161,6 +164,9 @@ class OperationalRuntime:
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "NO_DATA"
             fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, slot, self.config.max_age_seconds)
+            if fresh:
+                # The slot bounds evidence; wall time bounds execution freshness.
+                fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, self.clock(), self.config.max_age_seconds)
             if getattr(self.market_provider, "health_by_asset", {}).get(
                 {"XAUUSD": "METAL", "EURUSD": "FOREX", "NAS100": "INDEX"}[symbol]
             ) == "STALE":
@@ -190,13 +196,14 @@ class OperationalRuntime:
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
                                       self.instruments.get(symbol), self.risk_config,
                                       equity=broker.account.equity, run_id=run_id)
+            deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
             with self.store.transaction():
                 self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
             macro_report = deterministic.macro_news_report
             if macro_report and macro_report.status == "ERROR":
                 self.store.event(self.clock(), run_id, symbol, "macro_news", "PROVIDER_FAILURE", "ERROR",
                                  {"provider": self.config.macro_provider_mode})
-            if (self.config.macro_provider_mode in {"finnhub", "official_hybrid"} and macro_report and
+            if (self.config.macro_provider_mode in {"finnhub", "official_hybrid", "fxmacrodata"} and macro_report and
                     macro_report.status in {"OK", "PARTIAL"} and macro_report.evidence):
                 self.store.record_macro_awareness(self.clock(), run_id, symbol,
                                                   macro_report.evidence[0].get("macro_events", ()))
@@ -212,6 +219,21 @@ class OperationalRuntime:
                 self.store.set_state("ai_provider", "ERROR" if provider_failed else "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")
             if provider_failed:
                 self.store.event(self.clock(), ai.run_id, symbol, "ai_provider", "PROVIDER_FAILURE", "ERROR")
+            # Provider/AI latency may cross a freshness or session boundary.
+            # Recheck before progressing any pending order or submitting a new one.
+            execution_at = self.clock()
+            execution_fresh, execution_state, _ = fresh_snapshot(
+                snapshot, symbol, execution_at, self.config.max_age_seconds)
+            if not self.diagnostic_outside_session and not set(session_names(execution_at)) & set(self.config.sessions):
+                execution_state = "SESSION_SKIPPED"
+                execution_fresh = False
+            if not execution_fresh:
+                self.store.event(execution_at, run_id, symbol, "runtime", "EXECUTION_GATE_BLOCKED", "WARNING",
+                                 {"state": execution_state})
+                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, execution_state,
+                                         "execution_time_gate_blocked", run_id))
+                self.store.finish(key, execution_at, "COMPLETED", execution_state)
+                return execution_state
             ai_healthy = all(r is not None and r.status in {"OK", "PARTIAL"} for r in
                 (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review))
             if self.paper_enabled and ai_healthy and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}:

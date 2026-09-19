@@ -9,6 +9,7 @@ from runtime.config import RuntimeConfig
 from runtime.cloud import cloud_preflight
 from runtime.demo_runner import DemoRunner
 from runtime.notifications import SlackNotificationSink
+from runtime.paper_contracts import paper_instruments
 
 
 def main():
@@ -37,7 +38,11 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("scheduler authority already active") from None
-        runner = DemoRunner(config, notification_sink=SlackNotificationSink())
+        # The exclusive lifetime lock proves no previous authority is alive.
+        # Recover even a recent interrupted run; otherwise its symbol lock can
+        # survive a quick restart forever.
+        runner = DemoRunner(config, notification_sink=SlackNotificationSink(),
+                            recovery_stale_after_seconds=0, instruments=paper_instruments())
         try:
             while not stop:
                 runner.tick()
