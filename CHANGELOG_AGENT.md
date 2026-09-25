@@ -1,5 +1,27 @@
 # Agent Changelog
 
+## 2026-09-25 — Authorized PAPER restart repair during Slack routing
+
+- Reproduction: after a configuration-only redeploy of frozen commit 4428fc20,
+  cloud startup rejected the existing experiment because experiment_not_started
+  was required on every boot. User explicitly authorized this startup-only fix.
+- Change: runtime/cloud.py accepts an existing experiment only when its freeze
+  identity, account and durable run metadata match the active configuration.
+  All other infrastructure/provider checks and the exclusive runner lock remain.
+- Preservation: no trading logic, strategy, prompts, sizing, providers, sessions,
+  cadence, freshness, economics or SQLite records are manually modified. The
+  original freeze identity and start timestamp remain unchanged. The new commit
+  is an operational repair, not a new trading baseline; record its deploy SHA
+  separately from AI_FLOOR_GIT_COMMIT (the original experiment identity).
+- Validation: baseline 509 tests pass with the required freeze environment;
+  regression reproduces the rejected resume, then 513 tests pass. Existing
+  Windows temporary-directory cleanup warnings occur after the successful suite.
+  New tests cover unchanged durable state, identity/configuration drift and
+  missing account/credentials. Production table hashes are compared after deploy.
+- Comparability: no decision/execution rule changes. Restart resets process caches;
+  repair is performed outside trading sessions. Any downtime crossing a scheduled
+  slot must be recorded rather than backfilled. Do not clear experiment_started.
+
 ## 2026-09-19 — Experiment lifecycle
 
 - `agent`: GitHub Copilot

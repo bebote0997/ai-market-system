@@ -1,5 +1,5 @@
 """Render preparation checks and supervised single-service entry point."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 import os
@@ -69,6 +69,7 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "slack_configured": bool(env.get("SLACK_WEBHOOK_URL")),
         "db_writable_schema": False,
         "experiment_not_started": False,
+        "experiment_resumable": False,
     }
     if checks["durable_path"] and checks["durable_mount"]:
         try:
@@ -81,15 +82,34 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
                         store.db.execute("INSERT INTO cloud_write_probe VALUES(1)")
                         store.db.execute("DELETE FROM cloud_write_probe")
                 checks["experiment_not_started"] = store.get_state("experiment_started") != "1"
+                if not checks["experiment_not_started"]:
+                    # A restart must retain the experiment identity and ledger.
+                    # Activation callers temporarily disable the scheduler for
+                    # preflight; durable run metadata describes the active config.
+                    freeze = env.get("AI_FLOOR_GIT_COMMIT")
+                    fingerprint = replace(config, scheduler_enabled=True).fingerprint()
+                    metadata = store.db.execute(
+                        "SELECT DISTINCT git_commit, config_fingerprint, starting_equity FROM run_metadata"
+                    ).fetchall()
+                    checks["experiment_resumable"] = bool(
+                        freeze and store.get_state("experiment_freeze_sha") == freeze
+                        and store.get_state("experiment_started_at_utc")
+                        and store.db.execute("SELECT 1 FROM paper_accounts WHERE account_id=?",
+                                             (config.account_id,)).fetchone()
+                        and all(tuple(row) == (freeze, fingerprint, config.starting_equity)
+                                for row in metadata)
+                    )
             finally:
                 store.close()
         except (OSError, RuntimeError, ValueError, sqlite3.Error):
             checks["db_writable_schema"] = False
+    checks["experiment_state_compatible"] = (
+        checks["experiment_not_started"] or checks["experiment_resumable"])
     infrastructure = (
         "paper_only", "enabled_symbols", "market_provider", "ai_provider",
         "macro_provider_valid", "scheduler_single_authority", "scheduler_not_started",
         "durable_path", "durable_mount", "dashboard_auth", "db_writable_schema",
-        "experiment_not_started",
+        "experiment_state_compatible",
     )
     infra_ready = all(checks[name] for name in infrastructure)
     experiment_ready = infra_ready and all(checks[name] for name in (
