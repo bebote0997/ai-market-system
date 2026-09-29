@@ -140,6 +140,18 @@ class ExecutionObservabilityTests(unittest.TestCase):
         finally:
             runner.close()
 
+    def test_order_survives_dashboard_snapshot_failure(self):
+        runner = self.runner()
+        try:
+            with patched_scouts("LONG"), patch.object(runner.store, "save_snapshot",
+                                                      side_effect=RuntimeError("private failure")):
+                result = runner.run_once("XAUUSD", T)
+            self.assertEqual(result["status"], "PLAN_READY")
+            self.assertEqual(result["durable_status"], "COMPLETED")
+            self.assertEqual(len(runner.store.load_paper("paper-main")[1]), 1)
+        finally:
+            runner.close()
+
     def test_capture_and_slack_failures_do_not_change_paper_order(self):
         runner = self.runner()
         try:

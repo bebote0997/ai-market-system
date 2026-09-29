@@ -267,7 +267,9 @@ class OperationalRuntime:
             execution_status, execution_reason = "SKIPPED", "POLICY_NOT_READY"
             blocking_position_id = blocking_order_id = submitted_order_id = None
             if eligible and not self.paper_enabled:
-                self.store.event(self.clock(), run_id, symbol, "policy", "PAPER_DIAGNOSTIC_BLOCKED", "INFO")
+                self._audit_safely(lambda: self.store.event(
+                    self.clock(), run_id, symbol, "policy", "PAPER_DIAGNOSTIC_BLOCKED", "INFO"),
+                    run_id, symbol)
                 execution_reason = "PAPER_DIAGNOSTIC_BLOCKED"
             elif eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
                 if not self.store.owns_slot(key, symbol):
@@ -282,7 +284,9 @@ class OperationalRuntime:
                 else:
                     execution_reason = "BROKER_DECLINED_PLAN"
             elif ai.final_status == "AI_CAUTION":
-                self.store.event(self.clock(), ai.run_id, symbol, "policy", "AI_CAUTION", "WARNING")
+                self._audit_safely(lambda: self.store.event(
+                    self.clock(), ai.run_id, symbol, "policy", "AI_CAUTION", "WARNING"),
+                    run_id, symbol)
                 execution_reason = "AI_CAUTION"
             elif eligible:
                 pending = next((o for o in broker.orders.values()
@@ -300,8 +304,8 @@ class OperationalRuntime:
                                           blocking_position_id=blocking_position_id,
                                           blocking_order_id=blocking_order_id,
                                           order_id=submitted_order_id)
-            vm = from_ai_report(ai, now=slot)
-            self.store.save_snapshot(symbol, self._snapshot(vm))
+            self._audit_safely(lambda: self.store.save_snapshot(
+                symbol, self._snapshot(from_ai_report(ai, now=slot))), run_id, symbol)
             if not self.store.finish(key, self.clock(), "COMPLETED", ai.final_status):
                 return "ERROR"
             LOG.info("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_COMPLETED status=%s",
