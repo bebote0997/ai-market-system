@@ -56,7 +56,7 @@ else:
         system.render(st, vm, health(store) if store else None,
                       store.latest_review(symbol) if store else None,
                       store.notification_events() if store else (),
-                      review_bundle_json(store) if store else None)
+                      review_bundle_json(store) if store else None, store=store)
     finally:
         if store:
             store.close()
