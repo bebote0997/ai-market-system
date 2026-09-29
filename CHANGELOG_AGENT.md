@@ -356,3 +356,22 @@
 - Tests E2E sintéticos cubren setup LONG/SHORT, riesgo, IA adversa, datos inválidos, fallos de proveedores, duplicados y reinicio/cierre de posición.
 - Proveedores activos de la demo: Twelve Data y OpenAI; Massive soportado/no activo; NAS100 soportado/no habilitado. El experimento no se inicia.
 - Certificación final local: 447 tests OK; preflight READY; diagnóstico live XAUUSD/EURUSD PASS con barras actuales, IA contractual y cero órdenes.
+
+# 2026-09-29 — PAPER execution observability (PR only)
+
+- Reproduced a `PLAN_READY`/risk `APPROVED` cycle with no order because an
+  existing position or pending order owns the symbol. The audit result is now
+  persisted in the review and journal and sent as a separate final Slack
+  `EXECUTION_DECISION`. No new field participates in the PAPER policy gate.
+- Added an advisory `setup_id` from existing 15m structural evidence. It is
+  never used for deduplication, sizing, risk, or order submission.
+- SYSTEM can look up a persisted review and journal by run ID. Its bulk export
+  shrinks to the newest records when the 1 MB bound is reached, avoiding a
+  page-wide exception; a single oversized review yields an explicit warning.
+- Comparability: trading signals, risk decisions, order/fill economics, and
+  exit logic are unchanged. Additional journal/notification records and review
+  metadata affect observability only. The deployed commit remains untouched.
+- Tests: 512 passed on the main-based PR with a valid `AI_FLOOR_GIT_COMMIT`
+  supplied to the existing cloud-runner test harness. Without that variable, two pre-existing baseline
+  tests fail before this change because cloud_runner requires a commit SHA.
+- No deploy, merge, production database mutation, or REAL execution activation.

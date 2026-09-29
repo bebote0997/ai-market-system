@@ -23,6 +23,7 @@ class NotificationEvent:
     paper_trade_ids: tuple
     evidence_refs: tuple
     daily_summary: dict | None = None
+    execution: dict | None = None
 
     def payload(self):
         return asdict(self)
@@ -86,6 +87,21 @@ class SlackNotificationSink:
         if event.type == "DAILY_SUMMARY":
             payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
                        json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
+        elif event.type == "EXECUTION_DECISION":
+            outcome = event.execution or {}
+            payload = {"text": "AI Market System PAPER execution\n" + json.dumps({
+                "run_id": event.run_id, "symbol": event.symbol,
+                "setup_id": outcome.get("setup_id"),
+                "setup_status": outcome.get("setup_status"),
+                "plan_status": outcome.get("plan_status"),
+                "direction": outcome.get("side"),
+                "execution_status": outcome.get("execution_status"),
+                "execution_reason": outcome.get("execution_reason"),
+                "blocking_position_id": outcome.get("blocking_position_id"),
+                "blocking_order_id": outcome.get("blocking_order_id"),
+                "order_id": outcome.get("order_id"),
+                "risk_status": event.risk_decision.get("status") if event.risk_decision else None,
+            }, sort_keys=True)}
         try:
             self.transport(self.webhook_url, payload, self.timeout)
         except HTTPError as exc:

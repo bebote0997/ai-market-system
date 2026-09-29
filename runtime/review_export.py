@@ -52,7 +52,29 @@ def review_bundle(store, *, limit=100):
 
 
 def review_bundle_json(store, *, limit=100):
-    output = json.dumps(review_bundle(store, limit=limit), ensure_ascii=False, separators=(",", ":"))
-    if len(output.encode("utf-8")) > MAX_EXPORT_BYTES:
-        raise ValueError("review export exceeds safe size")
-    return output
+    # A busy PAPER service must not break the entire SYSTEM page when history grows.
+    # Keep the newest records, shrinking the bounded export until it fits.
+    while limit >= 1:
+        output = json.dumps(review_bundle(store, limit=limit), ensure_ascii=False, separators=(",", ":"))
+        if len(output.encode("utf-8")) <= MAX_EXPORT_BYTES:
+            return output
+        limit //= 2
+    return json.dumps({"schema_version": "1.0", "paper_only": True,
+                       "reviews": [], "notification_events": [],
+                       "warning": "latest_review_exceeds_export_limit"})
+
+
+def run_evidence_json(store, run_id):
+    review = store.review_report(run_id)
+    if review is None:
+        return None
+    bundle = _sanitize({"schema_version": "1.0", "review": review,
+                        "journal": store.journal(run_id=run_id, limit=500)})
+    output = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
+    if len(output.encode("utf-8")) <= MAX_EXPORT_BYTES:
+        return output
+    # Preserve decision evidence even if agent summaries/journal exceed the cap.
+    compact = {key: review.get(key) for key in ("run_id", "symbol", "as_of", "final_status",
+               "setup_status", "risk_decision", "execution", "paper", "error")}
+    return json.dumps(_sanitize({"schema_version": "1.0", "review": compact,
+                                  "warning": "run_evidence_truncated"}), ensure_ascii=False)

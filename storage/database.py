@@ -223,6 +223,21 @@ class Store:
                 self._event(at, ai.run_id, ai.symbol, "risk", "RISK_" + status,
                             "INFO" if status == "APPROVED" else "WARNING")
 
+    def record_execution(self, at, run_id, symbol, *, status, reason, setup_id=None,
+                         blocking_position_id=None, blocking_order_id=None, order_id=None):
+        """Atomically retain the final PAPER gate result before notification delivery."""
+        outcome = {"execution_status": status, "execution_reason": reason,
+                   "setup_id": setup_id, "blocking_position_id": blocking_position_id,
+                   "blocking_order_id": blocking_order_id, "order_id": order_id}
+        with self.transaction():
+            row = self.db.execute("SELECT payload FROM review_reports WHERE run_id=?", (run_id,)).fetchone()
+            if row is None:
+                raise RuntimeError("execution outcome requires persisted review")
+            review = json.loads(row[0])
+            review["execution"] = outcome
+            self.db.execute("UPDATE review_reports SET payload=? WHERE run_id=?", (safe_json(review), run_id))
+            self._event(at, run_id, symbol, "policy", "EXECUTION_DECISION", "INFO", outcome)
+
     def finish(self, key, completed_at, status, final_status, error=None):
         with self.transaction():
             owner = self.db.execute("SELECT symbol FROM runs WHERE slot_key=? AND status='RUNNING'", (key,)).fetchone()
@@ -288,7 +303,7 @@ class Store:
         selected = {"RUN_FAILED", "STATE_INCONSISTENCY", "RECOVERY_STARTED",
                     "RECOVERY_COMPLETED", "PROVIDER_FAILURE", "AUTH_ERROR",
                     "ENTITLEMENT_ERROR", "RATE_LIMITED", "SETUP_VALID_SETUP",
-                    "RISK_REJECTED", "ORDER_SUBMITTED", "POSITION_OPENED",
+                    "RISK_REJECTED", "EXECUTION_DECISION", "ORDER_SUBMITTED", "POSITION_OPENED",
                     "POSITION_CLOSED", "DAILY_SUMMARY", "MACRO_HIGH_IMPORTANCE",
                     "MACRO_HIGH_RELEVANCE"}
         events = []
@@ -313,6 +328,12 @@ class Store:
                     if macro_id:
                         evidence = tuple(dict.fromkeys((*evidence, macro_id)))
                 entity = row["source"]
+                execution = None
+                if row["event_type"] == "EXECUTION_DECISION":
+                    execution = json.loads(row["payload"])
+                    execution.update({"setup_status": review.get("setup_status") if review else None,
+                                      "plan_status": review.get("final_status") if review else None,
+                                      "side": (review.get("risk_decision") or {}).get("side") if review else None})
                 event = NotificationEvent(
                     "1.0", event_id, row["run_id"] or "system", row["timestamp"],
                     row["severity"], row["event_type"], row["symbol"],
@@ -320,7 +341,8 @@ class Store:
                     review.get("risk_decision") if review else None,
                     (entity,) if row["event_type"] in {"ORDER_SUBMITTED", "POSITION_OPENED"} else (),
                     (entity,) if row["event_type"] == "POSITION_CLOSED" else (), evidence,
-                    json.loads(row["payload"]) if row["event_type"] == "DAILY_SUMMARY" else None)
+                    json.loads(row["payload"]) if row["event_type"] == "DAILY_SUMMARY" else None,
+                    execution)
                 self.db.execute("INSERT INTO notification_events VALUES(?,?,?)",
                                 (event_id, row["id"], safe_json(event.payload())))
                 events.append(event)

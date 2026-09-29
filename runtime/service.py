@@ -17,6 +17,7 @@ from floor.orchestrator import run as run_floor
 from riesgo import crear_configuracion_riesgo_v2
 from runtime.config import RuntimeConfig
 from runtime.gates import fresh_snapshot, paper_policy
+from runtime.observability import setup_id as audit_setup_id
 from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
 from storage.codec import utc
@@ -230,6 +231,9 @@ class OperationalRuntime:
             if not execution_fresh:
                 self.store.event(execution_at, run_id, symbol, "runtime", "EXECUTION_GATE_BLOCKED", "WARNING",
                                  {"state": execution_state})
+                self.store.record_execution(execution_at, run_id, symbol, status="SKIPPED",
+                                            reason=execution_state,
+                                            setup_id=audit_setup_id(deterministic.setup_assessment))
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, execution_state,
                                          "execution_time_gate_blocked", run_id))
                 self.store.finish(key, execution_at, "COMPLETED", execution_state)
@@ -246,8 +250,11 @@ class OperationalRuntime:
                 self.store.save_paper(broker, owner_key=key, symbol=symbol)
             eligible = paper_policy(ai)
             stage = "paper"
+            execution_status, execution_reason = "SKIPPED", "POLICY_NOT_READY"
+            blocking_position_id = blocking_order_id = submitted_order_id = None
             if eligible and not self.paper_enabled:
                 self.store.event(self.clock(), run_id, symbol, "policy", "PAPER_DIAGNOSTIC_BLOCKED", "INFO")
+                execution_reason = "PAPER_DIAGNOSTIC_BLOCKED"
             elif eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
@@ -255,8 +262,28 @@ class OperationalRuntime:
                 if order:
                     self.store.save_paper(broker, owner_key=key, symbol=symbol)
                     self.store.event(self.clock(), ai.run_id, symbol, "policy", "PAPER_ORDER_SUBMITTED")
+                    execution_status, execution_reason, submitted_order_id = "SUBMITTED", "ORDER_SUBMITTED", order.order_id
+                else:
+                    execution_reason = "BROKER_DECLINED_PLAN"
             elif ai.final_status == "AI_CAUTION":
                 self.store.event(self.clock(), ai.run_id, symbol, "policy", "AI_CAUTION", "WARNING")
+                execution_reason = "AI_CAUTION"
+            elif eligible:
+                pending = next((o for o in broker.orders.values()
+                                if o.symbol == symbol and o.status == "PENDING"), None)
+                if pending:
+                    execution_reason, blocking_order_id = "PENDING_ORDER", pending.order_id
+                else:
+                    position = broker.account.open_positions.get(symbol)
+                    execution_reason, blocking_position_id = "EXISTING_POSITION", position.position_id
+            else:
+                execution_reason = ai.final_status if ai.final_status != "PLAN_READY" else "POLICY_REVIEW_UNAVAILABLE"
+            self.store.record_execution(self.clock(), run_id, symbol,
+                                        status=execution_status, reason=execution_reason,
+                                        setup_id=audit_setup_id(deterministic.setup_assessment),
+                                        blocking_position_id=blocking_position_id,
+                                        blocking_order_id=blocking_order_id,
+                                        order_id=submitted_order_id)
             vm = from_ai_report(ai, now=slot)
             self.store.save_snapshot(symbol, self._snapshot(vm))
             if not self.store.finish(key, self.clock(), "COMPLETED", ai.final_status):
