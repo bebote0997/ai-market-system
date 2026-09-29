@@ -375,3 +375,17 @@
   supplied to the existing cloud-runner test harness. Without that variable, two pre-existing baseline
   tests fail before this change because cloud_runner requires a commit SHA.
 - No deploy, merge, production database mutation, or REAL execution activation.
+
+## 2026-09-29 — Slack signal policy and isolated PAPER audit (PR #2 follow-up)
+
+- Reproduced redundant cycle alerts and injected setup ID, audit transaction,
+  analysis journal, post-persist order journal, notification capture and Slack
+  failures. PAPER decisions and saved orders survive these audit failures.
+- Capture immediate SUBMITTED, first VALID_SETUP blocked outcome or changed
+  blocker/reason, RISK_REJECTED, AI_CAUTION, position transitions and operational
+  failures. WATCH/NO_SETUP and repeated identical blockers remain in journal and
+  review; SETUP_VALID_SETUP and duplicate order alert no longer add Slack noise.
+- The run export enforces its byte bound even when compact evidence is oversized.
+  Capture and delivery errors log only the exception type, never credentials.
+- The operational restart repair is separately proposed in PR #3. Revalidate
+  the combined tree before either merge; keep the original freeze identity.

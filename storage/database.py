@@ -302,8 +302,8 @@ class Store:
         from runtime.scheduler import session_names
         selected = {"RUN_FAILED", "STATE_INCONSISTENCY", "RECOVERY_STARTED",
                     "RECOVERY_COMPLETED", "PROVIDER_FAILURE", "AUTH_ERROR",
-                    "ENTITLEMENT_ERROR", "RATE_LIMITED", "SETUP_VALID_SETUP",
-                    "RISK_REJECTED", "EXECUTION_DECISION", "ORDER_SUBMITTED", "POSITION_OPENED",
+                    "ENTITLEMENT_ERROR", "RATE_LIMITED", "AI_CAUTION",
+                    "RISK_REJECTED", "EXECUTION_DECISION", "POSITION_OPENED",
                     "POSITION_CLOSED", "DAILY_SUMMARY", "MACRO_HIGH_IMPORTANCE",
                     "MACRO_HIGH_RELEVANCE"}
         events = []
@@ -317,6 +317,24 @@ class Store:
                 if self.db.execute("SELECT 1 FROM notification_events WHERE event_id=?", (event_id,)).fetchone():
                     continue
                 review = self.review_report(row["run_id"]) if row["run_id"] else None
+                if row["event_type"] == "EXECUTION_DECISION":
+                    decision = json.loads(row["payload"])
+                    setup_status = review.get("setup_status") if review else None
+                    plan_status = review.get("final_status") if review else None
+                    if decision["execution_status"] == "SKIPPED":
+                        if setup_status != "VALID_SETUP" or plan_status in {"AI_CAUTION", "RISK_REJECTED"}:
+                            continue
+                        previous = self.db.execute(
+                            "SELECT payload FROM journal WHERE symbol=? AND event_type='EXECUTION_DECISION' "
+                            "AND id<? ORDER BY id DESC LIMIT 1", (row["symbol"], row["id"])).fetchone()
+                        if previous:
+                            old = json.loads(previous[0])
+                            identity = ("execution_status", "execution_reason",
+                                        "blocking_position_id", "blocking_order_id")
+                            if decision["execution_reason"] not in {"EXISTING_POSITION", "PENDING_ORDER"}:
+                                identity += ("setup_id",)
+                            if all(old.get(key) == decision.get(key) for key in identity):
+                                continue
                 agents = tuple({"agent": a["agent"], "status": a["status"],
                                 "reasoning_summary": a["reasoning_summary"]}
                                for a in review.get("agents", ())) if review else ()

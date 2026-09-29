@@ -37,7 +37,7 @@ def review_bundle(store, *, limit=100):
         raw = json.loads(row[0])
         reviews.append({key: raw.get(key) for key in (
             "schema_version", "run_id", "slot_key", "symbol", "as_of", "final_status",
-            "setup_status", "agents", "risk_decision", "paper", "warnings", "error",
+            "setup_status", "agents", "risk_decision", "execution", "paper", "warnings", "error",
             "provider_health", "macro_evidence")})
     event_rows = store.db.execute(
         "SELECT payload FROM notification_events ORDER BY journal_id DESC LIMIT ?", (limit,)
@@ -76,5 +76,9 @@ def run_evidence_json(store, run_id):
     # Preserve decision evidence even if agent summaries/journal exceed the cap.
     compact = {key: review.get(key) for key in ("run_id", "symbol", "as_of", "final_status",
                "setup_status", "risk_decision", "execution", "paper", "error")}
-    return json.dumps(_sanitize({"schema_version": "1.0", "review": compact,
-                                  "warning": "run_evidence_truncated"}), ensure_ascii=False)
+    output = json.dumps(_sanitize({"schema_version": "1.0", "review": compact,
+                                   "warning": "run_evidence_truncated"}), ensure_ascii=False)
+    if len(output.encode("utf-8")) <= MAX_EXPORT_BYTES:
+        return output
+    return json.dumps(_sanitize({"schema_version": "1.0", "run_id": run_id,
+                                  "warning": "run_evidence_exceeds_export_limit"}), ensure_ascii=False)
