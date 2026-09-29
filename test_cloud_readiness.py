@@ -256,8 +256,9 @@ class CloudDB(unittest.TestCase):
         self.assertNotIn(secret, exported)
         self.assertNotIn("hooks.slack.com/services", exported)
         with patch("runtime.review_export.MAX_EXPORT_BYTES", 100):
-            with self.assertRaisesRegex(ValueError, "safe size"):
-                review_bundle_json(FakeStore())
+            compact = json.loads(review_bundle_json(FakeStore()))
+            self.assertEqual(compact["warning"], "latest_review_exceeds_export_limit")
+            self.assertEqual(compact["reviews"], [])
 
     def test_render_blueprint_static_safety_configuration(self):
         blueprint = Path("render.yaml").read_text(encoding="utf-8")

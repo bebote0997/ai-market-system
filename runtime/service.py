@@ -17,6 +17,7 @@ from floor.orchestrator import run as run_floor
 from riesgo import crear_configuracion_riesgo_v2
 from runtime.config import RuntimeConfig
 from runtime.gates import fresh_snapshot, paper_policy
+from runtime.observability import setup_id as audit_setup_id
 from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
 from storage.codec import utc
@@ -27,6 +28,18 @@ LOG = logging.getLogger("ai_floor.runtime")
 
 
 class OperationalRuntime:
+    def _audit_safely(self, action, run_id, symbol):
+        try:
+            action()
+        except Exception as exc:
+            LOG.warning("run_id=%s symbol=%s component=observability event=RECORD_FAILED error_type=%s",
+                        run_id, symbol, type(exc).__name__)
+
+    def _record_execution_safely(self, at, run_id, symbol, assessment, **outcome):
+        """Audit is best effort and must never change a PAPER decision."""
+        self._audit_safely(lambda: self.store.record_execution(
+            at, run_id, symbol, setup_id=audit_setup_id(assessment), **outcome), run_id, symbol)
+
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
                  instruments=None, clock=None, risk_config=None, paper_enabled=True,
                  diagnostic_outside_session=False, recovery_stale_after_seconds=120):
@@ -205,15 +218,17 @@ class OperationalRuntime:
                                  {"provider": self.config.macro_provider_mode})
             if (self.config.macro_provider_mode in {"finnhub", "official_hybrid", "fxmacrodata"} and macro_report and
                     macro_report.status in {"OK", "PARTIAL"} and macro_report.evidence):
-                self.store.record_macro_awareness(self.clock(), run_id, symbol,
-                                                  macro_report.evidence[0].get("macro_events", ()))
+                self._audit_safely(lambda: self.store.record_macro_awareness(
+                    self.clock(), run_id, symbol, macro_report.evidence[0].get("macro_events", ())),
+                    run_id, symbol)
             stage = "ai"
             audit = AuditLog()
             ai = run_ai(deterministic, self.ai_provider, audit)
             if not self.store.owns_slot(key, symbol):
                 raise RuntimeError("slot ownership lost")
             self.store.save_reports(key, deterministic, ai, audit.entries)
-            self.store.record_analysis_events(self.clock(), deterministic, ai)
+            self._audit_safely(lambda: self.store.record_analysis_events(self.clock(), deterministic, ai),
+                               run_id, symbol)
             provider_failed = any(r is not None and r.status == "ERROR" for r in (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review, ai.ai_trade_review))
             with self.store.transaction():
                 self.store.set_state("ai_provider", "ERROR" if provider_failed else "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")
@@ -230,6 +245,9 @@ class OperationalRuntime:
             if not execution_fresh:
                 self.store.event(execution_at, run_id, symbol, "runtime", "EXECUTION_GATE_BLOCKED", "WARNING",
                                  {"state": execution_state})
+                self._record_execution_safely(execution_at, run_id, symbol,
+                                              deterministic.setup_assessment,
+                                              status="SKIPPED", reason=execution_state)
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, execution_state,
                                          "execution_time_gate_blocked", run_id))
                 self.store.finish(key, execution_at, "COMPLETED", execution_state)
@@ -246,19 +264,48 @@ class OperationalRuntime:
                 self.store.save_paper(broker, owner_key=key, symbol=symbol)
             eligible = paper_policy(ai)
             stage = "paper"
+            execution_status, execution_reason = "SKIPPED", "POLICY_NOT_READY"
+            blocking_position_id = blocking_order_id = submitted_order_id = None
             if eligible and not self.paper_enabled:
-                self.store.event(self.clock(), run_id, symbol, "policy", "PAPER_DIAGNOSTIC_BLOCKED", "INFO")
+                self._audit_safely(lambda: self.store.event(
+                    self.clock(), run_id, symbol, "policy", "PAPER_DIAGNOSTIC_BLOCKED", "INFO"),
+                    run_id, symbol)
+                execution_reason = "PAPER_DIAGNOSTIC_BLOCKED"
             elif eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
                 order = broker.submit_plan(deterministic, snapshot, slot)
                 if order:
                     self.store.save_paper(broker, owner_key=key, symbol=symbol)
-                    self.store.event(self.clock(), ai.run_id, symbol, "policy", "PAPER_ORDER_SUBMITTED")
+                    self._audit_safely(lambda: self.store.event(
+                        self.clock(), ai.run_id, symbol, "policy", "PAPER_ORDER_SUBMITTED"),
+                        run_id, symbol)
+                    execution_status, execution_reason, submitted_order_id = "SUBMITTED", "ORDER_SUBMITTED", order.order_id
+                else:
+                    execution_reason = "BROKER_DECLINED_PLAN"
             elif ai.final_status == "AI_CAUTION":
-                self.store.event(self.clock(), ai.run_id, symbol, "policy", "AI_CAUTION", "WARNING")
-            vm = from_ai_report(ai, now=slot)
-            self.store.save_snapshot(symbol, self._snapshot(vm))
+                self._audit_safely(lambda: self.store.event(
+                    self.clock(), ai.run_id, symbol, "policy", "AI_CAUTION", "WARNING"),
+                    run_id, symbol)
+                execution_reason = "AI_CAUTION"
+            elif eligible:
+                pending = next((o for o in broker.orders.values()
+                                if o.symbol == symbol and o.status == "PENDING"), None)
+                if pending:
+                    execution_reason, blocking_order_id = "PENDING_ORDER", pending.order_id
+                else:
+                    position = broker.account.open_positions.get(symbol)
+                    execution_reason, blocking_position_id = "EXISTING_POSITION", position.position_id
+            else:
+                execution_reason = ai.final_status if ai.final_status != "PLAN_READY" else "POLICY_REVIEW_UNAVAILABLE"
+            self._record_execution_safely(self.clock(), run_id, symbol,
+                                          deterministic.setup_assessment,
+                                          status=execution_status, reason=execution_reason,
+                                          blocking_position_id=blocking_position_id,
+                                          blocking_order_id=blocking_order_id,
+                                          order_id=submitted_order_id)
+            self._audit_safely(lambda: self.store.save_snapshot(
+                symbol, self._snapshot(from_ai_report(ai, now=slot))), run_id, symbol)
             if not self.store.finish(key, self.clock(), "COMPLETED", ai.final_status):
                 return "ERROR"
             LOG.info("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_COMPLETED status=%s",

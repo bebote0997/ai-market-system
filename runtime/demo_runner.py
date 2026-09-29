@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
+import logging
 import os
 import sqlite3
 
@@ -13,6 +14,7 @@ from storage.daily_summary import build_daily_summary
 
 
 REAL_EXECUTION_ENABLED = False
+LOG = logging.getLogger("ai_floor.observability")
 
 
 @dataclass(frozen=True)
@@ -85,21 +87,34 @@ class DemoRunner:
         if experiment_baseline_sha is not None:
             self.store.start_experiment_if_unstarted(self.clock(), experiment_baseline_sha,
                                                      experiment_freeze_sha)
-        self._deliver(self.store.capture_notifications())
+        self._capture_and_deliver()
+
+    def _capture_and_deliver(self, *, run_id=None):
+        try:
+            events = self.store.capture_notifications(run_id=run_id)
+            self._deliver(events)
+        except Exception as exc:
+            LOG.warning("component=notifications event=CAPTURE_OR_DELIVERY_FAILED error_type=%s",
+                        type(exc).__name__)
 
     def _deliver(self, events):
         for event in events:
-            durable = getattr(self.sink, "durable_delivery", False)
-            if durable and not self.store.claim_notification_delivery(event.event_id, self.clock()):
-                continue
+            durable = False
             try:
+                durable = getattr(self.sink, "durable_delivery", False)
+                if durable and not self.store.claim_notification_delivery(event.event_id, self.clock()):
+                    continue
                 self.sink.deliver(event)
                 if durable:
                     self.store.complete_notification_delivery(event.event_id, self.clock())
             except Exception as exc:
                 # The persisted event and trading outcome are the source of truth.
                 if durable:
-                    self.store.complete_notification_delivery(event.event_id, self.clock(), type(exc).__name__)
+                    try:
+                        self.store.complete_notification_delivery(event.event_id, self.clock(), type(exc).__name__)
+                    except Exception as record_error:
+                        LOG.warning("component=notifications event=DELIVERY_RECORD_FAILED error_type=%s",
+                                    type(record_error).__name__)
 
     def run_cycle(self, symbol, scheduled_at):
         return self.run_once(symbol, scheduled_at)["status"]
@@ -114,12 +129,18 @@ class DemoRunner:
             raise RuntimeError("cycle has no durable run")
         # A position close belongs to its opening run, even when observed in a
         # later cycle. Capture all newly committed journal rows exactly once.
-        self._deliver(self.store.capture_notifications())
-        review = self.store.review_report(run["run_id"])
+        self._capture_and_deliver()
+        try:
+            review = self.store.review_report(run["run_id"])
+            journal_count = len(self.store.journal(run_id=run["run_id"]))
+        except Exception as exc:
+            LOG.warning("component=observability event=RESULT_READ_FAILED error_type=%s",
+                        type(exc).__name__)
+            review, journal_count = None, 0
         return {"schema_version": "1.0", "run_id": run["run_id"], "symbol": symbol,
                 "status": status, "durable_status": run["status"],
                 "review_durable": review is not None,
-                "journal_count": len(self.store.journal(run_id=run["run_id"])),
+                "journal_count": journal_count,
                 "paper_orders_enabled": not self.dry_run}
 
     def tick(self):
@@ -138,7 +159,7 @@ class DemoRunner:
             self.store.set_state("daily_summary_date", date)
             self.store._event(at, f"daily:{date}", None, "demo_runner", "DAILY_SUMMARY", "INFO",
                               summary)
-        self._deliver(self.store.capture_notifications(run_id=f"daily:{date}"))
+        self._capture_and_deliver(run_id=f"daily:{date}")
         return True
 
     def close(self):

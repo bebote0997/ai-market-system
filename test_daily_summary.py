@@ -148,8 +148,7 @@ class DailySummaryTests(unittest.TestCase):
 
     def test_crash_after_journal_commit_can_capture_persisted_summary(self):
         with patch.object(self.store, 'capture_notifications', side_effect=RuntimeError('crash')):
-            with self.assertRaises(RuntimeError):
-                self.runner.daily_summary(T)
+            self.assertTrue(self.runner.daily_summary(T))
         self.assertEqual(len(self.sent), 0)
         events = self.store.capture_notifications()
         self.runner._deliver(events)

@@ -378,3 +378,36 @@
 - Tests E2E sintéticos cubren setup LONG/SHORT, riesgo, IA adversa, datos inválidos, fallos de proveedores, duplicados y reinicio/cierre de posición.
 - Proveedores activos de la demo: Twelve Data y OpenAI; Massive soportado/no activo; NAS100 soportado/no habilitado. El experimento no se inicia.
 - Certificación final local: 447 tests OK; preflight READY; diagnóstico live XAUUSD/EURUSD PASS con barras actuales, IA contractual y cero órdenes.
+
+# 2026-09-29 — PAPER execution observability (PR only)
+
+- Reproduced a `PLAN_READY`/risk `APPROVED` cycle with no order because an
+  existing position or pending order owns the symbol. The audit result is now
+  persisted in the review and journal and sent as a separate final Slack
+  `EXECUTION_DECISION`. No new field participates in the PAPER policy gate.
+- Added an advisory `setup_id` from existing 15m structural evidence. It is
+  never used for deduplication, sizing, risk, or order submission.
+- SYSTEM can look up a persisted review and journal by run ID. Its bulk export
+  shrinks to the newest records when the 1 MB bound is reached, avoiding a
+  page-wide exception; a single oversized review yields an explicit warning.
+- Comparability: trading signals, risk decisions, order/fill economics, and
+  exit logic are unchanged. Additional journal/notification records and review
+  metadata affect observability only. The deployed commit remains untouched.
+- Tests: 512 passed on the main-based PR with a valid `AI_FLOOR_GIT_COMMIT`
+  supplied to the existing cloud-runner test harness. Without that variable, two pre-existing baseline
+  tests fail before this change because cloud_runner requires a commit SHA.
+- No deploy, merge, production database mutation, or REAL execution activation.
+
+## 2026-09-29 — Slack signal policy and isolated PAPER audit (PR #2 follow-up)
+
+- Reproduced redundant cycle alerts and injected setup ID, audit transaction,
+  analysis journal, post-persist order journal, dashboard snapshot, notification capture and Slack
+  failures. PAPER decisions and saved orders survive these audit failures.
+- Capture immediate SUBMITTED, first VALID_SETUP blocked outcome or changed
+  blocker/reason, RISK_REJECTED, AI_CAUTION, position transitions and operational
+  failures. WATCH/NO_SETUP and repeated identical blockers remain in journal and
+  review; SETUP_VALID_SETUP and duplicate order alert no longer add Slack noise.
+- The run export enforces its byte bound even when compact evidence is oversized.
+  Capture and delivery errors log only the exception type, never credentials.
+- The operational restart repair is separately proposed in PR #3. Revalidate
+  the combined tree before either merge; keep the original freeze identity.
