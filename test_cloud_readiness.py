@@ -23,6 +23,7 @@ from ui.auth import require_dashboard_access
 
 
 T = datetime(2026, 9, 17, 13, 30, tzinfo=timezone.utc)
+FREEZE_COMMIT_SHA = "d8d30e1e7f4273d958fb8fc09427bd2a623025b8"
 
 
 class CloudDB(unittest.TestCase):
@@ -214,10 +215,27 @@ class CloudDB(unittest.TestCase):
     def test_cloud_runner_cannot_start_without_certified_macro(self):
         from runtime import cloud_runner
         config = RuntimeConfig(db_path=self.path, scheduler_enabled=True, macro_provider_mode="none")
-        with patch.dict("os.environ", {"RENDER": "true", "AI_FLOOR_CLOUD_RUNNER": "1"}), \
+        with patch.dict("os.environ", {"RENDER": "true", "AI_FLOOR_CLOUD_RUNNER": "1",
+                                      "AI_FLOOR_GIT_COMMIT": FREEZE_COMMIT_SHA}), \
              patch.object(RuntimeConfig, "from_env", return_value=config):
             with self.assertRaisesRegex(RuntimeError, "experiment activation preflight not ready"):
                 cloud_runner.main()
+
+    def test_cloud_runner_rejects_missing_or_malformed_freeze_sha(self):
+        from runtime import cloud_runner
+        config = RuntimeConfig(db_path=self.path, scheduler_enabled=True,
+                               macro_provider_mode="fxmacrodata")
+        with patch.object(RuntimeConfig, "from_env", return_value=config), \
+             patch.object(cloud_runner, "cloud_preflight") as preflight:
+            for freeze_sha in (None, "not-a-commit"):
+                with self.subTest(freeze_sha=freeze_sha):
+                    env = {"RENDER": "true", "AI_FLOOR_CLOUD_RUNNER": "1"}
+                    if freeze_sha is not None:
+                        env["AI_FLOOR_GIT_COMMIT"] = freeze_sha
+                    with patch.dict("os.environ", env, clear=True):
+                        with self.assertRaisesRegex(RuntimeError, "AI_FLOOR_GIT_COMMIT"):
+                            cloud_runner.main()
+            preflight.assert_not_called()
 
     def test_private_dashboard_gate_and_bounded_review_export(self):
         class Stop(Exception):
