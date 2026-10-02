@@ -16,6 +16,8 @@ from storage.daily_summary import build_daily_summary
 from storage.database import Store
 from test_demo_runner import Data, T, instrument, macro_fixture, patched_scouts
 
+FREEZE_COMMIT_SHA = "d8d30e1e7f4273d958fb8fc09427bd2a623025b8"
+
 
 class FreezeSafetyTests(unittest.TestCase):
     def setUp(self):
@@ -147,7 +149,8 @@ class FreezeSafetyTests(unittest.TestCase):
         fake_fcntl = SimpleNamespace(flock=flock, LOCK_EX=2, LOCK_NB=4)
         # No actual scheduler or runtime is constructed: a fake tick immediately
         # ends the supervisor, while validating what would be wired after lock.
-        with patch.dict('os.environ', {'RENDER': 'true', 'AI_FLOOR_CLOUD_RUNNER': '1'}), \
+        with patch.dict('os.environ', {'RENDER': 'true', 'AI_FLOOR_CLOUD_RUNNER': '1',
+                                      'AI_FLOOR_GIT_COMMIT': FREEZE_COMMIT_SHA}), \
              patch.dict('sys.modules', {'fcntl': fake_fcntl}), \
              patch.object(RuntimeConfig, 'from_env', return_value=config), \
              patch.object(cloud_runner, 'cloud_preflight', return_value=SimpleNamespace(experiment_ready=True)), \
@@ -158,6 +161,7 @@ class FreezeSafetyTests(unittest.TestCase):
                 cloud_runner.main()
             self.assertEqual(flock.call_count, 1)
             self.assertEqual(factory.call_args.kwargs['instruments'], paper_instruments())
+            self.assertEqual(factory.call_args.kwargs['experiment_freeze_sha'], FREEZE_COMMIT_SHA)
             self.assertEqual(factory.call_args.kwargs['recovery_stale_after_seconds'], 0)
             factory.return_value.close.assert_called_once()
             factory.reset_mock()

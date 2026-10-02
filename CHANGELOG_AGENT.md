@@ -1,5 +1,22 @@
 # Agent Changelog
 
+## 2026-10-02 — ISSUE-001/005 test contract and governance
+
+- Reproduction: the full 523-test baseline suite had two failures because the
+  cloud-runner test fixtures omitted `AI_FLOOR_GIT_COMMIT`; the runner rejected
+  startup before the intended assertions.
+- Change: cloud-runner fixtures now supply the full SHA of the commit that
+  introduced the official freeze document. Added regression coverage that
+  missing or malformed freeze identity remains fail-closed. No runtime code or
+  CI workflow behavior changed.
+- Governance: documented required `main` branch rules, independent review,
+  successful `unit` CI, and PR/SHA/CI/deploy evidence. Added a PR template.
+  GitHub branch protection remains an administrator setting and must be enabled
+  before ISSUE-005 can be considered closed; no Render or production settings
+  were changed.
+- Comparability: test fixtures and governance documentation only; no trading,
+  risk, execution, provider, prompt, or runtime behavior changed.
+
 ## 2026-09-25 — Authorized PAPER restart repair during Slack routing
 
 - Reproduction: after a configuration-only redeploy of frozen commit 4428fc20,
