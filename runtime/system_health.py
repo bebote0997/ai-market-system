@@ -28,13 +28,16 @@ class HealthStatus(str, Enum):
 
 
 class ProviderErrorType(str, Enum):
-    """V2 provider failure taxonomy (V2_HANDOFF_REQUIREMENTS.md, P2)."""
+    """V2 provider failure taxonomy: V2_HANDOFF_REQUIREMENTS.md P2, plus MODEL_UNAVAILABLE and
+    CONNECTION_ERROR, which the Phase 1 Master requirements define as explicit canonical classes."""
     RATE_LIMITED = "RATE_LIMITED"
     BILLING_OR_QUOTA = "BILLING_OR_QUOTA"
     TIMEOUT = "TIMEOUT"
     AUTH_FAILURE = "AUTH_FAILURE"
     PROVIDER_5XX = "PROVIDER_5XX"
     INVALID_RESPONSE = "INVALID_RESPONSE"
+    MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+    CONNECTION_ERROR = "CONNECTION_ERROR"
     UNKNOWN_PROVIDER_FAILURE = "UNKNOWN_PROVIDER_FAILURE"
 
 
@@ -47,10 +50,10 @@ LEGACY_ERROR_NAMES = {
     "ACCESS_DENIED": ProviderErrorType.AUTH_FAILURE,
     "INVALID_RESPONSE": ProviderErrorType.INVALID_RESPONSE,
     "TIMEOUT": ProviderErrorType.TIMEOUT,
-    # Ambiguous legacy names (see report): no status-free evidence of a narrower class.
+    "MODEL_UNAVAILABLE": ProviderErrorType.MODEL_UNAVAILABLE,
+    "CONNECTION_ERROR": ProviderErrorType.CONNECTION_ERROR,
+    # Ambiguous legacy names: no evidence of a narrower class.
     "NOT_ENTITLED": ProviderErrorType.UNKNOWN_PROVIDER_FAILURE,
-    "MODEL_UNAVAILABLE": ProviderErrorType.UNKNOWN_PROVIDER_FAILURE,
-    "CONNECTION_ERROR": ProviderErrorType.UNKNOWN_PROVIDER_FAILURE,
     "PROVIDER_ERROR": ProviderErrorType.UNKNOWN_PROVIDER_FAILURE,
     "PROVIDER_FAILURE": ProviderErrorType.UNKNOWN_PROVIDER_FAILURE,
 }
@@ -76,7 +79,7 @@ def classify_provider_error(*, kind=None, http_status=None, exception=None):
     """
     legacy = kind if isinstance(kind, str) and _LEGACY.fullmatch(kind) else None
     if legacy in ProviderErrorType.__members__:
-        return ProviderErrorType(legacy), None  # Already a V2 name: nothing legacy to preserve.
+        return ProviderErrorType(legacy), None  # Canonical name: error_type itself is the original name.
     mapped = LEGACY_ERROR_NAMES.get(legacy)
     if mapped is not None and legacy not in {"PROVIDER_FAILURE", "PROVIDER_ERROR"}:
         return mapped, legacy

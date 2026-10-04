@@ -1,5 +1,6 @@
 """SYSTEM HEALTH V2 core (Phase 1 / Batch 1): F01-T11 foundation, F01-T15..T19."""
 import ast
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
@@ -154,12 +155,35 @@ class TaxonomyTests(unittest.TestCase):
 
     def test_t19_legacy_names_normalized_and_preserved(self):
         expected = {"QUOTA_EXHAUSTED": "BILLING_OR_QUOTA", "AUTH_ERROR": "AUTH_FAILURE",
-                    "ACCESS_DENIED": "AUTH_FAILURE", "MODEL_UNAVAILABLE": "UNKNOWN_PROVIDER_FAILURE",
-                    "CONNECTION_ERROR": "UNKNOWN_PROVIDER_FAILURE", "NOT_ENTITLED": "UNKNOWN_PROVIDER_FAILURE",
+                    "ACCESS_DENIED": "AUTH_FAILURE", "NOT_ENTITLED": "UNKNOWN_PROVIDER_FAILURE",
                     "PROVIDER_FAILURE": "UNKNOWN_PROVIDER_FAILURE", "PROVIDER_ERROR": "UNKNOWN_PROVIDER_FAILURE"}
         for legacy, v2 in expected.items():
             with self.subTest(legacy=legacy):
                 self.assertEqual(classify_provider_error(kind=legacy), (ProviderErrorType(v2), legacy))
+
+    def test_t19_model_unavailable_and_connection_error_are_canonical(self):
+        for name in ("MODEL_UNAVAILABLE", "CONNECTION_ERROR"):
+            with self.subTest(name=name):
+                self.assertEqual(classify_provider_error(kind=name), (ProviderErrorType(name), None))
+                self.assertEqual(classify_provider_error(kind=name, http_status=503)[0], ProviderErrorType(name))
+                self.assertNotEqual(classify_provider_error(kind=name)[0],
+                                    ProviderErrorType.UNKNOWN_PROVIDER_FAILURE)
+
+    def test_t19_original_provider_error_preserved_as_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="v2-health-ev-") as folder:
+            store = Store(Path(folder) / "floor.db")
+            try:
+                health = SystemHealth(store, POLICY)
+                for index, name in enumerate(("MODEL_UNAVAILABLE", "CONNECTION_ERROR", "QUOTA_EXHAUSTED")):
+                    record = health.record_error("ai", provider="openai", at=at(index), observation_id=f"e{index}",
+                                                 kind=name, http_status=404 if index == 0 else None)
+                    original = record.legacy_error_name or record.error_type
+                    self.assertEqual(original, name)
+                stored = store.db.execute("SELECT payload FROM health_observations ORDER BY observed_at").fetchall()
+                self.assertEqual([json.loads(r[0])["error_type"] for r in stored],
+                                 ["MODEL_UNAVAILABLE", "CONNECTION_ERROR", "BILLING_OR_QUOTA"])
+            finally:
+                store.close()
 
     def test_t19_status_and_exception_classification(self):
         cases = {429: "RATE_LIMITED", 402: "BILLING_OR_QUOTA", 401: "AUTH_FAILURE", 403: "AUTH_FAILURE",
