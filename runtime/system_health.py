@@ -167,6 +167,9 @@ class ComponentHealth:
     error_type: str | None
     legacy_error_name: str | None
     sanitized_error_reason: str | None
+    # Latest sanitized evidence (e.g. data_state, model, free_bytes, future token/cost metadata).
+    # Defaulted only so Batch 1 sidecar payloads remain readable.
+    details: dict | None = None
 
     def to_json(self):
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
@@ -196,6 +199,31 @@ def _latency(value):
     return float(value)
 
 
+_DETAIL_KEY = re.compile(r"[a-z][a-z0-9_]{0,39}")
+MAX_DETAILS = 16
+STATE_ONLY_STATUSES = frozenset({HealthStatus.STALE, HealthStatus.UNKNOWN, HealthStatus.DEGRADED})
+
+
+def sanitize_details(details):
+    """Small flat mapping of scalar evidence; strings are sanitized like reasons. None stays None."""
+    if details is None:
+        return None
+    if not isinstance(details, dict) or len(details) > MAX_DETAILS:
+        raise ValueError(f"details: mapping of at most {MAX_DETAILS} entries required")
+    clean = {}
+    for key, value in details.items():
+        if not isinstance(key, str) or not _DETAIL_KEY.fullmatch(key):
+            raise ValueError("details keys: lowercase identifiers required")
+        if isinstance(value, str):
+            value = sanitize_reason(value)
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"details.{key}: finite number required")
+        elif value is not None and not isinstance(value, (bool, int, float)):
+            raise ValueError(f"details.{key}: scalar value required")
+        clean[key] = value
+    return dict(sorted(clean.items()))
+
+
 def _later(new, old):
     return old is None or parse_utc(new) >= parse_utc(old)
 
@@ -211,14 +239,30 @@ class SystemHealth:
         self.store, self.policy = store, policy
 
     # --- writes -------------------------------------------------------------------------------------
-    def record_success(self, component, *, at, observation_id, provider=None, latency_ms=None):
-        return self._observe("SUCCESS", component, provider, at, observation_id, latency_ms=_latency(latency_ms))
+    def record_success(self, component, *, at, observation_id, provider=None, latency_ms=None, details=None):
+        return self._observe("SUCCESS", component, provider, at, observation_id, latency_ms=_latency(latency_ms),
+                             **self._details(details))
 
     def record_error(self, component, *, at, observation_id, provider=None, kind=None, http_status=None,
-                     exception=None, reason=None, latency_ms=None):
+                     exception=None, reason=None, latency_ms=None, details=None):
         error_type, legacy = classify_provider_error(kind=kind, http_status=http_status, exception=exception)
         return self._observe("ERROR", component, provider, at, observation_id, latency_ms=_latency(latency_ms),
-                             error_type=error_type.value, legacy_error_name=legacy, reason=sanitize_reason(reason))
+                             error_type=error_type.value, legacy_error_name=legacy, reason=sanitize_reason(reason),
+                             **self._details(details))
+
+    def record_state(self, component, *, at, observation_id, status, reason, provider=None, details=None):
+        """A non-error condition (STALE, UNKNOWN or DEGRADED), e.g. stale data or NOT_CONFIGURED.
+        It never counts as an error and never changes consecutive_errors."""
+        status = HealthStatus(status)
+        if status not in STATE_ONLY_STATUSES:
+            raise ValueError("record_state accepts STALE, UNKNOWN or DEGRADED only")
+        return self._observe("STATE", component, provider, at, observation_id, status=status.value,
+                             reason=sanitize_reason(reason), **self._details(details))
+
+    @staticmethod
+    def _details(details):
+        details = sanitize_details(details)
+        return {} if details is None else {"details": details}  # Absent key keeps Batch 1 payloads identical.
 
     def record_heartbeat(self, component, *, at, observation_id, provider=None):
         """Liveness only; never changes success, error or progress facts."""
@@ -263,17 +307,21 @@ class SystemHealth:
                            progress_ref=observation["reference"])
         if not _later(at, record.last_checked_at):
             return record  # Out-of-order result: logged, never regresses newer facts.
+        details = observation.get("details")
+        if kind == "STATE":
+            return replace(record, status=observation["status"], last_checked_at=at, error_type=None,
+                           legacy_error_name=None, sanitized_error_reason=observation["reason"], details=details)
         if kind == "SUCCESS":
             return replace(record, status=HealthStatus.HEALTHY.value, last_success_at=at, last_checked_at=at,
                            consecutive_errors=0, latency_ms=observation["latency_ms"], error_type=None,
-                           legacy_error_name=None, sanitized_error_reason=None)
+                           legacy_error_name=None, sanitized_error_reason=None, details=details)
         errors = record.consecutive_errors + 1
         status = (HealthStatus.FAILED if errors >= self.policy.failed_after_consecutive_errors
                   else HealthStatus.DEGRADED)
         return replace(record, status=status.value, last_error_at=at, last_checked_at=at, consecutive_errors=errors,
                        latency_ms=observation["latency_ms"], error_type=observation["error_type"],
                        legacy_error_name=observation["legacy_error_name"],
-                       sanitized_error_reason=observation["reason"])
+                       sanitized_error_reason=observation["reason"], details=details)
 
     # --- reads (read-only projection for Batch 2/3) ---------------------------------------------------
     def _read(self, component, provider):
