@@ -2,37 +2,27 @@
 
 Status: **CLOSED / FROZEN**  
 Closure date: **2026-10-04**  
-Experiment window: **2026-09-21 through 2026-10-04**  
-Last market-active day: **2026-10-02**  
-Mode: **PAPER / DEMO ONLY**  
+Recorded experiment-start evidence: **2026-09-19T22:08:49Z**
+
+Last market-active day: **2026-10-02 — NOT VERIFIED**
+
+Mode: **PAPER / DEMO ONLY**
+
 Real execution: **DISABLED**
 
 ## 1. Executive result
 
-V1 achieved its purpose as a PAPER proof of concept. It demonstrated an end-to-end path from market data through multi-agent AI review, deterministic setup/risk gating, PAPER execution, persistence, duplicate-position protection, observability, and recovery from a real provider incident.
+V1 demonstrated a PAPER execution path, but this postmortem does not certify performance or production readiness. The recorded start evidence is `2026-09-19T22:08:49Z`; this is distinct from later operational observations and the document's closure date. The previously stated dates `2026-09-21` through `2026-10-04` are **NOT VERIFIED** as the official experiment window. `2026-10-04` is the document closure date, not evidence of trading activity on that date; `2026-10-02` as the last market-active day is also **NOT VERIFIED**.
 
-Final persisted PAPER snapshot:
+### Historical performance limitation — H02
 
-- Starting equity: **$10,000.00**
-- Final persisted equity: **$10,450.8623374**
-- Net mark-to-market result: **+$450.8623374**
-- Return: **+4.5086%**
-- Derived cumulative realized PnL at final snapshot: **+$510.3679735**
-- Final unrealized PnL: **-$59.5056361**
-- Positions open at frozen final mark: **2**
+Historical performance and trade-outcome metrics are **POTENTIALLY BIASED** by the H02 5-minute bar / Trade Manager sampling gap. Intermediate completed bars may not have been evaluated for open-position SL/TP management. Therefore persisted equity/PnL snapshots, exit outcomes, realized/unrealized PnL, returns, and any metrics derived from them must not be treated as a verified performance result without an appropriate historical market-data replay and reconciliation.
 
-The final positions were not synthetically liquidated on Sunday. V1 is frozen at the last persisted Friday market valuation to avoid contaminating the experiment with a weekend/non-market fill.
+The following previously stated final snapshot values are **NOT VERIFIED** by evidence cited in this postmortem and are withdrawn: final equity, net mark-to-market result, return, realized PnL, unrealized PnL, and final open-position count.
 
 ## 2. Execution evidence
 
-Known final ledger summary:
-
-- 8 PAPER orders
-- 4 filled
-- 4 rejected
-- 4 fills
-- 2 trades closed
-- 2 positions remaining open at the frozen final mark
+Final order/fill/trade/position counts are **NOT VERIFIED** by evidence cited in this postmortem and are withdrawn. Any later reconstruction must identify its database snapshot, timestamp, and deployed SHA, and must account for the H02 limitation.
 
 Important behaviors demonstrated:
 
@@ -44,7 +34,7 @@ Important behaviors demonstrated:
 
 ## 3. Audited natural-cycle window
 
-For the Slack DAILY_SUMMARY window from 2026-09-25 through 2026-10-02:
+The following figures were previously reported for Slack DAILY_SUMMARY messages from 2026-09-25 through 2026-10-02. They are **POTENTIALLY BIASED** by H02 and are not an independently reconciled full-window ledger:
 
 - Natural cycles: **672**
 - EURUSD: **336**
@@ -58,7 +48,7 @@ This is a conservative audited subset, not a claim that 672 is the complete cycl
 
 ## 4. Main incident — provider balance exhaustion
 
-The largest operational incident was a shared AI-provider failure affecting structure_ai, liquidity_ai, macro_ai and setup_reviewer_ai.
+The largest reported operational incident was an AI-provider balance/quota issue affecting structure_ai, liquidity_ai, macro_ai and setup_reviewer_ai.
 
 Observed evidence:
 
@@ -73,7 +63,7 @@ V2 consequence: provider usage, cost, balance/quota state and rate-limit health 
 
 ## 5. Secondary incident — rate limiting
 
-Two RATE_LIMITED warnings were observed on 2026-10-02. The system continued afterward, but V2 must distinguish transient rate limits from billing/quota exhaustion and from generic provider failures.
+The `RATE_LIMITED` event reported for 2026-10-02 was on the **market-data path**, not the AI-provider path. Do not attribute this event to an AI provider. Its exact provider/request attribution is **NOT VERIFIED** here. V2 must distinguish market-data rate limits from AI billing/quota exhaustion and other provider failures.
 
 Required behavior for V2:
 
@@ -149,6 +139,12 @@ V1 trading baseline SHA:
 
 `25726a1f11af8a95d0becdec695cdd267c505438`
 
+Known operational code lineage:
+
+`4428fc20d121d8b34ace9b97a0e87c4528f3d6f7` → `806af8504bafb6d0095fe742ae09e840f74e0e6d` → `25726a1f11af8a95d0becdec695cdd267c505438`
+
+The final SHA identifies the final operational baseline, not every historical run. Attribute an individual run only to its evidenced deployed SHA; where that per-run link is unavailable, record it as **NOT VERIFIED** rather than assigning the final SHA retroactively.
+
 Governance-only current main at closure:
 
 `1ab735ec4cda49fc082e58a325cf44528d04cde0`
@@ -159,17 +155,12 @@ Persistent runtime path:
 
 `/opt/render/project/src/data/runtime`
 
-Closure controls applied on Render:
-
-- `AI_FLOOR_CLOUD_RUNNER=0`
-- `AI_FLOOR_SCHEDULER=0`
-- Render auto-deploy remains off.
-- Service remains available for dashboard/read-only access.
+Render shutdown/closure changes and the service's current availability are **NOT VERIFIED** by evidence cited here. The freeze document records its own earlier activation settings, but that is not evidence of a later Render change or current state. No claim is made here that Render was shut down or that the service remains available.
 
 No V1 trading cycles should be intentionally generated after the freeze.
 
 ## 10. Final verdict
 
-**V1 VERDICT: SUCCESSFUL PAPER PROOF OF CONCEPT.**
+**V1 VERDICT: SUCCESSFUL PAPER PROOF OF CONCEPT (technical demonstration; not a profitability finding).**
 
 The correct next step is not to continue modifying the V1 experiment. V1 becomes immutable historical evidence. New product, strategy, observability and execution work belongs to V2 and must pass the V2 phase gates before PAPER validation is restarted.
