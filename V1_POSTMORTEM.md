@@ -18,23 +18,43 @@ V1 demonstrated a PAPER execution path, but this postmortem does not certify per
 
 Historical performance and trade-outcome metrics are **POTENTIALLY BIASED** by the H02 5-minute bar / Trade Manager sampling gap. Intermediate completed bars may not have been evaluated for open-position SL/TP management. Therefore persisted equity/PnL snapshots, exit outcomes, realized/unrealized PnL, returns, and any metrics derived from them must not be treated as a verified performance result without an appropriate historical market-data replay and reconciliation.
 
-The following previously stated final snapshot values are **NOT VERIFIED** by evidence cited in this postmortem and are withdrawn: final equity, net mark-to-market result, return, realized PnL, unrealized PnL, and final open-position count.
+**FINAL SUNDAY MARK / NOT VERIFIED:** final equity, net mark-to-market result, return, realized/unrealized PnL and final open-position count for the Sunday closure are not established. The certified Friday snapshot below records persisted V1 state at its own timestamp; it is not a Sunday liquidation or a verified performance result.
 
 ## 2. Execution evidence
 
-Final order/fill/trade/position counts are **NOT VERIFIED** by evidence cited in this postmortem and are withdrawn. Any later reconstruction must identify its database snapshot, timestamp, and deployed SHA, and must account for the H02 limitation.
+### CERTIFIED SNAPSHOT DATA
+
+**CERTIFIED SNAPSHOT — timestamp: 2026-10-02 16:29 UTC.** The native SQLite backup ran from `2026-10-02T16:29:38.641540Z` to `2026-10-02T16:29:39.876862Z`. Certification here refers to the preserved and reconciled snapshot, not profitability, a Sunday closing mark, or certification of the whole phase.
+
+| Persisted snapshot field | Value |
+| --- | --- |
+| Orders | 8 |
+| Fills | 4 |
+| Open positions | 2 |
+| Pending orders | 0 |
+| Closed trades | 2 |
+| Open XAUUSD LONG quantity | 1.798 troy ounces |
+| Open EURUSD SHORT quantity | 5715 EUR base units |
+| Realized PnL, paper-main (USD) | +510.36797350 (approximately +510.37) |
+
+Evidence: retained Phase 0 package `PHASE0_OWNER_CLOSURE_EVIDENCIA_2026-10-02.zip`, members `manifest.json`, `validation.json` (PASS; all 20 table digests match the source snapshot) and `PHASE0_RESUME_CLOSURE_DELTA_2026-10-02.md`, section 2. The separate private `PHASE0_SQLITE_BACKUP_2026-10-02.zip` contains `paper-backup.db`; its `paper_positions.payload` records confirm the two OPEN quantities/directions above, and `closed_trades` records the two closes. Units follow [EXPERIMENT_FREEZE.md](EXPERIMENT_FREEZE.md). These are retained evidence-package references, not repository-local download links; the private database is not published by this PR.
+
+- Backup archive SHA-256: `02399350c07c155d98377b64fb7ab7358b7136f6a1a71db0723918463328593d`.
+- SQLite image SHA-256: `dae095c7322e39497a4efeea5bb032757e993b0ca6e1247cd15685412353b4a0`.
+
+Both hashes and the cited records were checked against the retained package for this correction. The Phase 0 closure report associates this evidence with operational baseline `25726a1f11af8a95d0becdec695cdd267c505438`; this does not repair the per-run deployed-SHA gap (ISSUE-004). H02 remains applicable: the ledger proves what V1 recorded, while fills/closures and derived performance remain **POTENTIALLY BIASED** until replay/reconciliation. Friday snapshot counts must not be relabeled as Sunday final counts.
 
 Important behaviors demonstrated:
 
-1. EURUSD completed a profitable close during V1.
-2. A later fresh EURUSD SHORT passed VALID_SETUP, PLAN_READY and Risk APPROVED before PAPER execution.
-3. XAUUSD remained LONG at the final snapshot.
+1. The certified snapshot's closed-trade ledger records a positive EURUSD close; this is a recorded outcome subject to H02, not validated profitability.
+2. The certified snapshot records a later open EURUSD SHORT. The previously reported fresh-data / VALID_SETUP / PLAN_READY / Risk APPROVED sequence for that entry is **NOT VERIFIED** by the snapshot records cited here alone.
+3. XAUUSD was LONG at the certified Friday snapshot; its Sunday final state is **NOT VERIFIED**.
 4. Existing-position protection repeatedly prevented duplicate exposure using the path VALID_SETUP -> PLAN_READY -> APPROVED -> SKIPPED / EXISTING_POSITION.
 5. No real-broker execution path was enabled.
 
 ## 3. Audited natural-cycle window
 
-The following figures were previously reported for Slack DAILY_SUMMARY messages from 2026-09-25 through 2026-10-02. They are **POTENTIALLY BIASED** by H02 and are not an independently reconciled full-window ledger:
+The following figures were previously reported from Slack DAILY_SUMMARY messages for 2026-09-25 through 2026-10-02. Their limitation is that the cycle totals/classifications have not been fully reconciled against the canonical database/persistence for that window. H02 concerns bar sampling and trade outcomes; it is not evidence that these cycle counts or classifications are biased.
 
 - Natural cycles: **672**
 - EURUSD: **336**
@@ -71,7 +91,7 @@ Required behavior for V2:
 - bounded retries with backoff and jitter;
 - never convert provider instability into a real-execution bypass;
 - persist incident start/recovery timestamps;
-- alert only when actionable to avoid Slack noise.
+- alert only when actionable to avoid notification-channel noise (email primary in V2; Slack supplemental).
 
 ## 6. What V1 proved
 
@@ -117,15 +137,15 @@ These remain out of scope until explicitly designed and certified.
 - PAPER-first architecture;
 - deterministic risk layer after AI analysis;
 - persistent journal and run identifiers;
-- duplicate-position guard;
-- Slack as an exception/summary channel;
+- protection against UNAUTHORIZED additional exposure; V1 used `EXISTING_POSITION -> SKIP`, while V2 must `ANALYZE NEW SETUP` before applying approved exposure rules, without automatically authorizing another position, pyramiding, reversal or hedging (see V2_HANDOFF_REQUIREMENTS.md, P6);
+- exception/summary notifications, with email primary and Slack supplemental in V2;
 - persistent disk and SQLite for reproducible audit evidence.
 
 ### Improve
 
 - provider-cost and quota telemetry;
 - failure taxonomy;
-- anti-noise Slack policy;
+- anti-noise notification-channel policy;
 - end-to-end run dashboard;
 - position lifecycle and multi-target management;
 - explicit strategy-rule provenance;
