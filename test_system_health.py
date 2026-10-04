@@ -1,8 +1,13 @@
-"""SYSTEM HEALTH V2 core (Phase 1 / Batch 1): F01-T11 foundation, F01-T15..T19."""
+"""SYSTEM HEALTH V2 core (Phase 1 / Batch 1): F01-T11 sidecar foundation, F01-T15..T19."""
 import ast
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shutil
+import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -12,6 +17,12 @@ from runtime.system_health import (
     sanitize_reason,
 )
 from storage.database import SCHEMA_VERSION, Store
+from storage.health_store import HEALTH_APPLICATION_ID, HEALTH_SCHEMA_VERSION, HealthStore, HealthStoreError
+
+ROOT = Path(__file__).resolve().parent
+FROZEN_V1_BASELINE = "25726a1f11af8a95d0becdec695cdd267c505438"
+# sha256 of storage/database.py (LF-normalized) at the frozen V1 baseline 25726a1 (and at main 2075e7f).
+FROZEN_TRADING_DB_MODULE_SHA256 = "80f8c9ae037bb27dbcd45403ea33655b07dfed3983f3cb6637d8704e5ef4ebde"
 
 T = datetime(2026, 10, 5, 13, 0, tzinfo=timezone.utc)
 POLICY = HealthPolicy(failed_after_consecutive_errors=3, heartbeat_stale_after_seconds=60,
@@ -26,14 +37,14 @@ class HealthCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="v2-health-")
         self.addCleanup(self.tmp.cleanup)
-        self.path = Path(self.tmp.name) / "floor.db"
-        self.store = Store(self.path)
+        self.path = Path(self.tmp.name) / "system_health.db"
+        self.store = HealthStore(self.path)
         self.addCleanup(lambda: self.store.close())
         self.health = SystemHealth(self.store, POLICY)
 
     def reopen(self):
         self.store.close()
-        self.store = Store(self.path)
+        self.store = HealthStore(self.path)
         self.health = SystemHealth(self.store, POLICY)
 
     def count(self, table):
@@ -171,7 +182,7 @@ class TaxonomyTests(unittest.TestCase):
 
     def test_t19_original_provider_error_preserved_as_evidence(self):
         with tempfile.TemporaryDirectory(prefix="v2-health-ev-") as folder:
-            store = Store(Path(folder) / "floor.db")
+            store = HealthStore(Path(folder) / "system_health.db")
             try:
                 health = SystemHealth(store, POLICY)
                 for index, name in enumerate(("MODEL_UNAVAILABLE", "CONNECTION_ERROR", "QUOTA_EXHAUSTED")):
@@ -237,75 +248,148 @@ class SecretSafetyTests(HealthCase):
                 self.health.record_success(bad, at=at(0), observation_id="n")
 
 
-class MigrationTests(unittest.TestCase):
+def file_digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+class SidecarTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="v2-health-mig-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="v2-health-sidecar-")
         self.addCleanup(self.tmp.cleanup)
-        self.path = Path(self.tmp.name) / "floor.db"
+        self.dir = Path(self.tmp.name)
+        self.sidecar = self.dir / "system_health.db"
+        self.trading = self.dir / "trading_floor.db"
 
-    def make_v3(self):
-        store = Store(self.path)
+    def make_trading_db(self):
+        store = Store(self.trading)
         store.set_state("retained_v1_evidence", "unchanged")
-        store.db.execute("DROP TABLE component_health")
-        store.db.execute("DROP TABLE health_observations")
-        store.db.execute("UPDATE schema_info SET version=3")
         store.close()
+        return file_digest(self.trading)
 
-    def version(self, store):
-        return store.db.execute("SELECT version FROM schema_info").fetchone()[0]
-
-    def test_new_database_is_v4_with_health_tables(self):
-        store = Store(self.path)
+    def test_sidecar_creation_schema_and_version(self):
+        store = HealthStore(self.sidecar)
         self.addCleanup(store.close)
-        self.assertEqual((self.version(store), SCHEMA_VERSION), (4, 4))
-        SystemHealth(store, POLICY).record_success("ai", at=T, observation_id="o")
+        tables = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertEqual(tables, {"health_schema_info", "component_health", "health_observations"})
+        self.assertEqual(store.db.execute("SELECT version FROM health_schema_info").fetchall(),
+                         [(HEALTH_SCHEMA_VERSION,)])
+        self.assertEqual(store.db.execute("PRAGMA application_id").fetchone()[0], HEALTH_APPLICATION_ID)
 
-    def test_v3_upgrades_additively_and_preserves_evidence(self):
-        self.make_v3()
-        with self.assertRaisesRegex(RuntimeError, "upgrade required"):
-            Store(self.path, readonly=True)
-        store = Store(self.path)
-        self.addCleanup(store.close)
-        self.assertEqual(self.version(store), 4)
-        self.assertEqual(store.get_state("retained_v1_evidence"), "unchanged")
-        SystemHealth(store, POLICY).record_success("ai", at=T, observation_id="o")
+    def test_persistence_survives_reopen_and_read_only_open(self):
+        store = HealthStore(self.sidecar)
+        SystemHealth(store, POLICY).record_error("ai", provider="openai", at=T, observation_id="e1",
+                                                 kind="CONNECTION_ERROR")
         store.close()
-        reopened = Store(self.path, readonly=True)
+        reopened = HealthStore(self.sidecar, readonly=True)
         self.addCleanup(reopened.close)
-        self.assertEqual(SystemHealth(reopened, POLICY).get("ai").status, "HEALTHY")
+        record = SystemHealth(reopened, POLICY).get("ai", "openai")
+        self.assertEqual((record.error_type, record.consecutive_errors), ("CONNECTION_ERROR", 1))
+        with self.assertRaises(HealthStoreError):
+            SystemHealth(reopened, POLICY).record_success("ai", at=at(1), observation_id="s")
 
-    def test_migration_is_repeatable(self):
-        self.make_v3()
-        for _ in range(3):
-            Store(self.path).close()
-        store = Store(self.path)
-        self.addCleanup(store.close)
-        self.assertEqual(self.version(store), 4)
+    def test_trading_db_and_foreign_files_are_refused_and_never_written(self):
+        digest = self.make_trading_db()
+        for readonly in (False, True):
+            with self.subTest(readonly=readonly), self.assertRaisesRegex(HealthStoreError, "not a SYSTEM HEALTH"):
+                HealthStore(self.trading, readonly=readonly)
+        self.assertEqual(file_digest(self.trading), digest)
+        trading = Store(self.trading)
+        self.addCleanup(trading.close)
+        with self.assertRaisesRegex(ValueError, "sidecar"):
+            SystemHealth(trading, POLICY)
 
-    def test_incomplete_v4_rejected_without_mutation(self):
-        store = Store(self.path)
-        store.db.execute("DROP TABLE health_observations")
-        store.close()
-        with self.assertRaisesRegex(RuntimeError, "incomplete"):
-            Store(self.path)
-        import sqlite3
-        db = sqlite3.connect(self.path)
-        self.addCleanup(db.close)
-        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertNotIn("health_observations", tables)
-
-    def test_corrupt_v3_rejected_before_upgrade(self):
-        self.make_v3()
-        import sqlite3
-        db = sqlite3.connect(self.path)
-        db.execute("DROP TABLE macro_awareness")
+    def test_incompatible_and_corrupt_sidecars_fail_safely(self):
+        HealthStore(self.sidecar).close()
+        db = sqlite3.connect(self.sidecar)
+        db.execute("UPDATE health_schema_info SET version=99")
         db.commit()
         db.close()
-        with self.assertRaisesRegex(RuntimeError, "incomplete"):
-            Store(self.path)
-        db = sqlite3.connect(self.path)
-        self.addCleanup(db.close)
-        self.assertEqual(db.execute("SELECT version FROM schema_info").fetchone()[0], 3)  # Not mutated.
+        with self.assertRaisesRegex(HealthStoreError, "incompatible"):
+            HealthStore(self.sidecar)
+        garbage = self.dir / "garbage.db"
+        garbage.write_bytes(b"this is not a sqlite database at all" * 200)
+        before = file_digest(garbage)
+        with self.assertRaisesRegex(HealthStoreError, "unreadable"):
+            HealthStore(garbage)
+        self.assertEqual(file_digest(garbage), before)  # Never repaired or recreated.
+        with self.assertRaisesRegex(HealthStoreError, "missing"):
+            HealthStore(self.dir / "absent.db", readonly=True)
+
+    def test_corrupt_record_payload_fails_safely(self):
+        store = HealthStore(self.sidecar)
+        self.addCleanup(store.close)
+        health = SystemHealth(store, POLICY)
+        health.record_success("ai", at=T, observation_id="s1")
+        store.db.execute("UPDATE component_health SET payload=?", ('{"status":"ONLINE"}',))
+        with self.assertRaisesRegex(HealthStoreError, "corrupt"):
+            health.get("ai")
+        with self.assertRaisesRegex(HealthStoreError, "corrupt"):
+            health.record_success("ai", at=at(1), observation_id="s2")
+        self.assertEqual(store.db.execute("SELECT count(*) FROM health_observations").fetchone()[0], 1)
+
+    def test_sidecar_use_and_failure_never_mutate_trading_db(self):
+        digest = self.make_trading_db()
+        store = HealthStore(self.sidecar)
+        health = SystemHealth(store, POLICY)
+        for index in range(5):
+            health.record_error("market_data", provider="twelve_data", at=at(index), observation_id=f"e{index}",
+                                kind="RATE_LIMITED")
+        health.record_heartbeat("runner", at=at(5), observation_id="hb")
+        store.db.execute("UPDATE component_health SET payload='broken'")
+        with self.assertRaises(HealthStoreError):
+            health.get("market_data", "twelve_data")
+        store.close()
+        self.sidecar.write_bytes(b"corrupted")
+        with self.assertRaises(HealthStoreError):
+            HealthStore(self.sidecar)
+        self.assertEqual(file_digest(self.trading), digest)
+        trading = Store(self.trading, readonly=True)
+        self.addCleanup(trading.close)
+        self.assertEqual(trading.db.execute("SELECT version FROM schema_info").fetchone()[0], 3)
+        self.assertEqual(trading.get_state("retained_v1_evidence"), "unchanged")
+        tables = {r[0] for r in trading.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertFalse(tables & {"component_health", "health_observations", "health_schema_info"})
+
+
+class TradingDatabaseCompatibilityTests(unittest.TestCase):
+    def test_trading_db_module_is_byte_identical_to_frozen_v1_baseline(self):
+        source = (ROOT / "storage" / "database.py").read_bytes().replace(b"\r\n", b"\n")
+        self.assertEqual(hashlib.sha256(source).hexdigest(), FROZEN_TRADING_DB_MODULE_SHA256)
+        self.assertEqual(SCHEMA_VERSION, 3)
+
+    def test_frozen_v1_baseline_code_opens_trading_db_after_sidecar_use(self):
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("git unavailable; covered by the byte-identity test")
+        with tempfile.TemporaryDirectory(prefix="v2-health-v1-") as folder:
+            folder = Path(folder)
+            archive = subprocess.run([git, "archive", "--format=tar", FROZEN_V1_BASELINE, "storage", "execution"],
+                                     cwd=ROOT, capture_output=True, timeout=60)
+            if archive.returncode != 0:
+                self.skipTest("frozen V1 baseline commit not available in this checkout")
+            frozen = folder / "frozen"
+            frozen.mkdir()
+            import io
+            import tarfile
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+                tar.extractall(frozen, filter="data")
+            trading = folder / "trading_floor.db"
+            store = Store(trading)
+            store.set_state("retained_v1_evidence", "unchanged")
+            store.close()
+            health_store = HealthStore(folder / "system_health.db")
+            SystemHealth(health_store, POLICY).record_error("ai", at=T, observation_id="e", kind="MODEL_UNAVAILABLE")
+            health_store.close()
+            code = ("import sys; from storage.database import Store, SCHEMA_VERSION\n"
+                    "for ro in (True, False):\n"
+                    "    s = Store(sys.argv[1], readonly=ro)\n"
+                    "    assert s.get_state('retained_v1_evidence') == 'unchanged'\n"
+                    "    print(SCHEMA_VERSION, s.db.execute('SELECT version FROM schema_info').fetchone()[0])\n"
+                    "    s.close()")
+            result = subprocess.run([sys.executable, "-B", "-c", code, str(trading)], cwd=frozen,
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.split(), ["3", "3", "3", "3"])
 
 
 class IsolationTests(unittest.TestCase):
@@ -324,7 +408,7 @@ class IsolationTests(unittest.TestCase):
     def test_record_round_trip(self):
         record = module.empty_health("ai", "openai")
         self.assertEqual(ComponentHealth.from_json(record.to_json()), record)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(HealthStoreError):
             ComponentHealth.from_json(record.to_json().replace("UNKNOWN", "ONLINE"))
 
 

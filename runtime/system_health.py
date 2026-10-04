@@ -7,6 +7,9 @@ calls providers, or touches setups, AI, risk, orders, positions or execution.
 LIVENESS != PROGRESS (H04): ``heartbeat_at`` only proves the process is alive;
 ``progress_at``/``progress_stage``/``progress_ref`` record the latest completed
 pipeline step. A fresh heartbeat with stale progress projects STALE, never HEALTHY.
+
+Persistence is the isolated SYSTEM HEALTH sidecar (storage/health_store.py), never
+trading_floor.db. Callers must treat any health failure as non-fatal to trading.
 """
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
@@ -17,6 +20,7 @@ import math
 import re
 
 from storage.codec import parse_utc, utc
+from storage.health_store import HealthStore, HealthStoreError
 
 
 class HealthStatus(str, Enum):
@@ -169,10 +173,13 @@ class ComponentHealth:
 
     @classmethod
     def from_json(cls, text):
-        record = cls(**json.loads(text))
-        HealthStatus(record.status)
-        if record.error_type is not None:
-            ProviderErrorType(record.error_type)
+        try:
+            record = cls(**json.loads(text))
+            HealthStatus(record.status)
+            if record.error_type is not None:
+                ProviderErrorType(record.error_type)
+        except (TypeError, ValueError) as exc:
+            raise HealthStoreError("corrupt SYSTEM HEALTH record") from exc
         return record
 
 
@@ -197,6 +204,8 @@ class SystemHealth:
     """Persisted health core. Every update is idempotent by ``observation_id``."""
 
     def __init__(self, store, policy):
+        if not isinstance(store, HealthStore):
+            raise ValueError("SYSTEM HEALTH sidecar (HealthStore) required; the trading DB is never used")
         if not isinstance(policy, HealthPolicy):
             raise ValueError("HealthPolicy required")
         self.store, self.policy = store, policy
