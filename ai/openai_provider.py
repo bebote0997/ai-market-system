@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 from ai.contracts import AIResponse, VALID_RECOMMENDATIONS, evidence_ids
 from ai.provider import AIProvider
 from ai import prompts
+from runtime import health_hooks
 from runtime.retry_after import retry_after_seconds
 
 
@@ -146,6 +147,20 @@ class OpenAIProvider(AIProvider):
         raise AssertionError("unreachable")
 
     def generate(self, request):
+        """Unchanged provider call plus a passive SYSTEM HEALTH observation (V2 Phase 1).
+        The original result is returned and the original exception re-raised unchanged."""
+        started = time.perf_counter()
+        try:
+            response = self._generate_unobserved(request)
+        except Exception as error:
+            health_hooks.emit("provider_call_observed", provider=self, request=request, error=error,
+                              latency_ms=(time.perf_counter() - started) * 1000)
+            raise
+        health_hooks.emit("provider_call_observed", provider=self, request=request, response=response,
+                          latency_ms=(time.perf_counter() - started) * 1000)
+        return response
+
+    def _generate_unobserved(self, request):
         role_prompt = _PROMPTS.get(request.role)
         if role_prompt is None:
             raise ValueError("unsupported AI role")

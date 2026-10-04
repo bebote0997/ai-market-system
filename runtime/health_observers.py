@@ -8,7 +8,9 @@ None of these is wired into the runtime cycle in Phase 1 / Batch 2.
 """
 import logging
 
-from runtime.system_health import HealthStatus
+import hashlib
+
+from runtime.system_health import ComponentErrorType, HealthStatus, SystemHealth
 
 LOG = logging.getLogger(__name__)
 TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
@@ -73,7 +75,7 @@ def observe_risk_evaluation(health, *, at, observation_id, decision=None, except
             reason = (f"risk exception {type(exception).__name__}" if exception is not None
                       else f"invalid risk decision status {status!r}")
             health.record_error("risk_engine", at=at, observation_id=observation_id, latency_ms=latency_ms,
-                                exception=exception, reason=reason)
+                                component_error=ComponentErrorType.RISK_ENGINE_ERROR, reason=reason)
     return safe_observe(action)
 
 
@@ -87,7 +89,8 @@ def observe_paper_operation(health, *, at, observation_id, operation, exception=
                                   latency_ms=latency_ms, details=details)
         else:
             health.record_error("paper_broker", provider="paper", at=at, observation_id=observation_id,
-                                exception=exception, latency_ms=latency_ms, details=details,
+                                component_error=ComponentErrorType.PAPER_BROKER_ERROR, latency_ms=latency_ms,
+                                details=details,
                                 reason=f"paper operation {operation} raised {type(exception).__name__}")
     return safe_observe(action)
 
@@ -96,3 +99,64 @@ def observe_scheduler_condition(health, *, at, observation_id, status, reason):
     """F01-T01: an explicit non-error scheduler condition (e.g. STALE progress) seen by a supervisor."""
     return safe_observe(lambda: health.record_state("scheduler", at=at, observation_id=observation_id,
                                                     status=HealthStatus(status), reason=reason))
+
+
+def _oid(*parts):
+    return "hook:" + hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:40]
+
+
+def _compact(moment):
+    return moment.strftime("%Y%m%dT%H%M%SZ")
+
+
+class SystemHealthSink:
+    """Receives runtime.health_hooks events and records them in the SYSTEM HEALTH sidecar.
+
+    Install with runtime.health_hooks.install_health_sink(SystemHealthSink(health)). Any failure
+    here is contained by health_hooks.emit; nothing is returned to the business code.
+    """
+
+    def __init__(self, health):
+        if not isinstance(health, SystemHealth):
+            raise ValueError("SystemHealth required")
+        self.health = health
+
+    def market_data_observed(self, *, symbol, slot, snapshot, data_state, provider_mode):
+        """F01-T02: per-timeframe latest bar of the snapshot the runtime ALREADY loaded and judged."""
+        provider = str(provider_mode or "unknown")
+        frames = snapshot if isinstance(snapshot, dict) else {}
+        for timeframe in sorted(frames):
+            index = getattr(frames[timeframe], "index", None)
+            latest = None if index is None or len(index) == 0 else index.max().to_pydatetime()
+            component = f"market_data:{symbol}:{timeframe}"
+            details = {"symbol": symbol, "timeframe": timeframe, "data_state": data_state, "observed_at": slot.isoformat(),
+                       "latest_bar_timestamp": latest.isoformat() if latest is not None else None}
+            oid = _oid("market", symbol, timeframe, slot.isoformat(), data_state, details["latest_bar_timestamp"])
+            if data_state == "CURRENT":
+                self.health.record_success(component, provider=provider, at=slot, observation_id=oid, details=details)
+            else:
+                self.health.record_state(component, provider=provider, at=slot, observation_id=oid, details=details,
+                                         status=HealthStatus.STALE if data_state == "STALE_DATA" else HealthStatus.UNKNOWN,
+                                         reason=data_state)
+            if latest is not None:
+                self.health.record_progress(component, provider=provider, at=latest, observation_id=_oid("bar", oid),
+                                            stage="bar_received", reference=_compact(latest))
+
+    def provider_call_observed(self, *, provider, request, latency_ms, response=None, error=None):
+        """F01-T04: one real provider call's outcome; no call is made and nothing is returned."""
+        metadata = dict(getattr(provider, "metadata", {}) or {})
+        name = str(metadata.get("provider") or "unknown")
+        usage = (getattr(provider, "last_usage", None) or {}) if error is None else {}  # Never stale usage on error.
+        details = {"model": metadata.get("model"), "agent": getattr(request, "agent_name", None),
+                   **{key: usage[key] for key in TOKEN_KEYS if isinstance(usage.get(key), int)}}
+        at = request.as_of
+        outcome = "OK" if error is None else f"ERROR:{getattr(error, 'kind', None) or type(error).__name__}"
+        oid = _oid("provider", name, getattr(request, "run_id", None), details["agent"], outcome, latency_ms)
+        if error is None:
+            self.health.record_success("ai_provider", provider=name, at=at, observation_id=oid, latency_ms=latency_ms,
+                                       details=details)
+        else:
+            kind = getattr(error, "kind", None)
+            self.health.record_error("ai_provider", provider=name, at=at, observation_id=oid, latency_ms=latency_ms,
+                                     kind=kind, http_status=getattr(error, "http_status", None), exception=error,
+                                     reason=f"{details['agent']}: {kind or type(error).__name__}", details=details)

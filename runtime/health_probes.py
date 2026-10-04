@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import shutil
 
-from runtime.system_health import HealthStatus, SystemHealth, sanitize_reason
+from runtime.system_health import ComponentErrorType, HealthStatus, SystemHealth, sanitize_reason
 from storage.codec import parse_utc
 from storage.database import SCHEMA_VERSION, Store
 from storage.health_store import HealthStore
@@ -71,6 +71,7 @@ def probe_scheduler(trading, health):
                                   details={**details, "final_status": run["final_status"]})
         else:
             health.record_error("scheduler", at=at, observation_id=oid, latency_ms=latency,
+                                component_error=ComponentErrorType.SCHEDULER_ERROR,
                                 reason=f"run {run['status']}: {run['error'] or 'no error recorded'}",
                                 details={**details, "final_status": run["final_status"]})
 
@@ -185,6 +186,7 @@ def probe_risk(trading, health):
             health.record_success("risk_engine", at=at, observation_id=oid, details=details)
         else:
             health.record_error("risk_engine", at=at, observation_id=oid, details=details,
+                                component_error=ComponentErrorType.RISK_ENGINE_ERROR,
                                 reason=f"unexpected risk decision status {row['status']}")
 
 
@@ -202,6 +204,7 @@ def probe_paper_broker(trading, health):
                    "real_execution": "DISABLED"}
         if row["event_type"] == "STATE_INCONSISTENCY" or reason in PAPER_OPERATIONAL_REJECTIONS:
             health.record_error("paper_broker", provider="paper", at=at, observation_id=oid, details=details,
+                                component_error=ComponentErrorType.PAPER_BROKER_ERROR,
                                 reason=f"{row['event_type']}: {reason or 'operational failure'}")
         else:
             health.record_success("paper_broker", provider="paper", at=at, observation_id=oid, details=details)
@@ -220,10 +223,12 @@ def probe_trading_db(path, health, *, now):
         finally:
             trading.close()
     except Exception as exc:  # noqa: BLE001 - observational boundary
-        health.record_error("trading_db", at=now, observation_id=oid, reason=f"open failed: {type(exc).__name__}: {exc}")
+        health.record_error("trading_db", at=now, observation_id=oid, component_error=ComponentErrorType.DATABASE_ERROR,
+                            reason=f"open failed: {type(exc).__name__}: {exc}")
         return None
     if check != "ok" or version != SCHEMA_VERSION:
         health.record_error("trading_db", at=now, observation_id=oid, details=details,
+                            component_error=ComponentErrorType.DATABASE_ERROR,
                             reason="integrity check failed" if check != "ok" else "unexpected schema version")
     else:
         health.record_success("trading_db", at=now, observation_id=oid, details=details)
@@ -254,10 +259,12 @@ def probe_disk(runtime_dir, health, *, now, expected_files=("trading_floor.db",)
                    "free_bytes": usage.free, "total_bytes": usage.total,
                    "expected_files_present": all((path / name).is_file() for name in expected_files)}
     except Exception as exc:  # noqa: BLE001 - observational boundary
-        health.record_error("persistent_disk", at=now, observation_id=oid, reason=f"{type(exc).__name__}: {exc}")
+        health.record_error("persistent_disk", at=now, observation_id=oid, component_error=ComponentErrorType.DISK_ERROR,
+                            reason=f"{type(exc).__name__}: {exc}")
         return None
     if not (details["readable"] and details["writable"]):
-        health.record_error("persistent_disk", at=now, observation_id=oid, details=details, reason="path not accessible")
+        health.record_error("persistent_disk", at=now, observation_id=oid, details=details, reason="path not accessible",
+                            component_error=ComponentErrorType.DISK_ERROR)
     elif not details["expected_files_present"]:
         health.record_state("persistent_disk", at=now, observation_id=oid, status=HealthStatus.DEGRADED,
                             reason="expected runtime files not visible", details=details)
@@ -302,6 +309,15 @@ def _isolated(probe, *args, **kwargs):
         return sanitize_reason(f"{type(exc).__name__}: {exc}")
 
 
+PROJECTION_SCHEMA_VERSION = "v2.system_health_projection.1"
+
+
+def _envelope(components, now):
+    return {"schema_version": PROJECTION_SCHEMA_VERSION, "generated_at": now.isoformat(), "mode": "PAPER",
+            "real_execution": "DISABLED", "components": components, "overall_status": None,
+            "overall_policy": "OWNER_DECISION_REQUIRED"}
+
+
 def health_projection(*, health_db_path, policy, now):
     """Stable, sanitized, read-only view for the Batch 3 dashboard. Never writes anything.
 
@@ -311,7 +327,7 @@ def health_projection(*, health_db_path, policy, now):
     try:
         store = HealthStore(health_db_path, readonly=True)
     except Exception:  # noqa: BLE001 - reported by the health_sidecar entry above
-        return {"components": components, "overall_status": None, "overall_policy": "OWNER_DECISION_REQUIRED"}
+        return _envelope(components, now)
     try:
         health = SystemHealth(store, policy)
         for record in health.records():
@@ -325,10 +341,11 @@ def health_projection(*, health_db_path, policy, now):
                 "progress_at": data["progress_at"], "progress_stage": data["progress_stage"],
                 "consecutive_errors": data["consecutive_errors"], "latency_ms": data["latency_ms"],
                 "error_type": data["error_type"], "legacy_error_name": data["legacy_error_name"],
-                "reason": data["sanitized_error_reason"], "details": data["details"]})
+                "reason": data["sanitized_error_reason"], "sanitized_error_reason": data["sanitized_error_reason"],
+                "details": data["details"]})
     finally:
         store.close()
-    return {"components": components, "overall_status": None, "overall_policy": "OWNER_DECISION_REQUIRED"}
+    return _envelope(components, now)
 
 
 __all__ = ["collect", "health_projection", "observation_id", "sidecar_status"]

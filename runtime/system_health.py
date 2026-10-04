@@ -45,6 +45,17 @@ class ProviderErrorType(str, Enum):
     UNKNOWN_PROVIDER_FAILURE = "UNKNOWN_PROVIDER_FAILURE"
 
 
+class ComponentErrorType(str, Enum):
+    """Operational failures of NON-provider components; kept distinct from ProviderErrorType."""
+    SCHEDULER_ERROR = "SCHEDULER_ERROR"
+    RISK_ENGINE_ERROR = "RISK_ENGINE_ERROR"
+    PAPER_BROKER_ERROR = "PAPER_BROKER_ERROR"
+    DATABASE_ERROR = "DATABASE_ERROR"
+    DISK_ERROR = "DISK_ERROR"
+    EMAIL_FAILURE = "EMAIL_FAILURE"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
 # Names emitted by existing V1 providers/notifications, normalized here at the observability
 # boundary only. Provider behavior is unchanged; the original name is preserved on the record.
 LEGACY_ERROR_NAMES = {
@@ -54,6 +65,8 @@ LEGACY_ERROR_NAMES = {
     "ACCESS_DENIED": ProviderErrorType.AUTH_FAILURE,
     "INVALID_RESPONSE": ProviderErrorType.INVALID_RESPONSE,
     "TIMEOUT": ProviderErrorType.TIMEOUT,
+    "INVALID_STRUCTURED_RESPONSE": ProviderErrorType.INVALID_RESPONSE,  # OpenAIProvider schema failure.
+    "INCOMPLETE_RESPONSE": ProviderErrorType.INVALID_RESPONSE,  # OpenAIProvider non-completed response.
     "MODEL_UNAVAILABLE": ProviderErrorType.MODEL_UNAVAILABLE,
     "CONNECTION_ERROR": ProviderErrorType.CONNECTION_ERROR,
     # Ambiguous legacy names: no evidence of a narrower class.
@@ -179,7 +192,7 @@ class ComponentHealth:
         try:
             record = cls(**json.loads(text))
             HealthStatus(record.status)
-            if record.error_type is not None:
+            if record.error_type is not None and record.error_type not in ComponentErrorType.__members__:
                 ProviderErrorType(record.error_type)
         except (TypeError, ValueError) as exc:
             raise HealthStoreError("corrupt SYSTEM HEALTH record") from exc
@@ -244,8 +257,13 @@ class SystemHealth:
                              **self._details(details))
 
     def record_error(self, component, *, at, observation_id, provider=None, kind=None, http_status=None,
-                     exception=None, reason=None, latency_ms=None, details=None):
-        error_type, legacy = classify_provider_error(kind=kind, http_status=http_status, exception=exception)
+                     exception=None, reason=None, latency_ms=None, details=None, component_error=None):
+        """Provider errors are classified with ProviderErrorType; a non-provider component passes
+        ``component_error`` (ComponentErrorType) instead and is never given a provider label."""
+        if component_error is not None:
+            error_type, legacy = ComponentErrorType(component_error), None
+        else:
+            error_type, legacy = classify_provider_error(kind=kind, http_status=http_status, exception=exception)
         return self._observe("ERROR", component, provider, at, observation_id, latency_ms=_latency(latency_ms),
                              error_type=error_type.value, legacy_error_name=legacy, reason=sanitize_reason(reason),
                              **self._details(details))
