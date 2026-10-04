@@ -9,8 +9,17 @@ import uuid
 
 from storage.codec import paper_decode, paper_encode, public_metadata, safe_json, utc, parse_utc
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
+# V2 SYSTEM HEALTH (Phase 1): current per-component health + idempotent observation log.
+HEALTH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS component_health(
+  component TEXT NOT NULL, provider TEXT NOT NULL, payload TEXT NOT NULL,
+  PRIMARY KEY(component,provider));
+CREATE TABLE IF NOT EXISTS health_observations(
+  observation_id TEXT PRIMARY KEY, component TEXT NOT NULL, provider TEXT NOT NULL,
+  observed_at TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL);
+"""
 PHASE8_SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_deliveries(
   event_id TEXT PRIMARY KEY, status TEXT NOT NULL, attempted_at TEXT NOT NULL,
@@ -59,7 +68,7 @@ CREATE TABLE IF NOT EXISTS run_metadata(slot_key TEXT PRIMARY KEY,git_commit TEX
   config_fingerprint TEXT NOT NULL,experiment_id TEXT,starting_equity REAL NOT NULL,
   schema_version INTEGER NOT NULL, FOREIGN KEY(slot_key) REFERENCES runs(slot_key));
 CREATE TABLE IF NOT EXISTS symbol_locks(symbol TEXT PRIMARY KEY,slot_key TEXT NOT NULL);
-""" + PHASE7_SCHEMA + PHASE8_SCHEMA
+""" + PHASE7_SCHEMA + PHASE8_SCHEMA + HEALTH_SCHEMA
 
 
 class Store:
@@ -83,13 +92,21 @@ class Store:
         version_table = self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_info'").fetchone()
         if version_table:
             rows = self.db.execute("SELECT version FROM schema_info").fetchall()
-            if len(rows) != 1 or rows[0][0] not in {1, 2, SCHEMA_VERSION}:
+            if len(rows) != 1 or rows[0][0] not in {1, 2, 3, SCHEMA_VERSION}:
                 raise RuntimeError("incompatible database schema")
             required = {"runs", "agent_decisions", "setups", "risk_decisions", "paper_accounts",
                         "paper_orders", "paper_fills", "paper_positions", "closed_trades",
                         "journal", "system_state", "ui_snapshots", "run_metadata", "symbol_locks"}
             actual = {r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not required <= actual:
+                raise RuntimeError("incomplete database schema")
+            # Validate the stored version's tables BEFORE any upgrade, so nothing is mutated on failure.
+            if rows[0][0] >= 2:
+                if not {"review_reports", "notification_events"} <= actual:
+                    raise RuntimeError("incomplete database schema")
+            if rows[0][0] >= 3 and not {"notification_deliveries", "macro_awareness"} <= actual:
+                raise RuntimeError("incomplete database schema")
+            if rows[0][0] == SCHEMA_VERSION and not {"component_health", "health_observations"} <= actual:
                 raise RuntimeError("incomplete database schema")
             if rows[0][0] == 1:
                 if self.readonly:
@@ -100,12 +117,12 @@ class Store:
                 if self.readonly:
                     raise RuntimeError("database schema upgrade required")
                 self.db.executescript("BEGIN IMMEDIATE;" + PHASE8_SCHEMA +
+                                      "UPDATE schema_info SET version=3;COMMIT;")
+            if rows[0][0] <= 3:
+                if self.readonly:
+                    raise RuntimeError("database schema upgrade required")
+                self.db.executescript("BEGIN IMMEDIATE;" + HEALTH_SCHEMA +
                                       f"UPDATE schema_info SET version={SCHEMA_VERSION};COMMIT;")
-            if rows[0][0] >= 2:
-                if not {"review_reports", "notification_events"} <= actual:
-                    raise RuntimeError("incomplete database schema")
-            if rows[0][0] == SCHEMA_VERSION and not {"notification_deliveries", "macro_awareness"} <= actual:
-                raise RuntimeError("incomplete database schema")
         elif self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone():
             raise RuntimeError("unversioned database schema")
         else:
