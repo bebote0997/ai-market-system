@@ -1,5 +1,28 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 Batch 1 final store hardening (M1 URI alias, M2 effective schema)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `dd9459f137b06589e869e847387afed1e12ada35`; final SHA = the commit that adds this entry.
+  Independent re-review of `dd9459f`: M3 closed; M1 and M2 reopened (MEDIUM).
+- M1: reproduced `trading_floor.db#evidence` initializing an empty protected `trading_floor.db`
+  (raw path interpolated into a SQLite URI). `EvidenceStore` now resolves the path once, validates
+  that target and opens exactly it: plain filename for read-write, `Path.as_uri()` (percent-encoded)
+  for read-only; SQLite's `PRAGMA database_list` must report the same target before any write.
+- M2: the schema contract now also refuses partial/extra UNIQUE indexes, partial or expression
+  indexes, hidden/generated columns, foreign keys, affinity changes and (by a literal/comment-free
+  keyword scan of the table definitions) CHECK, ON CONFLICT, non-BINARY COLLATE, STRICT,
+  WITHOUT ROWID, AUTOINCREMENT. Harmless syntactic variants still open.
+- Tests: focused 47/47 (was 43). Full suite 656/656 pass, 0 failed, 0 errors, 0 skipped. Scratch
+  mutation checks 12/12 detected (raw URI, fragment bypass, partial indexes, CHECK, extra UNIQUE,
+  triggers, collation, ON CONFLICT, generated columns, unsafe non-unique indexes, foreign keys,
+  affinity).
+- Unchanged: M3 crash tests, owner decisions A–E, Batch 2 trading-side idempotency gate (HIGH,
+  OPEN; pending-order gate reason reconfirmed), H02 **PARTIAL**. `storage/database.py` unchanged,
+  trading DB schema 3, no runtime wiring, no trading/risk/Paper Broker/provider/freshness/session/
+  cadence change. REAL EXECUTION = DISABLED; NAS100 = OFF. No deploy, no merge, no PR, Batch 2 not
+  started. Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED**.
+
 ## 2026-10-05 — V2 Phase 2 Batch 1 review fixes (M1–M3, decisions A–E)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

@@ -555,7 +555,7 @@ class PersistenceTests(unittest.TestCase):
 
     def assert_refused_unchanged(self, path):
         listing = sorted(p.name for p in path.parent.iterdir())
-        before = digest(path) if path.is_file() else None
+        before = (digest(path), path.stat().st_size) if path.is_file() else None
         for readonly in (False, True):
             try:
                 store = EvidenceStore(path, readonly=readonly)
@@ -563,7 +563,7 @@ class PersistenceTests(unittest.TestCase):
                 continue
             store.close()
             self.fail(f"{path.name} was accepted as a MARKET EVIDENCE database (readonly={readonly})")
-        self.assertEqual(digest(path) if path.is_file() else None, before)  # Byte-for-byte unchanged.
+        self.assertEqual((digest(path), path.stat().st_size) if path.is_file() else None, before)  # Unchanged.
         self.assertEqual(sorted(p.name for p in path.parent.iterdir()), listing)  # No journal/WAL/new file.
 
     def test_m1_trading_db_refused_by_name_and_identity_before_any_write(self):
@@ -614,6 +614,76 @@ class PersistenceTests(unittest.TestCase):
                 self.addCleanup(reopened.close)
                 self.assertEqual(MarketEvidenceEngine(reopened).committed("XAUUSD", "5m"), (bar(0),))
 
+    @staticmethod
+    def sqlite_target(store):
+        return Path(next(row[2] for row in store.db.execute("PRAGMA database_list") if row[1] == "main")).resolve()
+
+    def test_m1_uri_significant_path_never_reaches_the_protected_trading_db(self):
+        # Independent reproduction: "trading_floor.db#evidence" was validated as another name but
+        # SQLite parsed "#evidence" as a URI fragment and initialized the empty trading DB.
+        folder = self.dir / "uri"
+        (folder / "nested").mkdir(parents=True)
+        protected = folder / "trading_floor.db"
+        protected.write_bytes(b"")
+        before = (protected.stat().st_size, digest(protected))
+        listing = set(p.name for p in folder.iterdir())
+        requested = set()
+        for suffix in ("#evidence", "#", "?mode=rwc", "?mode=ro#x", "%23evidence", "%3Fmode=rwc", " #x",
+                       "#é市場"):
+            for relative in (f"trading_floor.db{suffix}", f"nested/../trading_floor.db{suffix}"):
+                path = folder / relative
+                for readonly in (False, True):
+                    with self.subTest(path=relative, readonly=readonly):
+                        try:
+                            store = EvidenceStore(path, readonly=readonly)
+                        except EvidenceStoreError:
+                            continue  # Refused (e.g. '?' is not a valid Windows filename, or missing).
+                        try:  # Accepted only as the literal, distinct file that was validated.
+                            self.assertEqual(self.sqlite_target(store), path.resolve())
+                            self.assertNotEqual(path.resolve().name, protected.name)
+                            requested.add(path.resolve().name)
+                        finally:
+                            store.close()
+        self.assertEqual((protected.stat().st_size, digest(protected)), before)  # Never opened/initialized.
+        created = set(p.name for p in folder.iterdir()) - listing
+        self.assertEqual(created, requested)  # Only the literal requested files; no journal/WAL/SHM/side file.
+        self.assertFalse({n for n in created if n.endswith(("-journal", "-wal", "-shm"))})
+
+    def test_m1_legitimate_uri_significant_filenames_open_their_own_file(self):
+        folder = self.dir / "legit"
+        folder.mkdir()
+        names = ["market#evidence.db", "market%23evidence.db", "market%2523evidence.db", "market evidence.db",
+                 "market?evidence.db", "évidence_市場.db"]
+        usable = []
+        for name in names:  # Filenames the platform cannot represent (e.g. '?' on Windows) must fail closed.
+            probe = folder / "probe"
+            probe.mkdir(exist_ok=True)
+            try:
+                (probe / name).write_bytes(b"")
+                (probe / name).unlink()
+                usable.append(name)
+            except OSError:
+                with self.assertRaises(EvidenceStoreError):
+                    EvidenceStore(folder / name)
+                self.assertFalse((folder / name).exists())
+        self.assertIn("market#evidence.db", usable)
+        for index, name in enumerate(usable):  # Distinct close per file: any aliasing would show up.
+            store = EvidenceStore(folder / name)
+            self.assertEqual(self.sqlite_target(store), (folder / name).resolve())
+            MarketEvidenceEngine(store).ingest("XAUUSD", "5m", [bar(0, close=200.0 + index)], as_of=after(0))
+            store.close()
+        for index, name in enumerate(usable):
+            for readonly in (False, True):
+                with self.subTest(name=name, readonly=readonly):
+                    store = EvidenceStore(folder / name, readonly=readonly)
+                    try:
+                        self.assertEqual(self.sqlite_target(store), (folder / name).resolve())
+                        self.assertEqual(MarketEvidenceEngine(store).committed("XAUUSD", "5m"),
+                                         (bar(0, close=200.0 + index),))
+                    finally:
+                        store.close()
+        self.assertEqual(sorted(p.name for p in folder.iterdir() if p.is_file()), sorted(usable))
+
     SCHEMA = {
         "market_evidence": "symbol TEXT NOT NULL, timeframe TEXT NOT NULL, bar_start TEXT NOT NULL, "
                            "stream_seq INTEGER NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, "
@@ -662,15 +732,72 @@ class PersistenceTests(unittest.TestCase):
             self.assert_refused_unchanged(self.crafted(
                 "trigger.db", "CREATE TRIGGER t AFTER INSERT ON market_evidence BEGIN DELETE FROM market_evidence; END;"))
 
+    def test_m2_behavior_changing_constraints_are_refused_on_open_unchanged(self):
+        # Each schema identifies itself as a sidecar but can make a canonical write behave differently.
+        evidence, anomalies = self.SCHEMA["market_evidence"], self.SCHEMA["evidence_anomalies"]
+        cases = {
+            # A: independent finding — 2 GAPs detected, 1 persisted through INSERT OR IGNORE.
+            "partial_unique_anomalies": ("CREATE UNIQUE INDEX g ON evidence_anomalies(symbol) WHERE kind='GAP';", {}),
+            # B: partial indexes able to block valid bars.
+            "partial_unique_bars": ("CREATE UNIQUE INDEX p ON market_evidence(symbol) WHERE stream_seq > 1;", {}),
+            "partial_index_failing_predicate": ("CREATE INDEX p ON market_evidence(symbol) WHERE json(symbol);", {}),
+            "expression_index": ("CREATE INDEX e ON market_evidence(json(symbol));", {}),
+            # C: CHECK constraints (table- and column-level).
+            "check_table": ("", {"market_evidence": evidence + ", CHECK(stream_seq < 2)"}),
+            "check_column": ("", {"market_evidence": evidence.replace("payload TEXT NOT NULL",
+                                                                      "payload TEXT NOT NULL CHECK(length(payload) < 9)")}),
+            # D: foreign key.
+            "foreign_key": ("", {"evidence_anomalies": anomalies.replace(
+                "symbol TEXT NOT NULL", "symbol TEXT NOT NULL REFERENCES market_evidence(symbol)")}),
+            # E: trigger on the anomalies table.
+            "trigger_anomalies": ("CREATE TRIGGER t BEFORE INSERT ON evidence_anomalies BEGIN SELECT RAISE(IGNORE); END;", {}),
+            # F: incompatible collation (unique key, non-key column).
+            "nocase_unique_key": ("", {"market_evidence": evidence.replace(
+                "UNIQUE(symbol,timeframe,stream_seq)", "UNIQUE(symbol COLLATE NOCASE,timeframe,stream_seq)")}),
+            "nocase_column": ("", {"evidence_anomalies": anomalies.replace("kind TEXT NOT NULL",
+                                                                           "kind TEXT NOT NULL COLLATE NOCASE")}),
+            # G: extra UNIQUE constraints.
+            "extra_table_unique": ("", {"market_evidence": evidence + ", UNIQUE(digest)"}),
+            "extra_unique_anomalies": ("CREATE UNIQUE INDEX u ON evidence_anomalies(bar_start);", {}),
+            # Other behavior-changing mechanisms.
+            "on_conflict_replace": ("", {"market_evidence": evidence.replace(
+                "UNIQUE(symbol,timeframe,stream_seq)", "UNIQUE(symbol,timeframe,stream_seq) ON CONFLICT REPLACE")}),
+            "not_null_on_conflict_ignore": ("", {"evidence_anomalies": anomalies.replace(
+                "payload TEXT NOT NULL", "payload TEXT NOT NULL ON CONFLICT IGNORE")}),
+            "generated_column": ("", {"market_evidence": evidence.replace(
+                "digest TEXT NOT NULL", "digest TEXT NOT NULL, derived TEXT GENERATED ALWAYS AS (json(symbol)) VIRTUAL")}),
+            "numeric_affinity": ("", {"market_evidence": evidence.replace("digest TEXT", "digest NUMERIC")}),
+            "strict_table": ("", {"market_evidence": evidence + ") STRICT; SELECT (1"}),
+            "without_rowid": ("", {"evidence_anomalies": anomalies + ") WITHOUT ROWID; SELECT (1"}),
+        }
+        for name, (extra, tables) in cases.items():
+            with self.subTest(case=name):
+                self.assert_refused_unchanged(self.crafted(f"behavior_{name}.db", extra, **tables))
+
+    def test_m2_canonical_schema_opens_and_persists_every_detected_anomaly(self):
+        path = self.crafted("canonical.db")  # H: the canonical definitions, built outside EvidenceStore.
+        store = EvidenceStore(path)
+        self.addCleanup(store.close)
+        engine = MarketEvidenceEngine(store)
+        result = engine.ingest("XAUUSD", "5m", [bar(0), bar(2), bar(4)], as_of=after(4))
+        self.assertEqual(len(result.gaps), 2)
+        self.assertEqual([a.kind for a in engine.anomalies()], ["GAP", "GAP"])  # Detected == persisted.
+
     def test_m2_semantically_equivalent_schema_opens_and_ingests_normally(self):
+        # I: formatting/case, column and key order, same-affinity type spellings, explicit BINARY
+        # collation, DEFAULT values, quoted identifiers, comments and literals that merely contain
+        # constraint keywords, and plain non-unique indexes cannot change a canonical write.
         path = self.crafted(
             "equivalent.db", "CREATE UNIQUE INDEX seq_identity ON market_evidence(timeframe, stream_seq, symbol);"
-                             "CREATE INDEX by_digest ON market_evidence(digest);",
-            market_evidence="stream_seq integer not null, digest text not null, payload text not null, "
-                            "bar_start text not null, timeframe text not null, symbol text not null, "
-                            "constraint identity primary key (bar_start, symbol, timeframe)",
+                             "CREATE INDEX by_digest ON market_evidence(digest);"
+                             "CREATE INDEX by_kind ON evidence_anomalies(kind, bar_start DESC);",
+            market_evidence="stream_seq integer not null, digest varchar(64) not null, payload text not null, "
+                            "bar_start text not null collate binary, \"timeframe\" character(3) not null, "
+                            "symbol text not null default 'CHECK REFERENCES COLLATE NOCASE', "
+                            "constraint identity primary key (bar_start, symbol, timeframe) -- no CHECK here\n",
             evidence_anomalies="payload text not null, kind text not null, bar_start text not null, "
-                               "timeframe text not null, symbol text not null, anomaly_id text, primary key (anomaly_id)")
+                               "timeframe text not null, symbol text not null, anomaly_id text, "
+                               "/* STRICT? no */ primary key (anomaly_id)")
         store = EvidenceStore(path)
         self.addCleanup(store.close)
         engine = MarketEvidenceEngine(store)

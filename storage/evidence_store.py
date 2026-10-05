@@ -5,13 +5,22 @@ market evidence (closed bars) and evidence anomalies; it never touches the tradi
 and refuses to open any database that is not a MARKET EVIDENCE sidecar (including the trading
 DB): such a file is never written to. Nothing is repaired or recreated automatically.
 
+Target identity: the path is resolved ONCE to an absolute filesystem target; that target is
+what is validated (trading DB name/identity) and exactly what SQLite opens. Read-write opens it
+as a plain filename (no URI parsing); read-only opens it through a percent-encoded file URI
+(``Path.as_uri``), so ``#``, ``?``, ``%`` and spaces stay part of the filename. After connecting,
+SQLite's own ``PRAGMA database_list`` must report that same target before anything is written.
+
 A path named like the trading DB is refused before any connection, whether or not the file
-exists or is still empty (an empty trading DB has no application_id yet). An existing sidecar is
-accepted only when its actual schema (columns, primary/unique keys, no triggers) matches the
-contract below; otherwise it is refused on open, never repaired.
+exists or is still empty (an empty trading DB has no application_id yet).
+
+Schema contract: an existing sidecar is accepted only when its effective schema cannot make a
+canonical write behave differently (see ``_schema_contract``); otherwise it is refused on open,
+before any ingestion, and is never repaired.
 """
 from contextlib import contextmanager
 from pathlib import Path
+import re
 import sqlite3
 
 EVIDENCE_APPLICATION_ID = 0x56324D45  # "V2ME"
@@ -36,42 +45,95 @@ class EvidenceStoreError(RuntimeError):
     """The sidecar is missing, incompatible or corrupt. Nothing is repaired or recreated."""
 
 
-def _is_trading_db_name(path):
+def _target(path):
+    """The single filesystem object that is both validated and opened."""
+    try:
+        return path.resolve()
+    except OSError as exc:
+        raise EvidenceStoreError("cannot resolve the MARKET EVIDENCE database path") from exc
+
+
+def _is_trading_db_name(*paths):
     """Case-insensitive, after resolving links/'..'; Windows ignores trailing dots/spaces and an
     alternate-data-stream suffix, so those cannot disguise the trading DB name either."""
-    try:
-        names = {path.name, path.resolve().name}
-    except OSError as exc:
-        raise EvidenceStoreError("cannot verify that the path is not the trading DB") from exc
-    return any(name.split(":")[0].rstrip(" .").casefold() == TRADING_DB_NAME for name in names)
+    return any(path.name.split(":")[0].rstrip(" .").casefold() == TRADING_DB_NAME for path in paths)
 
 
-def _shares_file_with_trading_db(path):
+def _shares_file_with_trading_db(target):
     """An existing file that is the same file (e.g. a hard link) as a sibling trading DB."""
-    if not path.exists():
+    if not target.exists():
         return False
     try:
-        return any(_is_trading_db_name(sibling) and sibling.is_file() and path.samefile(sibling)
-                   for sibling in path.resolve().parent.iterdir())
+        return any(_is_trading_db_name(sibling) and sibling.is_file() and target.samefile(sibling)
+                   for sibling in target.parent.iterdir())
     except OSError as exc:
         raise EvidenceStoreError("cannot verify that the path is not the trading DB") from exc
+
+
+# --- schema contract ------------------------------------------------------------------------------
+# Strategy: SQLite metadata wherever it exists (table_xinfo, index_list, index_xinfo,
+# foreign_key_list, sqlite_master triggers), plus the smallest extra inspection for constraints
+# that metadata does not expose: a keyword scan of each table's CREATE statement with string
+# literals, quoted identifiers and comments removed first. A keyword below in a table definition
+# can reject, rewrite or suppress a canonical write, so its presence refuses the store.
+_SQL_NOISE = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`(?:[^`]|``)*`|\[[^\]]*\]|--[^\n]*|/\*.*?(?:\*/|$)",
+                        re.S)
+BEHAVIOR_KEYWORDS = frozenset({
+    "CHECK",          # Rejects rows.
+    "CONFLICT",       # ON CONFLICT REPLACE/IGNORE/... silently replaces or drops rows.
+    "REFERENCES",     # Foreign keys (also read from PRAGMA foreign_key_list).
+    "GENERATED", "STORED", "VIRTUAL",  # Generated columns / virtual tables (also table_xinfo hidden).
+    "STRICT", "WITHOUT",  # Table options the canonical schema does not use (type rules, rowid).
+    "AUTOINCREMENT",
+})
+
+
+def _affinity(declared):
+    """SQLite column affinity rules (https://sqlite.org/datatype3.html, section 3.1)."""
+    declared = (declared or "").upper()
+    if "INT" in declared:
+        return "INTEGER"
+    if any(token in declared for token in ("CHAR", "CLOB", "TEXT")):
+        return "TEXT"
+    if not declared or "BLOB" in declared:
+        return "BLOB"
+    if any(token in declared for token in ("REAL", "FLOA", "DOUB")):
+        return "REAL"
+    return "NUMERIC"
+
+
+def _behavior_keywords(sql):
+    words = [w.upper() for w in re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", _SQL_NOISE.sub(" ", sql or ""))]
+    found = set(words) & BEHAVIOR_KEYWORDS
+    found |= {f"COLLATE {following or '?'}" for word, following in zip(words, words[1:] + [""])
+              if word == "COLLATE" and following != "BINARY"}  # Non-binary (or quoted) collation.
+    return frozenset(found)
 
 
 def _schema_contract(db):
-    """Semantic schema via SQLite metadata: per table, columns (declared type, NOT NULL, part of
-    the PRIMARY KEY), and the column sets of full UNIQUE/PRIMARY KEY indexes with their
-    collations. Column order, key column order and SQL formatting are irrelevant."""
+    """Per table, everything that can change a canonical write:
+    - columns: name, affinity, NOT NULL, primary-key membership, hidden/generated flag;
+    - every UNIQUE/PRIMARY KEY index: key columns with collation, and whether it is partial;
+    - unsafe non-unique indexes (partial, or on expressions: evaluated, and able to fail, on write);
+    - foreign keys and behavior keywords of the table definition.
+    Harmless differences (SQL formatting/case, column and key order, declared type spelling with
+    the same affinity, plain non-unique column indexes) do not change the contract."""
     contract = {}
     for table in sorted(EVIDENCE_TABLES):
-        columns = frozenset((row[1], row[2].upper(), row[3], bool(row[5]))
-                            for row in db.execute(f"PRAGMA table_info({table})"))
-        unique = set()
-        for index in db.execute(f"PRAGMA index_list({table})").fetchall():
-            if index[2] and not index[4]:  # Unique and not partial: enforced for every row.
-                keys = frozenset((row[2], (row[4] or "BINARY").upper())
-                                 for row in db.execute(f"PRAGMA index_xinfo({index[1]!r})") if row[5])
-                unique.add(keys)
-        contract[table] = (columns, frozenset(unique))
+        columns = frozenset((row[1], _affinity(row[2]), row[3], bool(row[5]), row[6])
+                            for row in db.execute(f"PRAGMA table_xinfo({table})"))
+        unique, unsafe = set(), set()
+        for _, name, is_unique, _, partial in db.execute(f"PRAGMA index_list({table})").fetchall():
+            keys = [(row[1], row[2], (row[4] or "BINARY").upper())
+                    for row in db.execute("SELECT * FROM pragma_index_xinfo(?)", (name,)) if row[5]]
+            if is_unique:
+                unique.add((frozenset((column, collation) for _, column, collation in keys), bool(partial)))
+            elif partial or any(cid < 0 for cid, _, _ in keys):
+                unsafe.add(name)
+        foreign_keys = len(db.execute(f"PRAGMA foreign_key_list({table})").fetchall())
+        sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        contract[table] = (columns, frozenset(unique), frozenset(unsafe), foreign_keys,
+                           _behavior_keywords(sql[0] if sql else None))
     return contract
 
 
@@ -91,21 +153,37 @@ class EvidenceStore:
     def __init__(self, path, *, readonly=False):
         self.path = Path(path)
         self.readonly = readonly
-        if _is_trading_db_name(self.path) or _shares_file_with_trading_db(self.path):
+        target = _target(self.path)
+        if _is_trading_db_name(self.path, target) or _shares_file_with_trading_db(target):
             raise EvidenceStoreError("refusing to use the trading DB path as a MARKET EVIDENCE database")
-        if readonly and not self.path.exists():
+        if readonly and not target.is_file():
             raise EvidenceStoreError("MARKET EVIDENCE database missing")
-        if not readonly:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-        mode = "ro" if readonly else "rwc"
-        self.db = sqlite3.connect(f"file:{self.path.resolve().as_posix()}?mode={mode}", uri=True,
-                                  timeout=10, isolation_level=None)
         try:
+            if readonly:  # mode=ro requires a URI; pathlib percent-encodes the target.
+                self.db = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True, timeout=10,
+                                          isolation_level=None)
+            else:  # A plain filename: no URI parsing of the path at all.
+                target.parent.mkdir(parents=True, exist_ok=True)
+                self.db = sqlite3.connect(str(target), uri=False, timeout=10, isolation_level=None)
+        except (sqlite3.Error, OSError) as exc:
+            raise EvidenceStoreError("MARKET EVIDENCE database cannot be opened") from exc
+        try:
+            self._verify_target(target)
             self.db.execute("PRAGMA busy_timeout=10000")
             self._open()
         except BaseException:
             self.db.close()
             raise
+
+    def _verify_target(self, target):
+        """SQLite's actual main database file must be the validated target (nothing written yet)."""
+        try:
+            opened = next((row[2] for row in self.db.execute("PRAGMA database_list") if row[1] == "main"), None)
+            same = bool(opened) and Path(opened).resolve() == target
+        except (sqlite3.Error, OSError) as exc:
+            raise EvidenceStoreError("cannot verify the MARKET EVIDENCE database target") from exc
+        if not same:
+            raise EvidenceStoreError("SQLite target differs from the validated MARKET EVIDENCE path")
 
     def _open(self):
         try:

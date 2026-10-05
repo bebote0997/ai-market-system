@@ -21,7 +21,7 @@ Files:
 | --- | --- |
 | `data/market_evidence.py` | `MarketBar` contract, `bars_from_frame` adapter for the V1 provider frame, `MarketEvidenceEngine` (ingest, catch-up, anomalies, reads) |
 | `storage/evidence_store.py` | Isolated MARKET EVIDENCE SQLite sidecar (`EvidenceStore`) |
-| `test_market_evidence.py` | 43 focused tests (identity, order, idempotency, catch-up, closed bars, real-process crash/restart, gaps, multi-stream, NAS100, persistence and schema contract, safety) |
+| `test_market_evidence.py` | 47 focused tests (identity, order, idempotency, catch-up, closed bars, real-process crash/restart, gaps, multi-stream, NAS100, persistence and schema contract, safety) |
 
 ## V1 market path audit (frozen behavior, unchanged by Batch 1)
 
@@ -131,13 +131,33 @@ Durable evidence is required (restart correctness cannot rely on memory). Option
      file (e.g. a hard link) as a sibling trading DB is refused too; an initialized trading DB under
      any other name is refused by `application_id`/table set. Refused files stay byte-for-byte
      unchanged.
+   - **Validated target == SQLite target.** The path is resolved once; that absolute target is what
+     is validated and exactly what SQLite opens. Read-write opens it as a plain filename (no URI
+     parsing); read-only uses a percent-encoded file URI (`Path.as_uri`), so `#`, `?`, `%`, spaces
+     and non-ASCII stay part of the filename (e.g. `trading_floor.db#evidence` can never reach
+     `trading_floor.db` as a URI fragment). Before anything is written, SQLite's own
+     `PRAGMA database_list` must report the same target, otherwise the store is refused. A filename
+     the platform cannot represent (e.g. `?` on Windows) fails closed.
    - **Foreign databases.** The Phase 1 health sidecar and any other SQLite file are refused.
-   - **Schema contract.** A database that identifies itself as a sidecar (`application_id`, version,
-     table names) is accepted only when its actual schema matches, read through SQLite metadata
-     (`PRAGMA table_info`, `index_list`, `index_xinfo`): every required column with its declared type
-     and NOT NULL, primary-key membership, exactly the required full UNIQUE/PRIMARY KEY column sets
-     with BINARY collation (`(symbol,timeframe,bar_start)`, `(symbol,timeframe,stream_seq)`,
-     `anomaly_id`), and no triggers. Column order, key column order and SQL formatting are irrelevant.
+   - **Schema contract (effective behavior).** A database that identifies itself as a sidecar
+     (`application_id`, version, table names) is accepted only when no schema object can make a
+     canonical write behave differently. Strategy: SQLite metadata wherever it exists, plus the
+     smallest extra inspection for what metadata does not expose.
+     - Metadata (`PRAGMA table_xinfo`, `index_list`, `index_xinfo`, `foreign_key_list`,
+       `sqlite_master`): every required column with its type affinity, NOT NULL, primary-key
+       membership and no hidden/generated column; exactly the required UNIQUE/PRIMARY KEY column
+       sets (`(symbol,timeframe,bar_start)`, `(symbol,timeframe,stream_seq)`, `anomaly_id`), each
+       non-partial with BINARY collation, and no other UNIQUE index (partial or not); no partial or
+       expression non-unique index (their predicates/expressions are evaluated, and can fail, on
+       write); no foreign key; no trigger.
+     - Keyword scan of each table's CREATE statement after removing string literals, quoted
+       identifiers and comments (never whole-string equality): `CHECK`, `ON CONFLICT`,
+       `REFERENCES`, generated/`VIRTUAL`/`STORED` columns, non-BINARY `COLLATE`, `STRICT`,
+       `WITHOUT ROWID` and `AUTOINCREMENT` refuse the store (fail closed: the last three are not
+       used by the canonical schema).
+     - Accepted harmless differences: SQL formatting/case, column and key order, same-affinity type
+       spellings, explicit `COLLATE BINARY`, `DEFAULT` values, comments, and plain non-unique
+       column indexes.
      A mismatch is refused on open, before any ingestion, and the file is never repaired.
    - `quick_check` integrity validation.
 
@@ -194,7 +214,9 @@ design.
   (`execution/trade_manager.py` ignores bars at or before it).
 - Pending orders have no equivalent durable per-bar progress: `PaperBroker.process_next_bar`
   resolves a `PENDING` order against the bar it is given (fill, cancel or reject); nothing records
-  which bars an order has already been evaluated against.
+  which bars an order has already been evaluated against. Pending-order eligibility also depends
+  on runtime gates (AI, freshness, session) that are not proven recoverable per historical bar
+  (reconfirmed by the re-review of `dd9459f`).
 - Runs recover by scheduler slot (`claim_slot`), not by bar.
 - Therefore the Evidence Store watermark cannot prove that the economic effects of a bar were applied
   (Decision B). Before wiring: prove restart/idempotency for every economic effect under bar-by-bar
@@ -232,6 +254,20 @@ untouched and remain open.
   `test_process_crash_in_duplicate_check_transaction_loses_nothing`. The real pre-commit window is
   covered by `test_process_crash_after_real_insert_before_commit_then_restart`.
 - Focused: `test_market_evidence.py` 43/43 pass; full suite figures in `CHANGELOG_AGENT.md`.
+
+### Batch 1 final store hardening (re-review of `dd9459f`; M3 closed)
+
+- **M1 (URI/path alias):** `test_m1_uri_significant_path_never_reaches_the_protected_trading_db`
+  reproduces the independent `trading_floor.db#evidence` bypass (plus `#`, `?`, `%`, space,
+  non-ASCII and `nested/../` forms) and proves the empty protected file keeps its size and SHA-256
+  with no journal/WAL/SHM or side file; `test_m1_legitimate_uri_significant_filenames_open_their_own_file`
+  proves such names are real, distinct files in read-write and read-only mode.
+- **M2 (effective schema):** `test_m2_behavior_changing_constraints_are_refused_on_open_unchanged`
+  (partial UNIQUE on anomalies — the 2-detected/1-persisted GAP case — partial/expression indexes,
+  CHECK, FOREIGN KEY, trigger, collation, extra UNIQUE, ON CONFLICT, generated column, affinity,
+  STRICT, WITHOUT ROWID); `test_m2_canonical_schema_opens_and_persists_every_detected_anomaly`;
+  `test_m2_semantically_equivalent_schema_opens_and_ingests_normally`.
+- Focused: `test_market_evidence.py` 47/47 pass.
 
 ## Safety evidence
 
