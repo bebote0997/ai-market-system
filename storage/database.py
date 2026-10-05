@@ -406,11 +406,34 @@ class Store:
                                  "impact": "HIGH" if source_high else None,
                                  "policy_relevance": "HIGH" if policy_high else None})
 
-    def save_paper(self, broker, *, owner_key=None, symbol=None):
+    @staticmethod
+    def paper_state(account, orders, fills):
+        """Immutable comparison value for every PAPER object save_paper can overwrite.
+
+        Include the whole account, not only one position's watermark: concurrent
+        progress on another symbol must not be lost through a stale account save.
+        """
+        return (None if account is None else paper_encode(account),
+                tuple(sorted(paper_encode(p) for p in account.open_positions.values())) if account else (),
+                tuple(sorted(paper_encode(t) for t in account.closed_trades)) if account else (),
+                tuple(sorted(paper_encode(o) for o in orders.values())),
+                tuple(sorted(paper_encode(f) for f in fills.values())))
+
+    def save_paper(self, broker, *, owner_key=None, symbol=None, expected_state=None):
+        """Persist atomically; optional B2.1 compare-and-swap returns False if stale.
+
+        The comparison runs under the same BEGIN IMMEDIATE as all writes. SQLite
+        excludes other writers until commit/rollback, including other processes.
+        Existing callers without expected_state retain their original behavior.
+        """
         account = broker.account
         with self.transaction():
             if owner_key is not None and not self.owns_slot(owner_key, symbol):
                 raise RuntimeError("paper persistence without slot ownership")
+            if expected_state is not None:
+                durable = self.paper_state(*self.load_paper(account.account_id))
+                if durable != expected_state:
+                    return False  # No economic writes, journal writes or in-memory journal clearing.
             self.db.execute("INSERT OR REPLACE INTO paper_accounts VALUES(?,?)", (account.account_id, paper_encode(account)))
             for table, items, id_field in (("paper_orders", broker.orders.values(), "order_id"),
                 ("paper_fills", broker.fills.values(), "fill_id"),

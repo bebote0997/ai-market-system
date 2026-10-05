@@ -1,5 +1,5 @@
 """One durable PAPER cycle. Explicit dependencies; no network or sample fallback."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import re
@@ -12,6 +12,8 @@ from ai.runtime import AuditLog
 from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
+from execution.pending_order_gate import CurrentCycleGate, PendingGateEvidenceError, gate_pending_orders
+from execution.position_catch_up import CatchUpEvidenceError, catch_up_position
 from execution.trade_manager import TradeManager
 from floor.orchestrator import run as run_floor
 from riesgo import crear_configuracion_riesgo_v2
@@ -26,6 +28,8 @@ from storage.database import Store
 from ui.adapters import MARKETS, from_ai_report
 
 LOG = logging.getLogger("ai_floor.runtime")
+STALE_PAPER_STATE = "STALE_PAPER_STATE"  # B2.3A: submission refused, PAPER state changed under it.
+EVIDENCE_UNAVAILABLE = "EVIDENCE_UNAVAILABLE"  # B2.3B: PAPER economics fail closed for this cycle.
 
 
 class OperationalRuntime:
@@ -73,8 +77,9 @@ class OperationalRuntime:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
         self.store = Store(self.config.db_path)
+        self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
         self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
-        account, orders, _ = self.store.load_paper(self.config.account_id)
+        account, orders, fills = self.store.load_paper(self.config.account_id)
         if account is None:
             if orders or self.store.db.execute("SELECT 1 FROM paper_positions LIMIT 1").fetchone():
                 self.store.event(self.clock(), None, None, "recovery", "STATE_INCONSISTENCY", "ERROR", {"reason": "paper_account_missing"})
@@ -82,7 +87,13 @@ class OperationalRuntime:
                 raise RuntimeError("paper state without account")
             account = PaperAccount("1.0", self.config.account_id, self.config.starting_equity,
                                    self.config.starting_equity, self.config.starting_equity)
-            self.store.save_paper(PaperBroker(account))
+            # B2.3A: create only if still absent; a concurrent creator's account is never overwritten.
+            if self.store.save_paper(PaperBroker(account),
+                                     expected_state=self.store.paper_state(None, orders, fills)) is False:
+                account, orders, _ = self.store.load_paper(self.config.account_id)
+                if account is None:
+                    self.store.close()
+                    raise RuntimeError("paper account creation raced without an account")
         for position in account.open_positions.values():
             origin = orders.get(position.origin_order_id)
             if origin is None or origin.status != "FILLED" or origin.symbol != position.symbol or origin.quantity != position.quantity:
@@ -102,6 +113,8 @@ class OperationalRuntime:
     def close(self):
         self.store.heartbeat(self.clock(), "STOPPED")
         self.store.close()
+        if self.evidence is not None:
+            self.evidence.store.close()
 
     def _broker(self, symbol):
         account, orders, fills = self.store.load_paper(self.config.account_id)
@@ -109,6 +122,82 @@ class OperationalRuntime:
         broker.orders = orders
         broker.fills = fills
         return broker
+
+    def _guarded_paper_write(self, symbol, key, apply):
+        """B2.3A: run ``apply(broker)`` on freshly loaded durable PAPER state and persist it only if
+        that state is still current (B2.1 ``expected_state``, revalidated under BEGIN IMMEDIATE).
+
+        ``apply`` returns (save, result). On STALE the computation is discarded and redone once from
+        a fresh load. Returns (broker, result), or (None, None) when both attempts were stale.
+        """
+        for _ in range(2):
+            broker = self._broker(symbol)
+            expected_state = self.store.paper_state(broker.account, broker.orders, broker.fills)
+            save, result = apply(broker)
+            if not save or self.store.save_paper(broker, owner_key=key, symbol=symbol,
+                                                 expected_state=expected_state) is not False:
+                return broker, result
+        return None, None
+
+    def _ingest_evidence(self, symbol, snapshot, slot):
+        """B2.3B: commit this snapshot's closed bars to the separate Evidence Store (closed by the
+        slot, the provider's own boundary). Returns None, or the failure reason (fail closed)."""
+        try:
+            if self.evidence is None:
+                from data.market_evidence import MarketEvidenceEngine
+                from storage.evidence_store import EvidenceStore
+                self.evidence = MarketEvidenceEngine(EvidenceStore(self.config.market_evidence_path),
+                                                     enabled_symbols=self.config.enabled_symbols)
+            self.evidence.ingest_snapshot(symbol, snapshot, as_of=slot)
+            return None
+        except Exception as exc:  # noqa: BLE001 - any evidence failure blocks PAPER economics
+            LOG.warning("symbol=%s component=market_evidence event=%s error_type=%s",
+                        symbol, EVIDENCE_UNAVAILABLE, type(exc).__name__)
+            return EVIDENCE_UNAVAILABLE
+
+    def _catch_up_positions(self, symbol, slot, key):
+        """B2.3B: every committed closed 5m bar after the open position's durable watermark, oldest
+        first, through the accepted B2.1 catch-up (guarded save per bar). Never a newest-bar fallback.
+        Returns None, or the reason PAPER economics are blocked for this cycle."""
+        for _ in range(2):  # A STALE result resumes from the durable watermark once.
+            try:
+                result = catch_up_position(self.store, self.evidence, account_id=self.config.account_id,
+                                           symbol=symbol, as_of=slot, instrument=self.instruments.get(symbol),
+                                           owner_key=key)
+            except CatchUpEvidenceError:
+                return EVIDENCE_UNAVAILABLE
+            if result.status != "STALE":
+                return None
+        return STALE_PAPER_STATE
+
+    def _committed_bar(self, symbol, start):
+        """B2.3C: the committed 5m Evidence bar starting at ``start`` (the current cycle's bar) in the
+        dict form ``process_next_bar`` takes, or None. Committed evidence is authoritative (decision 3);
+        there is never a snapshot fallback."""
+        try:
+            bars = self.evidence.committed(symbol, "5m", after=start - timedelta(microseconds=1))
+        except Exception:  # noqa: BLE001 - unreadable evidence fails closed
+            return None
+        bar = next((b for b in bars if b.start == start), None)
+        if bar is None or bar.is_closed is not True:
+            return None
+        return {"symbol": bar.symbol, "timestamp": bar.start, "open": bar.open, "high": bar.high,
+                "low": bar.low, "close": bar.close, "is_closed": True}
+
+    def _gate_pending_orders(self, gate, symbol, slot, key):
+        """B2.3C: pending orders progress only through the accepted B2.2 ``gate_pending_orders`` (P1).
+        A STALE result is retried once from fresh durable state. Returns None, or the reason PAPER
+        economics are blocked for this cycle."""
+        for _ in range(2):
+            try:
+                result = gate_pending_orders(self.store, self.evidence, account_id=self.config.account_id,
+                                             symbol=symbol, as_of=slot, gate=gate,
+                                             instrument=self.instruments.get(symbol), owner_key=key)
+            except PendingGateEvidenceError:
+                return EVIDENCE_UNAVAILABLE
+            if result.status != "STALE":
+                return None
+        return STALE_PAPER_STATE
 
     def _snapshot(self, vm):
         plan = None if vm.plan is None else {k: getattr(vm.plan, k) for k in
@@ -177,6 +266,9 @@ class OperationalRuntime:
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", provider_state, run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "NO_DATA"
+            paper_blocked = None  # B2.3B: reason PAPER economics are blocked this cycle (flag ON only).
+            if self.config.v2_position_catch_up:
+                paper_blocked = self._ingest_evidence(symbol, snapshot, slot)
             fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, slot, self.config.max_age_seconds)
             if fresh:
                 # The slot bounds evidence; wall time bounds execution freshness.
@@ -196,7 +288,6 @@ class OperationalRuntime:
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, data_state, "freshness_gate_blocked", run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", data_state)
                 return data_state
-            broker = self._broker(symbol)
             if not self.store.owns_slot(key, symbol):
                 raise RuntimeError("slot ownership lost")
             # A previously authorized paper order may progress only after this
@@ -204,15 +295,27 @@ class OperationalRuntime:
             bar = {"symbol": symbol, "timestamp": snapshot["5m"].index.max().to_pydatetime(),
                    "open": float(last_bar["Open"]), "high": float(last_bar["High"]),
                    "low": float(last_bar["Low"]), "close": float(last_bar["Close"]), "is_closed": True}
-            had_open = bool(broker.account.open_positions)
-            if self.paper_enabled:
-                TradeManager(broker.account, broker).process_bar(bar)
-            if self.paper_enabled and (had_open or broker.journal):
-                self.store.save_paper(broker, owner_key=key, symbol=symbol)
+
+            def manage_positions(fresh):
+                had_open = bool(fresh.account.open_positions)
+                if self.paper_enabled:
+                    TradeManager(fresh.account, fresh).process_bar(bar)
+                return self.paper_enabled and (had_open or bool(fresh.journal)), None
+            if not self.config.v2_position_catch_up:
+                broker, _ = self._guarded_paper_write(symbol, key, manage_positions)
+                if broker is None:
+                    raise RuntimeError("stale paper state")  # Fail closed: nothing of this cycle written.
+            else:  # B2.3B replaces the newest-bar TradeManager step; it never falls back to it.
+                if self.paper_enabled and paper_blocked is None:
+                    paper_blocked = self._catch_up_positions(symbol, slot, key)
+                if paper_blocked is not None:
+                    self.store.event(self.clock(), run_id, symbol, "market_evidence", paper_blocked, "ERROR")
+                broker = self._broker(symbol)
+            decision_equity = broker.account.equity
             stage = "deterministic"
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
                                       self.instruments.get(symbol), self.risk_config,
-                                      equity=broker.account.equity, run_id=run_id)
+                                      equity=decision_equity, run_id=run_id)
             deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
             with self.store.transaction():
                 self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
@@ -243,7 +346,9 @@ class OperationalRuntime:
             execution_at = self.clock()
             execution_fresh, execution_state, _ = fresh_snapshot(
                 snapshot, symbol, execution_at, self.config.max_age_seconds)
-            if not self.diagnostic_outside_session and not set(session_names(execution_at)) & set(self.config.sessions):
+            session_open = self.diagnostic_outside_session or bool(
+                set(session_names(execution_at)) & set(self.config.sessions))
+            if not session_open:
                 execution_state = "SESSION_SKIPPED"
                 execution_fresh = False
             if not execution_fresh:
@@ -258,14 +363,36 @@ class OperationalRuntime:
                 return execution_state
             ai_healthy = all(r is not None and r.status in {"OK", "PARTIAL"} for r in
                 (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review))
-            if self.paper_enabled and ai_healthy and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}:
+            if self.config.v2_position_catch_up:
+                # B2.3C: the existing V1 gate values of THIS cycle plus its committed Evidence bar;
+                # B2.2 decides. No snapshot fallback, no approval from another cycle.
+                if self.paper_enabled and paper_blocked is None:
+                    if not self.store.owns_slot(key, symbol):
+                        raise RuntimeError("slot ownership lost")
+                    committed = self._committed_bar(symbol, bar["timestamp"])
+                    if committed is None:
+                        paper_blocked = EVIDENCE_UNAVAILABLE
+                    else:
+                        gate = CurrentCycleGate(run_id=run_id, symbol=symbol, bar=committed,
+                                                paper_enabled=self.paper_enabled, execution_fresh=execution_fresh,
+                                                session_open=session_open, ai_healthy=ai_healthy,
+                                                ai_final_status=ai.final_status)
+                        paper_blocked = self._gate_pending_orders(gate, symbol, slot, key)
+                    if paper_blocked is not None:
+                        self.store.event(self.clock(), run_id, symbol, "market_evidence", paper_blocked, "ERROR")
+            elif (self.paper_enabled and paper_blocked is None and ai_healthy
+                    and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}):
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
-                for order in tuple(broker.orders.values()):
-                    if order.symbol == symbol and order.status == "PENDING" and bar["timestamp"] > order.as_of:
-                        broker.process_next_bar(order, bar)
-            if self.paper_enabled and broker.journal:
-                self.store.save_paper(broker, owner_key=key, symbol=symbol)
+
+                def progress_pending(fresh):
+                    for order in tuple(fresh.orders.values()):
+                        if order.symbol == symbol and order.status == "PENDING" and bar["timestamp"] > order.as_of:
+                            fresh.process_next_bar(order, bar)
+                    return bool(fresh.journal), None
+                if self._guarded_paper_write(symbol, key, progress_pending)[0] is None:
+                    raise RuntimeError("stale paper state")  # Fail closed: no pending-order effect written.
+            broker = self._broker(symbol)  # B2.3A: later decisions read durable state, never a stale broker.
             eligible = paper_policy(ai)
             stage = "paper"
             execution_status, execution_reason = "SKIPPED", "POLICY_NOT_READY"
@@ -275,12 +402,27 @@ class OperationalRuntime:
                     self.clock(), run_id, symbol, "policy", "PAPER_DIAGNOSTIC_BLOCKED", "INFO"),
                     run_id, symbol)
                 execution_reason = "PAPER_DIAGNOSTIC_BLOCKED"
+            elif eligible and paper_blocked is not None:
+                execution_reason = paper_blocked  # B2.3B: no submission over unreconciled positions.
             elif eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
-                order = broker.submit_plan(deterministic, snapshot, slot)
-                if order:
-                    self.store.save_paper(broker, owner_key=key, symbol=symbol)
+
+                def submit(fresh):
+                    # The approved Risk decision stays valid only for the state it was sized on:
+                    # never resubmit after eligibility or equity changed, and never rerun Risk/AI.
+                    if (any(o.symbol == symbol and o.status == "PENDING" for o in fresh.orders.values())
+                            or symbol in fresh.account.open_positions or fresh.account.equity != decision_equity):
+                        return False, STALE_PAPER_STATE
+                    order = fresh.submit_plan(deterministic, snapshot, slot)
+                    return order is not None, order
+                fresh, order = self._guarded_paper_write(symbol, key, submit)
+                if fresh is None or order is STALE_PAPER_STATE:
+                    self._audit_safely(lambda: self.store.event(
+                        self.clock(), ai.run_id, symbol, "policy", STALE_PAPER_STATE, "WARNING"),
+                        run_id, symbol)
+                    execution_reason = STALE_PAPER_STATE
+                elif order:
                     self._audit_safely(lambda: self.store.event(
                         self.clock(), ai.run_id, symbol, "policy", "PAPER_ORDER_SUBMITTED"),
                         run_id, symbol)

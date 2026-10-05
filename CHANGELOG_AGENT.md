@@ -1,5 +1,202 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.3D regression preservation (test-only)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `05afa4e0c64d5731d4f3a8fcfd31b7b237d9526c`; final SHA = the commit that adds this entry.
+- New permanent `test_phase2_e2e.py`: the B2.3D deterministic end-to-end scenario, assertions
+  unchanged from the certification run. No production code change.
+- B2.3D PASS. H02 CLOSED (owner-accepted) for the V2 implementation under P1. Runtime activation NOT
+  AUTHORIZED; flag OFF by default. Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive.
+- Status: **READY FOR FINAL INDEPENDENT PHASE 2 CERTIFICATION**.
+
+## 2026-10-05 — V2 Phase 2 B2.3C (runtime pending orders via CurrentCycleGate, flag OFF)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `a5b1ce51a1fc109c1a43df4189f207c66f69012a`; final SHA = the commit that adds this entry.
+- `runtime/service.py`: with the flag ON, pending orders progress only through B2.2
+  `gate_pending_orders` with a `CurrentCycleGate` built from this cycle's real V1 values and the
+  committed current Evidence bar; missing bar / evidence error / persistent STALE fail closed. The
+  V1 session check is computed once into `session_open` (same expression). Flag OFF unchanged.
+- Tests: new `test_runtime_pending_gate.py` 14/14 (real-process crash and contention); isolation
+  tests updated. Mutations 6/6 killed; flag-OFF old/new byte-identical; full suite once 751 pass /
+  0 fail / 0 skip.
+- Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive; H02 PARTIAL; B2.3D NOT STARTED.
+  Status: **READY FOR INDEPENDENT REVIEW**.
+
+## 2026-10-05 — V2 Phase 2 B2.3B (Evidence + position catch-up runtime wiring, flag OFF)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `5258e125f03eed7dda711ad9af090858cc5c0a83`; final SHA = the commit that adds this entry.
+- `runtime/config.py`: `v2_position_catch_up` (default False, never from env) + `market_evidence_path`.
+- `runtime/service.py`: with the flag ON, snapshot ingestion into the Evidence Store, then B2.1
+  catch-up replaces the newest-bar TradeManager step; evidence failure / persistent STALE fails
+  closed for PAPER economics (no fallback, no pending progress, no submission).
+- Tests: new `test_runtime_catch_up.py` 15/15 (real-process crash and contention); isolation tests in
+  `test_market_evidence.py`, `test_position_catch_up.py`, `test_stale_safe_writers.py` updated to the
+  authorized flag-gated wiring. Mutations 6/6 killed; flag-OFF old/new byte-identical; full suite once
+  737 pass / 0 fail / 0 skip.
+- Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive; H02 PARTIAL; B2.3C NOT STARTED.
+  Status: **READY FOR INDEPENDENT REVIEW**.
+
+## 2026-10-05 — V2 Phase 2 B2.3A (stale-safe runtime PAPER writers)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `a261f62aea8b52e4edb1c905c920693ecd35d30a`; final SHA = the commit that adds this entry.
+- `runtime/service.py`: all runtime PAPER writers (bootstrap, legacy TradeManager, legacy pending,
+  submit) use the B2.1 `expected_state` guard via `_guarded_paper_write`; one fresh recompute on
+  STALE; submit fails closed as `STALE_PAPER_STATE` on changed eligibility/equity; later decisions
+  never use a stale broker. Fixes a V1 cross-process lost update (XAU/EUR sharing one account).
+- New `test_stale_safe_writers.py` 12/12 (pre-fix fails 9/12); mutations 4/4 killed; single-writer
+  old/new equivalence byte-identical; full suite once 722 pass / 0 fail / 0 skip.
+- No Evidence/catch-up/gate wiring; no flag; schema 3; System Health inactive; REAL DISABLED;
+  NAS100 OFF; H02 PARTIAL. Status: **READY FOR INDEPENDENT REVIEW**.
+
+## 2026-10-05 — V2 Phase 2 B2.2 F1 fix (fail closed on missing AI final status)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `4c7c956478acd24b5c26ccfa2acf8636c811d5e4`; final SHA = the commit that adds this entry.
+- F1: `CurrentCycleGate.passed()` now requires a non-empty `str` `ai_final_status` before the
+  unchanged V1 deny-list; None/empty/non-str never authorize evaluation. Tests `test_7b`/`test_7c`.
+- Focused 26/26; B2.1 28/28; mutations 2/2 killed; full suite once 710 pass / 0 fail / 0 skip.
+- No other changes. REAL DISABLED; NAS100 OFF; schema 3; H02 PARTIAL; B2.3 NOT STARTED.
+- Status: **READY FOR F1-ONLY INDEPENDENT RE-REVIEW**. Phase 2 IN PROGRESS / NOT CERTIFIED.
+
+## 2026-10-05 — V2 Phase 2 B2.2 (cycle-gated pending orders, isolated)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `8e880bfa09bb724c75eb5cd82de0534fc46fab63`; final SHA = the commit that adds this entry.
+- Owner decision P1 APPROVED: no current cycle gate = no pending-order evaluation.
+- Scope: new `execution/pending_order_gate.py` (`CurrentCycleGate`, `gate_pending_orders`), new
+  `test_pending_order_gate.py`, Phase 2 doc section. Not wired into the runtime. No schema change.
+- Intermediate bars journaled idempotently as `PENDING_NOT_EVALUATED` / `NO_CURRENT_CYCLE_GATE` in
+  the existing journal; only the current gate's own bar reaches unchanged `process_next_bar`, only
+  after `order.as_of`; stale gates are not current; evaluation persisted via B2.1 guarded save.
+- Tests: focused 24/24; B2.1 28/28; mutations 4/4 killed; full suite once 708 pass / 0 fail / 0 skip.
+- Trading semantics unchanged (fill/stop/target/quantity/economics/gates). REAL DISABLED; NAS100 OFF;
+  H02 PARTIAL; B2.3 NOT STARTED (opt-in stale guard recorded as B2.3 activation gate).
+- Status: **READY FOR INDEPENDENT REVIEW**, not accepted. Phase 2 IN PROGRESS / NOT CERTIFIED.
+
+## 2026-10-05 — V2 Phase 2 B2.1 P1 concurrency correction
+
+- Agent: Codex. Branch `v2/phase2-market-evidence`; clean/fetched starting SHA
+  `8c99d7dfd1b726443c85b4ebc5ccb0004dec7579`; final SHA = this corrective commit.
+- Reproduced A-computes / B-commits / A-resumes before production edits: two closed trades and
+  POSITION_CLOSED events; account realized -10 versus persisted trade sum -20.
+- Fix: immutable pre-computation PAPER snapshot compared with durable state inside the existing
+  `save_paper` BEGIN IMMEDIATE. Mismatch returns False before writes; catch-up discards the computed
+  transition and returns STALE. Whole-account/object comparison also excludes cross-symbol lost
+  updates. SQLite serializes processes; no Python-only lock or Evidence Store transaction coupling.
+- Files: `execution/position_catch_up.py`, narrow schema-neutral `storage/database.py` opt-in guard,
+  new `test_position_catch_up_concurrency.py`, narrow `test_system_health.py` compatibility assertion,
+  this changelog and `V2_PHASE2_MARKET_EVIDENCE.md`. Original B2.1 tests unchanged.
+- Focused 28/28; includes two independent processes, progress/close, crash holding write transaction,
+  repeated restarts, PnL reconciliation, other-symbol progress and bidirectional transaction isolation.
+  Exactly 3 scratch mutants detected: no revalidation, stale watermark accepted, duplicate close path.
+- Full local suite once: 683 pass / 1 failure / 0 skipped, 684 total. Only failure was the historical
+  whole-file frozen hash gate. Updated it to permit only the authorized opt-in addition while keeping
+  the original hash for every remaining byte; targeted compatibility rerun 2/2 PASS. No production
+  edits after full run and no full rerun. Actual frozen V1 code also opens a guarded-close DB read-only
+  and read-write, schema 3, one close/event, PnL -10 and equity 9990. Final-SHA Linux push CI pending.
+- Windows sandbox temp-permission adjustment confined to external launcher; no skipped tests.
+- Comparability: unchanged single-writer SL/TP/economics; removes invalid duplicate concurrent effects.
+  No historical data repair. TradeManager, Paper Broker/pending orders, Risk, AI, Planner, providers,
+  freshness, strategy, config and runtime unchanged; schema 3 preserved. REAL DISABLED; NAS100 OFF;
+  H02 PARTIAL; B2.2/B2.3 NOT STARTED. No PR/merge/deploy. Phase 2 IN PROGRESS / NOT CERTIFIED.
+- Status: **READY FOR INDEPENDENT RE-REVIEW**, not accepted/certified.
+
+## 2026-10-05 — V2 Phase 2 B2.1 (position catch-up core, isolated)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `e12797701eb4184c47837bbe0c83388a86db60c2`; final SHA = the commit that adds this entry.
+- Scope: `execution/position_catch_up.py` (`catch_up_position`), `test_position_catch_up.py`
+  (19 tests), Phase 2 doc section. Not wired into the runtime.
+- Invariant: per (position, closed 5m bar) either no effect commits and the bar stays eligible, or
+  all effects plus `last_processed_at` commit in one existing `Store.save_paper` transaction.
+  Watermark from the trading DB only; evidence read-only; fail closed on evidence failure.
+- Tests: focused 19/19 (A–R incl. real-process crash before/inside/after a bar transaction and
+  repeated crashes). Scratch mutations 5/5 detected (newest-bar-only, reversed ordering, watermark
+  check removed, duplicate bar allowed, latest-bar fallback on evidence failure).
+- Unchanged: `storage/database.py`, `execution/trade_manager.py`, `execution/paper_broker.py`,
+  runtime, Risk, AI, Setup, Planner, providers, pending-order eligibility; trading DB schema 3.
+- Safety: REAL EXECUTION = DISABLED; NAS100 = OFF. H02 PARTIAL. B2.2 and B2.3 not started.
+  No PR, no merge, no deploy. Phase 2 IN PROGRESS / NOT CERTIFIED.
+
+## 2026-10-05 — V2 Phase 2 Batch 1 final store hardening (M1 URI alias, M2 effective schema)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `dd9459f137b06589e869e847387afed1e12ada35`; final SHA = the commit that adds this entry.
+  Independent re-review of `dd9459f`: M3 closed; M1 and M2 reopened (MEDIUM).
+- M1: reproduced `trading_floor.db#evidence` initializing an empty protected `trading_floor.db`
+  (raw path interpolated into a SQLite URI). `EvidenceStore` now resolves the path once, validates
+  that target and opens exactly it: plain filename for read-write, `Path.as_uri()` (percent-encoded)
+  for read-only; SQLite's `PRAGMA database_list` must report the same target before any write.
+- M2: the schema contract now also refuses partial/extra UNIQUE indexes, partial or expression
+  indexes, hidden/generated columns, foreign keys, affinity changes and (by a literal/comment-free
+  keyword scan of the table definitions) CHECK, ON CONFLICT, non-BINARY COLLATE, STRICT,
+  WITHOUT ROWID, AUTOINCREMENT. Harmless syntactic variants still open.
+- Tests: focused 47/47 (was 43). Full suite 656/656 pass, 0 failed, 0 errors, 0 skipped. Scratch
+  mutation checks 12/12 detected (raw URI, fragment bypass, partial indexes, CHECK, extra UNIQUE,
+  triggers, collation, ON CONFLICT, generated columns, unsafe non-unique indexes, foreign keys,
+  affinity).
+- Unchanged: M3 crash tests, owner decisions A–E, Batch 2 trading-side idempotency gate (HIGH,
+  OPEN; pending-order gate reason reconfirmed), H02 **PARTIAL**. `storage/database.py` unchanged,
+  trading DB schema 3, no runtime wiring, no trading/risk/Paper Broker/provider/freshness/session/
+  cadence change. REAL EXECUTION = DISABLED; NAS100 = OFF. No deploy, no merge, no PR, Batch 2 not
+  started. Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED**.
+
+## 2026-10-05 — V2 Phase 2 Batch 1 review fixes (M1–M3, decisions A–E)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `817a35947b305de6524b593c008d1c5fecc03c4a`; final SHA = the commit that adds this entry.
+- M1: `EvidenceStore` refuses the trading DB by name (case-insensitive, after link/`..`
+  resolution, Windows trailing dot/space and stream suffix ignored) and by identity (same file as a
+  sibling trading DB; initialized trading DB under any name), before any connection or write,
+  including an existing empty `trading_floor.db` / `TRADING_FLOOR.DB`.
+- M2: an existing sidecar must match the schema contract read from SQLite metadata (columns, types,
+  NOT NULL, primary-key membership, exact UNIQUE/PRIMARY KEY column sets with BINARY collation, no
+  triggers); otherwise it is refused on open and left unchanged. Equivalent schemas are accepted.
+- M3: the old pre-commit crash test actually crashed in the duplicate-T0 transaction; renamed to
+  what it proves. New real-process test crashes after a genuine INSERT and before COMMIT (first
+  and middle new bar); restart commits the bar exactly once, nothing lost or duplicated.
+- `V2_PHASE2_MARKET_EVIDENCE.md`: owner-approved decisions A–E replace the open questions; Batch 2
+  trading-side idempotency recorded as an OPEN HIGH gate (pending orders have no durable per-bar
+  progress); V1 defect and `contiguous` (ingestion continuity != market-history completeness)
+  stated precisely. H02 remains **PARTIAL**.
+- Tests: focused 43/43 (was 39). Full suite 652/652 pass, 0 failed, 0 errors, 0 skipped. Scratch
+  mutation checks: 8/8 detected (case-insensitive refusal, empty trading DB initialization, column
+  validation, uniqueness validation, defective crash test, trigger check, hard-link identity,
+  collation).
+- Safety: only `storage/evidence_store.py`, its test and the Phase 2 doc changed (plus this entry).
+  `storage/database.py` unchanged, trading DB schema 3, no runtime wiring, no trading, risk, Paper
+  Broker, provider, freshness, session or cadence change. REAL EXECUTION = DISABLED; NAS100 = OFF.
+  No deploy, no merge, no PR, Batch 2 not started. Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED**.
+
+## 2026-10-05 — V2 Phase 2 Batch 1 (Market Evidence Engine foundation + H02 evidence processing)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence` (worktree `ai-market-system-phase2-evidence`);
+  starting `main` SHA `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`; final SHA = the commit that adds
+  this entry.
+- Scope: isolated V2 market-evidence foundation. `data/market_evidence.py` (`MarketBar` contract,
+  V1-frame adapter, `MarketEvidenceEngine`), `storage/evidence_store.py` (isolated MARKET EVIDENCE
+  SQLite sidecar, application_id "V2ME", schema 1), `test_market_evidence.py` (39 tests),
+  `V2_PHASE2_MARKET_EVIDENCE.md` (V1 path audit, design, limitations, owner decisions).
+- H02 status: **PARTIAL**. Evidence processing complete and proven: every new closed bar, per
+  stream, chronological, idempotent across overlap/retry/duplicate slot/restart, one bar per
+  transaction, real-process crash/restart tests, gaps/late/revised bars recorded and never
+  fabricated or overwritten. Not done: applying intermediate bars to 5m position management,
+  SL/TP, pending orders and fills (runtime integration; owner decisions in the Phase 2 doc).
+- Persistence decision: isolated sidecar; `trading_floor.db` not migrated (schema 3, byte-identical
+  in tests).
+- Tests: baseline 609/609 pass, 0 skipped. Focused 39/39. Full suite 648/648 pass, 0 failed,
+  0 errors, 0 skipped. Scratch mutation testing (no file modified): newest-bar-only, reversed
+  chronology, duplicate processing, in-memory-only recovery, skipped middle bar, duplicate commit
+  after restart and forming-bar commit are all caught.
+- Safety: no runtime wiring; no change to runtime, providers, config, freshness, sessions, cadence,
+  setup/AI/prompts, risk, Paper Broker, execution, PnL or existing tests. SYSTEM HEALTH untouched
+  and inactive. REAL EXECUTION = DISABLED; NAS100 = OFF. No deploy, no merge, no PR.
+  Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED**.
+
 ## 2026-10-05 — V2 Phase 1 final PR polish (documentation + test only)
 
 - Agent: Claude. Branch `v2/phase1-system-health`; starting SHA
