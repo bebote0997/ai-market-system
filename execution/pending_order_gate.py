@@ -55,11 +55,13 @@ class CurrentCycleGate:
     execution_fresh: bool
     session_open: bool
     ai_healthy: bool
-    ai_final_status: str | None
+    ai_final_status: str
 
     def passed(self):
+        # A missing/empty/non-str final status never authorizes evaluation (fail closed).
         return (self.paper_enabled is True and self.execution_fresh is True and self.session_open is True
-                and self.ai_healthy is True and self.ai_final_status not in BLOCKING_FINAL_STATUSES)
+                and self.ai_healthy is True and isinstance(self.ai_final_status, str)
+                and self.ai_final_status != "" and self.ai_final_status not in BLOCKING_FINAL_STATUSES)
 
 
 @dataclass(frozen=True)

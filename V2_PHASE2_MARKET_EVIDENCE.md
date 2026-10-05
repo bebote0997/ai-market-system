@@ -335,6 +335,17 @@ as_of, gate=None, instrument=None, owner_key=None)`. Not wired into the runtime.
   scheduler, freshness, sessions, strategy, Paper Broker economics and schema 3 unchanged.
 - **READY FOR INDEPENDENT REVIEW only.** Not accepted. No PR/merge/deploy/runtime wiring.
 
+#### B2.2 F1 correction — fail closed on missing AI final status (2026-10-05)
+
+- Independent review of `4c7c956` found `CurrentCycleGate.passed()` accepted `ai_final_status=None`
+  (not in the deny-list), which could fill a pending order. Fix: the status must be a non-empty `str`
+  before the unchanged V1 deny-list {AI_CAUTION, ERROR, RISK_REJECTED} applies. Not an allow-list;
+  unknown non-empty strings keep V1 behavior. No other gate semantics changed.
+- Tests: `test_7b` (None, "", non-str incl. truthy → not passed, 0 `process_next_bar` calls, no
+  economic effect) and `test_7c` (valid statuses pass, blocked stay blocked). Focused 26/26; B2.1
+  28/28; mutations 2/2 killed (allow None; allow empty/non-str); full suite 710 pass / 0 fail / 0 skip.
+- **READY FOR F1-ONLY INDEPENDENT RE-REVIEW.** B2.2 not accepted yet.
+
 Remaining gates:
 - **B2.3 — runtime activation: NOT STARTED.** Requires explicit owner authorization: per-bar SL/TP
   changes PAPER economics versus V1 and the frozen experiment. Activation gates recorded for B2.3:

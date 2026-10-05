@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.2 F1 fix (fail closed on missing AI final status)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `4c7c956478acd24b5c26ccfa2acf8636c811d5e4`; final SHA = the commit that adds this entry.
+- F1: `CurrentCycleGate.passed()` now requires a non-empty `str` `ai_final_status` before the
+  unchanged V1 deny-list; None/empty/non-str never authorize evaluation. Tests `test_7b`/`test_7c`.
+- Focused 26/26; B2.1 28/28; mutations 2/2 killed; full suite once 710 pass / 0 fail / 0 skip.
+- No other changes. REAL DISABLED; NAS100 OFF; schema 3; H02 PARTIAL; B2.3 NOT STARTED.
+- Status: **READY FOR F1-ONLY INDEPENDENT RE-REVIEW**. Phase 2 IN PROGRESS / NOT CERTIFIED.
+
 ## 2026-10-05 — V2 Phase 2 B2.2 (cycle-gated pending orders, isolated)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

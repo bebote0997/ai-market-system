@@ -169,6 +169,22 @@ class FailedGateTests(GateCase):
             with self.subTest(status=status):
                 self.assert_not_evaluated(gate(4, ai_final_status=status))
 
+    def test_7b_missing_or_invalid_ai_final_status_fails_closed(self):
+        for status in (None, "", 1, True, ("NO_TRADE",), b"NO_TRADE"):
+            with self.subTest(status=status):
+                self.assertFalse(gate(4, ai_final_status=status).passed())
+                self.assert_not_evaluated(gate(4, ai_final_status=status))
+                self.assertEqual(self.rows("ORDER_REJECTED") + self.rows("ORDER_CANCELLED")
+                                 + self.rows("ORDER_FILLED"), [])
+
+    def test_7c_valid_ai_final_status_still_passes_existing_deny_list(self):
+        for status in ("NO_TRADE", "VALID_SETUP", "WATCH"):
+            with self.subTest(status=status):
+                self.assertTrue(gate(4, ai_final_status=status).passed())
+        for status in ("AI_CAUTION", "ERROR", "RISK_REJECTED"):
+            with self.subTest(status=status):
+                self.assertFalse(gate(4, ai_final_status=status).passed())
+
     def test_8_ai_failure(self):
         self.assert_not_evaluated(gate(4, ai_healthy=False))
 
