@@ -1,5 +1,5 @@
 """One durable PAPER cycle. Explicit dependencies; no network or sample fallback."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import re
@@ -12,6 +12,7 @@ from ai.runtime import AuditLog
 from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
+from execution.pending_order_gate import CurrentCycleGate, PendingGateEvidenceError, gate_pending_orders
 from execution.position_catch_up import CatchUpEvidenceError, catch_up_position
 from execution.trade_manager import TradeManager
 from floor.orchestrator import run as run_floor
@@ -169,6 +170,35 @@ class OperationalRuntime:
                 return None
         return STALE_PAPER_STATE
 
+    def _committed_bar(self, symbol, start):
+        """B2.3C: the committed 5m Evidence bar starting at ``start`` (the current cycle's bar) in the
+        dict form ``process_next_bar`` takes, or None. Committed evidence is authoritative (decision 3);
+        there is never a snapshot fallback."""
+        try:
+            bars = self.evidence.committed(symbol, "5m", after=start - timedelta(microseconds=1))
+        except Exception:  # noqa: BLE001 - unreadable evidence fails closed
+            return None
+        bar = next((b for b in bars if b.start == start), None)
+        if bar is None or bar.is_closed is not True:
+            return None
+        return {"symbol": bar.symbol, "timestamp": bar.start, "open": bar.open, "high": bar.high,
+                "low": bar.low, "close": bar.close, "is_closed": True}
+
+    def _gate_pending_orders(self, gate, symbol, slot, key):
+        """B2.3C: pending orders progress only through the accepted B2.2 ``gate_pending_orders`` (P1).
+        A STALE result is retried once from fresh durable state. Returns None, or the reason PAPER
+        economics are blocked for this cycle."""
+        for _ in range(2):
+            try:
+                result = gate_pending_orders(self.store, self.evidence, account_id=self.config.account_id,
+                                             symbol=symbol, as_of=slot, gate=gate,
+                                             instrument=self.instruments.get(symbol), owner_key=key)
+            except PendingGateEvidenceError:
+                return EVIDENCE_UNAVAILABLE
+            if result.status != "STALE":
+                return None
+        return STALE_PAPER_STATE
+
     def _snapshot(self, vm):
         plan = None if vm.plan is None else {k: getattr(vm.plan, k) for k in
             ("entry", "stop", "target", "risk_reward", "side", "invalidation")}
@@ -316,7 +346,9 @@ class OperationalRuntime:
             execution_at = self.clock()
             execution_fresh, execution_state, _ = fresh_snapshot(
                 snapshot, symbol, execution_at, self.config.max_age_seconds)
-            if not self.diagnostic_outside_session and not set(session_names(execution_at)) & set(self.config.sessions):
+            session_open = self.diagnostic_outside_session or bool(
+                set(session_names(execution_at)) & set(self.config.sessions))
+            if not session_open:
                 execution_state = "SESSION_SKIPPED"
                 execution_fresh = False
             if not execution_fresh:
@@ -331,7 +363,24 @@ class OperationalRuntime:
                 return execution_state
             ai_healthy = all(r is not None and r.status in {"OK", "PARTIAL"} for r in
                 (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review))
-            if (self.paper_enabled and paper_blocked is None and ai_healthy
+            if self.config.v2_position_catch_up:
+                # B2.3C: the existing V1 gate values of THIS cycle plus its committed Evidence bar;
+                # B2.2 decides. No snapshot fallback, no approval from another cycle.
+                if self.paper_enabled and paper_blocked is None:
+                    if not self.store.owns_slot(key, symbol):
+                        raise RuntimeError("slot ownership lost")
+                    committed = self._committed_bar(symbol, bar["timestamp"])
+                    if committed is None:
+                        paper_blocked = EVIDENCE_UNAVAILABLE
+                    else:
+                        gate = CurrentCycleGate(run_id=run_id, symbol=symbol, bar=committed,
+                                                paper_enabled=self.paper_enabled, execution_fresh=execution_fresh,
+                                                session_open=session_open, ai_healthy=ai_healthy,
+                                                ai_final_status=ai.final_status)
+                        paper_blocked = self._gate_pending_orders(gate, symbol, slot, key)
+                    if paper_blocked is not None:
+                        self.store.event(self.clock(), run_id, symbol, "market_evidence", paper_blocked, "ERROR")
+            elif (self.paper_enabled and paper_blocked is None and ai_healthy
                     and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}):
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")

@@ -1,5 +1,19 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.3C (runtime pending orders via CurrentCycleGate, flag OFF)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `a5b1ce51a1fc109c1a43df4189f207c66f69012a`; final SHA = the commit that adds this entry.
+- `runtime/service.py`: with the flag ON, pending orders progress only through B2.2
+  `gate_pending_orders` with a `CurrentCycleGate` built from this cycle's real V1 values and the
+  committed current Evidence bar; missing bar / evidence error / persistent STALE fail closed. The
+  V1 session check is computed once into `session_open` (same expression). Flag OFF unchanged.
+- Tests: new `test_runtime_pending_gate.py` 14/14 (real-process crash and contention); isolation
+  tests updated. Mutations 6/6 killed; flag-OFF old/new byte-identical; full suite once 751 pass /
+  0 fail / 0 skip.
+- Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive; H02 PARTIAL; B2.3D NOT STARTED.
+  Status: **READY FOR INDEPENDENT REVIEW**.
+
 ## 2026-10-05 — V2 Phase 2 B2.3B (Evidence + position catch-up runtime wiring, flag OFF)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

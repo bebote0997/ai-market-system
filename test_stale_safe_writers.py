@@ -348,7 +348,7 @@ class AtomicityAndScopeTests(StaleSafeCase):
                 imports.add(node.module)
             elif isinstance(node, ast.Import):
                 imports.update(alias.name for alias in node.names)
-        self.assertNotIn("execution.pending_order_gate", imports)  # B2.3C, not wired.
+        self.assertIn("execution.pending_order_gate", imports)  # B2.3C: used only when the flag is ON.
         # B2.3B wires Evidence + catch-up only behind a flag that is OFF by default.
         self.assertIs(RuntimeConfig().v2_position_catch_up, False)
         self.assertIs(self.runtime().evidence, None)

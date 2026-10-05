@@ -317,7 +317,8 @@ class IsolationTests(GateCase):
         users = [p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*.py")
                  if ".venv" not in p.parts and not p.name.startswith("test_") and p.name != "pending_order_gate.py"
                  and "pending_order_gate" in p.read_text(encoding="utf-8", errors="replace")]
-        self.assertEqual(users, [])
+        # B2.3C: the runtime is the only user, behind v2_position_catch_up (OFF by default).
+        self.assertEqual(users, ["runtime/service.py"])
 
     def test_open_position_and_other_symbol_are_untouched(self):
         account = PaperAccount("1.0", ACCOUNT, 10000.0, 10000.0, 10000.0)

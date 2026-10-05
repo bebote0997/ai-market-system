@@ -1,7 +1,8 @@
 # V2 Phase 2 — Market Evidence Engine V2
 
 Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 accepted; B2.2
-accepted; B2.3A accepted; B2.3B READY FOR INDEPENDENT REVIEW; B2.3C/D not started). H02: **PARTIAL**.
+accepted; B2.3A accepted; B2.3B accepted; B2.3C READY FOR INDEPENDENT REVIEW; B2.3D not started). H02:
+**PARTIAL**.
 Branch: `v2/phase2-market-evidence` · Base: `main` @ `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`
 
 Mode: PAPER / DEMO only. REAL EXECUTION: DISABLED. NAS100: OFF. Not wired into the runtime.
@@ -427,8 +428,39 @@ B2.3C replaces it with `CurrentCycleGate` and applies decision 3 (committed evid
 - Full suite 737 pass / 0 fail / 0 skip. Schema 3; REAL DISABLED; NAS100 OFF; System Health
   inactive. Flag not enabled anywhere. **READY FOR INDEPENDENT REVIEW.**
 
+### B2.3C — runtime pending orders through CurrentCycleGate, flag OFF (2026-10-05)
+
+With `v2_position_catch_up` ON, the direct `process_next_bar` loop is replaced (OFF: unchanged; old
+B2.3B vs new `service.py` byte-identical over 16 cycles). After catch-up and the existing
+execution-time gates, `run_cycle`:
+1. takes the **committed** 5m Evidence bar whose start equals this cycle's current bar (decision 3:
+   committed evidence wins over the snapshot, e.g. under REVISION). If it is not committed, PAPER
+   economics fail closed (`EVIDENCE_UNAVAILABLE`): no snapshot/newest-bar fallback, no submission;
+2. builds `CurrentCycleGate` from this cycle's own V1 values — `paper_enabled`, `execution_fresh`,
+   `session_open` (the V1 session expression, now computed once and reused), `ai_healthy`,
+   `ai.final_status`, `run_id`, `symbol` — no recomputation, no other cycle's approval;
+3. calls the accepted B2.2 `gate_pending_orders(..., as_of=slot)`: only the gate's own bar, only after
+   `order.as_of`; intermediate bars journaled once as `PENDING_NOT_EVALUATED`; B2.1-guarded save. A
+   STALE result is retried once from fresh state; persistent STALE fails closed
+   (`STALE_PAPER_STATE`); a gate evidence error fails closed.
+Submission then proceeds unchanged, only if eligible and not blocked.
+
+- Tests: `test_runtime_pending_gate.py` 14/14 — gate fields equal the cycle's real values; T1–T3 never
+  reach `process_next_bar`, T4 only; committed 101 beats snapshot 100 (REVISION recorded); flag OFF
+  keeps V1; `order.as_of` = T4 → no evaluation, no cancel; repeated unhealthy cycles journal each bar
+  once, later fill on that cycle's own bar, duplicate/restart add nothing; missing committed bar and
+  corrupt store fail closed; None/empty status, truthy non-bool flags fail closed; STALE → one fresh
+  retry, fills once; persistent STALE → no economics; real child-process crash before/during/after the
+  gate's save (before/during: later cycle fills on its own bar, never T4); real XAU/EUR processes with
+  a forced interleave: STALE, retry, both updates kept.
+- Mutations 6/6 killed: bypass gate; snapshot bar; T4 approval used backward; `as_of` guard removed;
+  newest-bar fallback when evidence missing; `expected_state` removed.
+- Isolation tests updated: `pending_order_gate` is used only by `runtime/service.py`.
+- Full suite 751 pass / 0 fail / 0 skip. Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive;
+  flag OFF by default and never from env. **READY FOR INDEPENDENT REVIEW.**
+
 Remaining gates:
-- **B2.3C/D — NOT STARTED.** Evidence ingestion + catch-up replacing the legacy TradeManager path
+- **B2.3D — NOT STARTED.** Evidence ingestion + catch-up replacing the legacy TradeManager path
   (B2.3B), `CurrentCycleGate` replacing the direct `process_next_bar` loop (B2.3C), end-to-end
   crash/concurrency/rollback certification (B2.3D), all behind a flag OFF by default. Activation
   requires separate owner approval: per-bar SL/TP changes PAPER economics versus V1.
