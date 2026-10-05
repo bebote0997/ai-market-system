@@ -1,5 +1,18 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.3A (stale-safe runtime PAPER writers)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `a261f62aea8b52e4edb1c905c920693ecd35d30a`; final SHA = the commit that adds this entry.
+- `runtime/service.py`: all runtime PAPER writers (bootstrap, legacy TradeManager, legacy pending,
+  submit) use the B2.1 `expected_state` guard via `_guarded_paper_write`; one fresh recompute on
+  STALE; submit fails closed as `STALE_PAPER_STATE` on changed eligibility/equity; later decisions
+  never use a stale broker. Fixes a V1 cross-process lost update (XAU/EUR sharing one account).
+- New `test_stale_safe_writers.py` 12/12 (pre-fix fails 9/12); mutations 4/4 killed; single-writer
+  old/new equivalence byte-identical; full suite once 722 pass / 0 fail / 0 skip.
+- No Evidence/catch-up/gate wiring; no flag; schema 3; System Health inactive; REAL DISABLED;
+  NAS100 OFF; H02 PARTIAL. Status: **READY FOR INDEPENDENT REVIEW**.
+
 ## 2026-10-05 — V2 Phase 2 B2.2 F1 fix (fail closed on missing AI final status)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

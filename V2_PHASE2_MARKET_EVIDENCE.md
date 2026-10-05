@@ -1,7 +1,7 @@
 # V2 Phase 2 — Market Evidence Engine V2
 
 Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 accepted; B2.2
-READY FOR INDEPENDENT REVIEW, not accepted; B2.3 not started). H02: **PARTIAL**.
+accepted; B2.3A READY FOR INDEPENDENT REVIEW; B2.3B/C/D not started). H02: **PARTIAL**.
 Branch: `v2/phase2-market-evidence` · Base: `main` @ `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`
 
 Mode: PAPER / DEMO only. REAL EXECUTION: DISABLED. NAS100: OFF. Not wired into the runtime.
@@ -346,13 +346,50 @@ as_of, gate=None, instrument=None, owner_key=None)`. Not wired into the runtime.
   28/28; mutations 2/2 killed (allow None; allow empty/non-str); full suite 710 pass / 0 fail / 0 skip.
 - **READY FOR F1-ONLY INDEPENDENT RE-REVIEW.** B2.2 not accepted yet.
 
+### B2.3A — stale-safe runtime PAPER writers (2026-10-05)
+
+Owner decisions approved for B2.3: (1) implement behind a feature flag OFF by default; per-bar
+SL/TP activation needs B2.3D + independent certification + separate approval; (2) evidence failure
+fails closed for PAPER economics (analysis may continue; no V1 newest-bar fallback); (3) committed
+Evidence Store content is authoritative under REVISION. B2.3A wires no evidence, catch-up or gate.
+
+Hazard fixed (pre-existing in V1): `save_paper` rewrites the whole account and every PAPER object,
+and the runtime saved a broker loaded before AI. Two processes on different symbols sharing one
+account lost updates (reproduced: a stale XAUUSD save resurrected a closed EURUSD position and
+reverted its realized PnL).
+
+`runtime/service.py` only. Every runtime PAPER writer now uses the existing B2.1 `expected_state`
+guard through `_guarded_paper_write`: fresh durable load → capture `paper_state` → compute → guarded
+`save_paper` (BEGIN IMMEDIATE revalidation). STALE discards the computation and recomputes once from
+a fresh load; no in-process lock, no new mechanism.
+
+| Writer | Guard | Second STALE |
+|---|---|---|
+| Bootstrap account | `paper_state(None, …)`: create only if still absent | adopt the winner's account |
+| Legacy `TradeManager` save | recompute once on fresh state (watermark makes it idempotent) | cycle FAILED, nothing written |
+| Legacy pending `process_next_bar` save | recompute once on fresh state | cycle FAILED, nothing written |
+| `submit_plan` save | eligibility (no PENDING/position for the symbol) and equity == equity Risk sized on | SKIPPED `STALE_PAPER_STATE` |
+
+- Later decisions use a freshly loaded broker, never one older than a guarded write. Submission never
+  reruns AI/Risk and never duplicates an order; a changed eligibility or equity fails closed at once.
+- Legacy writers stay in place (replaced only in B2.3B/C), now stale-safe with unchanged economics.
+- Single-writer equivalence: with one process no save is ever STALE; old vs new `service.py` over 16
+  cycles (submit, fill, marks, stop-out, risk-resized re-entry) gave byte-identical results, PAPER
+  state and journal (170 events).
+- Tests: `test_stale_safe_writers.py` 12/12 (bootstrap race, XAU/EUR lost update, bounded retries,
+  stale submit with changed equity/eligibility, no duplicate order/fill, crash inside the guarded
+  transaction in a child process, restart, single-writer guarded-never-stale, scope/schema/health).
+  Pre-fix `service.py` fails 9/12. Mutations 4/4 killed (no `expected_state`; retry reuses stale
+  broker; stale submit writes after equity change; unbounded retry). Full suite 722 pass / 0 fail /
+  0 skip.
+- Schema 3; no migration; no Evidence/catch-up/gate wiring; System Health inactive; REAL DISABLED;
+  NAS100 OFF. **READY FOR INDEPENDENT REVIEW.**
+
 Remaining gates:
-- **B2.3 — runtime activation: NOT STARTED.** Requires explicit owner authorization: per-bar SL/TP
-  changes PAPER economics versus V1 and the frozen experiment. Activation gates recorded for B2.3:
-  (1) the B2.1 stale-state guard is opt-in — before catch-up and the runtime operate together, every
-  relevant PAPER writer (runtime `save_paper` calls included) must participate safely in stale-state
-  protection; (2) the runtime must build `CurrentCycleGate` from its real gate values at the existing
-  pending-order point and replace its direct `process_next_bar` loop, without relaxing any gate.
+- **B2.3B/C/D — NOT STARTED.** Evidence ingestion + catch-up replacing the legacy TradeManager path
+  (B2.3B), `CurrentCycleGate` replacing the direct `process_next_bar` loop (B2.3C), end-to-end
+  crash/concurrency/rollback certification (B2.3D), all behind a flag OFF by default. Activation
+  requires separate owner approval: per-bar SL/TP changes PAPER economics versus V1.
 
 ## Phase 1 protection
 

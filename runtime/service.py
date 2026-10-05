@@ -26,6 +26,7 @@ from storage.database import Store
 from ui.adapters import MARKETS, from_ai_report
 
 LOG = logging.getLogger("ai_floor.runtime")
+STALE_PAPER_STATE = "STALE_PAPER_STATE"  # B2.3A: submission refused, PAPER state changed under it.
 
 
 class OperationalRuntime:
@@ -74,7 +75,7 @@ class OperationalRuntime:
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
         self.store = Store(self.config.db_path)
         self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
-        account, orders, _ = self.store.load_paper(self.config.account_id)
+        account, orders, fills = self.store.load_paper(self.config.account_id)
         if account is None:
             if orders or self.store.db.execute("SELECT 1 FROM paper_positions LIMIT 1").fetchone():
                 self.store.event(self.clock(), None, None, "recovery", "STATE_INCONSISTENCY", "ERROR", {"reason": "paper_account_missing"})
@@ -82,7 +83,13 @@ class OperationalRuntime:
                 raise RuntimeError("paper state without account")
             account = PaperAccount("1.0", self.config.account_id, self.config.starting_equity,
                                    self.config.starting_equity, self.config.starting_equity)
-            self.store.save_paper(PaperBroker(account))
+            # B2.3A: create only if still absent; a concurrent creator's account is never overwritten.
+            if self.store.save_paper(PaperBroker(account),
+                                     expected_state=self.store.paper_state(None, orders, fills)) is False:
+                account, orders, _ = self.store.load_paper(self.config.account_id)
+                if account is None:
+                    self.store.close()
+                    raise RuntimeError("paper account creation raced without an account")
         for position in account.open_positions.values():
             origin = orders.get(position.origin_order_id)
             if origin is None or origin.status != "FILLED" or origin.symbol != position.symbol or origin.quantity != position.quantity:
@@ -109,6 +116,22 @@ class OperationalRuntime:
         broker.orders = orders
         broker.fills = fills
         return broker
+
+    def _guarded_paper_write(self, symbol, key, apply):
+        """B2.3A: run ``apply(broker)`` on freshly loaded durable PAPER state and persist it only if
+        that state is still current (B2.1 ``expected_state``, revalidated under BEGIN IMMEDIATE).
+
+        ``apply`` returns (save, result). On STALE the computation is discarded and redone once from
+        a fresh load. Returns (broker, result), or (None, None) when both attempts were stale.
+        """
+        for _ in range(2):
+            broker = self._broker(symbol)
+            expected_state = self.store.paper_state(broker.account, broker.orders, broker.fills)
+            save, result = apply(broker)
+            if not save or self.store.save_paper(broker, owner_key=key, symbol=symbol,
+                                                 expected_state=expected_state) is not False:
+                return broker, result
+        return None, None
 
     def _snapshot(self, vm):
         plan = None if vm.plan is None else {k: getattr(vm.plan, k) for k in
@@ -196,7 +219,6 @@ class OperationalRuntime:
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, data_state, "freshness_gate_blocked", run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", data_state)
                 return data_state
-            broker = self._broker(symbol)
             if not self.store.owns_slot(key, symbol):
                 raise RuntimeError("slot ownership lost")
             # A previously authorized paper order may progress only after this
@@ -204,15 +226,20 @@ class OperationalRuntime:
             bar = {"symbol": symbol, "timestamp": snapshot["5m"].index.max().to_pydatetime(),
                    "open": float(last_bar["Open"]), "high": float(last_bar["High"]),
                    "low": float(last_bar["Low"]), "close": float(last_bar["Close"]), "is_closed": True}
-            had_open = bool(broker.account.open_positions)
-            if self.paper_enabled:
-                TradeManager(broker.account, broker).process_bar(bar)
-            if self.paper_enabled and (had_open or broker.journal):
-                self.store.save_paper(broker, owner_key=key, symbol=symbol)
+
+            def manage_positions(fresh):
+                had_open = bool(fresh.account.open_positions)
+                if self.paper_enabled:
+                    TradeManager(fresh.account, fresh).process_bar(bar)
+                return self.paper_enabled and (had_open or bool(fresh.journal)), None
+            broker, _ = self._guarded_paper_write(symbol, key, manage_positions)
+            if broker is None:
+                raise RuntimeError("stale paper state")  # Fail closed: nothing of this cycle written.
+            decision_equity = broker.account.equity
             stage = "deterministic"
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
                                       self.instruments.get(symbol), self.risk_config,
-                                      equity=broker.account.equity, run_id=run_id)
+                                      equity=decision_equity, run_id=run_id)
             deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
             with self.store.transaction():
                 self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
@@ -261,11 +288,15 @@ class OperationalRuntime:
             if self.paper_enabled and ai_healthy and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
-                for order in tuple(broker.orders.values()):
-                    if order.symbol == symbol and order.status == "PENDING" and bar["timestamp"] > order.as_of:
-                        broker.process_next_bar(order, bar)
-            if self.paper_enabled and broker.journal:
-                self.store.save_paper(broker, owner_key=key, symbol=symbol)
+
+                def progress_pending(fresh):
+                    for order in tuple(fresh.orders.values()):
+                        if order.symbol == symbol and order.status == "PENDING" and bar["timestamp"] > order.as_of:
+                            fresh.process_next_bar(order, bar)
+                    return bool(fresh.journal), None
+                if self._guarded_paper_write(symbol, key, progress_pending)[0] is None:
+                    raise RuntimeError("stale paper state")  # Fail closed: no pending-order effect written.
+            broker = self._broker(symbol)  # B2.3A: later decisions read durable state, never a stale broker.
             eligible = paper_policy(ai)
             stage = "paper"
             execution_status, execution_reason = "SKIPPED", "POLICY_NOT_READY"
@@ -278,9 +309,22 @@ class OperationalRuntime:
             elif eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")
-                order = broker.submit_plan(deterministic, snapshot, slot)
-                if order:
-                    self.store.save_paper(broker, owner_key=key, symbol=symbol)
+
+                def submit(fresh):
+                    # The approved Risk decision stays valid only for the state it was sized on:
+                    # never resubmit after eligibility or equity changed, and never rerun Risk/AI.
+                    if (any(o.symbol == symbol and o.status == "PENDING" for o in fresh.orders.values())
+                            or symbol in fresh.account.open_positions or fresh.account.equity != decision_equity):
+                        return False, STALE_PAPER_STATE
+                    order = fresh.submit_plan(deterministic, snapshot, slot)
+                    return order is not None, order
+                fresh, order = self._guarded_paper_write(symbol, key, submit)
+                if fresh is None or order is STALE_PAPER_STATE:
+                    self._audit_safely(lambda: self.store.event(
+                        self.clock(), ai.run_id, symbol, "policy", STALE_PAPER_STATE, "WARNING"),
+                        run_id, symbol)
+                    execution_reason = STALE_PAPER_STATE
+                elif order:
                     self._audit_safely(lambda: self.store.event(
                         self.clock(), ai.run_id, symbol, "policy", "PAPER_ORDER_SUBMITTED"),
                         run_id, symbol)
