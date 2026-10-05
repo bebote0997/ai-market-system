@@ -1,5 +1,18 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 3 P3.1 (Setup Validator V2 core)
+
+- Agent: Claude. Branch `v2/phase3-setup-validator` from certified `main`
+  `c7aaafb4ff0fe35c6985d7089d8ea85a144b2121`; final SHA = the commit that adds this entry.
+- `agents/setup_validator.py`: frozen V1 decision (byte-identical) + structured explanation (checks,
+  details, evidence refs, setup identity); `core/contracts.py`: optional `SetupAssessment.explanation`;
+  `runtime/observability.py`: setup_id delegates to the validator (same values); `runtime/review.py`:
+  review report carries the explanation. No schema change; `storage/database.py` untouched.
+- Confidence not implemented (no defensible methodology). F03-T09/T11 not started.
+- Tests: new `test_setup_validator_v2.py` 15/15; mutations 5/5 killed; full suite 767 pass / 0 fail /
+  0 skip. REAL DISABLED; NAS100 OFF; V2 runtime activation not authorized; System Health inactive.
+- Status: **READY FOR INDEPENDENT REVIEW**.
+
 ## 2026-10-05 — V2 Phase 2 B2.3D regression preservation (test-only)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

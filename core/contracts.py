@@ -148,6 +148,9 @@ class SetupAssessment:
     invalidation: Optional[float] = None
     warnings: Tuple[str, ...] = ()
     data_quality: dict = field(default_factory=dict)
+    # V2 Phase 3: structured, deterministic explanation of the decision (information only; never an input
+    # to status, Planner, Risk, AI or execution). Empty for assessments built outside the validator.
+    explanation: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
