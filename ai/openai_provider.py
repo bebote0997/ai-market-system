@@ -10,18 +10,22 @@ from urllib.request import Request, urlopen
 from ai.contracts import AIResponse, VALID_RECOMMENDATIONS, evidence_ids
 from ai.provider import AIProvider
 from ai import prompts
+from runtime import health_hooks
 from runtime.retry_after import retry_after_seconds
 
 
 class OpenAIProviderError(RuntimeError):
     """A sanitized provider failure; never carries a response body or credential."""
 
-    def __init__(self, kind, *, http_status=None, error_type=None, error_code=None, retry_after=None):
+    def __init__(self, kind, *, http_status=None, error_type=None, error_code=None, retry_after=None,
+                 timed_out=False):
         self.kind = kind
         self.http_status = http_status
         self.error_type = error_type
         self.error_code = error_code
         self.retry_after = retry_after
+        # Observational evidence only (SYSTEM HEALTH timeout classification); kind is unchanged.
+        self.timed_out = timed_out
         super().__init__(kind)
 
 
@@ -110,6 +114,7 @@ class OpenAIProvider(AIProvider):
             raise OpenAIProviderError("NOT_CONFIGURED")
         for attempt in range(self.retries + 1):
             http_status = error_type = error_code = retry_after = None
+            timed_out = False
             try:
                 return self._transport(payload, self.api_key, self.timeout)
             except HTTPError as exc:
@@ -135,17 +140,34 @@ class OpenAIProvider(AIProvider):
                     kind = ("RATE_LIMITED" if exc.code == 429 else
                             "AUTH_ERROR" if exc.code in {401, 403} else
                             "MODEL_UNAVAILABLE" if exc.code == 404 else "PROVIDER_ERROR")
-            except (URLError, TimeoutError, ConnectionError):
+            except (URLError, TimeoutError, ConnectionError) as exc:
                 transient, kind = True, "CONNECTION_ERROR"
+                # urlopen raises TimeoutError on read and URLError(reason=TimeoutError) on connect.
+                timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
             if not transient or attempt == self.retries or (retry_after is not None and retry_after > 15):
                 self.last_failure = kind
                 raise OpenAIProviderError(kind, http_status=http_status, error_type=error_type,
-                                          error_code=error_code, retry_after=retry_after) from None
+                                          error_code=error_code, retry_after=retry_after,
+                                          timed_out=timed_out) from None
             delay = retry_after if retry_after is not None else min(4.0, 0.4 * 2 ** attempt)
             self._sleep(delay + random.uniform(0, 0.1))
         raise AssertionError("unreachable")
 
     def generate(self, request):
+        """Unchanged provider call plus a passive SYSTEM HEALTH observation (V2 Phase 1).
+        The original result is returned and the original exception re-raised unchanged."""
+        started = time.perf_counter()
+        try:
+            response = self._generate_unobserved(request)
+        except Exception as error:
+            health_hooks.emit("provider_call_observed", provider=self, request=request, error=error,
+                              latency_ms=(time.perf_counter() - started) * 1000)
+            raise
+        health_hooks.emit("provider_call_observed", provider=self, request=request, response=response,
+                          latency_ms=(time.perf_counter() - started) * 1000)
+        return response
+
+    def _generate_unobserved(self, request):
         role_prompt = _PROMPTS.get(request.role)
         if role_prompt is None:
             raise ValueError("unsupported AI role")

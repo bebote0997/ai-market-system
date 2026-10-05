@@ -16,6 +16,7 @@ from execution.trade_manager import TradeManager
 from floor.orchestrator import run as run_floor
 from riesgo import crear_configuracion_riesgo_v2
 from runtime.config import RuntimeConfig
+from runtime import health_hooks
 from runtime.gates import fresh_snapshot, paper_policy
 from runtime.observability import setup_id as audit_setup_id
 from runtime.paper_contracts import apply_paper_quantity_increment
@@ -187,6 +188,9 @@ class OperationalRuntime:
             with self.store.transaction():
                 self.store.set_state("market_data_provider", "CURRENT" if fresh else data_state)
             self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_CHECK", "INFO" if fresh else "WARNING", {"state": data_state})
+            # Passive SYSTEM HEALTH hook (V2 Phase 1): observes the already-decided verdict; never raises.
+            health_hooks.emit("market_data_observed", symbol=symbol, slot=slot, snapshot=snapshot,
+                              data_state=data_state, provider_mode=self.config.market_provider_mode)
             if not fresh:
                 self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_STALE" if data_state == "STALE_DATA" else "DATA_UNAVAILABLE", "WARNING")
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, data_state, "freshness_gate_blocked", run_id))
