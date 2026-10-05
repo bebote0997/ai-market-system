@@ -1,5 +1,22 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.1 (position catch-up core, isolated)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `e12797701eb4184c47837bbe0c83388a86db60c2`; final SHA = the commit that adds this entry.
+- Scope: `execution/position_catch_up.py` (`catch_up_position`), `test_position_catch_up.py`
+  (19 tests), Phase 2 doc section. Not wired into the runtime.
+- Invariant: per (position, closed 5m bar) either no effect commits and the bar stays eligible, or
+  all effects plus `last_processed_at` commit in one existing `Store.save_paper` transaction.
+  Watermark from the trading DB only; evidence read-only; fail closed on evidence failure.
+- Tests: focused 19/19 (A–R incl. real-process crash before/inside/after a bar transaction and
+  repeated crashes). Scratch mutations 5/5 detected (newest-bar-only, reversed ordering, watermark
+  check removed, duplicate bar allowed, latest-bar fallback on evidence failure).
+- Unchanged: `storage/database.py`, `execution/trade_manager.py`, `execution/paper_broker.py`,
+  runtime, Risk, AI, Setup, Planner, providers, pending-order eligibility; trading DB schema 3.
+- Safety: REAL EXECUTION = DISABLED; NAS100 = OFF. H02 PARTIAL. B2.2 and B2.3 not started.
+  No PR, no merge, no deploy. Phase 2 IN PROGRESS / NOT CERTIFIED.
+
 ## 2026-10-05 — V2 Phase 2 Batch 1 final store hardening (M1 URI alias, M2 effective schema)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

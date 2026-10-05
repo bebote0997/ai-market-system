@@ -1,6 +1,7 @@
 # V2 Phase 2 — Market Evidence Engine V2
 
-Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 complete; later batches pending)
+Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 implemented, pending
+independent review; B2.2 and B2.3 not started). H02: **PARTIAL**.
 Branch: `v2/phase2-market-evidence` · Base: `main` @ `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`
 
 Mode: PAPER / DEMO only. REAL EXECUTION: DISABLED. NAS100: OFF. Not wired into the runtime.
@@ -224,6 +225,42 @@ design.
 - Not done in Batch 1 and not to be done casually: no trading DB schema migration, no ad-hoc
   pending-order progress, no change to order eligibility, fill semantics or the Paper Broker, no
   historical `run_cycle`, no cross-SQLite pseudo-atomicity.
+
+## B2.1 — Position catch-up core (isolated; not wired)
+
+Purpose: every committed closed 5m bar after an EXISTING open PAPER position's durable watermark
+reaches the unchanged `TradeManager.process_bar` exactly once, oldest first.
+`execution/position_catch_up.py` (`catch_up_position`); tests `test_position_catch_up.py`.
+
+- **Watermark.** `PaperPosition.last_processed_at`, else `opened_at` (trading DB, durable).
+- **Input.** `MarketEvidenceEngine.committed(symbol, "5m", after=watermark)`: committed, closed,
+  strictly chronological (verified; a violation fails closed), and closed by the caller's `as_of`.
+  LATE, REVISION, forming and gap bars are never committed, so they never reach economics.
+- **Exactly-once invariant (per position, bar).** Each bar is applied to PAPER state freshly loaded
+  from the trading DB and persisted with one `Store.save_paper` call, i.e. one trading-DB transaction
+  holding the position (including `last_processed_at`), any closed trade and position status, account
+  realized/unrealized PnL and equity, and the journal. Either nothing from the bar commits and it
+  stays eligible, or everything commits together. The next bar is chosen from durable state only;
+  `TradeManager`'s own `last_processed_at` guard is a second, independent duplicate barrier.
+- **Close.** A closing bar ends catch-up; later bars produce no effect (the position is no longer open).
+- **Crash/restart (real child processes, `os._exit`).** Crash before T2 → resumes T2; crash inside
+  T2's transaction → T2 rolled back, resumes T2; crash after T2 commits → resumes T3; repeated
+  crashes converge to the uninterrupted state (identical equity, one close, one PnL delta).
+- **Fail closed.** Evidence read failure or contract violation raises `CatchUpEvidenceError` before
+  any trading write; no newest-bar fallback; a later healthy call resumes at the right bar. A trading
+  save failure leaves the Evidence Store byte-identical (it is never written) and the bar eligible.
+- **No decision pipeline.** Never calls Setup, AI, Risk, the Trade Planner, `submit_plan` or
+  `process_next_bar`; pending orders are untouched (spies + AST tests). No open position → `NO_OP`
+  (bootstrap does not replay the provider lookback).
+- **Unchanged.** `storage/database.py`, `execution/trade_manager.py`, `execution/paper_broker.py`,
+  runtime, providers, Risk, AI; trading DB schema 3; no cross-database transaction.
+
+Remaining gates:
+- **B2.2 — pending orders: NOT STARTED.** Owner decision required on the gate for bars between
+  cycles (H02 vs H03 "an old approval cannot substitute for the current-cycle gate"); recommended
+  P1: cycle-gated only, intermediate bars journaled as not evaluated.
+- **B2.3 — runtime activation: NOT STARTED.** Requires explicit owner authorization: per-bar SL/TP
+  changes PAPER economics versus V1 and the frozen experiment.
 
 ## Phase 1 protection
 
