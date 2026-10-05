@@ -2,6 +2,7 @@
 import ast
 from datetime import datetime, timedelta, timezone
 import hashlib
+import os
 from pathlib import Path
 import random
 import sqlite3
@@ -261,25 +262,71 @@ class RestartTests(EvidenceCase):
         self.assertEqual((self.starts(result.committed), len(result.duplicates)), ([bar(3).start, bar(4).start], 3))
         self.assertEqual([r[3] for r in self.dump()[0]], [1, 2, 3, 4, 5])
 
-    def test_process_crash_before_first_commit_loses_nothing(self):
+    def test_process_crash_in_duplicate_check_transaction_loses_nothing(self):
+        # The first transaction of this presentation is the already-committed T0 (a DUPLICATE, no
+        # INSERT); the crash happens there, before any new bar is processed.
         self.engine.ingest("XAUUSD", "5m", [bar(0)], as_of=after(0))
         self.store.close()
         child = self.run_child("""
             import contextlib
             from storage import evidence_store
             @contextlib.contextmanager
-            def crash_before_commit(self):
+            def crash_in_first_transaction(self):
                 self.db.execute("BEGIN IMMEDIATE")
                 yield
-                os._exit(17)  # Hard crash inside the open transaction, after the INSERT.
-            evidence_store.EvidenceStore.transaction = crash_before_commit
+                os._exit(17)  # Hard crash inside the first (duplicate T0) transaction.
+            evidence_store.EvidenceStore.transaction = crash_in_first_transaction
             engine.ingest("XAUUSD", "5m", [bar(i) for i in range(5)], as_of=after(4))
         """)
         self.assertEqual(child.returncode, 17, child.stderr)
         self.open()
-        self.assertEqual(self.starts(self.stream()), [bar(0).start])  # Uncommitted evidence was not kept...
+        self.assertEqual(self.starts(self.stream()), [bar(0).start])
         result = self.engine.ingest("XAUUSD", "5m", [bar(i) for i in range(5)], as_of=after(4))
-        self.assertEqual(self.starts(result.committed), [bar(i).start for i in (1, 2, 3, 4)])  # ...and stays eligible.
+        self.assertEqual(self.starts(result.committed), [bar(i).start for i in (1, 2, 3, 4)])
+
+    def test_process_crash_after_real_insert_before_commit_then_restart(self):
+        # Real pre-commit window: the crash happens inside the transaction that has just INSERTed a
+        # genuinely new bar, before COMMIT. Crash points: first new bar (T1) and a middle bar (T2).
+        for crash_on_insert in (1, 2):
+            with self.subTest(crash_on_insert=crash_on_insert):
+                self.store.close()
+                self.path = self.dir / f"crash-on-insert-{crash_on_insert}.db"
+                self.open().ingest("XAUUSD", "5m", [bar(0)], as_of=after(0))
+                self.store.close()
+                child = self.run_child(f"""
+                    import contextlib
+                    from storage import evidence_store
+                    inserts = []
+                    @contextlib.contextmanager
+                    def crash_after_insert_before_commit(self):
+                        self.db.execute("BEGIN IMMEDIATE")
+                        changes = self.db.total_changes
+                        yield
+                        if self.db.total_changes > changes:  # This transaction INSERTed new evidence.
+                            inserts.append(1)
+                            if len(inserts) == {crash_on_insert}:
+                                pending = self.db.execute("SELECT bar_start FROM market_evidence "
+                                                          "ORDER BY stream_seq DESC LIMIT 1").fetchone()[0]
+                                print("UNCOMMITTED", pending, flush=True)
+                                os._exit(19)  # Hard crash: INSERT done, COMMIT never executed.
+                        self.db.execute("COMMIT")
+                    evidence_store.EvidenceStore.transaction = crash_after_insert_before_commit
+                    engine.ingest("XAUUSD", "5m", [bar(i) for i in range(5)], as_of=after(4))
+                """)
+                self.assertEqual(child.returncode, 19, child.stderr)
+                pending = bar(crash_on_insert)
+                self.assertEqual(child.stdout.split(), ["UNCOMMITTED", pending.bar_start])  # Inserted, in the txn.
+                self.open()
+                survivors = [bar(i).start for i in range(crash_on_insert)]
+                self.assertEqual(self.starts(self.stream()), survivors)  # The uncommitted bar was not kept.
+                result = self.engine.ingest("XAUUSD", "5m", [bar(i) for i in range(5)], as_of=after(4))
+                self.assertEqual(self.starts(result.committed), [bar(i).start for i in range(crash_on_insert, 5)])
+                self.assertEqual(len(result.duplicates), crash_on_insert)
+                self.assertEqual(self.starts(self.stream()), [bar(i).start for i in range(5)])  # None lost.
+                self.assertEqual([r[3] for r in self.dump()[0]], [1, 2, 3, 4, 5])  # Each committed once.
+                self.assertEqual(self.engine.anomalies("XAUUSD", "5m"), ())
+                again = self.engine.ingest("XAUUSD", "5m", [bar(i) for i in range(5)], as_of=after(4))
+                self.assertEqual((again.committed, len(again.duplicates)), ((), 5))
 
     def test_process_crash_after_partial_catch_up_then_restart(self):
         self.engine.ingest("XAUUSD", "5m", [bar(0)], as_of=after(0))
@@ -505,6 +552,132 @@ class PersistenceTests(unittest.TestCase):
             EvidenceStore(path)
         self.assertFalse(path.exists())
         Store(path).close()  # The trading DB can still initialize at its own path.
+
+    def assert_refused_unchanged(self, path):
+        listing = sorted(p.name for p in path.parent.iterdir())
+        before = digest(path) if path.is_file() else None
+        for readonly in (False, True):
+            try:
+                store = EvidenceStore(path, readonly=readonly)
+            except EvidenceStoreError:
+                continue
+            store.close()
+            self.fail(f"{path.name} was accepted as a MARKET EVIDENCE database (readonly={readonly})")
+        self.assertEqual(digest(path) if path.is_file() else None, before)  # Byte-for-byte unchanged.
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), listing)  # No journal/WAL/new file.
+
+    def test_m1_trading_db_refused_by_name_and_identity_before_any_write(self):
+        cases = self.dir / "cases"
+        cases.mkdir()
+        for index, name in enumerate(("trading_floor.db", "TRADING_FLOOR.DB")):  # A, B: existing EMPTY files.
+            with self.subTest(case=f"empty {name}"):
+                folder = cases / f"empty{index}"  # Separate folders: no reliance on filesystem case rules.
+                folder.mkdir()
+                (folder / name).write_bytes(b"")
+                self.assert_refused_unchanged(folder / name)
+                self.assertEqual((folder / name).read_bytes(), b"")
+        for name in ("Trading_Floor.Db", "trading_floor.db.", "trading_floor.db ", "trading_floor.db:evidence",
+                     "nested/../trading_floor.db"):  # Missing paths: case/normalization variants.
+            with self.subTest(case=f"variant {name!r}"):
+                folder = cases / f"variant{len(list(cases.iterdir()))}"
+                (folder / "nested").mkdir(parents=True)
+                with self.assertRaises(EvidenceStoreError):
+                    EvidenceStore(folder / name)
+                self.assertEqual(sorted(p.name for p in folder.iterdir()), ["nested"])  # Nothing created.
+        real = cases / "real" / "trading_floor.db"  # C: an initialized trading DB, by name and by copy.
+        Store(real).close()
+        self.assert_refused_unchanged(real)
+        copy = cases / "real" / "scratch_copy.db"
+        copy.write_bytes(real.read_bytes())
+        self.assert_refused_unchanged(copy)
+        empty = cases / "linked" / "trading_floor.db"  # Same file under another name (hard link).
+        empty.parent.mkdir()
+        empty.write_bytes(b"")
+        os.link(empty, cases / "linked" / "evidence.db")
+        self.assert_refused_unchanged(cases / "linked" / "evidence.db")
+        self.assertEqual(empty.read_bytes(), b"")
+        health = cases / "system_health.db"  # D: Phase 1 sidecar.
+        HealthStore(health).close()
+        self.assert_refused_unchanged(health)
+        foreign = cases / "foreign.db"  # E: unrelated SQLite database.
+        connection = sqlite3.connect(foreign)
+        connection.execute("CREATE TABLE t(x)")
+        connection.commit()
+        connection.close()
+        self.assert_refused_unchanged(foreign)
+        for name in ("market_evidence.db", "trading_floor_evidence.db"):  # F: legitimate new evidence DBs.
+            with self.subTest(case=f"new {name}"):
+                store = EvidenceStore(cases / "new" / name)
+                MarketEvidenceEngine(store).ingest("XAUUSD", "5m", [bar(0)], as_of=after(0))
+                store.close()
+                reopened = EvidenceStore(cases / "new" / name, readonly=True)
+                self.addCleanup(reopened.close)
+                self.assertEqual(MarketEvidenceEngine(reopened).committed("XAUUSD", "5m"), (bar(0),))
+
+    SCHEMA = {
+        "market_evidence": "symbol TEXT NOT NULL, timeframe TEXT NOT NULL, bar_start TEXT NOT NULL, "
+                           "stream_seq INTEGER NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, "
+                           "PRIMARY KEY(symbol,timeframe,bar_start), UNIQUE(symbol,timeframe,stream_seq)",
+        "evidence_anomalies": "anomaly_id TEXT PRIMARY KEY, symbol TEXT NOT NULL, timeframe TEXT NOT NULL, "
+                              "kind TEXT NOT NULL, bar_start TEXT NOT NULL, payload TEXT NOT NULL",
+    }
+
+    def crafted(self, name, extra="", **tables):
+        """A database that identifies itself as a MARKET EVIDENCE sidecar (application_id, version,
+        table names) with the given table definitions."""
+        path = self.dir / name
+        connection = sqlite3.connect(path)
+        definitions = {**self.SCHEMA, **tables}
+        connection.executescript(
+            "CREATE TABLE evidence_schema_info(version INTEGER NOT NULL);" +
+            "".join(f"CREATE TABLE {table}({body});" for table, body in definitions.items()) + extra +
+            f"INSERT INTO evidence_schema_info(version) VALUES({EVIDENCE_SCHEMA_VERSION});"
+            f"PRAGMA application_id={EVIDENCE_APPLICATION_ID};")
+        connection.close()
+        return path
+
+    def test_m2_self_identified_store_with_wrong_schema_is_refused_on_open_unchanged(self):
+        evidence = self.SCHEMA["market_evidence"]
+        cases = {
+            "missing_column": evidence.replace(", digest TEXT NOT NULL", ""),
+            "renamed_column": evidence.replace("digest TEXT", "checksum TEXT"),
+            "wrong_type": evidence.replace("stream_seq INTEGER", "stream_seq TEXT"),
+            "nullable_column": evidence.replace("payload TEXT NOT NULL", "payload TEXT"),
+            "missing_stream_seq_unique": evidence.replace(", UNIQUE(symbol,timeframe,stream_seq)", ""),
+            "missing_primary_key": evidence.replace("PRIMARY KEY(symbol,timeframe,bar_start), ", ""),
+            "narrower_primary_key": evidence.replace("PRIMARY KEY(symbol,timeframe,bar_start)",
+                                                     "PRIMARY KEY(symbol,bar_start)"),
+            "case_insensitive_identity": evidence.replace("symbol TEXT NOT NULL", "symbol TEXT NOT NULL COLLATE NOCASE"),
+        }
+        for name, body in cases.items():
+            with self.subTest(case=name):
+                path = self.crafted(f"{name}.db", market_evidence=body)
+                self.assert_refused_unchanged(path)
+        anomalies = self.SCHEMA["evidence_anomalies"].replace("anomaly_id TEXT PRIMARY KEY", "anomaly_id TEXT NOT NULL")
+        with self.subTest(case="missing_anomaly_identity"):
+            self.assert_refused_unchanged(self.crafted("anomaly.db", evidence_anomalies=anomalies))
+        with self.subTest(case="extra_unique_constraint"):
+            self.assert_refused_unchanged(self.crafted("extra_unique.db", "CREATE UNIQUE INDEX u ON market_evidence(symbol);"))
+        with self.subTest(case="trigger"):
+            self.assert_refused_unchanged(self.crafted(
+                "trigger.db", "CREATE TRIGGER t AFTER INSERT ON market_evidence BEGIN DELETE FROM market_evidence; END;"))
+
+    def test_m2_semantically_equivalent_schema_opens_and_ingests_normally(self):
+        path = self.crafted(
+            "equivalent.db", "CREATE UNIQUE INDEX seq_identity ON market_evidence(timeframe, stream_seq, symbol);"
+                             "CREATE INDEX by_digest ON market_evidence(digest);",
+            market_evidence="stream_seq integer not null, digest text not null, payload text not null, "
+                            "bar_start text not null, timeframe text not null, symbol text not null, "
+                            "constraint identity primary key (bar_start, symbol, timeframe)",
+            evidence_anomalies="payload text not null, kind text not null, bar_start text not null, "
+                               "timeframe text not null, symbol text not null, anomaly_id text, primary key (anomaly_id)")
+        store = EvidenceStore(path)
+        self.addCleanup(store.close)
+        engine = MarketEvidenceEngine(store)
+        engine.ingest("XAUUSD", "5m", [bar(0), bar(2)], as_of=after(2))
+        self.assertEqual(engine.committed("XAUUSD", "5m"), (bar(0), bar(2)))
+        self.assertEqual([a.kind for a in engine.anomalies()], ["GAP"])
+        self.assertEqual(engine.ingest("XAUUSD", "5m", [bar(0), bar(2)], as_of=after(2)).committed, ())
 
     def test_corrupt_and_incompatible_stores_fail_safely(self):
         self.path.write_bytes(b"not a sqlite database" * 100)

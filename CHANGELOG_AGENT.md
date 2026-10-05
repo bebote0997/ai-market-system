@@ -1,5 +1,32 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 Batch 1 review fixes (M1–M3, decisions A–E)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `817a35947b305de6524b593c008d1c5fecc03c4a`; final SHA = the commit that adds this entry.
+- M1: `EvidenceStore` refuses the trading DB by name (case-insensitive, after link/`..`
+  resolution, Windows trailing dot/space and stream suffix ignored) and by identity (same file as a
+  sibling trading DB; initialized trading DB under any name), before any connection or write,
+  including an existing empty `trading_floor.db` / `TRADING_FLOOR.DB`.
+- M2: an existing sidecar must match the schema contract read from SQLite metadata (columns, types,
+  NOT NULL, primary-key membership, exact UNIQUE/PRIMARY KEY column sets with BINARY collation, no
+  triggers); otherwise it is refused on open and left unchanged. Equivalent schemas are accepted.
+- M3: the old pre-commit crash test actually crashed in the duplicate-T0 transaction; renamed to
+  what it proves. New real-process test crashes after a genuine INSERT and before COMMIT (first
+  and middle new bar); restart commits the bar exactly once, nothing lost or duplicated.
+- `V2_PHASE2_MARKET_EVIDENCE.md`: owner-approved decisions A–E replace the open questions; Batch 2
+  trading-side idempotency recorded as an OPEN HIGH gate (pending orders have no durable per-bar
+  progress); V1 defect and `contiguous` (ingestion continuity != market-history completeness)
+  stated precisely. H02 remains **PARTIAL**.
+- Tests: focused 43/43 (was 39). Full suite 652/652 pass, 0 failed, 0 errors, 0 skipped. Scratch
+  mutation checks: 8/8 detected (case-insensitive refusal, empty trading DB initialization, column
+  validation, uniqueness validation, defective crash test, trigger check, hard-link identity,
+  collation).
+- Safety: only `storage/evidence_store.py`, its test and the Phase 2 doc changed (plus this entry).
+  `storage/database.py` unchanged, trading DB schema 3, no runtime wiring, no trading, risk, Paper
+  Broker, provider, freshness, session or cadence change. REAL EXECUTION = DISABLED; NAS100 = OFF.
+  No deploy, no merge, no PR, Batch 2 not started. Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED**.
+
 ## 2026-10-05 — V2 Phase 2 Batch 1 (Market Evidence Engine foundation + H02 evidence processing)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence` (worktree `ai-market-system-phase2-evidence`);
