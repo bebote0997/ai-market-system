@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
 import unittest
+from unittest import mock
 
 from ai.openai_provider import OpenAIProvider, OpenAIProviderError
 from runtime.health_observers import observe_agent_response, observe_ai_provider
@@ -207,6 +208,43 @@ class ProviderTimeoutEndToEndTests(IsolationCase):
                 self.install(mode, f"o-{mode}")
                 observed, observed_error = self.outcome(factory)
                 self.assertEqual((observed, observed_error.timed_out), (baseline, error.timed_out))
+
+    def test_p_timeout_retry_behavior_pinned_and_independent_of_timed_out_and_sink(self):
+        # Existing _post policy: a transport timeout is a transient CONNECTION_ERROR, attempted
+        # retries+1 times with the configured timeout, sleeping min(4.0, 0.4 * 2**attempt) + jitter.
+        def run(factory, succeed_on=None):
+            attempts, sleeps = [], []
+
+            def transport(payload, api_key, timeout):
+                attempts.append(timeout)
+                if len(attempts) == succeed_on:
+                    return openai_payload()
+                raise factory()
+            provider = OpenAIProvider(api_key="dummy", timeout=7, retries=2, transport=transport, sleep=sleeps.append)
+            with mock.patch("ai.openai_provider.random.uniform", return_value=0.05):
+                try:
+                    result = provider.generate(ai_request())
+                except OpenAIProviderError as error:
+                    result = (type(error), error.kind, error.http_status, error.retry_after, str(error),
+                              error.timed_out)
+            return result, attempts, [round(delay, 6) for delay in sleeps], provider.last_failure
+
+        exhausted = ([7.0, 7.0, 7.0], [0.45, 0.85], "CONNECTION_ERROR")
+        failure = (OpenAIProviderError, "CONNECTION_ERROR", None, None, "CONNECTION_ERROR")
+        self.install("absent", "p-absent")
+        recovered = self.provider(lambda *_: openai_payload()).generate(ai_request())
+        cases = {
+            "read_timeout": (lambda: TimeoutError("timed out"), None, (*failure, True), exhausted),
+            "connect_timeout": (lambda: URLError(TimeoutError("timed out")), None, (*failure, True), exhausted),
+            "connection_reset": (lambda: ConnectionError("reset"), None, (*failure, False), exhausted),
+            "timeout_then_success": (lambda: TimeoutError("timed out"), 3, recovered,
+                                     ([7.0, 7.0, 7.0], [0.45, 0.85], None)),
+        }
+        for mode in ("absent", *self.MODES):
+            for name, (factory, succeed_on, result, (attempts, sleeps, last_failure)) in cases.items():
+                with self.subTest(mode=mode, case=name):
+                    self.install(mode, f"p-{mode}-{name}")
+                    self.assertEqual(run(factory, succeed_on), (result, attempts, sleeps, last_failure))
 
     def test_n_observer_failure_cannot_change_successful_result(self):
         self.install("absent", "n-absent")

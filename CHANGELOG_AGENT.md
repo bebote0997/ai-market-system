@@ -1,5 +1,21 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 1 final PR polish (documentation + test only)
+
+- Agent: Claude. Branch `v2/phase1-system-health`; starting SHA
+  `0b6b6936965d704c9a6a9579664726345ee4d588`; final SHA = the commit that adds this entry.
+- From the final independent re-review; no production code changed.
+  1. `V2_PHASE1_SYSTEM_HEALTH.md`: H04 corrected to **PARTIALLY SATISFIED BY PHASE 1**
+     (liveness/progress separation satisfied; bounded supervisor/recovery/shutdown behavior still
+     open, mandatory, carried forward). AI-provider timeout observation consistency recorded as a
+     second blocker before SYSTEM HEALTH runtime activation, next to synchronous SQLite latency.
+  2. `test_phase1_hardening.py`: one regression test pins the existing timeout retry behavior
+     (3 attempts at `retries=2`, configured timeout, unchanged backoff, final `CONNECTION_ERROR`)
+     for every health-sink mode, closing the reviewer's surviving `timed_out` retry mutation.
+  3. This changelog: Phase 1 Batch 1–3 history added from git evidence.
+- Safety: REAL EXECUTION = DISABLED; NAS100 = OFF; trading DB schema 3. No deploy, no merge,
+  Phase 2 not started, Phase 1 not certified.
+
 ## 2026-10-05 — V2 Phase 1 final hardening (SYSTEM HEALTH semantics)
 
 - Agent: Claude. Branch `v2/phase1-system-health`; starting SHA
@@ -20,6 +36,32 @@
 - Safety: REAL EXECUTION = DISABLED; NAS100 = OFF; `storage/database.py` and trading DB schema 3
   unchanged; no trading, risk, execution or runtime behavior changed. No deploy, no merge,
   Phase 2 not started. Status: IMPLEMENTATION COMPLETE — PENDING FINAL CERTIFICATION.
+
+## 2026-10-04 — V2 Phase 1 Batches 1–3 (history recorded 2026-10-05 from git)
+
+Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 1 test methods in
+`test_system_health.py`, `test_health_probes.py` and `test_phase1_isolation.py` at each commit.
+
+- `894def6` — Batch 1, SYSTEM HEALTH core (F01-T11 foundation, F01-T15..T19): per-component
+  status, last success/error/check, consecutive errors, latency, heartbeat kept separate from
+  progress, typed provider errors with legacy-name normalization, sanitized reasons. Initially an
+  additive trading DB migration v3 → v4 (superseded by `43fdfc6`). 25 tests.
+- `fbb883a` — Batch 1 review fix: `MODEL_UNAVAILABLE` and `CONNECTION_ERROR` kept as canonical
+  error classes instead of `UNKNOWN_PROVIDER_FAILURE`. 27 tests.
+- `43fdfc6` — Batch 1 owner decision: health persistence moved to an isolated sidecar
+  (`storage/health_store.py`, application_id `V2HS`, schema 1) that refuses the trading DB;
+  v3 → v4 migration reverted, `storage/database.py` byte-identical to the frozen V1 baseline
+  (schema 3); frozen V1 code proven to open the trading DB after sidecar use. 30 tests.
+- `a07ee5a` — Batch 2, component probes (F01-T01..T13, F01-T14 projection prep): read-only probes
+  of trading DB evidence recorded only to the sidecar; email reported as `NOT_IMPLEMENTED`;
+  exception-isolated observers not wired into the runtime; `record_state` for non-error
+  conditions. 53 tests.
+- `0a9687b` — Batch 3: passive no-op-by-default hooks (`runtime/health_hooks.py`) after the
+  existing market-data verdict (F01-T02) and around `OpenAIProvider.generate` (F01-T04, result
+  and exception unchanged); `ComponentErrorType`; read-only dashboard projection; F01-T20 PAPER
+  scenario identical across six health modes. 62 tests.
+- Safety throughout: REAL EXECUTION = DISABLED; NAS100 = OFF; no trading, risk, provider or
+  execution behavior change; health sink never installed in the runtime; no deploy, no merge.
 
 ## 2026-10-02 — ISSUE-001/005 test contract and governance
 
