@@ -1,8 +1,9 @@
 # V2 Phase 2 — Market Evidence Engine V2
 
 Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 accepted; B2.2
-accepted; B2.3A accepted; B2.3B accepted; B2.3C READY FOR INDEPENDENT REVIEW; B2.3D not started). H02:
-**PARTIAL**.
+accepted; B2.3A–C accepted; B2.3D PASS — READY FOR FINAL INDEPENDENT PHASE 2 CERTIFICATION). H02:
+**CLOSED** (owner-accepted, V2 implementation under P1). Runtime activation: **NOT AUTHORIZED**; the
+`v2_position_catch_up` flag stays OFF by default.
 Branch: `v2/phase2-market-evidence` · Base: `main` @ `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`
 
 Mode: PAPER / DEMO only. REAL EXECUTION: DISABLED. NAS100: OFF. Not wired into the runtime.
@@ -209,6 +210,11 @@ remains isolated evidence processing.
 
 Status: **PARTIAL — mandatory gate before any Batch 2 runtime wiring.** Not solved in Batch 1, by
 design.
+
+**Update 2026-10-05 — H02 CLOSED (owner-accepted) for the V2 implementation under P1** after B2.3D:
+every economically relevant closed 5m bar is applied (positions, SL/TP, fills) or, for pending
+orders, durably classified `PENDING_NOT_EVALUATED` / `NO_CURRENT_CYCLE_GATE`. Production keeps the
+flag OFF, so the runtime exhibits this only after a separately authorized activation.
 
 - Existing V1 transactions recovered several crash scenarios without duplicate fills, closes or PnL
   (independent review).
@@ -459,11 +465,30 @@ Submission then proceeds unchanged, only if eligible and not blocked.
 - Full suite 751 pass / 0 fail / 0 skip. Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive;
   flag OFF by default and never from env. **READY FOR INDEPENDENT REVIEW.**
 
+### B2.3D — end-to-end certification (2026-10-05): PASS
+
+At `05afa4e` (CI 37378971001 green), no production change. Permanent regression
+`test_phase2_e2e.py` (flag ON in-test), one deterministic scenario: open EURUSD position and pending
+XAUUSD order; a real child process crashes the 13:30 EURUSD cycle right after T2's economic commit;
+restart resumes at T3 and applies T3–T6 once, oldest first; a REVISION of EUR T3 with a stop-hitting
+low is recorded and ignored (committed bar used); the stop fires on T6 (not T3, not the T7 target);
+XAUUSD with an unhealthy AI review journals T1–T4 as not evaluated; the gated 13:45 cycle fills only
+on its committed T7 bar at 101 while its snapshot says 100; T1–T6 rows once each, after `as_of`;
+duplicate slot and a recovery cycle re-presenting every bar add nothing; Setup/AI/Risk/Planner run
+once per analysed cycle; realized PnL = closed trade net PnL, equity = start + realized + unrealized;
+POSITION_CLOSED 1, STOP_HIT 1, TARGET_HIT 0, ORDER_FILLED 1. Fail-closed, STALE/retry, same-symbol
+and cross-symbol real-process concurrency, flag OFF equivalence and V1 rollback rely on the accepted
+B2.1–B2.3C suites and `test_frozen_v1_baseline_code_opens_trading_db_after_sidecar_use` (runs when
+`git` is on PATH; 0 skipped here).
+
+- Fixture note: the deterministic AI fixture returns ERROR for EURUSD, so gated fills are exercised
+  on XAUUSD (a EURUSD pending order fails closed at the gate in tests).
+- Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive; flag OFF by default and never from env.
+
 Remaining gates:
-- **B2.3D — NOT STARTED.** Evidence ingestion + catch-up replacing the legacy TradeManager path
-  (B2.3B), `CurrentCycleGate` replacing the direct `process_next_bar` loop (B2.3C), end-to-end
-  crash/concurrency/rollback certification (B2.3D), all behind a flag OFF by default. Activation
-  requires separate owner approval: per-bar SL/TP changes PAPER economics versus V1.
+- **Final independent Phase 2 certification** (by a non-author reviewer).
+- **Runtime activation — NOT AUTHORIZED.** Requires separate owner approval: per-bar SL/TP changes
+  PAPER economics versus V1 and the frozen experiment.
 
 ## Phase 1 protection
 

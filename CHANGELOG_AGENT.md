@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.3D regression preservation (test-only)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `05afa4e0c64d5731d4f3a8fcfd31b7b237d9526c`; final SHA = the commit that adds this entry.
+- New permanent `test_phase2_e2e.py`: the B2.3D deterministic end-to-end scenario, assertions
+  unchanged from the certification run. No production code change.
+- B2.3D PASS. H02 CLOSED (owner-accepted) for the V2 implementation under P1. Runtime activation NOT
+  AUTHORIZED; flag OFF by default. Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive.
+- Status: **READY FOR FINAL INDEPENDENT PHASE 2 CERTIFICATION**.
+
 ## 2026-10-05 — V2 Phase 2 B2.3C (runtime pending orders via CurrentCycleGate, flag OFF)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
