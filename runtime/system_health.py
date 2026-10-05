@@ -6,7 +6,8 @@ calls providers, or touches setups, AI, risk, orders, positions or execution.
 
 LIVENESS != PROGRESS (H04): ``heartbeat_at`` only proves the process is alive;
 ``progress_at``/``progress_stage``/``progress_ref`` record the latest completed
-pipeline step. A fresh heartbeat with stale progress projects STALE, never HEALTHY.
+pipeline step. A fresh heartbeat with stale progress projects STALE, never HEALTHY, and an
+explicitly NOT_ALIVE heartbeat projects STALE even when recent progress exists.
 
 Persistence is the isolated SYSTEM HEALTH sidecar (storage/health_store.py), never
 trading_floor.db. Callers must treat any health failure as non-fatal to trading.
@@ -86,6 +87,17 @@ _SECRET_PATTERNS = (
     re.compile(r"\b[A-Za-z0-9+/_\-]{32,}={0,2}"),  # Long opaque tokens.
 )
 MAX_REASON_LENGTH = 160
+# A known configuration condition (missing credential/provider): no provider call happened, so it is
+# neither a provider failure nor healthy. It is recorded as a state, never in the provider taxonomy.
+NOT_CONFIGURED = "NOT_CONFIGURED"
+
+
+def _timed_out(exception):
+    """Unambiguous timeout evidence: a TimeoutError, or a provider error flagged ``timed_out=True``."""
+    try:
+        return isinstance(exception, TimeoutError) or getattr(exception, "timed_out", False) is True
+    except Exception:  # noqa: BLE001 - classification never raises
+        return False
 
 
 def classify_provider_error(*, kind=None, http_status=None, exception=None):
@@ -93,8 +105,12 @@ def classify_provider_error(*, kind=None, http_status=None, exception=None):
 
     Precedence: explicit V2 type > known legacy name > HTTP status > exception type.
     Generic legacy names (PROVIDER_FAILURE/PROVIDER_ERROR) are refined by an HTTP status.
+    Timeout evidence on the exception refines the generic CONNECTION_ERROR to TIMEOUT; the
+    original CONNECTION_ERROR name is then preserved as the legacy name.
     """
     legacy = kind if isinstance(kind, str) and _LEGACY.fullmatch(kind) else None
+    if legacy == ProviderErrorType.CONNECTION_ERROR.value and _timed_out(exception):
+        return ProviderErrorType.TIMEOUT, legacy
     if legacy in ProviderErrorType.__members__:
         return ProviderErrorType(legacy), None  # Canonical name: error_type itself is the original name.
     mapped = LEGACY_ERROR_NAMES.get(legacy)
@@ -103,7 +119,7 @@ def classify_provider_error(*, kind=None, http_status=None, exception=None):
     by_status = _from_status(http_status)
     if by_status is not None:
         return by_status, legacy
-    if exception is not None and isinstance(exception, TimeoutError):
+    if exception is not None and _timed_out(exception):
         return ProviderErrorType.TIMEOUT, legacy
     return ProviderErrorType.UNKNOWN_PROVIDER_FAILURE, legacy
 
@@ -259,7 +275,12 @@ class SystemHealth:
     def record_error(self, component, *, at, observation_id, provider=None, kind=None, http_status=None,
                      exception=None, reason=None, latency_ms=None, details=None, component_error=None):
         """Provider errors are classified with ProviderErrorType; a non-provider component passes
-        ``component_error`` (ComponentErrorType) instead and is never given a provider label."""
+        ``component_error`` (ComponentErrorType) instead and is never given a provider label.
+        A NOT_CONFIGURED kind is a known configuration condition, not a provider failure: it is
+        recorded as an UNKNOWN state with reason NOT_CONFIGURED and never counts as an error."""
+        if component_error is None and kind == NOT_CONFIGURED:
+            return self.record_state(component, at=at, observation_id=observation_id, provider=provider,
+                                     status=HealthStatus.UNKNOWN, reason=NOT_CONFIGURED, details=details)
         if component_error is not None:
             error_type, legacy = ComponentErrorType(component_error), None
         else:
@@ -372,5 +393,7 @@ class SystemHealth:
             status = HealthStatus.STALE
         if progress == "STALLED" and status in (HealthStatus.HEALTHY, HealthStatus.UNKNOWN):
             status = HealthStatus.STALE  # Alive but not advancing is never HEALTHY.
+        if liveness == "NOT_ALIVE" and status is HealthStatus.HEALTHY:
+            status = HealthStatus.STALE  # Progress evidence never proves liveness (H04).
         return {"component": record.component, "provider": record.provider, "status": status.value,
                 "liveness": liveness, "progress": progress, "record": asdict(record)}

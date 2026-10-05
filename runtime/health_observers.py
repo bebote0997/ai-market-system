@@ -10,7 +10,7 @@ import logging
 
 import hashlib
 
-from runtime.system_health import ComponentErrorType, HealthStatus, SystemHealth
+from runtime.system_health import NOT_CONFIGURED, ComponentErrorType, HealthStatus, SystemHealth
 
 LOG = logging.getLogger(__name__)
 TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
@@ -35,6 +35,8 @@ def observe_ai_provider(health, provider, *, at, observation_id, latency_ms=None
         details = {"model": metadata.get("model"),
                    **{key: usage[key] for key in TOKEN_KEYS if isinstance(usage.get(key), int)}}
         failure = getattr(provider, "last_failure", None)
+        if not failure and getattr(provider, "health", None) == NOT_CONFIGURED:
+            failure = NOT_CONFIGURED  # No call can have succeeded; recorded as a state, never HEALTHY.
         if failure:
             health.record_error("ai_provider", provider=name, at=at, observation_id=observation_id, kind=failure,
                                 latency_ms=latency_ms, reason=f"provider failure {failure}", details=details)

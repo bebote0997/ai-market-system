@@ -1,5 +1,26 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 1 final hardening (SYSTEM HEALTH semantics)
+
+- Agent: Claude. Branch `v2/phase1-system-health`; starting SHA
+  `0a9687b9a78b8466903f29a667dcefc130d3116b`; final SHA = the commit that adds this entry.
+- Purpose: three authorized observability fixes before final independent re-review.
+  1. An explicitly `NOT_ALIVE` heartbeat never projects `HEALTHY` (H04: liveness != progress).
+  2. A real OpenAI transport timeout is classified `TIMEOUT`, not `CONNECTION_ERROR`
+     (`OpenAIProviderError.timed_out` evidence; provider kind, retries and exceptions unchanged).
+  3. `NOT_CONFIGURED` is recorded as an `UNKNOWN` configuration state, never `HEALTHY` and never
+     `UNKNOWN_PROVIDER_FAILURE`.
+- Tests: `test_phase1_hardening.py` (22 focused tests: liveness A–E, timeout/connection/rate/
+  billing/model/unknown classification, `NOT_CONFIGURED`, observer-failure isolation). Full suite
+  608/608 pass, 0 skipped.
+- Owner decisions recorded in `V2_PHASE1_SYSTEM_HEALTH.md`: H04 → Phase 1 (code/test evidence);
+  H02 → mandatory Phase 2; H15 and deploy/build/config/run traceability → mandatory transversal V2;
+  F01-T13 → Phase 1 representation only, Email Notification Engine → Phase 9; synchronous health
+  SQLite persistence → blocker before SYSTEM HEALTH runtime activation.
+- Safety: REAL EXECUTION = DISABLED; NAS100 = OFF; `storage/database.py` and trading DB schema 3
+  unchanged; no trading, risk, execution or runtime behavior changed. No deploy, no merge,
+  Phase 2 not started. Status: IMPLEMENTATION COMPLETE — PENDING FINAL CERTIFICATION.
+
 ## 2026-10-02 — ISSUE-001/005 test contract and governance
 
 - Reproduction: the full 523-test baseline suite had two failures because the
