@@ -10,6 +10,11 @@ Exactly-once invariant, per (position, bar):
   ``last_processed_at``), any closed trade, account realized/unrealized PnL and equity, and the
   journal. Either nothing from the bar is committed (the bar stays eligible) or all of it is.
 - The next bar is chosen from the durable watermark only, never from process memory.
+- Before computation we capture an immutable PAPER state comparison value. save_paper
+  revalidates it under its BEGIN IMMEDIATE, before any write. A concurrent winner
+  makes the loser stale; the loser discards its computed effects and returns STALE.
+  The comparison includes the whole account and loaded PAPER objects so another
+  symbol's progress cannot be overwritten. SQLite provides cross-process exclusion.
 
 Authorities: the Evidence Store says which bars exist (read-only here, never written); the trading
 DB says which effects were applied. There is no cross-database transaction. If evidence cannot be
@@ -36,7 +41,7 @@ class CatchUpEvidenceError(RuntimeError):
 @dataclass(frozen=True)
 class CatchUpResult:
     symbol: str
-    status: str  # NO_OP (no open position) | UP_TO_DATE | APPLIED | CLOSED
+    status: str  # NO_OP (no open position) | UP_TO_DATE | APPLIED | CLOSED | STALE
     applied: tuple  # bar_start of every bar applied (and committed) by this call, oldest first
     closed_by: str | None  # bar_start of the bar that closed the position, if any
     watermark: str | None  # durable position watermark after this call (None once closed)
@@ -93,19 +98,24 @@ def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=
         return CatchUpResult(symbol, "NO_OP", (), None, None)  # Bootstrap: nothing to replay.
     bars = _eligible_bars(evidence, symbol, _watermark(position), as_of)
     applied = []
+    stale = False
     for bar in bars:
         broker = _load(store, account_id, instrument)  # Durable state only, for every bar.
         position = broker.account.open_positions.get(symbol)
         if position is None or bar.start <= _watermark(position):
             break  # Closed, or progressed by another writer: never apply a bar twice.
+        expected_state = store.paper_state(broker.account, broker.orders, broker.fills)
         closed = TradeManager(broker.account, broker).process_bar(_bar(bar))
-        store.save_paper(broker, owner_key=owner_key, symbol=symbol)
+        if store.save_paper(broker, owner_key=owner_key, symbol=symbol, expected_state=expected_state) is False:
+            stale = True
+            break  # Discard this computed transition; a later call reloads/retries from durable state.
         applied.append(bar.bar_start)
         if closed:
             return CatchUpResult(symbol, "CLOSED", tuple(applied), bar.bar_start, None)
     final = _load(store, account_id, instrument).account.open_positions.get(symbol)
     watermark = None if final is None else utc(_watermark(final))
-    return CatchUpResult(symbol, "APPLIED" if applied else "UP_TO_DATE", tuple(applied), None, watermark)
+    return CatchUpResult(symbol, "STALE" if stale else "APPLIED" if applied else "UP_TO_DATE",
+                         tuple(applied), None, watermark)
 
 
 __all__ = ["CatchUpEvidenceError", "CatchUpResult", "catch_up_position"]

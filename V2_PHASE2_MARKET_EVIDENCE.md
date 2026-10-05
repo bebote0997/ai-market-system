@@ -1,7 +1,7 @@
 # V2 Phase 2 — Market Evidence Engine V2
 
-Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 implemented, pending
-independent review; B2.2 and B2.3 not started). H02: **PARTIAL**.
+Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 P1 concurrency fix
+READY FOR INDEPENDENT RE-REVIEW, not accepted/certified; B2.2 and B2.3 not started). H02: **PARTIAL**.
 Branch: `v2/phase2-market-evidence` · Base: `main` @ `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`
 
 Mode: PAPER / DEMO only. REAL EXECUTION: DISABLED. NAS100: OFF. Not wired into the runtime.
@@ -240,8 +240,9 @@ reaches the unchanged `TradeManager.process_bar` exactly once, oldest first.
   from the trading DB and persisted with one `Store.save_paper` call, i.e. one trading-DB transaction
   holding the position (including `last_processed_at`), any closed trade and position status, account
   realized/unrealized PnL and equity, and the journal. Either nothing from the bar commits and it
-  stays eligible, or everything commits together. The next bar is chosen from durable state only;
-  `TradeManager`'s own `last_processed_at` guard is a second, independent duplicate barrier.
+  stays eligible, or everything commits together. The next bar is chosen from durable state only.
+  The P1 fix below revalidates the pre-computation state under that transaction's write lock;
+  `TradeManager`'s in-memory watermark check alone cannot exclude another writer.
 - **Close.** A closing bar ends catch-up; later bars produce no effect (the position is no longer open).
 - **Crash/restart (real child processes, `os._exit`).** Crash before T2 → resumes T2; crash inside
   T2's transaction → T2 rolled back, resumes T2; crash after T2 commits → resumes T3; repeated
@@ -252,8 +253,49 @@ reaches the unchanged `TradeManager.process_bar` exactly once, oldest first.
 - **No decision pipeline.** Never calls Setup, AI, Risk, the Trade Planner, `submit_plan` or
   `process_next_bar`; pending orders are untouched (spies + AST tests). No open position → `NO_OP`
   (bootstrap does not replay the provider lookback).
-- **Unchanged.** `storage/database.py`, `execution/trade_manager.py`, `execution/paper_broker.py`,
+- **Unchanged.** `execution/trade_manager.py`, `execution/paper_broker.py`,
   runtime, providers, Risk, AI; trading DB schema 3; no cross-database transaction.
+  `storage/database.py` has only the opt-in, schema-neutral P1 comparison guard described below.
+
+### B2.1 P1 — concurrency correction (2026-10-05)
+
+- Checkpoint: clean `v2/phase2-market-evidence`, local/fetched remote
+  `8c99d7dfd1b726443c85b4ebc5ccb0004dec7579`. Certified main and accepted Batch 1 unchanged.
+- Reproduced before production edits with independent SQLite connections: A computes a stop
+  close, pauses before save; B computes/commits the same bar; A saves its stale result. Old code
+  persists two closed trades, two POSITION_CLOSED events, realized PnL -10 but trade sum -20.
+  The preserved normal-progress regression also fails on old code (both report applying the bar).
+- Mechanism: `Store.paper_state` captures immutable encoded account/positions/closed trades/orders/
+  fills before computation. `save_paper(expected_state=...)` reloads and compares those objects
+  **inside its existing BEGIN IMMEDIATE, before any economic or journal write**. SQLite serializes
+  competing processes. A winning commit changes the durable position watermark or removes the
+  open position; the later comparison fails and writes nothing. The full comparison also prevents
+  lost updates to account equity from another symbol. No schema change, Python lock, new database
+  authority, or cross-database transaction. Legacy callers omit the optional guard and behave as before.
+- Loser: `STALE`, with only previously committed bars (if any) in `applied`; the rejected bar has
+  no effects. A new call reloads durable state; no automatic spin/retry under contention.
+- Focused: 28/28 pass (19 original B2.1 tests unchanged + 9 new concurrency/isolation tests).
+  Real child processes prove A/B/A for progress and close, three fresh-process retries, and a writer
+  terminated with uncommitted close effects/write lock while another writer attempts the transaction.
+  Exactly one close/event, realized -10, equity 9990; progress watermark once, equity 10006.
+  Trading rollback preserves evidence bytes; evidence rollback preserves committed trading bytes.
+  Existing single-writer crash, pending-order and forbidden-pipeline tests pass.
+- Mutations: exactly 3, scratch copies only, all detected by assertion failures: remove transactional
+  revalidation; ignore `last_processed_at` in the comparison (unchanged-price bar); duplicate close journal.
+- Full local suite run **once**: 684 tests, 683 pass, 1 obsolete whole-file byte-identity assertion
+  fails, 0 skips. The assertion was narrowed solely for the authorized opt-in guard; the original
+  SHA-256 still checks every remaining byte. Both compatibility tests then pass (2/2), including
+  actual frozen V1 code from Git history. No production changes after the full run; no full rerun.
+  Additional frozen V1 read-only/read-write check on a DB containing a guarded close confirms
+  schema 3, one trade/event, reconciled PnL and equity. Linux push CI must be checked on the final SHA.
+- Windows-only test launcher adjustment outside the repository: temporary directories use inherited
+  permissions because this sandbox cannot reopen Python 3.13 mode-0700 directories. No test skipped.
+- Scope: two production files, new `test_position_catch_up_concurrency.py`, the narrow compatibility
+  assertion in `test_system_health.py`, and these two documentation files. All trading semantics
+  outside exclusion are unchanged; single-writer results remain comparable. The erroneous duplicate
+  multi-writer history is not a valid baseline and is not repaired/migrated by this fix.
+- **READY FOR INDEPENDENT RE-REVIEW only.** No acceptance/certification, PR, merge, deploy, runtime
+  wiring or activation. REAL DISABLED; NAS100 OFF; H02 PARTIAL; B2.2/B2.3 NOT STARTED.
 
 Remaining gates:
 - **B2.2 — pending orders: NOT STARTED.** Owner decision required on the gate for bars between
@@ -306,7 +348,7 @@ untouched and remain open.
   `test_m2_semantically_equivalent_schema_opens_and_ingests_normally`.
 - Focused: `test_market_evidence.py` 47/47 pass.
 
-## Safety evidence
+## Batch 1 safety evidence (historical; B2.1 changes listed above)
 
 - No changes to `runtime/`, `execution/`, `riesgo`, `floor/`, `agents/`, `ai/`, providers, config,
   `storage/database.py` or any existing test.

@@ -1,5 +1,33 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.1 P1 concurrency correction
+
+- Agent: Codex. Branch `v2/phase2-market-evidence`; clean/fetched starting SHA
+  `8c99d7dfd1b726443c85b4ebc5ccb0004dec7579`; final SHA = this corrective commit.
+- Reproduced A-computes / B-commits / A-resumes before production edits: two closed trades and
+  POSITION_CLOSED events; account realized -10 versus persisted trade sum -20.
+- Fix: immutable pre-computation PAPER snapshot compared with durable state inside the existing
+  `save_paper` BEGIN IMMEDIATE. Mismatch returns False before writes; catch-up discards the computed
+  transition and returns STALE. Whole-account/object comparison also excludes cross-symbol lost
+  updates. SQLite serializes processes; no Python-only lock or Evidence Store transaction coupling.
+- Files: `execution/position_catch_up.py`, narrow schema-neutral `storage/database.py` opt-in guard,
+  new `test_position_catch_up_concurrency.py`, narrow `test_system_health.py` compatibility assertion,
+  this changelog and `V2_PHASE2_MARKET_EVIDENCE.md`. Original B2.1 tests unchanged.
+- Focused 28/28; includes two independent processes, progress/close, crash holding write transaction,
+  repeated restarts, PnL reconciliation, other-symbol progress and bidirectional transaction isolation.
+  Exactly 3 scratch mutants detected: no revalidation, stale watermark accepted, duplicate close path.
+- Full local suite once: 683 pass / 1 failure / 0 skipped, 684 total. Only failure was the historical
+  whole-file frozen hash gate. Updated it to permit only the authorized opt-in addition while keeping
+  the original hash for every remaining byte; targeted compatibility rerun 2/2 PASS. No production
+  edits after full run and no full rerun. Actual frozen V1 code also opens a guarded-close DB read-only
+  and read-write, schema 3, one close/event, PnL -10 and equity 9990. Final-SHA Linux push CI pending.
+- Windows sandbox temp-permission adjustment confined to external launcher; no skipped tests.
+- Comparability: unchanged single-writer SL/TP/economics; removes invalid duplicate concurrent effects.
+  No historical data repair. TradeManager, Paper Broker/pending orders, Risk, AI, Planner, providers,
+  freshness, strategy, config and runtime unchanged; schema 3 preserved. REAL DISABLED; NAS100 OFF;
+  H02 PARTIAL; B2.2/B2.3 NOT STARTED. No PR/merge/deploy. Phase 2 IN PROGRESS / NOT CERTIFIED.
+- Status: **READY FOR INDEPENDENT RE-REVIEW**, not accepted/certified.
+
 ## 2026-10-05 — V2 Phase 2 B2.1 (position catch-up core, isolated)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

@@ -352,15 +352,38 @@ class SidecarTests(unittest.TestCase):
 
 
 class TradingDatabaseCompatibilityTests(unittest.TestCase):
-    def test_trading_db_module_is_byte_identical_to_frozen_v1_baseline(self):
-        source = (ROOT / "storage" / "database.py").read_bytes().replace(b"\r\n", b"\n")
-        self.assertEqual(hashlib.sha256(source).hexdigest(), FROZEN_TRADING_DB_MODULE_SHA256)
+    def test_trading_db_except_opt_in_b21_guard_is_byte_identical_to_frozen_v1(self):
+        # B2.1 P1 explicitly permits a schema-neutral, opt-in Store guard. Remove
+        # only that addition; every remaining byte must retain the original hash.
+        # Guard behavior is covered by test_position_catch_up_concurrency.
+        source = (ROOT / "storage" / "database.py").read_text(encoding="utf-8")
+        start = source.index("    @staticmethod\n    def paper_state(")
+        end = source.index("    def save_paper(", start)
+        source = source[:start] + source[end:]
+        signature = "def save_paper(self, broker, *, owner_key=None, symbol=None, expected_state=None):"
+        self.assertEqual(source.count(signature), 1)
+        source = source.replace(signature, "def save_paper(self, broker, *, owner_key=None, symbol=None):")
+        save = next(n for n in ast.walk(ast.parse(source))
+                    if isinstance(n, ast.FunctionDef) and n.name == "save_paper")
+        self.assertIsNotNone(ast.get_docstring(save))
+        lines = source.splitlines(keepends=True)
+        del lines[save.body[0].lineno - 1:save.body[0].end_lineno]
+        source = "".join(lines)
+        guard = (
+            "            if expected_state is not None:\n"
+            "                durable = self.paper_state(*self.load_paper(account.account_id))\n"
+            "                if durable != expected_state:\n"
+            "                    return False  # No economic writes, journal writes or in-memory journal clearing.\n"
+        )
+        self.assertEqual(source.count(guard), 1)
+        source = source.replace(guard, "")
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(), FROZEN_TRADING_DB_MODULE_SHA256)
         self.assertEqual(SCHEMA_VERSION, 3)
 
     def test_frozen_v1_baseline_code_opens_trading_db_after_sidecar_use(self):
         git = shutil.which("git")
         if git is None:
-            self.skipTest("git unavailable; covered by the byte-identity test")
+            self.skipTest("git unavailable; source outside opt-in B2.1 guard checked separately")
         with tempfile.TemporaryDirectory(prefix="v2-health-v1-") as folder:
             folder = Path(folder)
             archive = subprocess.run([git, "archive", "--format=tar", FROZEN_V1_BASELINE, "storage", "execution"],
