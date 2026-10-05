@@ -866,7 +866,8 @@ class SafetyTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8", errors="replace")
             if "market_evidence" in text or "evidence_store" in text:
                 users.append(path.relative_to(ROOT).as_posix())
-        self.assertEqual(users, [])
+        # B2.3B: the runtime is the only user, behind v2_position_catch_up (OFF by default).
+        self.assertEqual(sorted(users), ["runtime/config.py", "runtime/service.py"])
 
 
 if __name__ == "__main__":

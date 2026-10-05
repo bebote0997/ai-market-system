@@ -1,7 +1,7 @@
 # V2 Phase 2 — Market Evidence Engine V2
 
 Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 accepted; B2.2
-accepted; B2.3A READY FOR INDEPENDENT REVIEW; B2.3B/C/D not started). H02: **PARTIAL**.
+accepted; B2.3A accepted; B2.3B READY FOR INDEPENDENT REVIEW; B2.3C/D not started). H02: **PARTIAL**.
 Branch: `v2/phase2-market-evidence` · Base: `main` @ `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`
 
 Mode: PAPER / DEMO only. REAL EXECUTION: DISABLED. NAS100: OFF. Not wired into the runtime.
@@ -385,8 +385,50 @@ a fresh load; no in-process lock, no new mechanism.
 - Schema 3; no migration; no Evidence/catch-up/gate wiring; System Health inactive; REAL DISABLED;
   NAS100 OFF. **READY FOR INDEPENDENT REVIEW.**
 
+### B2.3B — Evidence + position catch-up in the runtime, flag OFF (2026-10-05)
+
+`RuntimeConfig.v2_position_catch_up` (bool, default **False**; `from_env` never sets it; ON requires a
+`market_evidence_path` distinct from the trading DB; the config fingerprint changes only when ON).
+With the flag OFF the runtime is unchanged: old (B2.3A) vs new `service.py` over 16 cycles gave
+byte-identical results, PAPER state and journal; no Evidence Store is opened or created.
+
+With the flag ON, in `run_cycle`:
+1. After a successful provider load: `ingest_snapshot(symbol, snapshot, as_of=slot)` into the
+   separate Evidence Store (the slot is the provider's closed-bar boundary). Each bar commits in its
+   own evidence transaction before any economics; no cross-database atomicity is claimed.
+2. Freshness gate unchanged (a stale cycle returns early; its bars are caught up later).
+3. In place of the newest-bar `TradeManager` step: the accepted B2.1 `catch_up_position` for the
+   cycle's symbol — every committed closed 5m bar after the durable watermark, oldest first, one
+   guarded `save_paper` per bar. A STALE result resumes once from the durable watermark.
+4. Fresh broker load; the rest of the cycle (Setup/AI/Risk/Planner, legacy current-bar pending
+   progress, submit) is unchanged and runs once for the current cycle only.
+
+Fail closed (owner decision 2): an Evidence Store that cannot open/validate, an ingestion failure,
+a catch-up evidence error or a persistent STALE sets the cycle's PAPER economics blocked: no
+catch-up, **no newest-bar fallback**, no pending-order progress, no submission (execution SKIPPED
+with reason `EVIDENCE_UNAVAILABLE` / `STALE_PAPER_STATE`, ERROR journal event). Analysis continues.
+The trading DB watermark stays the economic authority; the next cycle resumes from it.
+
+Pending orders keep the existing current-cycle-bar path (P1 holds: never an intermediate bar);
+B2.3C replaces it with `CurrentCycleGate` and applies decision 3 (committed evidence authoritative).
+
+- Tests: `test_runtime_catch_up.py` 15/15 — flag OFF = V1 (newest bar only); T1→T4 chronological;
+  cadence jump 13:15→13:45 applies every skipped bar once; T2 stop beats T3 target; duplicate slot and
+  re-presented bars add nothing; Setup/AI/Risk run once per cycle, `submit_plan` never for history;
+  pending order evaluated on T4 only; corrupt Evidence Store and ingestion failure fail closed with no
+  fallback and resume next cycle; trading save failure keeps evidence and resumes at the economic
+  watermark; real child-process crash before/after the economic commit; two real processes on one
+  symbol close once; real XAU/EUR processes with a forced interleave go STALE and keep both updates;
+  schema 3, no `market_evidence` table in the trading DB, health inactive.
+- Mutations 6/6 killed: newest-bar fallback, reversed chronology, watermark bypass, historical
+  pending evaluation, flag default ON, fail-open evidence error.
+- Isolation tests from Batch 1/B2.1 now allow exactly `runtime/service.py` and `runtime/config.py`
+  as users (B2.3A scope test: pending gate still unwired, flag OFF by default).
+- Full suite 737 pass / 0 fail / 0 skip. Schema 3; REAL DISABLED; NAS100 OFF; System Health
+  inactive. Flag not enabled anywhere. **READY FOR INDEPENDENT REVIEW.**
+
 Remaining gates:
-- **B2.3B/C/D — NOT STARTED.** Evidence ingestion + catch-up replacing the legacy TradeManager path
+- **B2.3C/D — NOT STARTED.** Evidence ingestion + catch-up replacing the legacy TradeManager path
   (B2.3B), `CurrentCycleGate` replacing the direct `process_next_bar` loop (B2.3C), end-to-end
   crash/concurrency/rollback certification (B2.3D), all behind a flag OFF by default. Activation
   requires separate owner approval: per-bar SL/TP changes PAPER economics versus V1.

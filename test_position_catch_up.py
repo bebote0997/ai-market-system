@@ -352,7 +352,8 @@ class IsolationTests(CatchUpCase):
         users = [p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*.py")
                  if ".venv" not in p.parts and not p.name.startswith("test_") and p.name != "position_catch_up.py"
                  and "position_catch_up" in p.read_text(encoding="utf-8", errors="replace")]
-        self.assertEqual(users, [])
+        # B2.3B: the runtime is the only user, behind v2_position_catch_up (OFF by default).
+        self.assertEqual(sorted(users), ["runtime/config.py", "runtime/service.py"])
 
 
 class FailureTests(CatchUpCase):

@@ -348,9 +348,10 @@ class AtomicityAndScopeTests(StaleSafeCase):
                 imports.add(node.module)
             elif isinstance(node, ast.Import):
                 imports.update(alias.name for alias in node.names)
-        for module in ("data.market_evidence", "storage.evidence_store", "execution.position_catch_up",
-                       "execution.pending_order_gate"):
-            self.assertNotIn(module, imports)
+        self.assertNotIn("execution.pending_order_gate", imports)  # B2.3C, not wired.
+        # B2.3B wires Evidence + catch-up only behind a flag that is OFF by default.
+        self.assertIs(RuntimeConfig().v2_position_catch_up, False)
+        self.assertIs(self.runtime().evidence, None)
         self.assertIsNone(health_hooks._sink)
         self.assertNotIn("NAS100", self.config.enabled_symbols)
         self.assertIn('"paper_mode": True', (ROOT / "runtime" / "config.py").read_text(encoding="utf-8"))

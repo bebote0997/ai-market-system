@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.3B (Evidence + position catch-up runtime wiring, flag OFF)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `5258e125f03eed7dda711ad9af090858cc5c0a83`; final SHA = the commit that adds this entry.
+- `runtime/config.py`: `v2_position_catch_up` (default False, never from env) + `market_evidence_path`.
+- `runtime/service.py`: with the flag ON, snapshot ingestion into the Evidence Store, then B2.1
+  catch-up replaces the newest-bar TradeManager step; evidence failure / persistent STALE fails
+  closed for PAPER economics (no fallback, no pending progress, no submission).
+- Tests: new `test_runtime_catch_up.py` 15/15 (real-process crash and contention); isolation tests in
+  `test_market_evidence.py`, `test_position_catch_up.py`, `test_stale_safe_writers.py` updated to the
+  authorized flag-gated wiring. Mutations 6/6 killed; flag-OFF old/new byte-identical; full suite once
+  737 pass / 0 fail / 0 skip.
+- Schema 3; REAL DISABLED; NAS100 OFF; System Health inactive; H02 PARTIAL; B2.3C NOT STARTED.
+  Status: **READY FOR INDEPENDENT REVIEW**.
+
 ## 2026-10-05 — V2 Phase 2 B2.3A (stale-safe runtime PAPER writers)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
