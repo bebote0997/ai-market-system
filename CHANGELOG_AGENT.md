@@ -1,5 +1,30 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 Batch 1 (Market Evidence Engine foundation + H02 evidence processing)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence` (worktree `ai-market-system-phase2-evidence`);
+  starting `main` SHA `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`; final SHA = the commit that adds
+  this entry.
+- Scope: isolated V2 market-evidence foundation. `data/market_evidence.py` (`MarketBar` contract,
+  V1-frame adapter, `MarketEvidenceEngine`), `storage/evidence_store.py` (isolated MARKET EVIDENCE
+  SQLite sidecar, application_id "V2ME", schema 1), `test_market_evidence.py` (39 tests),
+  `V2_PHASE2_MARKET_EVIDENCE.md` (V1 path audit, design, limitations, owner decisions).
+- H02 status: **PARTIAL**. Evidence processing complete and proven: every new closed bar, per
+  stream, chronological, idempotent across overlap/retry/duplicate slot/restart, one bar per
+  transaction, real-process crash/restart tests, gaps/late/revised bars recorded and never
+  fabricated or overwritten. Not done: applying intermediate bars to 5m position management,
+  SL/TP, pending orders and fills (runtime integration; owner decisions in the Phase 2 doc).
+- Persistence decision: isolated sidecar; `trading_floor.db` not migrated (schema 3, byte-identical
+  in tests).
+- Tests: baseline 609/609 pass, 0 skipped. Focused 39/39. Full suite 648/648 pass, 0 failed,
+  0 errors, 0 skipped. Scratch mutation testing (no file modified): newest-bar-only, reversed
+  chronology, duplicate processing, in-memory-only recovery, skipped middle bar, duplicate commit
+  after restart and forming-bar commit are all caught.
+- Safety: no runtime wiring; no change to runtime, providers, config, freshness, sessions, cadence,
+  setup/AI/prompts, risk, Paper Broker, execution, PnL or existing tests. SYSTEM HEALTH untouched
+  and inactive. REAL EXECUTION = DISABLED; NAS100 = OFF. No deploy, no merge, no PR.
+  Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED**.
+
 ## 2026-10-05 — V2 Phase 1 final PR polish (documentation + test only)
 
 - Agent: Claude. Branch `v2/phase1-system-health`; starting SHA
