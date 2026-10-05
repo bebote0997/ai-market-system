@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 2 B2.2 (cycle-gated pending orders, isolated)
+
+- Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA
+  `8e880bfa09bb724c75eb5cd82de0534fc46fab63`; final SHA = the commit that adds this entry.
+- Owner decision P1 APPROVED: no current cycle gate = no pending-order evaluation.
+- Scope: new `execution/pending_order_gate.py` (`CurrentCycleGate`, `gate_pending_orders`), new
+  `test_pending_order_gate.py`, Phase 2 doc section. Not wired into the runtime. No schema change.
+- Intermediate bars journaled idempotently as `PENDING_NOT_EVALUATED` / `NO_CURRENT_CYCLE_GATE` in
+  the existing journal; only the current gate's own bar reaches unchanged `process_next_bar`, only
+  after `order.as_of`; stale gates are not current; evaluation persisted via B2.1 guarded save.
+- Tests: focused 24/24; B2.1 28/28; mutations 4/4 killed; full suite once 708 pass / 0 fail / 0 skip.
+- Trading semantics unchanged (fill/stop/target/quantity/economics/gates). REAL DISABLED; NAS100 OFF;
+  H02 PARTIAL; B2.3 NOT STARTED (opt-in stale guard recorded as B2.3 activation gate).
+- Status: **READY FOR INDEPENDENT REVIEW**, not accepted. Phase 2 IN PROGRESS / NOT CERTIFIED.
+
 ## 2026-10-05 — V2 Phase 2 B2.1 P1 concurrency correction
 
 - Agent: Codex. Branch `v2/phase2-market-evidence`; clean/fetched starting SHA

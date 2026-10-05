@@ -1,7 +1,7 @@
 # V2 Phase 2 — Market Evidence Engine V2
 
-Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 P1 concurrency fix
-READY FOR INDEPENDENT RE-REVIEW, not accepted/certified; B2.2 and B2.3 not started). H02: **PARTIAL**.
+Status: **PHASE 2 — IN PROGRESS / NOT CERTIFIED** (Batch 1 accepted; B2.1 accepted; B2.2
+READY FOR INDEPENDENT REVIEW, not accepted; B2.3 not started). H02: **PARTIAL**.
 Branch: `v2/phase2-market-evidence` · Base: `main` @ `1f3362f47cf2439f7d1c6df844a2a9f7656dee1b`
 
 Mode: PAPER / DEMO only. REAL EXECUTION: DISABLED. NAS100: OFF. Not wired into the runtime.
@@ -297,12 +297,51 @@ reaches the unchanged `TradeManager.process_bar` exactly once, oldest first.
 - **READY FOR INDEPENDENT RE-REVIEW only.** No acceptance/certification, PR, merge, deploy, runtime
   wiring or activation. REAL DISABLED; NAS100 OFF; H02 PARTIAL; B2.2/B2.3 NOT STARTED.
 
+### B2.2 — cycle-gated pending orders (isolated, 2026-10-05)
+
+**Owner decision P1: APPROVED.** NO CURRENT CYCLE GATE = NO PENDING-ORDER EVALUATION. B2.1 was
+accepted at `8e880bf` before this batch.
+
+`execution/pending_order_gate.py` → `gate_pending_orders(store, evidence, *, account_id, symbol,
+as_of, gate=None, instrument=None, owner_key=None)`. Not wired into the runtime.
+
+- `CurrentCycleGate` carries the outcome of the EXISTING V1 gates for one real cycle — paper_enabled,
+  execution-time freshness, execution-time session (incl. the V1 diagnostic override), AI health and
+  final status not in {AI_CAUTION, ERROR, RISK_REJECTED} — plus that cycle's own closed 5m bar (the
+  dict V1 hands to `process_next_bar`). It does not compute or relax any gate; flags must be `True`.
+  A failed or crashed cycle supplies `None` or a non-passing gate.
+- Current = passed, same symbol, aware bar timestamp, and not older than the newest committed closed
+  5m bar. An earlier cycle's approval is therefore never carried forward to bars it did not see.
+- Only the gate's own bar is ever handed to the unchanged `PaperBroker.process_next_bar`, and only if
+  strictly after `order.as_of` (V1 rule; bars at/before `as_of` are never evaluated, so recovery cannot
+  cancel an order with an old bar). Approval cannot travel backward: no T4 fill at T1–T3 prices.
+- Every other committed closed 5m bar after `order.as_of` (intermediate bars, or all bars without a
+  current gate) is journaled once in the existing `journal` table: `event_type=PENDING_NOT_EVALUATED`,
+  `symbol`, `source=order_id`, `timestamp=bar start`, `run_id=order.run_id`, payload
+  `{order_id, bar_start, reason: NO_CURRENT_CYCLE_GATE}`. Inserted under one BEGIN IMMEDIATE that
+  re-reads which orders are still PENDING and skips keys already present: retries, restarts and
+  duplicate evidence add no rows. No economic effect; no schema change.
+- Exactly-once evaluation: durable reload, B2.1 `expected_state` captured, one `save_paper` guarded
+  under BEGIN IMMEDIATE; a concurrent winner makes the call `STALE` with nothing written.
+- Evidence read-only; read failure or contract violation fails closed (`PendingGateEvidenceError`).
+- Never runs Setup, AI, setup reviewer, Risk, Trade Planner, `submit_plan` or `TradeManager`
+  (spies + AST: the single `process_next_bar` call takes `gate.bar`).
+- Tests: `test_pending_order_gate.py` 24/24 (required items 1–20 plus stale-gate, truthy flags,
+  other symbol/malformed bar, evidence failure, not-yet-closed bars, two-writer STALE). B2.1 suites
+  28/28 unchanged. Mutations 4/4 killed: intermediate bar to `process_next_bar`; previous gate carried
+  forward; T4 gate evaluating T1 price; `order.as_of` guard removed. Full suite once: 708 pass /
+  0 fail / 0 skipped.
+- Scope: new module + new test file + these two docs. Protected modules, runtime, Risk, AI, providers,
+  scheduler, freshness, sessions, strategy, Paper Broker economics and schema 3 unchanged.
+- **READY FOR INDEPENDENT REVIEW only.** Not accepted. No PR/merge/deploy/runtime wiring.
+
 Remaining gates:
-- **B2.2 — pending orders: NOT STARTED.** Owner decision required on the gate for bars between
-  cycles (H02 vs H03 "an old approval cannot substitute for the current-cycle gate"); recommended
-  P1: cycle-gated only, intermediate bars journaled as not evaluated.
 - **B2.3 — runtime activation: NOT STARTED.** Requires explicit owner authorization: per-bar SL/TP
-  changes PAPER economics versus V1 and the frozen experiment.
+  changes PAPER economics versus V1 and the frozen experiment. Activation gates recorded for B2.3:
+  (1) the B2.1 stale-state guard is opt-in — before catch-up and the runtime operate together, every
+  relevant PAPER writer (runtime `save_paper` calls included) must participate safely in stale-state
+  protection; (2) the runtime must build `CurrentCycleGate` from its real gate values at the existing
+  pending-order point and replace its direct `process_next_bar` loop, without relaxing any gate.
 
 ## Phase 1 protection
 
