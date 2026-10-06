@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 5 P5.0 (Risk Engine V2 audit & owner-decision package)
+
+- Agent: Claude. Branch `v2/phase5-risk-engine` from `main` `3edb64804cfc4b1432dbc79aa7ed3d810be4e558`; final SHA
+  = the commit that adds this entry. Audit/design only; no production code changed.
+- `V2_PHASE5_RISK_ENGINE.md` (authority map, F05 gap matrix, sizing, portfolio, drawdown, correlation, invalid
+  geometry, abnormal market, concurrency, architecture); `test_phase5_risk_characterization.py` (8 tests).
+- Finding: the broker's hard-coded 1% money-at-risk cap rejects 27.4% of DEC-4.7-accepted fills in replay.
+- REAL DISABLED; NAS100 OFF; schema 3; runtime OFF. Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-06 — V2 Phase 4 DEC-4.7 (fixed-3R fill execution floor 2.50R)
 
 - Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `de24ccd771dd28a8506fc7be3808ca9ca6bef45a`;
