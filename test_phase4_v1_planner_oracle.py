@@ -2,8 +2,8 @@
 
 Pins the EXACT current outputs (main b8b7493) of Setup -> Trade Planner -> Risk -> PAPER quantity
 increment -> AI trade review (deterministic provider) -> Paper Broker fill gate. Non-production: it
-imports production code read-only and changes nothing. Values include current V1 defects on purpose
-(declared-R:R trust, unrounded targets, manufactured 3R targets); P4.1 must not change them silently.
+imports production code read-only and changes nothing. Values include current V1 behavior on purpose
+(unrounded targets, manufactured 3R targets). The declared-R:R trust defect is fixed by DEC-4.2 (P4.1).
 """
 import unittest
 from dataclasses import replace
@@ -103,9 +103,11 @@ class V1PlannerOracle(unittest.TestCase):
     def test_risk_rr_floor_and_declared_rr_trust(self):
         low = TradePlan("1.0", "XAUUSD", "LONG", "5m", 2650.0, 2640.0, 2670.0, 2.0, run_id="run", as_of=AT)
         self.assertEqual(evaluar_trade_plan(low, 10000.0, INSTRUMENTS["XAUUSD"], CONFIG).reason, "rr_below_minimum")
-        # Current V1 defect (pinned): Risk trusts the declared risk_reward; real geometry here is 1:1.
+        # P4.0 pinned a V1 defect here (declared 3R / real 1R was APPROVED). DEC-4.2 fixes it in P4.1, for V1
+        # too: Risk recomputes R:R from levels. Consistent V1 plans are unaffected (all rows above unchanged).
         lie = replace(low, target=2660.0, risk_reward=3.0)
-        self.assertEqual(evaluar_trade_plan(lie, 10000.0, INSTRUMENTS["XAUUSD"], CONFIG).status, "APPROVED")
+        decision = evaluar_trade_plan(lie, 10000.0, INSTRUMENTS["XAUUSD"], CONFIG)
+        self.assertEqual((decision.status, decision.reason), ("REJECTED", "rr_declared_mismatch"))
         self.assertEqual(CONFIG["ratio_minimo"], 3.0)
 
     def test_deterministic_ai_trade_review_depends_on_rr_3(self):

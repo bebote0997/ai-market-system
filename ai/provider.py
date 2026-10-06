@@ -17,6 +17,16 @@ class AIProvider(ABC):
         raise NotImplementedError
 
 
+def _rr_rejected(rr_policy, risk_reward):
+    """Deterministic AI R:R gate. V1 plans (no policy key): unchanged ``< 3`` rule. A Phase 4 plan is
+    rejected only outside the single-contract 2R..5R policy; the AI never selects or alters levels."""
+    if rr_policy is None:
+        return isinstance(risk_reward, (int, float)) and risk_reward < 3
+    from core.rr_contract import POLICY_V2_D, WITHIN_POLICY, classify, to_decimal
+    value = to_decimal(risk_reward)
+    return rr_policy != POLICY_V2_D or value is None or classify(value, POLICY_V2_D) != WITHIN_POLICY
+
+
 class DeterministicAIProvider(AIProvider):
     """Safe default provider: it only ever echoes and summarizes evidence
     that was actually supplied on the request. It never invents a price,
@@ -110,7 +120,7 @@ class DeterministicAIProvider(AIProvider):
         ]
         expected = "BULLISH" if plan.get("side") == "LONG" else "BEARISH" if plan.get("side") == "SHORT" else "UNKNOWN"
         conflicts = sum(1 for value in specialist_conflicts if value != expected)
-        if not invalidation or (isinstance(risk_reward, (int, float)) and risk_reward < 3):
+        if not invalidation or _rr_rejected(plan.get("rr_policy"), risk_reward):
             recommendation, confidence = "REJECT_RECOMMENDATION", 0.4
         elif macro_caution or conflicts > 0:
             recommendation, confidence = "CAUTION", 0.6

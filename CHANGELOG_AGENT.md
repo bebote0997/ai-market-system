@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 4 P4.1 (Policy D, single R:R contract, replay foundation)
+
+- Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `f862176d6660b81a8574d8ba8007fb1504b7e402`
+  (P4.0); final SHA = the commit that adds this entry. Owner decisions DEC-4.1..4.4 recorded.
+- New `core/rr_contract.py` (single R:R authority), `agents/target_planner.py` (Policy D, explicit opt-in),
+  `replay/` (separate Replay Store, acquisition, lookahead-free engine, comparison). Changed: `riesgo.py`
+  (recompute R:R for every plan; Phase 4 config), `floor/orchestrator.py` (`planner_policy`, default V1),
+  `ai/provider.py` + `ai/agents/trade_reviewer_ai.py` (policy-aware deterministic gate; V1 unchanged),
+  `execution/paper_broker.py` (`rr_policy`, default V1 expression), `core/contracts.py` and `runtime/review.py`
+  (additive fields), `.gitignore` (`data/replay/`). Runtime cannot select Policy D.
+- Fixed: Risk declared-R:R trust (DEC-4.2). Tests: new Phase 4 suites 28/28; oracle updated for DEC-4.2;
+  mutations 12/12 killed. 12-month real-data replay: Policy D 0 plans (HIGH finding, owner decision).
+- REAL DISABLED; NAS100 OFF; schema 3; System Health inactive. Status: **READY FOR INDEPENDENT REVIEW**;
+  Phase 4 NOT certified.
+
 ## 2026-10-06 — V2 Phase 4 P4.0 (Trade Planner + Target/R:R design & owner decision package)
 
 - Agent: Claude. Branch `v2/phase4-trade-planner` from `main` `b8b7493d91b37156e653d8ce7a8850a9abd82fb0`;

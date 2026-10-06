@@ -20,6 +20,8 @@ def build_request(trade_plan, ai_structure, ai_liquidity, ai_macro, symbol, run_
             "evidence_id": "trade_plan",
             "side": trade_plan.side,
             "risk_reward": trade_plan.risk_reward,
+            **({"rr_policy": trade_plan.policy_version}
+               if getattr(trade_plan, "policy_version", "V1") != "V1" else {}),
             "invalidation": trade_plan.invalidation,
         }]
         for name, response in (("structure", ai_structure), ("liquidity", ai_liquidity), ("macro", ai_macro)):

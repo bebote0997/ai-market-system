@@ -1,6 +1,7 @@
 # V2 Phase 4 — Trade Planner + Target/R:R Engine (P4.0 design & owner decision package)
 
-Status: **P4.0 DESIGN COMPLETE — READY FOR OWNER DECISION.** P4.1 implementation NOT STARTED.
+Status: **P4.1 IMPLEMENTATION CANDIDATE — READY FOR INDEPENDENT REVIEW** (P4.0 design below; P4.1 section at the end).
+P4.1 implementation ≠ Phase 4 certification.
 Base: `main` @ `b8b7493d91b37156e653d8ce7a8850a9abd82fb0` (Phase 3 merged). Branch `v2/phase4-trade-planner`.
 No production code changed; trading behavior unchanged. PAPER only; REAL DISABLED; NAS100 OFF; V2 runtime
 activation NOT AUTHORIZED; System Health INACTIVE; trading DB schema 3.
@@ -310,3 +311,139 @@ on identical evidence, PAPER only, REAL disabled, NAS100 off, schema 3 (metadata
 - WHY: no broker cost data exists; inventing costs is forbidden.
 - TRADING BEHAVIOR AFFECTED: none if informational; acceptance only if net R:R is later made a gate.
 - RISK IF APPROVED: assumption error. RISK IF DEFERRED: net expectancy unavailable in F04-T16.
+
+---
+
+## P4.1 — Implementation candidate (2026-10-06)
+
+Status line: **P4.1 IMPLEMENTED — READY FOR INDEPENDENT REVIEW. P4.1 implementation ≠ Phase 4 certification**
+(F04-T18 not certified). Policy D is reachable only through an explicit `planner_policy=POLICY_V2_D` argument
+(tests/replay); the runtime has no path to it (flag OFF; runtime activation NOT AUTHORIZED).
+
+### Owner decisions recorded
+
+- **DEC-4.1 — Policy D (approved with modification).** Entry and invalidation from the certified authorities,
+  frozen; first genuine structural target in the trade direction; exact gross R:R; eligible only for
+  `2.0 <= R:R <= 5.0`; `< 2` → `RR_BELOW_FLOOR` (no plan); `> 5` → `OUT_OF_POLICY_EXTENDED_TARGET`
+  (target and ratio kept as observation, never an order); no 5R synthesis; no ratio rounding to a band.
+- **DEC-4.2 — single R:R authority (approved).** `core/rr_contract.py` used by the Phase 4 planner, Risk,
+  the deterministic AI gate and the Paper Broker fill gate. Risk recomputes R:R from levels for **every**
+  plan (V1 included) and rejects a declared/recomputed mismatch beyond `1e-9` relative (float noise only):
+  the P4.0 MEDIUM finding (declared 3R / real 1R APPROVED) is fixed.
+- **DEC-4.3 — replay data (approved conceptually, no purchase).** Separate Replay Store; acquisition via the
+  existing Twelve Data key, plan `basic` (8 req/min, 800/day, no payment).
+- **DEC-4.4 — gross R:R only.** `cost_model = NO_COST_MODEL`, `net_rr = effective_rr = UNAVAILABLE`. The legacy
+  `PaperOrder.cost_rate = 0.0` is a compatibility value, not evidence of zero cost.
+
+### Implementation
+
+- `core/rr_contract.py`: `geometry` (LONG `stop < entry < target`, SHORT `target < entry < stop`, finite > 0;
+  risk/reward as defined in DEC-4.2), exact `Decimal` ratio, `classify` (floor/ceiling inclusive), analytics
+  `band`, `declared_matches`, directed `normalize` (quantized to the instrument increment).
+- `agents/target_planner.py` (`plan_policy_d`): result codes `PLAN_READY`, `NO_VALID_TARGET`, `RR_BELOW_FLOOR`,
+  `OUT_OF_POLICY_EXTENDED_TARGET`, `INVALID_GEOMETRY`, `INSUFFICIENT_TARGET_EVIDENCE`, `UNSUPPORTED_PRECISION`,
+  `NOT_A_VALID_SETUP` (plan viability; Setup statuses untouched; the floor report keeps `PLAN_UNAVAILABLE`).
+  - **Eligible target authority:** confirmed 15m/1h swing highs (LONG) / lows (SHORT) from the structure scout,
+    only for timeframes whose payload lineage matches and whose Phase 3 evidence reference is `VALID`, confirmed
+    at or before `as_of`, strictly beyond the entry. Equal-high/low liquidity: recorded as `HEURISTIC`, never
+    selected. Volatility/sweeps: not used (`volatility = UNAVAILABLE`).
+  - **First structural obstacle:** LONG nearest eligible level above entry; SHORT nearest below. Never skipped
+    (1.7R then 3.5R → `RR_BELOW_FLOOR`). Same-price levels from several timeframes are merged (`sources`).
+  - **Precision:** prices are normalized **before** comparison, with directed rounding that can only lower
+    R:R (LONG entry↑ stop↓ target↓; SHORT entry↓ stop↑ target↑), quantized to the increment (XAU 0.01,
+    EUR 0.00001); the ratio is exact on those values (no `1.0939999999999996`-style artifacts).
+  - **Trace (`target_decision`, additive in the review report):** policy version, status/reason, setup_id,
+    run_id, symbol, side, raw and normalized entry/stop, increment, every candidate (source, timeframe, authority,
+    raw/normalized price, confirmation/pivot time, eligibility, reason), selected target + sources, exact gross
+    R:R, band, risk/reward, cost-model status, `decision_id`.
+  - **Idempotency:** `decision_id = uuid5(policy, setup_id, symbol, side, entry, stop, increment, candidates)`;
+    run_id excluded; same across retry and a new process; a moved target gives a new id. `setup_id` untouched.
+- `floor/orchestrator.run(..., planner_policy=POLICY_V1)`: default V1 (unchanged); unknown policy refused.
+- `riesgo.py`: `crear_configuracion_riesgo_phase4()` (V2 sizing, `rr_policy=POLICY_V2_D`). Policy from Risk's
+  own configuration (never from the plan): V1 keeps the `>= 3` declared check, then the recompute/mismatch
+  check; Phase 4 requires `plan.policy_version == POLICY_V2_D`, recomputes, and accepts only 2R–5R
+  (`rr_below_minimum` / `rr_above_maximum` / `rr_declared_mismatch` / `rr_policy_mismatch`). Sizing unchanged.
+- AI: the trade-review request carries `rr_policy` only for Phase 4 plans (V1 requests byte-identical); the
+  deterministic provider applies the V1 `< 3` rule to V1 plans and the 2R–5R contract to Phase 4 plans. AI
+  returns a recommendation only; it cannot select, alter or round levels.
+- Paper Broker: `PaperBroker(..., rr_policy=None)`; `None` keeps the frozen V1 expression. With `POLICY_V2_D`
+  the fill gate recomputes R:R at the actual fill price with the contract: same-price fill as planned;
+  favorable fill raises R:R (rejected if it exceeds 5R — out of policy); adverse fill lowers it (rejected
+  below 2R); a gap through the stop is invalid geometry. SL/TP are never moved to rescue a fill.
+
+### Replay foundation (F04-T15) and comparison (F04-T16)
+
+`replay/` (offline; never imported by the runtime): `store.py` (separate Replay Store in the Phase 2 evidence
+format; file name must contain `replay`; trading DB refused), `acquire.py` (backward paging, closed bars only,
+chronological ingest), `engine.py` (lookahead-free: a decision at `t` sees only bars with `start + duration <= t`,
+500-bar windows as the runtime; both policies run the production floor on the identical snapshot; fill at the
+next 5m open with the policy's gate; SL/TP walk with V1 TradeManager precedence; independent per-decision
+simulation; no trading DB, no PaperBroker, no AI), `compare.py` (plans, rejections by reason,
+`NO_VALID_TARGET` / `RR_BELOW_FLOOR` / `OUT_OF_POLICY_EXTENDED_TARGET`, R:R distribution and bands, target
+sources, fills, outcomes, reach/stop rates, gross R total/expectancy, max drawdown in R, session and symbol
+distribution, data sufficiency; `historical_probability` only if ≥ 100 closed per symbol and ≥ 30 per band;
+net/effective `UNAVAILABLE`).
+
+### Real-data replay observation
+
+**Observation only — not a historical performance or probability claim.** Replay Store
+`data/replay/replay_twelve_data_12m.db` (git-ignored, never committed): Twelve Data `basic` plan (existing key,
+no payment; 8 req/min, 800/day; ~44 requests used), XAU/USD and EUR/USD, 1h/15m/5m, 2025-10-06 → 2026-10-06:
+XAU 8,406 / 33,606 / 100,799 bars, EUR 8,067 / 32,249 / 96,704 bars; GAP anomalies 14–46 per stream (recorded,
+nothing invented). Data note: the provider includes weekend quotes (~1.9–2.1k 1h bars per symbol); no
+decision is made on weekends (session calendar), but weekend bars sit inside the scouts' 500-bar windows exactly
+as in the live runtime with the same provider. Licensing: provider terms; stored locally for internal research.
+
+Run: decisions 2025-11-03 → 2026-10-05 (≥ 500 1h bars warm-up), **hourly cadence** (sampled: the unchanged
+production scouts cost ~2.4 s per run; the scouts run once per slot and are shared by both policies), runtime
+session gates, real scouts and Setup Validator, AI excluded, independent per-decision simulation, gross only.
+6,661 slots per policy; identical setups across policies: **yes**; 491 VALID_SETUP (XAU 262, EUR 229).
+
+| Metric | Policy 0 (V1) | Policy D |
+|---|---|---|
+| plans ready | 491 | **0** |
+| rejected | — | RR_BELOW_FLOOR 462, NO_VALID_TARGET 29 |
+| out-of-policy extended | — | 0 |
+| fills / fill-rejected | 275 / **216 (44%)** | — |
+| outcomes (closed) | STOP 187, TARGET 69, OPEN 19 | — |
+| target reach / stop rate | 27.0% / 73.0% | — |
+| gross expectancy / total / max DD | +0.083R / +21.3R / 68.5R | — |
+| data sufficiency (≥100/symbol, ≥30/band) | met (128/128 closed; band 3_TO_4: 256) | not met |
+| historical probability | ELIGIBLE_FOR_REVIEW (not computed) | UNAVAILABLE / INSUFFICIENT_EVIDENCE |
+
+**Why Policy D produced no plan (diagnosis on all 491 setups):** the first genuine structural target gives
+gross R:R median **0.011**, max 0.58 (XAU) / 0.58 (EUR) — never ≥ 2. Reward is tiny (a confirmed 15m/1h swing
+almost always sits just beyond the entry: median 0.029% XAU, 0.006% EUR) and risk is large (the certified
+invalidation is the window-extreme swing: median 2.55% XAU, 0.63% EUR). Informational only (not the certified
+authority, not proposed): with the nearest protective 15m swing as stop, 26/262 (XAU) and 21/229 (EUR) would fall
+within 2R–5R. **Policy D as approved is effectively a no-trade policy on this data; it is implemented exactly and
+not changed.** The V1 fill gate rejects 44% of approved V1 plans (any adverse next-open gap breaks the fixed 3R).
+
+### Tests
+
+`test_phase4_target_planner.py` (Policy D matrix for EURUSD/XAUUSD LONG/SHORT at 1.5/2.0/2.4/3.0/3.6/4.0/
+4.9/5.0/5.5R, just-below-2R on the grid, first obstacle never skipped, confluence, no target, insufficient
+evidence, wrong-symbol / future / untrusted-reference evidence, heuristic liquidity never selected, NaN/Inf/
+geometry/precision, rounding never manufactures 2R, exact 3/4/5R boundaries, frozen stop, idempotency incl.
+new process, setup_id untouched, Risk 2R–5R and 10 adversarial inputs, AI gate, broker fill gate, flag OFF),
+`test_phase4_replay.py` (identical setups across policies, outcomes, no lookahead incl. forming bar, no trading
+DB / orders, separate store, simulation gates, real scouts end-to-end), `test_phase4_v1_planner_oracle.py`
+(V1 economics; the declared-R:R row updated for DEC-4.2). Accepted isolation test
+`test_market_evidence.test_not_wired_into_the_runtime` now allows the offline `replay/` package and asserts
+no runtime module imports it.
+
+### Status
+
+F04-T01..T14: IMPLEMENTED (T05 volatility and T12 historical probability implemented as explicit
+`UNAVAILABLE`; T10 session as replay metadata only). F04-T15: IMPLEMENTED (foundation + 12-month real-data run, hourly cadence).
+F04-T16: IMPLEMENTED (gross only). F04-T17: IMPLEMENTED. F04-T18: NOT CERTIFIED.
+
+### P4.1 findings and remaining owner decision
+
+- **HIGH (policy outcome, not a code defect):** DEC-4.1 Policy D yields 0 eligible plans in 12 months of real data
+  (first genuine target ≪ 2R because the certified invalidation is the window-extreme swing and nearby confirmed
+  swings sit just beyond entry). Owner decision required before any further Phase 4 economics (candidate-target
+  authority and/or invalidation authority — the latter belongs to the certified Setup Validator).
+- MEDIUM: V1 fill gate rejects 44% of approved V1 plans (strict `>= 3` at the next open with a fixed 3R target).
+- LOW: Twelve Data includes weekend quotes; GAP anomalies recorded. LOW: replay uses hourly sampled cadence
+  (production scouts ~2.4 s/run).

@@ -24,9 +24,11 @@ def _valid_ohlc(bar):
 
 
 class PaperBroker:
-    def __init__(self, account, instrument=None):
+    def __init__(self, account, instrument=None, rr_policy=None):
         self.account = account
         self.instrument = instrument
+        # V2 Phase 4: fill-gate R:R policy. None = frozen V1 (``reward / risk >= 3`` at the fill price).
+        self.rr_policy = rr_policy
         self.orders = {}
         self.fills = {}
         self.journal = []
@@ -66,6 +68,14 @@ class PaperBroker:
         self._event(as_of, order.run_id, order.symbol, order.order_id, "ORDER_SUBMITTED")
         return order
 
+    def _fill_rr_rejected(self, order, fill_price, risk_per_unit, reward):
+        """Recompute R:R at the actual fill price; SL/TP are never moved to rescue a fill."""
+        if self.rr_policy is None:
+            return reward / risk_per_unit < 3  # Frozen V1 expression.
+        from core.rr_contract import WITHIN_POLICY, classify, geometry
+        shape, _ = geometry(order.side, fill_price, order.stop, order.target)
+        return shape is None or classify(shape.rr, self.rr_policy) != WITHIN_POLICY
+
     def process_next_bar(self, order, bar):
         if order is None or order.status != "PENDING":
             return None
@@ -89,7 +99,7 @@ class PaperBroker:
         real_risk = risk_per_unit * order.quantity * order.contract_multiplier
         current_equity = self.account.equity
         if (not _valid(current_equity) or not _valid(order.equity_at_submission)
-                or risk_per_unit <= 0 or reward <= 0 or reward / risk_per_unit < 3
+                or risk_per_unit <= 0 or reward <= 0 or self._fill_rr_rejected(order, fill_price, risk_per_unit, reward)
                 or real_risk > current_equity * 0.01 or real_risk > order.equity_at_submission * 0.01):
             order.status = "REJECTED"
             self._event(bar["timestamp"], order.run_id, order.symbol, order.order_id, "ORDER_REJECTED", {"reason": "post_fill_risk_or_geometry"})

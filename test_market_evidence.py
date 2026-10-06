@@ -866,8 +866,12 @@ class SafetyTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8", errors="replace")
             if "market_evidence" in text or "evidence_store" in text:
                 users.append(path.relative_to(ROOT).as_posix())
-        # B2.3B: the runtime is the only user, behind v2_position_catch_up (OFF by default).
-        self.assertEqual(sorted(users), ["runtime/config.py", "runtime/service.py"])
+        # B2.3B: the runtime is the only user, behind v2_position_catch_up (OFF by default). Phase 4 (DEC-4.3):
+        # the offline replay package reuses the evidence format in a separate Replay Store; no runtime imports it.
+        self.assertEqual(sorted(u for u in users if not u.startswith("replay/")),
+                         ["runtime/config.py", "runtime/service.py"])
+        runtime_sources = [p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "runtime").glob("*.py")]
+        self.assertFalse(any("import replay" in text or "from replay" in text for text in runtime_sources))
 
 
 if __name__ == "__main__":
