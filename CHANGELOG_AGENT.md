@@ -1,5 +1,41 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 5 P5.1C (certification-blocker correction: durable pending-risk policy identity)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase5-risk-engine`; starting SHA
+  `a71688ee4279f2257a72d921a8231290a8782b21`; final SHA = the commit that adds this entry.
+- HIGH fixed: pending reservations no longer assume 8/7. `PaperOrder.risk_policy_version` (additive, omitted when
+  None; schema 3), registry in `core/risk_policy.py`, stamping in `execution/risk_reservation.py`, identity-bound
+  reservation and `UNKNOWN_PENDING_RISK_POLICY` in `execution/risk_engine_v2.py`, stamped-order fill binding in
+  `execution/paper_broker.py`, codec omission in `storage/codec.py`, audit stamping in `replay/risk_audit.py`.
+- Docs: open risk renamed entry-basis loss to stop (no "never understates" claim); P5.1C section C1–C8.
+- Tests: reviewer HIGH regression on the real 2.30% cap, restart/reload identity, unknown legacy, fixed-3R happy
+  path (1.00/0.75/0.63/0.25%), fill binding, 4 new multi-process cases.
+- REAL DISABLED; NAS100 OFF; schema 3; runtime not wired/activated. Status: **READY FOR INDEPENDENT DELTA REVIEW**.
+
+## 2026-10-06 — V2 Phase 5 P5.1 (Risk Engine V2 implementation, DEC-5.1 → DEC-5.8)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase5-risk-engine`; starting SHA
+  `9c9e9817deaeb1c17f7cf946f5c20b535c8a7113`; final SHA = the commit that adds this entry.
+- New: `core/risk_policy.py` (versioned policy `V2_P5_RISK_1`, derived 8/7), `execution/risk_engine_v2.py` (pure
+  portfolio-aware Risk: conservative equity, 1% / 100% notional sizing, open + pending + proposed ≤ 2.30%, one per
+  symbol, 5% drawdown gate, traceability record), `execution/risk_reservation.py` (atomic reservation = PENDING
+  order via B2.3A CAS, run_id idempotency), `replay/risk_audit.py`, `test_phase5_risk_engine.py`,
+  `test_phase5_risk_concurrency.py` (real multi-process cases A–E).
+- Changed: `execution/paper_broker.py` DEC-5.7 fill money rule for fixed 3R (V1 and policy D unchanged);
+  `test_phase5_risk_characterization.py` H1 assertion explicitly superseded; `V2_PHASE5_RISK_ENGINE.md` P5.1 section.
+- Replay: the old 1% cap rejected 523/1,940 fills; DEC-5.7 rejects 0 money fills; R:R ≥ 2.50 vs 8/7 disagreements 0.
+- REAL DISABLED; NAS100 OFF; schema 3; runtime not wired/activated. Status: **READY FOR INDEPENDENT REVIEW**.
+
+## 2026-10-06 — V2 Phase 5 P5.0 (Risk Engine V2 audit & owner-decision package)
+
+- Agent: Claude. Branch `v2/phase5-risk-engine` from `main` `3edb64804cfc4b1432dbc79aa7ed3d810be4e558`; final SHA
+  = the commit that adds this entry. Audit/design only; no production code changed.
+- `V2_PHASE5_RISK_ENGINE.md` (authority map, F05 gap matrix, sizing, portfolio, drawdown, correlation, invalid
+  geometry, abnormal market, concurrency, architecture); `test_phase5_risk_characterization.py` (8 tests).
+- Finding: the broker's hard-coded 1% money-at-risk cap rejects 27.4% of DEC-4.7-accepted fills in replay.
+- REAL DISABLED; NAS100 OFF; schema 3; runtime OFF. Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-06 — V2 Phase 4 DEC-4.7 (fixed-3R fill execution floor 2.50R)
 
 - Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `de24ccd771dd28a8506fc7be3808ca9ca6bef45a`;
