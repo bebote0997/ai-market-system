@@ -504,3 +504,78 @@ holdout 52.9%); closed target rate 31.0%; gross expectancy +0.24R (discovery +0.
 **Interpretation.** Under every tested target definition the binding constraint is the certified invalidation
 distance (median 1.40% of entry): genuine structural targets sit far closer, so 2R–5R is reached in at most ~2.7%
 of valid setups (D2), and D2's observational outcomes are stop-dominated in both discovery and holdout.
+
+---
+
+## DEC-4.6 — FIXED 3R V2 POLICY (2026-10-06)
+
+**Owner decision.** The V2 Trade Planner target policy is **fixed 1:3 R:R**, chosen for simplicity, deterministic
+trade management and comparability across the planned 60-day V2 PAPER period. This does not claim variable R:R is
+universally inferior. DEC-4.6 supersedes the proposed P4.1B invalidation lab: it was stopped before completion,
+none of its results were used, and its files were not committed. **Phase 3 stays certified, closed and merged;**
+Setup Validator and setup_id semantics are unchanged.
+
+**Research record (unchanged above).** Structural target policies D0–D4 were researched (P4.1, P4.1A). D2
+(prior completed-day high/low) was the only meaningful non-zero candidate: 53 / 1,941 valid setups (2.73%), with
+insufficient sample and stop-dominated observational outcomes. The Owner therefore did not adopt structural levels
+as target authority for V2 at this time. This does not mean 2R, 4R or 5R are inherently invalid.
+
+**Contract (implemented; explicit opt-in `planner_policy=POLICY_V2_F3`, no runtime path).**
+VALID_SETUP → certified structural invalidation = SL → reference entry → TP = entry ± 3 × risk → Risk → AI →
+PAPER fill validation. The SL is never derived from a ratio and never moved; TP is never relocated.
+- `agents/target_planner.plan_fixed_3r`: entry and SL are normalized with the Policy D conservative rounding
+  (LONG entry up / SL down; SHORT entry down / SL up); risk is a grid multiple, so TP is exact on the grid and the
+  planned R:R is exactly 3 (Decimal). Invalid geometry (zero/negative risk, NaN, ±Inf, wrong side, SHORT TP ≤ 0)
+  fails closed. Trace: setup_id, run_id, symbol, side, raw and normalized entry/SL, increment, risk, reward, TP,
+  planned and declared R:R, cost-model status, deterministic `decision_id` (run_id excluded).
+- Structural levels (15m/1h swings beyond entry) are recorded as `observational_context` (level, R:R at the level,
+  whether TP lies beyond it). They never move TP/SL and never reject a plan.
+- `core/rr_contract`: `POLICY_V2_F3` planned limits exactly 3; Risk (`crear_configuracion_riesgo_fixed_3r`)
+  recomputes from levels and rejects declared/recomputed mismatch, anything not exactly 3R, and policy mismatch.
+- AI deterministic gate: the fixed-3R plan follows the contract (the legacy `< 3` rule cannot reject it); AI cannot
+  change entry, SL, TP or R:R.
+- Paper Broker (`rr_policy=POLICY_V2_F3`): recomputes the actual geometry at the fill with the frozen SL/TP and
+  records it (`fill_geometry`: fill price, SL, TP, actual risk, reward, R:R) on ORDER_FILLED / ORDER_REJECTED; it
+  never repairs levels. **Fill acceptance is PROVISIONAL:** the existing V1 rule (actual R:R ≥ 3, no upper bound)
+  is inherited unchanged pending DEC-4.7; no tolerance was invented.
+- Gross only (DEC-4.4): net/effective UNAVAILABLE; no cost model is not zero cost.
+
+### Fill-geometry audit (evidence for DEC-4.7)
+
+`replay/fill_audit.py` rebuilt the planned geometry of all 1,940 V1 plan slots from P4.1A (identical VALID setups;
+no scout rerun) and filled them with frozen SL/TP under two models:
+**NEXT_BAR** (open of the 5m bar starting at t — the P4.1/P4.1A replay model) and **NEXT_CYCLE** (open of the bar
+starting at t + 10 min — the current-cycle bar of the next 15-minute runtime cycle, where the runtime and the P1 gate
+actually evaluate a pending order).
+
+| Model / policy | Fill-rejected | Rejected fills that were adverse | Displacement (R) p05 / median / p95 | Median actual R:R |
+|---|---|---|---|---|
+| NEXT_BAR · V1 | 924 / 1,940 (47.63%) — reproduces P4.1A | 924 / 924 | −0.011 / 0.000 / +0.011 | 3.000 |
+| NEXT_BAR · V2 fixed 3R | 913 (47.06%) | 913 / 913 | −0.011 / 0.000 / +0.011 | 3.000 |
+| NEXT_CYCLE · V1 | 919 (47.37%) | 918 / 919 (1 gap through SL) | −0.085 / −0.002 / +0.089 | 3.006 |
+| NEXT_CYCLE · V2 fixed 3R | 919 (47.37%) | 918 / 919 | −0.085 / −0.002 / +0.089 | 3.007 |
+
+(Displacement > 0 = adverse; holdout rejection 52.6–52.9% NEXT_BAR, 48.7% NEXT_CYCLE.) Planned R:R is exactly 3.0
+for all V2 plans (V1: 3.0 within float noise).
+
+**Findings.**
+1. Planned entry = last closed 5m close at t (not an executable price); the PAPER fill is the next evaluated bar's
+   open, so it always differs by the market move between them.
+2. The rejection is decided by **sign, not size**: with a fixed TP, any adverse displacement — median 0.0023R
+   (NEXT_BAR) / 0.025R (NEXT_CYCLE) — makes actual R:R < 3, so the strict `≥ 3` rule rejects every adverse fill and
+   accepts every favorable one. About half of fills are adverse, hence ~47–53% rejections. It is a coin-flip filter,
+   not protection against meaningful geometry degradation, and it biases accepted trades toward favorable fills.
+3. The replay's NEXT_BAR model understates the runtime: the runtime fills ~10 minutes later (NEXT_CYCLE), with ~10×
+   larger displacement (p95 0.089R → actual R:R ≈ 2.67 at the 95th adverse percentile), yet a similar rejection rate.
+4. Next-bar-open mechanics plus the fixed-TP strict rule are the primary cause; the 47.6% is an artifact of the PAPER
+   fill model rather than a protective signal.
+
+Observational, gross, AI excluded, no costs: NEXT_CYCLE V2 fixed 3R — 1,021 filled; target 276 / stop 674 / open 71;
+gross expectancy +0.21R (holdout −0.01R). Not a performance claim; probabilities UNAVAILABLE.
+
+**Owner decision required — DEC-4.7 (fill policy).** Options for the owner (no recommendation of a numeric
+tolerance is made here): (a) keep strict `≥ 3` at the fill (status quo; ~47–53% rejected, favorable-fill bias);
+(b) accept a fill when its actual R:R is at least an owner-chosen floor (evidence above gives the displacement
+distribution); (c) change the PAPER execution model to a limit order at the planned entry (fill only when price
+trades at/through it, so actual R:R ≥ 3 by construction; unfilled orders expire) — an execution-mechanics change;
+(d) re-anchoring TP at the fill is excluded by DEC-4.6 (TP immutable).

@@ -117,6 +117,14 @@ def crear_configuracion_riesgo_phase4():
 	return config
 
 
+def crear_configuracion_riesgo_fixed_3r():
+	"""DEC-4.6: V2 sizing unchanged; planned R:R must recompute to exactly 3 from levels. Tests/replay only."""
+	from core.rr_contract import POLICY_V2_F3
+	config = crear_configuracion_riesgo_v2()
+	config.update(rr_policy=POLICY_V2_F3, ratio_minimo=3.0, ratio_maximo=3.0)
+	return config
+
+
 def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=None):
 	if isinstance(plan, TradePlan):
 		plan_data = plan.__dict__
@@ -140,13 +148,13 @@ def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=Non
 		return RiskDecision("1.0", "REJECTED", plan_data.get("symbol", ""), side, None, None, entry, stop, target, "instrument_contract_data_unavailable")
 	if (side == "LONG" and not stop < entry < target) or (side == "SHORT" and not target < entry < stop):
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_level_order")
-	from core.rr_contract import POLICY_V1, POLICY_V2_D, RR_BELOW_FLOOR, WITHIN_POLICY, classify, declared_matches, geometry
+	from core.rr_contract import POLICY_V1, POLICY_V2_D, POLICY_V2_F3, RR_BELOW_FLOOR, WITHIN_POLICY, classify, declared_matches, geometry
 	policy = configuracion.get("rr_policy", POLICY_V1)
 	if policy == POLICY_V1:
 		if not _finito(rr) or rr < configuracion["ratio_minimo"]:
 			return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_below_minimum")
-	elif policy == POLICY_V2_D:
-		if plan_data.get("policy_version") != POLICY_V2_D:
+	elif policy in (POLICY_V2_D, POLICY_V2_F3):
+		if plan_data.get("policy_version") != policy:
 			return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_policy_mismatch")
 	else:
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_policy_unknown")
@@ -156,7 +164,7 @@ def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=Non
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_level_order")
 	if not declared_matches(rr, shape.rr):
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_declared_mismatch")
-	if policy == POLICY_V2_D:
+	if policy in (POLICY_V2_D, POLICY_V2_F3):
 		outcome = classify(shape.rr, policy)
 		if outcome != WITHIN_POLICY:
 			reason = "rr_below_minimum" if outcome == RR_BELOW_FLOOR else "rr_above_maximum"

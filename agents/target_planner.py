@@ -196,5 +196,66 @@ def plan_policy_d(setup, datos_5m, symbol, run_id, as_of, instrument):
     return plan, decision
 
 
+def plan_fixed_3r(setup, datos_5m, symbol, run_id, as_of, instrument):
+    """DEC-4.6 fixed 3R: (TradePlan or None, target_decision).
+
+    Authority order: VALID_SETUP -> certified structural invalidation = SL (never derived from a ratio) ->
+    reference entry -> TP = entry +/- 3 x risk. Entry and SL are put on the instrument grid with the same
+    conservative directed rounding as Policy D (LONG entry up / SL down; SHORT entry down / SL up); risk is then a
+    grid multiple, so TP is exact on the grid and the planned R:R is exactly 3 (no TP rounding). Structural levels
+    beyond the entry are recorded as OBSERVATIONAL context only: they never move TP or SL and never reject.
+    """
+    from core.rr_contract import POLICY_V2_F3
+    decision = {"policy_version": POLICY_V2_F3, "status": None, "reason": None, "run_id": run_id,
+                "setup_id": (getattr(setup, "explanation", None) or {}).get("setup_id"), "symbol": symbol,
+                "side": getattr(setup, "side", None), "entry": None, "stop": None, "entry_raw": None, "stop_raw": None,
+                "price_increment": None, "risk": None, "reward": None, "target": None, "planned_rr": None,
+                "declared_rr": None, "observational_context": [], **COST_MODEL}
+
+    def done(status, reason, plan=None):
+        decision.update(status=status, reason=reason)
+        identity = {k: decision.get(k) for k in ("policy_version", "setup_id", "symbol", "side", "entry", "stop",
+                                                   "price_increment", "target")}
+        decision["decision_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True)))
+        return plan, decision
+
+    if not isinstance(setup, SetupAssessment) or setup.status != "VALID_SETUP" or setup.symbol != symbol:
+        return done(NOT_A_VALID_SETUP, "setup_not_valid_for_symbol")
+    side = setup.side
+    increment = getattr(instrument, "price_increment", None)
+    if instrument is None or getattr(instrument, "symbol", None) != symbol or to_decimal(increment) is None:
+        return done(UNSUPPORTED_PRECISION, "instrument_precision_unavailable")
+    decision["price_increment"] = str(to_decimal(increment))
+    entry_raw, stop_raw = _entry(datos_5m, as_of), to_decimal(setup.invalidation)
+    decision.update(entry_raw=None if entry_raw is None else repr(entry_raw),
+                    stop_raw=None if stop_raw is None else str(stop_raw))
+    if entry_raw is None or stop_raw is None or side not in ("LONG", "SHORT"):
+        return done(INVALID_GEOMETRY, "entry_or_invalidation_unavailable")
+    entry = normalize(entry_raw, increment, ROUND_CEILING if side == "LONG" else ROUND_FLOOR)
+    stop = normalize(stop_raw, increment, ROUND_FLOOR if side == "LONG" else ROUND_CEILING)
+    decision.update(entry=None if entry is None else str(entry), stop=None if stop is None else str(stop))
+    if entry is None or stop is None or (side == "LONG" and not stop < entry) or (side == "SHORT" and not stop > entry):
+        return done(INVALID_GEOMETRY, "invalid_entry_stop_geometry")
+    risk = abs(entry - stop)
+    target = entry + 3 * risk if side == "LONG" else entry - 3 * risk
+    shape, why = geometry(side, entry, stop, target)
+    if shape is None:
+        return done(INVALID_GEOMETRY, why)  # e.g. a SHORT target at or below zero
+    if classify(shape.rr, POLICY_V2_F3) != WITHIN_POLICY:
+        return done(INVALID_GEOMETRY, "planned_rr_not_exactly_3")
+    candidates, _ = _candidates(setup, side, entry, increment, as_of)
+    decision["observational_context"] = [
+        {**c, "rr_at_level": str(abs(Decimal(c["target_price"]) - entry) / risk),
+         "tp_beyond_level": bool((target > Decimal(c["target_price"])) if side == "LONG"
+                                 else (target < Decimal(c["target_price"])))}
+        for c in candidates if c.get("eligible")]
+    decision.update(risk=str(shape.risk), reward=str(shape.reward), target=str(target), planned_rr=str(shape.rr),
+                    declared_rr=float(shape.rr))
+    plan = TradePlan("1.0", symbol, side, "5m", float(entry), float(stop), float(target), float(shape.rr),
+                     evidence=setup.evidence, invalidation=str(stop), run_id=run_id, as_of=as_of,
+                     policy_version=POLICY_V2_F3)
+    return done(PLAN_READY, "fixed_3r_from_structural_invalidation", plan)
+
+
 __all__ = ["INSUFFICIENT_TARGET_EVIDENCE", "INVALID_GEOMETRY", "NOT_A_VALID_SETUP", "NO_VALID_TARGET", "PLAN_READY",
-           "POLICY_VERSION", "UNSUPPORTED_PRECISION", "plan_policy_d"]
+           "POLICY_VERSION", "UNSUPPORTED_PRECISION", "plan_fixed_3r", "plan_policy_d"]

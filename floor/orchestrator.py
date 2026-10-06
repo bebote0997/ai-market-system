@@ -8,13 +8,14 @@ from agents.structure_agent import analizar_estructura
 from agents.trade_planner import crear_trade_plan
 from core.contracts import FloorRunReport, RiskDecision
 from riesgo import evaluar_trade_plan
-from core.rr_contract import POLICY_V1, POLICY_V2_D
+from core.rr_contract import POLICY_V1, POLICY_V2_D, POLICY_V2_F3
 
 
 def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, equity=None, run_id=None,
         planner_policy=POLICY_V1):
-    """``planner_policy`` POLICY_V1 (default, frozen V1) or POLICY_V2_D (Phase 4; tests/replay only)."""
-    if planner_policy not in (POLICY_V1, POLICY_V2_D):
+    """``planner_policy`` POLICY_V1 (default, frozen V1), POLICY_V2_F3 (DEC-4.6 fixed 3R) or POLICY_V2_D (research);
+    Phase 4 policies are tests/replay only (no runtime path)."""
+    if planner_policy not in (POLICY_V1, POLICY_V2_D, POLICY_V2_F3):
         raise ValueError("unknown planner policy")
     run_id = run_id or str(uuid.uuid4())
     if not isinstance(equity, (int, float)) or isinstance(equity, bool) or equity <= 0:
@@ -32,6 +33,9 @@ def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, eq
     if planner_policy == POLICY_V2_D:
         from agents.target_planner import plan_policy_d
         plan, target_decision = plan_policy_d(setup, {"data": snapshot["5m"]}, symbol, run_id, as_of, instrumento)
+    elif planner_policy == POLICY_V2_F3:
+        from agents.target_planner import plan_fixed_3r
+        plan, target_decision = plan_fixed_3r(setup, {"data": snapshot["5m"]}, symbol, run_id, as_of, instrumento)
     else:
         plan = crear_trade_plan(setup, {"data": snapshot["5m"]}, symbol, run_id, as_of)
     if plan is None:

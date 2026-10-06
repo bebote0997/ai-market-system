@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from core.rr_contract import POLICY_V1, POLICY_V2_D, WITHIN_POLICY, classify, geometry
+from core.rr_contract import FILL_LIMITS, POLICY_V1, POLICY_V2_D, WITHIN_POLICY, classify, geometry
 from data.macro_news import NoMacroDataProvider
 from data.market_evidence import TIMEFRAMES
 from floor.orchestrator import run as run_floor
@@ -84,7 +84,7 @@ def _fill_rejected(policy, side, fill_price, stop, target):
     if policy == POLICY_V1:
         return reward / risk < 3  # Frozen V1 broker expression.
     shape, _ = geometry(side, fill_price, stop, target)
-    return shape is None or classify(shape.rr, policy) != WITHIN_POLICY
+    return shape is None or classify(shape.rr, policy, FILL_LIMITS) != WITHIN_POLICY
 
 
 def simulate(policy, frame_5m, slot, side, stop, target):

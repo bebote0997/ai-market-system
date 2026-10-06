@@ -22,9 +22,10 @@ def _rr_rejected(rr_policy, risk_reward):
     rejected only outside the single-contract 2R..5R policy; the AI never selects or alters levels."""
     if rr_policy is None:
         return isinstance(risk_reward, (int, float)) and risk_reward < 3
-    from core.rr_contract import POLICY_V2_D, WITHIN_POLICY, classify, to_decimal
+    from core.rr_contract import POLICY_V2_D, POLICY_V2_F3, WITHIN_POLICY, classify, to_decimal
     value = to_decimal(risk_reward)
-    return rr_policy != POLICY_V2_D or value is None or classify(value, POLICY_V2_D) != WITHIN_POLICY
+    return (rr_policy not in (POLICY_V2_D, POLICY_V2_F3) or value is None
+            or classify(value, rr_policy) != WITHIN_POLICY)
 
 
 class DeterministicAIProvider(AIProvider):

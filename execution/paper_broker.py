@@ -29,6 +29,7 @@ class PaperBroker:
         self.instrument = instrument
         # V2 Phase 4: fill-gate R:R policy. None = frozen V1 (``reward / risk >= 3`` at the fill price).
         self.rr_policy = rr_policy
+        self.last_fill_geometry = None
         self.orders = {}
         self.fills = {}
         self.journal = []
@@ -72,9 +73,13 @@ class PaperBroker:
         """Recompute R:R at the actual fill price; SL/TP are never moved to rescue a fill."""
         if self.rr_policy is None:
             return reward / risk_per_unit < 3  # Frozen V1 expression.
-        from core.rr_contract import WITHIN_POLICY, classify, geometry
+        from core.rr_contract import FILL_LIMITS, WITHIN_POLICY, classify, geometry
         shape, _ = geometry(order.side, fill_price, order.stop, order.target)
-        return shape is None or classify(shape.rr, self.rr_policy) != WITHIN_POLICY
+        self.last_fill_geometry = None if shape is None else {
+            "policy": self.rr_policy, "fill_price": str(shape.entry), "stop": str(shape.stop),
+            "target": str(shape.target), "actual_risk": str(shape.risk), "actual_reward": str(shape.reward),
+            "actual_rr": str(shape.rr)}
+        return shape is None or classify(shape.rr, self.rr_policy, FILL_LIMITS) != WITHIN_POLICY
 
     def process_next_bar(self, order, bar):
         if order is None or order.status != "PENDING":
@@ -102,13 +107,16 @@ class PaperBroker:
                 or risk_per_unit <= 0 or reward <= 0 or self._fill_rr_rejected(order, fill_price, risk_per_unit, reward)
                 or real_risk > current_equity * 0.01 or real_risk > order.equity_at_submission * 0.01):
             order.status = "REJECTED"
-            self._event(bar["timestamp"], order.run_id, order.symbol, order.order_id, "ORDER_REJECTED", {"reason": "post_fill_risk_or_geometry"})
+            self._event(bar["timestamp"], order.run_id, order.symbol, order.order_id, "ORDER_REJECTED",
+                        {"reason": "post_fill_risk_or_geometry",
+                         **({"fill_geometry": self.last_fill_geometry} if self.rr_policy is not None else {})})
             return None
         fill = PaperFill("1.0", str(uuid.uuid4()), order.order_id, order.run_id, order.symbol, order.side, order.quantity, order.planned_entry, fill_price, bar["timestamp"])
         order.status = "FILLED"
         self.fills[fill.fill_id] = fill
         position = PaperPosition("1.0", str(uuid.uuid4()), order.order_id, order.run_id, order.symbol, order.side, order.quantity, order.planned_entry, fill.fill_price, order.stop, order.target, fill.fill_timestamp, last_price=fill.fill_price, contract_multiplier=order.contract_multiplier, cost_rate=order.cost_rate)
         self.account.open_positions[position.symbol] = position
-        self._event(fill.fill_timestamp, order.run_id, order.symbol, fill.fill_id, "ORDER_FILLED")
+        self._event(fill.fill_timestamp, order.run_id, order.symbol, fill.fill_id, "ORDER_FILLED",
+                    {"fill_geometry": self.last_fill_geometry} if self.rr_policy is not None else None)
         self._event(fill.fill_timestamp, order.run_id, order.symbol, position.position_id, "POSITION_OPENED")
         return position

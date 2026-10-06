@@ -15,8 +15,13 @@ import math
 
 POLICY_V1 = "V1_FIXED_3R"
 POLICY_V2_D = "V2_P4_D_FIRST_OBSTACLE_2R_5R"
-# policy -> (floor, ceiling); both inclusive. V1 has no ceiling.
-LIMITS = {POLICY_V1: (Decimal(3), None), POLICY_V2_D: (Decimal(2), Decimal(5))}
+POLICY_V2_F3 = "V2_P4_FIXED_3R"  # DEC-4.6: the selected V2 planning policy.
+# policy -> (floor, ceiling) for PLANNED geometry; both inclusive. V1 has no ceiling; fixed 3R is exactly 3.
+LIMITS = {POLICY_V1: (Decimal(3), None), POLICY_V2_D: (Decimal(2), Decimal(5)),
+          POLICY_V2_F3: (Decimal(3), Decimal(3))}
+# Fill-time acceptance (actual fill vs frozen SL/TP). DEC-4.6 does not set a tolerance: fixed 3R inherits the
+# existing V1 fill rule (actual R:R >= 3, no upper bound) PROVISIONALLY, pending Owner Decision DEC-4.7.
+FILL_LIMITS = {POLICY_V2_D: LIMITS[POLICY_V2_D], POLICY_V2_F3: (Decimal(3), None)}
 # Relative tolerance for comparing a DECLARED ratio with the recomputed one. It only absorbs binary-float
 # noise of legacy float plans; it is never applied to the policy floor/ceiling of the Phase 4 path.
 DECLARED_TOLERANCE = Decimal("1e-9")
@@ -76,9 +81,9 @@ def geometry(side, entry, stop, target):
     return Geometry(side, entry, stop, target, risk, reward, rr), None
 
 
-def classify(rr, policy):
+def classify(rr, policy, limits=None):
     """WITHIN_POLICY / RR_BELOW_FLOOR / OUT_OF_POLICY_EXTENDED_TARGET on the exact ratio."""
-    floor, ceiling = LIMITS[policy]
+    floor, ceiling = (limits or LIMITS)[policy]
     if rr < floor:
         return RR_BELOW_FLOOR
     if ceiling is not None and rr > ceiling:
@@ -120,6 +125,6 @@ def normalize(price, increment, rounding):
     return result if result > 0 else None
 
 
-__all__ = ["DECLARED_TOLERANCE", "Geometry", "LIMITS", "OUT_OF_POLICY_EXTENDED_TARGET", "POLICY_V1",
+__all__ = ["DECLARED_TOLERANCE", "FILL_LIMITS", "Geometry", "LIMITS", "POLICY_V2_F3", "OUT_OF_POLICY_EXTENDED_TARGET", "POLICY_V1",
            "POLICY_V2_D", "ROUND_CEILING", "ROUND_FLOOR", "RR_BELOW_FLOOR", "WITHIN_POLICY", "band", "classify",
            "declared_matches", "geometry", "normalize", "to_decimal"]
