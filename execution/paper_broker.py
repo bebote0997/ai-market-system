@@ -70,16 +70,34 @@ class PaperBroker:
         return order
 
     def _fill_rr_rejected(self, order, fill_price, risk_per_unit, reward):
-        """Recompute R:R at the actual fill price; SL/TP are never moved to rescue a fill."""
-        if self.rr_policy is None:
-            return reward / risk_per_unit < 3  # Frozen V1 expression.
-        from core.rr_contract import FILL_LIMITS, WITHIN_POLICY, classify, geometry
-        shape, _ = geometry(order.side, fill_price, order.stop, order.target)
-        self.last_fill_geometry = None if shape is None else {
-            "policy": self.rr_policy, "fill_price": str(shape.entry), "stop": str(shape.stop),
-            "target": str(shape.target), "actual_risk": str(shape.risk), "actual_reward": str(shape.reward),
-            "actual_rr": str(shape.rr)}
-        return shape is None or classify(shape.rr, self.rr_policy, FILL_LIMITS) != WITHIN_POLICY
+        """Frozen V1 fill-time R:R expression (used only when ``rr_policy`` is None)."""
+        return reward / risk_per_unit < 3
+
+    def _fill_check(self, order, fill_price):
+        """V2 policies: recompute the actual fill geometry (actual fill + frozen SL + frozen TP) with the single R:R
+        contract and the policy's execution tolerance. Returns (rejection reason or None, telemetry). SL/TP are never
+        moved, re-anchored or normalized to rescue or 'correct' a fill."""
+        from core.rr_contract import FILL_LIMITS, LIMITS, WITHIN_POLICY, classify, geometry, to_decimal
+        planned, _ = geometry(order.side, order.planned_entry, order.stop, order.target)
+        actual, why = geometry(order.side, fill_price, order.stop, order.target)
+        entry, fill = to_decimal(order.planned_entry), to_decimal(fill_price)
+        adverse = None if entry is None or fill is None else (fill - entry if order.side == "LONG" else entry - fill)
+        telemetry = {
+            "policy": self.rr_policy, "planned_entry": None if entry is None else str(entry),
+            "fill_price": None if fill is None else str(fill), "stop": str(to_decimal(order.stop)),
+            "target": str(to_decimal(order.target)), "planned_rr": None if planned is None else str(planned.rr),
+            "actual_risk": None if actual is None else str(actual.risk),
+            "actual_reward": None if actual is None else str(actual.reward),
+            "actual_fill_rr": None if actual is None else str(actual.rr),
+            "fill_rr_floor": str(FILL_LIMITS[self.rr_policy][0]),
+            "displacement_price": None if adverse is None else str(adverse),
+            "displacement_r": None if adverse is None or planned is None else str(adverse / planned.risk),
+            "fill_direction": None if adverse is None else ("ADVERSE" if adverse > 0 else "FAVORABLE" if adverse < 0 else "EQUAL")}
+        if actual is None:
+            return "fill_invalid_geometry", {**telemetry, "geometry_error": why}  # at/through SL or past TP
+        if classify(actual.rr, self.rr_policy, FILL_LIMITS) != WITHIN_POLICY:
+            return "fill_rr_below_minimum", telemetry
+        return None, telemetry
 
     def process_next_bar(self, order, bar):
         if order is None or order.status != "PENDING":
@@ -103,13 +121,21 @@ class PaperBroker:
         reward = (order.target - fill_price) if order.side == "LONG" else (fill_price - order.target)
         real_risk = risk_per_unit * order.quantity * order.contract_multiplier
         current_equity = self.account.equity
-        if (not _valid(current_equity) or not _valid(order.equity_at_submission)
-                or risk_per_unit <= 0 or reward <= 0 or self._fill_rr_rejected(order, fill_price, risk_per_unit, reward)
-                or real_risk > current_equity * 0.01 or real_risk > order.equity_at_submission * 0.01):
+        if self.rr_policy is None:  # Frozen V1 fill gate (byte-identical behavior).
+            rejected = (not _valid(current_equity) or not _valid(order.equity_at_submission)
+                        or risk_per_unit <= 0 or reward <= 0 or self._fill_rr_rejected(order, fill_price, risk_per_unit, reward)
+                        or real_risk > current_equity * 0.01 or real_risk > order.equity_at_submission * 0.01)
+            details = {"reason": "post_fill_risk_or_geometry"}
+        else:
+            reason, self.last_fill_geometry = self._fill_check(order, fill_price)
+            if reason is None and (not _valid(current_equity) or not _valid(order.equity_at_submission)
+                                   or real_risk > current_equity * 0.01 or real_risk > order.equity_at_submission * 0.01):
+                reason = "post_fill_risk_or_geometry"  # Existing risk gates, unchanged.
+            rejected = reason is not None
+            details = {"reason": reason, "fill_geometry": self.last_fill_geometry}
+        if rejected:
             order.status = "REJECTED"
-            self._event(bar["timestamp"], order.run_id, order.symbol, order.order_id, "ORDER_REJECTED",
-                        {"reason": "post_fill_risk_or_geometry",
-                         **({"fill_geometry": self.last_fill_geometry} if self.rr_policy is not None else {})})
+            self._event(bar["timestamp"], order.run_id, order.symbol, order.order_id, "ORDER_REJECTED", details)
             return None
         fill = PaperFill("1.0", str(uuid.uuid4()), order.order_id, order.run_id, order.symbol, order.side, order.quantity, order.planned_entry, fill_price, bar["timestamp"])
         order.status = "FILLED"

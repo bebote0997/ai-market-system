@@ -109,40 +109,85 @@ class RiskAndAiTests(unittest.TestCase):
         self.assertEqual((plan.entry, plan.stop, plan.target, plan.risk_reward), (2650.0, 2640.0, 2680.0, 3.0))
 
 
+def eur_plan(side):
+    """EURUSD fixed-3R plan with risk 0.00700: LONG 1.08500/1.07800 -> TP 1.10600; SHORT 1.08500/1.09200 -> 1.06400."""
+    entry, stop = 1.085, (1.078 if side == "LONG" else 1.092)
+    target = 1.106 if side == "LONG" else 1.064
+    return TradePlan("1.0", "EURUSD", side, "5m", entry, stop, target, 3.0, invalidation=str(stop), run_id="run",
+                     as_of=AT, policy_version=POLICY_V2_F3)
+
+
 class BrokerTests(unittest.TestCase):
-    def fill(self, open_price, policy=POLICY_V2_F3):
-        plan = f3_plan()
-        decision = evaluar_trade_plan(plan, 10000.0, INS["XAUUSD"], F3)
-        report = FloorRunReport("1.0", "run", AT, "XAUUSD", {}, {}, None, None, plan, decision, "PLAN_READY")
-        broker = PaperBroker(PaperAccount("1.0", "a", 10000.0, 10000.0, 10000.0), INS["XAUUSD"], rr_policy=policy)
+    def fill(self, open_price, side="LONG", policy=POLICY_V2_F3, plan=None):
+        plan = plan or eur_plan(side)
+        decision = evaluar_trade_plan(plan, 10000.0, INS[plan.symbol], F3)
+        self.assertEqual(decision.status, "APPROVED")
+        report = FloorRunReport("1.0", "run", AT, plan.symbol, {}, {}, None, None, plan, decision, "PLAN_READY")
+        broker = PaperBroker(PaperAccount("1.0", "a", 10000.0, 10000.0, 10000.0), INS[plan.symbol], rr_policy=policy)
         order = broker.submit_plan(report, None, AT)
-        bar = {"symbol": "XAUUSD", "timestamp": AT + timedelta(minutes=5), "open": open_price, "high": open_price,
+        bar = {"symbol": plan.symbol, "timestamp": AT + timedelta(minutes=5), "open": open_price, "high": open_price,
                "low": open_price, "close": open_price, "is_closed": True}
         broker.process_next_bar(order, bar)
         events = {e.event_type: e.details for e in broker.journal}
-        position = broker.account.open_positions.get("XAUUSD")
-        return order, events, position
+        return order, events, broker.account.open_positions.get(plan.symbol)
 
-    def test_fill_geometry_truthful_and_never_repaired(self):
-        order, events, position = self.fill(2650.0)  # same price: actual 3.0R
-        self.assertEqual((order.status, events["ORDER_FILLED"]["fill_geometry"]["actual_rr"]), ("FILLED", "3"))
-        self.assertEqual((position.stop, position.target), (2640.0, 2680.0))
-        order, events, position = self.fill(2648.0)  # favorable: actual 4.0R, TP/SL unchanged
-        self.assertEqual((order.status, Decimal(events["ORDER_FILLED"]["fill_geometry"]["actual_rr"])), ("FILLED", Decimal(4)))
-        self.assertEqual((position.stop, position.target), (2640.0, 2680.0))
-        order, events, position = self.fill(2652.0)  # adverse: actual 2.333R < 3 (provisional V1 fill rule)
-        self.assertEqual((order.status, position), ("REJECTED", None))
-        geometry_detail = events["ORDER_REJECTED"]["fill_geometry"]
-        self.assertEqual((events["ORDER_REJECTED"]["reason"], Decimal(geometry_detail["stop"]),
-                          Decimal(geometry_detail["target"])), ("post_fill_risk_or_geometry", Decimal(2640), Decimal(2680)))
-        self.assertLess(Decimal(geometry_detail["actual_rr"]), 3)
-        self.assertEqual((order.stop, order.target), (2640.0, 2680.0))  # not repaired
-        self.assertEqual(self.fill(2639.0)[0].status, "REJECTED")  # gap through SL
+    def assert_outcome(self, open_price, side, status, rr=None, reason=None, direction=None):
+        order, events, position = self.fill(open_price, side)
+        self.assertEqual(order.status, status, (side, open_price))
+        event = events["ORDER_FILLED" if status == "FILLED" else "ORDER_REJECTED"]
+        geometry_detail = event["fill_geometry"]
+        self.assertEqual((geometry_detail["planned_rr"], geometry_detail["fill_rr_floor"]), ("3", "2.5"))
+        if rr is not None:
+            self.assertEqual(Decimal(geometry_detail["actual_fill_rr"]), Decimal(rr))
+        if reason is not None:
+            self.assertEqual(event["reason"], reason)
+        if direction is not None:
+            self.assertEqual(geometry_detail["fill_direction"], direction)
+        self.assertEqual((order.stop, order.target), (eur_plan(side).stop, eur_plan(side).target))  # never repaired
+        if position is not None:
+            self.assertEqual((position.stop, position.target), (order.stop, order.target))  # immutable after fill
+        return geometry_detail
+
+    def test_boundaries_long(self):
+        self.assert_outcome(1.085, "LONG", "FILLED", rr="3", direction="EQUAL")  # exactly 3.00R
+        self.assert_outcome(1.084, "LONG", "FILLED", rr="3.666666666666666666666666666666667", direction="FAVORABLE")
+        detail = self.assert_outcome(1.08547, "LONG", "FILLED", direction="ADVERSE")  # ~2.75R accepted
+        self.assertTrue(Decimal("2.74") < Decimal(detail["actual_fill_rr"]) < Decimal("2.76"))
+        self.assertEqual(Decimal(detail["displacement_r"]) * Decimal("0.007"), Decimal(detail["displacement_price"]))
+        self.assert_outcome(1.086, "LONG", "FILLED", rr="2.5")  # exactly 2.50R on the grid: ACCEPT
+        detail = self.assert_outcome(1.08601, "LONG", "REJECTED", reason="fill_rr_below_minimum")  # one tick worse
+        self.assertLess(Decimal(detail["actual_fill_rr"]), Decimal("2.5"))
+        self.assert_outcome(1.09, "LONG", "REJECTED", reason="fill_rr_below_minimum")  # materially below
+
+    def test_boundaries_short(self):
+        self.assert_outcome(1.086, "SHORT", "FILLED", direction="FAVORABLE")
+        self.assert_outcome(1.0845, "SHORT", "FILLED", direction="ADVERSE")  # ~2.78R accepted
+        self.assert_outcome(1.084, "SHORT", "FILLED", rr="2.5")  # exactly 2.50R
+        self.assert_outcome(1.08399, "SHORT", "REJECTED", reason="fill_rr_below_minimum")
+
+    def test_fill_at_or_through_sl_and_invalid_geometry(self):
+        self.assert_outcome(1.078, "LONG", "REJECTED", reason="fill_invalid_geometry")  # at SL
+        self.assert_outcome(1.07, "LONG", "REJECTED", reason="fill_invalid_geometry")  # through SL
+        self.assert_outcome(1.11, "LONG", "REJECTED", reason="fill_invalid_geometry")  # beyond TP
+        self.assert_outcome(1.095, "SHORT", "REJECTED", reason="fill_invalid_geometry")  # through SL (SHORT)
+        order, events, _ = self.fill(float("nan"))
+        self.assertEqual((order.status, events["ORDER_CANCELLED"]["reason"]), ("CANCELLED", "invalid_fill_bar"))
+        order, events, _ = self.fill(float("inf"))
+        self.assertEqual(order.status, "CANCELLED")
 
     def test_v1_flag_off_unchanged(self):
-        order, events, _ = self.fill(2650.0, policy=None)
-        self.assertEqual((order.status, events["ORDER_FILLED"]), ("FILLED", {}))  # V1 event details unchanged
-        self.assertIn(POLICY_V2_F3, (floor.POLICY_V2_F3,))
+        plan = replace(eur_plan("LONG"), policy_version="V1")
+        decision = evaluar_trade_plan(plan, 10000.0, INS["EURUSD"], crear_configuracion_riesgo_v2())
+        report = FloorRunReport("1.0", "run", AT, "EURUSD", {}, {}, None, None, plan, decision, "PLAN_READY")
+        for price, status in ((1.085, "FILLED"), (1.08547, "REJECTED")):  # V1 keeps strict >= 3 at the fill
+            broker = PaperBroker(PaperAccount("1.0", "a", 10000.0, 10000.0, 10000.0), INS["EURUSD"])
+            order = broker.submit_plan(report, None, AT)
+            broker.process_next_bar(order, {"symbol": "EURUSD", "timestamp": AT + timedelta(minutes=5), "open": price,
+                                            "high": price, "low": price, "close": price, "is_closed": True})
+            events = {e.event_type: e.details for e in broker.journal}
+            self.assertEqual(order.status, status)
+            self.assertEqual(events.get("ORDER_FILLED", events.get("ORDER_REJECTED")),
+                             {} if status == "FILLED" else {"reason": "post_fill_risk_or_geometry"})
         self.assertNotIn("POLICY_V2_F3", (ROOT / "runtime" / "service.py").read_text(encoding="utf-8"))
         with self.assertRaises(ValueError):
             floor.run({}, AT, "XAUUSD", None, None, {}, equity=1.0, planner_policy="FIXED_2R")

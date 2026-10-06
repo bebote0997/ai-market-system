@@ -579,3 +579,43 @@ tolerance is made here): (a) keep strict `≥ 3` at the fill (status quo; ~47–
 distribution); (c) change the PAPER execution model to a limit order at the planned entry (fill only when price
 trades at/through it, so actual R:R ≥ 3 by construction; unfilled orders expire) — an execution-mechanics change;
 (d) re-anchoring TP at the fill is excluded by DEC-4.6 (TP immutable).
+
+---
+
+## DEC-4.7 — FIXED-3R FILL EXECUTION POLICY (2026-10-06)
+
+**Owner decision (option b).** TARGET POLICY stays **fixed 3.00R** (DEC-4.6). EXECUTION FLOOR: a fixed-3R plan
+executes when its **actual fill-time R:R ≥ 2.50**, all other existing execution gates passing. 2.50 is an
+owner-approved execution tolerance, not a statistically optimized value and not a "2.5R strategy": the plan remains a
+fixed-3R plan that experienced execution displacement. The floor is frozen for the 60-day PAPER period unless a
+future Owner Decision changes it; there is no automatic adaptation.
+
+**Contract.** Planning: certified structural SL frozen → reference entry → TP exactly 3R → Risk verifies exact
+planned 3R (declared R:R never overrides geometry). Fill: actual fill + frozen SL + frozen TP → `actual_fill_rr`
+recomputed with the single contract (`FILL_LIMITS[POLICY_V2_F3] = (2.50, no upper bound)`); accept ≥ 2.50, reject
+< 2.50 (`fill_rr_below_minimum`); a fill at/through the SL (or beyond the TP) is invalid geometry
+(`fill_invalid_geometry`); the existing equity/real-risk gates are unchanged (`post_fill_risk_or_geometry`). Favorable
+fills (> 3R) are recorded truthfully, never normalized back. SL/TP are never moved, re-anchored or repaired; no
+limit-order conversion. V1 (`rr_policy=None`) keeps its frozen strict fill expression and event details.
+
+**60-day PAPER telemetry (broker `fill_geometry`, on ORDER_FILLED and ORDER_REJECTED):** policy, planned entry, actual
+fill, SL, TP, planned R:R, actual fill R:R, floor, actual risk/reward, displacement in price and in R, direction
+(FAVORABLE/EQUAL/ADVERSE), rejection reason; symbol/run_id/order_id on the event; setup_id via the execution record;
+session via the run. Phase 4 runtime remains OFF, so this is ready at the broker level for when the path is wired.
+
+### Replay comparison — strict ≥ 3 vs DEC-4.7 ≥ 2.50 (same 1,940 fixed-3R plans; planned R:R exactly 3.00 for all)
+
+| Fill model | Rule | Fills | Rejections | Favorable / equal / adverse accepted | Actual R:R < 2.5 / 2.5–3 / ≥ 3 | Gap through SL |
+|---|---|---|---|---|---|---|
+| NEXT_CYCLE (runtime) | strict ≥ 3 | 1,021 | 919 (47.37%) | 1,003 / 18 / 0 | 29 / 889 / 1,021 | 1 |
+| NEXT_CYCLE (runtime) | **DEC-4.7 ≥ 2.50** | **1,910** | **30 (1.55%)** | 1,003 / 18 / 889 | 29 / 889 / 1,021 | 1 |
+| NEXT_BAR (replay) | strict ≥ 3 | 1,027 | 913 (47.06%) | 885 / 142 / 0 | 1 / 912 / 1,027 | 0 |
+| NEXT_BAR (replay) | **DEC-4.7 ≥ 2.50** | **1,939** | **1 (0.05%)** | 885 / 142 / 912 | 1 / 912 / 1,027 | 0 |
+
+NEXT_CYCLE actual fill R:R: p01 2.457 · p05 2.674 · p25 2.903 · median 3.007 · p75 3.105 · p95 3.370.
+Discovery / holdout (NEXT_CYCLE, DEC-4.7): 1,211 / 699 fills; rejections 10 (0.82%) / 20 (2.78%).
+V1 strict reproduces P4.1A (924 NEXT_BAR; 919 NEXT_CYCLE).
+
+Observational only (gross, no costs, AI excluded; never an input to DEC-4.7): NEXT_CYCLE DEC-4.7 — target 541 /
+stop 1,232 / open 137, +0.22R per closed trade (discovery positive, holdout −0.01R); strict ≥ 3 — +0.21R. Net
+UNAVAILABLE; historical probability not computed.

@@ -19,9 +19,10 @@ POLICY_V2_F3 = "V2_P4_FIXED_3R"  # DEC-4.6: the selected V2 planning policy.
 # policy -> (floor, ceiling) for PLANNED geometry; both inclusive. V1 has no ceiling; fixed 3R is exactly 3.
 LIMITS = {POLICY_V1: (Decimal(3), None), POLICY_V2_D: (Decimal(2), Decimal(5)),
           POLICY_V2_F3: (Decimal(3), Decimal(3))}
-# Fill-time acceptance (actual fill vs frozen SL/TP). DEC-4.6 does not set a tolerance: fixed 3R inherits the
-# existing V1 fill rule (actual R:R >= 3, no upper bound) PROVISIONALLY, pending Owner Decision DEC-4.7.
-FILL_LIMITS = {POLICY_V2_D: LIMITS[POLICY_V2_D], POLICY_V2_F3: (Decimal(3), None)}
+# Fill-time EXECUTION TOLERANCE (actual fill vs frozen SL/TP), distinct from the planning policy. DEC-4.7: a fixed-3R
+# plan (planned exactly 3.00R) executes when the actual fill-time R:R >= 2.50 (no upper bound; favorable fills are
+# recorded truthfully, never normalized back). The plan stays a fixed-3R plan; SL/TP are never moved.
+FILL_LIMITS = {POLICY_V2_D: LIMITS[POLICY_V2_D], POLICY_V2_F3: (Decimal("2.5"), None)}
 # Relative tolerance for comparing a DECLARED ratio with the recomputed one. It only absorbs binary-float
 # noise of legacy float plans; it is never applied to the policy floor/ceiling of the Phase 4 path.
 DECLARED_TOLERANCE = Decimal("1e-9")
