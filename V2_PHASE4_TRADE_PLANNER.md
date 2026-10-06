@@ -447,3 +447,60 @@ F04-T16: IMPLEMENTED (gross only). F04-T17: IMPLEMENTED. F04-T18: NOT CERTIFIED.
 - MEDIUM: V1 fill gate rejects 44% of approved V1 plans (strict `>= 3` at the next open with a fixed 3R target).
 - LOW: Twelve Data includes weekend quotes; GAP anomalies recorded. LOW: replay uses hourly sampled cadence
   (production scouts ~2.4 s/run).
+
+---
+
+## P4.1A — Target Policy Lab (DEC-4.5 option a, offline) — 2026-10-06
+
+Status: **READY FOR OWNER DECISION.** Offline experiment only: no production planner/Risk/AI/broker change, no
+runtime wiring, Phase 3 invalidation and setup_id untouched, trading DB untouched.
+
+**Pre-registration.** Every variant, the discovery/holdout split and the mechanical selection rule are frozen in
+the `replay/lab.py` docstring, sha256 `81e30c9c02135d048ea7d95c113128edb42a03d310cf238d3869a14e3108c114`, recorded
+2026-10-06T12:37:47Z before any lab result; the file is unchanged since. No variant was modified after results.
+
+Level classes: TARGET CANDIDATE (variant rule) · CONTEXT LEVEL (all other structure incl. internal 15m swings) ·
+LIQUIDITY REFERENCE (heuristic equal levels, never a target) · INVALIDATION AUTHORITY (Phase 3 only) · BLOCKING
+OBSTACLE (only a nearer target candidate). Common: certified entry and invalidation frozen and normalized as in
+Policy D; nearest candidate beyond entry (never by ratio or outcome); exact gross R:R; tradeable iff 2R–5R; > 5R
+observational only.
+
+- **D0** current Policy D (production function, unchanged).
+- **D1** unswept confirmed 1h swing (external 1h structure).
+- **D2** prior completed weekday (UTC) high/low, unswept since that day ended.
+- **D3** D1 + D2, nearest.
+- **D4** external liquidity: **NOT TESTABLE / INSUFFICIENT EVIDENCE** (only the heuristic equal-level label exists).
+
+**Replay.** Same 12-month store, **15-minute runtime cadence** (no cross-slot caching: scout reports carry the slot's
+run_id/timestamp required by the Setup Validator lineage check; achieved by parallel compute; resumable per-chunk
+checkpoints). 26,641 decision slots (discovery 17,121 / holdout 9,520); 1,941 VALID_SETUP (1,222 / 719). Discovery
+2025-11-03 ≤ t < 2026-06-06; holdout 2026-06-06 ≤ t ≤ 2026-10-05. Weekend quotes never create decisions.
+
+**Selection (discovery only; feasible = ≥ 30 tradeable, ≥ 10 per symbol, ≥ 2 R:R bands; order D1, D2, D3):**
+D1 4 (XAU 4, EUR 0) infeasible · **D2 32 (XAU 17, EUR 15, 3 bands) feasible → chosen** · D3 4 infeasible.
+
+| | D0 | D1 | D2 | D3 |
+|---|---|---|---|---|
+| Discovery: target available / NO_VALID_TARGET | 1150 / 71 | 1089 / 132 | 501 / 720 | 1089 / 132 |
+| Discovery: <2 / 2–3 / 3–4 / 4–5 / >5 | 1150/0/0/0/0 | 1085/2/1/1/0 | 466/19/7/6/3 | 1085/2/1/1/0 |
+| Discovery tradeable (% of valid) | 0 (0%) | 4 (0.33%) | **32 (2.62%)** | 4 (0.33%) |
+| Discovery R:R median (all with a target) | 0.010 | 0.179 | 0.479 | 0.179 |
+| **Holdout (D2 only, frozen)** tradeable | — | — | **21 (2.92%)**, XAU 8 / EUR 13 | — |
+| Full 12 m tradeable (descriptive) | 0 | 7 | 53 (XAU 25 / EUR 28) | 5 |
+
+D2 detail (full, descriptive): tradeable R:R min 2.02 / median 2.41 / max 4.86; bands 2–3: 38, 3–4: 8, 4–5: 7;
+> 5R observational: 7; sources prior-day low 34 / high 19; sessions London 20, New York 18, overlap 15; all 53
+APPROVED by the unchanged Phase 4 Risk. Distances (all valid setups): stop median 1.40% of entry; first target
+median 0.013% (D0), 0.22% (D1), 0.51% (D2).
+
+**Observational outcomes (gross, no costs; never a selection input; probabilities UNAVAILABLE — samples below
+100/symbol and 30/band):** D2 discovery 2 target / 30 stop (−0.74R per trade, −23.5R); D2 holdout 3 / 17 / 1
+unresolved (−0.45R, −9.0R). D1 full 1 / 4 / 2.
+
+**V1 benchmark (15-minute, unchanged, AI excluded):** 1,940 plans; fill-rejected 47.6% (discovery 44.6%,
+holdout 52.9%); closed target rate 31.0%; gross expectancy +0.24R (discovery +0.38R, holdout −0.05R); max drawdown
+220.9R.
+
+**Interpretation.** Under every tested target definition the binding constraint is the certified invalidation
+distance (median 1.40% of entry): genuine structural targets sit far closer, so 2R–5R is reached in at most ~2.7%
+of valid setups (D2), and D2's observational outcomes are stop-dominated in both discovery and holdout.

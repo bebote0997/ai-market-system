@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 4 P4.1A (Target Policy Lab, offline, DEC-4.5 option a)
+
+- Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `36d7fc5da1d15149b9be1de2570c2bb4a643f32d`;
+  final SHA = the commit that adds this entry. Offline only; no production code changed.
+- New `replay/lab.py` (pre-registered variants D0–D4, split, selection rule; sha256 `81e30c9c…c114`),
+  `replay/lab_run.py` (15-minute resumable runner), `replay/lab_report.py` (protocol-ordered report),
+  `test_phase4_lab.py` (lookahead and invariant tests).
+- Result: D0 0, D1 7, D2 53, D3 5 tradeable of 1,941 valid setups (12 months, 15-minute cadence); D2 selected on
+  discovery (32) and confirmed frequency on holdout (21); observational outcomes stop-dominated. Status:
+  **READY FOR OWNER DECISION**. REAL DISABLED; NAS100 OFF; Phase 4 runtime OFF; schema 3.
+
 ## 2026-10-06 — V2 Phase 4 P4.1 (Policy D, single R:R contract, replay foundation)
 
 - Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `f862176d6660b81a8574d8ba8007fb1504b7e402`
