@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 4 P4.0 (Trade Planner + Target/R:R design & owner decision package)
+
+- Agent: Claude. Branch `v2/phase4-trade-planner` from `main` `b8b7493d91b37156e653d8ce7a8850a9abd82fb0`;
+  final SHA = the commit that adds this entry. Design/audit only: no production code changed.
+- `V2_PHASE4_TRADE_PLANNER.md`: V1 audit, evidence classification, invalidation-first design, policies
+  0/A/B/C/D, bands, scenarios, fail-closed matrix, replay/metrics/certification plans, 4 owner decisions.
+- `test_phase4_v1_planner_oracle.py`: frozen V1 planner/Risk/PAPER/AI/fill-gate outputs (6 tests).
+- Full suite once 783 pass / 0 fail / 0 skip. REAL DISABLED; NAS100 OFF; V2 runtime not authorized;
+  System Health inactive; schema 3. Status: **READY FOR OWNER DECISION**; P4.1 NOT STARTED.
+
 ## 2026-10-05 — V2 Phase 3 P3.2 (final regression, E2E, certification candidate)
 
 - Agent: Claude. Branch `v2/phase3-setup-validator`; starting SHA
