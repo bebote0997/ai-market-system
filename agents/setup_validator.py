@@ -148,34 +148,69 @@ def setup_identity(assessment):
     return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True))), identity
 
 
-def _iso(value):
-    if value is None:
-        return None
+DURATIONS = {"1h": pd.Timedelta(hours=1), "15m": pd.Timedelta(minutes=15), "5m": pd.Timedelta(minutes=5)}
+
+
+def _bar_ref(message, source, timeframe, assessment):
+    """A Phase 2-style reference (symbol, timeframe, bar_start) to the last closed bar a scout used.
+
+    Explanation metadata only (never read by any decision). VALID only when the report passes the same
+    V1 lineage check and its bar is an aware timestamp aligned to the timeframe and closed by as_of;
+    otherwise UNAVAILABLE/INVALID with a reason and no bar_start (nothing invented or normalized)."""
+    ref = {"source": source, "symbol": assessment.symbol, "timeframe": timeframe,
+           "status": message.status if isinstance(message, AgentMessage) else None,
+           "ref_state": "UNAVAILABLE", "reason": "report_missing", "bar_start": None}
+    if not isinstance(message, AgentMessage):
+        return ref
+    if not _report_valid(message, assessment.run_id, assessment.symbol, timeframe, assessment.timestamp):
+        return {**ref, "ref_state": "INVALID", "reason": "lineage_invalid"}
+    payload = _payload(message)
+    bars = payload.get("evidence") if payload else None
+    claimed = bars[0].get("timestamp") if isinstance(bars, list) and bars and isinstance(bars[0], dict) else None
+    if claimed is None:
+        return {**ref, "reason": "bar_missing"}
     try:
-        return pd.Timestamp(value).isoformat()
+        start = pd.Timestamp(claimed)
+        as_of = pd.Timestamp(assessment.timestamp)
     except (TypeError, ValueError):
-        return None
+        return {**ref, "ref_state": "INVALID", "reason": "bar_timestamp_invalid"}
+    if start is pd.NaT or start.tzinfo is None or as_of.tzinfo is None:
+        return {**ref, "ref_state": "INVALID", "reason": "bar_timestamp_invalid"}
+    duration = DURATIONS[timeframe]
+    if start.value % duration.value:
+        return {**ref, "ref_state": "INVALID", "reason": "bar_misaligned_for_timeframe"}
+    if start + duration > as_of:
+        return {**ref, "ref_state": "INVALID", "reason": "bar_not_closed_by_as_of"}
+    return {**ref, "ref_state": "VALID", "reason": None, "bar_start": start.tz_convert("UTC").isoformat()}
 
 
-def _evidence_refs(structure_reports, liquidity_reports, macro_report):
-    """Reference (never copy) what each scout looked at: its stream and last closed bar. The bar key is
-    the Phase 2 Market Evidence identity (symbol, timeframe, bar_start)."""
-    refs = []
-    for source, reports in (("structure", structure_reports), ("liquidity", liquidity_reports)):
-        for tf in ("1h", "15m", "5m"):
-            message = reports.get(tf) if isinstance(reports, dict) else None
-            payload = _payload(message)
-            bars = payload.get("evidence") if payload else None
-            last = bars[0].get("timestamp") if isinstance(bars, list) and bars and isinstance(bars[0], dict) else None
-            refs.append({"source": source, "timeframe": tf,
-                         "status": message.status if isinstance(message, AgentMessage) else None,
-                         "bar_start": _iso(last)})
+def _macro_ref(macro_report, assessment):
+    """Macro context reference; event ids only when the report passes the V1 macro lineage checks."""
+    ref = {"source": "macro", "symbol": assessment.symbol, "timeframe": None,
+           "status": macro_report.status if isinstance(macro_report, AgentMessage) else None,
+           "ref_state": "INVALID", "reason": "lineage_invalid", "event_ids": ()}
+    if (not isinstance(macro_report, AgentMessage) or macro_report.run_id != assessment.run_id
+            or macro_report.symbol != assessment.symbol
+            or macro_report.status not in {"OK", "PARTIAL", "NO_DATA", "ERROR"}):
+        return ref
+    try:
+        if pd.Timestamp(macro_report.timestamp) > pd.Timestamp(assessment.timestamp):
+            return {**ref, "reason": "timestamp_after_as_of"}
+    except (TypeError, ValueError):
+        return {**ref, "reason": "timestamp_invalid"}
+    payload = _payload(macro_report)
+    items = payload.get("macro_events", ()) if payload else ()
+    return {**ref, "ref_state": "VALID", "reason": None,
+            "event_ids": tuple(i.get("event_id") for i in items if isinstance(i, dict) and i.get("event_id"))}
+
+
+def _evidence_refs(structure_reports, liquidity_reports, macro_report, assessment):
+    """Reference (never copy) what each scout looked at; the Evidence Store is not read."""
+    refs = [_bar_ref(reports.get(tf) if isinstance(reports, dict) else None, source, tf, assessment)
+            for source, reports in (("structure", structure_reports), ("liquidity", liquidity_reports))
+            for tf in ("1h", "15m", "5m")]
     if macro_report is not None:
-        payload = _payload(macro_report)
-        items = payload.get("macro_events", ()) if payload else ()
-        refs.append({"source": "macro", "timeframe": None,
-                     "status": macro_report.status if isinstance(macro_report, AgentMessage) else None,
-                     "event_ids": tuple(i.get("event_id") for i in items if isinstance(i, dict) and i.get("event_id"))})
+        refs.append(_macro_ref(macro_report, assessment))
     return tuple(refs)
 
 
@@ -231,7 +266,8 @@ def explain(assessment, structure_reports, liquidity_reports, macro_report):
             "missing_checks": tuple(groups["MISSING"]), "not_applicable_checks": tuple(groups["NOT_APPLICABLE"]),
             "not_evaluated_checks": tuple(groups["NOT_EVALUATED"]),
             "check_details": _details(evaluated, structure_reports, liquidity_reports, macro_report, assessment),
-            "evidence_refs": _evidence_refs(structure_reports or {}, liquidity_reports or {}, macro_report),
+            "evidence_refs": _evidence_refs(structure_reports or {}, liquidity_reports or {}, macro_report,
+                                            assessment),
             "setup_id": setup_id, "identity_inputs": identity}
 
 

@@ -1,5 +1,18 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 3 P3.2 (final regression, E2E, certification candidate)
+
+- Agent: Claude. Branch `v2/phase3-setup-validator`; starting SHA
+  `55e1585e9259d3dd456777d08ec31b64e482302a` (P3.1 accepted); final SHA = the commit that adds this entry.
+- LOW fix (metadata only): evidence references are VALID only for lineage-valid reports whose bar is
+  aligned to its timeframe and closed by as_of; otherwise UNAVAILABLE/INVALID with a reason, no bar.
+- F03-T09: `test_setup_validator_regression.py` (verbatim V1 oracle, 17 cases, real Planner/Risk/AI).
+  New `test_phase3_e2e.py` (real runtime). P3.1 `test_13` fixed (it compared None == None).
+- Skip explained: the git-dependent V1 rollback test (environmental). Carry-forward: same-setup re-entry
+  (owner policy), invalidation-window aging (pre-existing).
+- Focused 29/29; Phase 2 targeted 143/143; mutations 10/10 killed. REAL DISABLED; NAS100 OFF; flag OFF;
+  System Health inactive; schema 3. Status: **READY FOR INDEPENDENT CERTIFICATION** (Phase 3).
+
 ## 2026-10-05 — V2 Phase 3 P3.1 (Setup Validator V2 core)
 
 - Agent: Claude. Branch `v2/phase3-setup-validator` from certified `main`

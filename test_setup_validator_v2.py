@@ -23,7 +23,8 @@ from runtime.observability import setup_id as audit_setup_id
 
 ROOT = Path(__file__).resolve().parent
 AT = datetime(2026, 1, 15, 13, 30, tzinfo=timezone.utc)
-BAR = {"1h": AT - timedelta(hours=1), "15m": AT - timedelta(minutes=15), "5m": AT - timedelta(minutes=5)}
+# Last closed bar of each timeframe at AT (13:30): 1h 12:00, 15m 13:15, 5m 13:25.
+BAR = {"1h": AT - timedelta(minutes=90), "15m": AT - timedelta(minutes=15), "5m": AT - timedelta(minutes=5)}
 # sha256 of the V1 ``evaluar_setup`` body at certified main c7aaafb (now ``_evaluar_setup_v1``).
 V1_DECISION_BODY_SHA256 = "6184c74d0cfa48081b0f1f16ac578d4777891bf8ab601951f43d01bbaff55170"
 # Independent oracle (read from the V1 code, not from the module under test): V1 reason code -> the check
@@ -61,6 +62,10 @@ def v1_setup_id(assessment):
     identity = {"symbol": assessment.symbol, "side": assessment.side,
                 "invalidation": assessment.invalidation, "anchor": anchor}
     return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True)))
+
+
+FIVE_MIN = {"data": pd.DataFrame({"Open": [100.0], "High": [100.5], "Low": [99.5], "Close": [100.0],
+                                  "is_closed": [True]}, index=pd.DatetimeIndex([AT - timedelta(minutes=5)]))}
 
 
 def msg(tf, payload, status="OK", run_id="run", symbol="XAUUSD", kind="scout"):
@@ -145,7 +150,9 @@ class FrozenDecisionTests(unittest.TestCase):
         s, l, _ = scenarios()["valid_long"]
         v2 = run(s, l)
         v1 = replace(v2, explanation={})
-        self.assertEqual(crear_trade_plan(v2, 100.0, "XAUUSD", "run", AT), crear_trade_plan(v1, 100.0, "XAUUSD", "run", AT))
+        plan = crear_trade_plan(v2, FIVE_MIN, "XAUUSD", "run", AT)
+        self.assertIsNotNone(plan)  # A real plan (P3.2: the P3.1 version compared None == None).
+        self.assertEqual(plan, crear_trade_plan(v1, FIVE_MIN, "XAUUSD", "run", AT))
         self.assertEqual(build_request(v2, None, None, None, "XAUUSD", "run", AT),
                          build_request(v1, None, None, None, "XAUUSD", "run", AT))
 
@@ -197,18 +204,112 @@ class ExplanationTests(unittest.TestCase):
     def test_5_evidence_refs_point_at_actual_scout_bars(self):
         s, l, m = scenarios()["valid_long_macro"]
         refs = run(s, l, m).explanation["evidence_refs"]
-        self.assertEqual([(r["source"], r["timeframe"], r["bar_start"]) for r in refs[:6]],
-                         [(src, tf, BAR[tf].isoformat()) for src in ("structure", "liquidity") for tf in ("1h", "15m", "5m")])
-        self.assertEqual(refs[6], {"source": "macro", "timeframe": None, "status": "OK", "event_ids": ("e1",)})
+        self.assertEqual([(r["source"], r["symbol"], r["timeframe"], r["ref_state"], r["bar_start"]) for r in refs[:6]],
+                         [(src, "XAUUSD", tf, "VALID", BAR[tf].isoformat())
+                          for src in ("structure", "liquidity") for tf in ("1h", "15m", "5m")])
+        self.assertEqual(refs[6], {"source": "macro", "symbol": "XAUUSD", "timeframe": None, "status": "OK",
+                                   "ref_state": "VALID", "reason": None, "event_ids": ("e1",)})
         refs = run(*scenarios()["missing_timeframe"]).explanation["evidence_refs"]
-        self.assertEqual([(r["timeframe"], r["status"], r["bar_start"]) for r in refs if r["source"] == "structure"],
-                         [("1h", "OK", BAR["1h"].isoformat()), ("15m", None, None), ("5m", None, None)])
+        self.assertEqual([(r["timeframe"], r["ref_state"], r["reason"], r["bar_start"]) for r in refs
+                          if r["source"] == "structure"],
+                         [("1h", "VALID", None, BAR["1h"].isoformat()), ("15m", "UNAVAILABLE", "report_missing", None),
+                          ("5m", "UNAVAILABLE", "report_missing", None)])
         refs = run(*scenarios()["scout_unavailable"]).explanation["evidence_refs"]
-        self.assertEqual(refs[2], {"source": "structure", "timeframe": "5m", "status": "ERROR", "bar_start": None})
+        self.assertEqual(refs[2], {"source": "structure", "symbol": "XAUUSD", "timeframe": "5m", "status": "ERROR",
+                                   "ref_state": "UNAVAILABLE", "reason": "bar_missing", "bar_start": None})
 
     def test_7_no_confidence_metadata(self):
         e = run(*scenarios()["valid_long"]).explanation
         self.assertNotIn("confidence", json.dumps(e, default=str))
+
+
+def nested(tf, when, run_id="run"):
+    """A structure report whose nested last-bar timestamp is ``when`` (lineage otherwise intact)."""
+    s, _ = scouts(run_id=run_id)
+    payload = dict(s[tf].evidence[0])
+    payload["evidence"] = [{"timestamp": when, "type": "closed_bar"}]
+    return msg(tf, payload, run_id=run_id)
+
+
+class EvidenceRefTests(unittest.TestCase):
+    """P3.2 LOW fix: a reference never claims more validity than the validator established. Metadata only."""
+
+    def decision(self, result):
+        """Trading-authority fields. ``evidence`` is excluded on purpose: V1 copies the scout payloads
+        (including the tampered nested timestamp) through unchanged; that is input, not a decision."""
+        return (result.status, result.side, result.warnings, result.invalidation,
+                result.explanation["decision_reason"], result.explanation["setup_id"])
+
+    @staticmethod
+    def plan_fields(plan):
+        return (plan.symbol, plan.side, plan.timeframe, plan.entry, plan.stop, plan.target, plan.risk_reward)
+
+    def ref(self, result, source, tf):
+        return next(r for r in result.explanation["evidence_refs"] if r["source"] == source and r["timeframe"] == tf)
+
+    def test_1_invalid_lineage_never_valid_ref(self):
+        s, l, _ = scenarios()["scout_lineage_invalid"]  # 1h report from another run, nested bar intact.
+        r = run(s, l)
+        self.assertEqual((r.status, r.warnings), ("NO_SETUP", ("scout_lineage_invalid",)))
+        ref = self.ref(r, "structure", "1h")
+        self.assertEqual((ref["ref_state"], ref["reason"], ref["bar_start"]), ("INVALID", "lineage_invalid", None))
+        future = dict(s)
+        future["1h"] = AgentMessage("1.0", "run", AT + timedelta(hours=1), "XAUUSD", "1h", "scout", "OK",
+                                    evidence=s["1h"].evidence)  # Report from the future: lineage invalid.
+        ref = self.ref(run(future, l), "structure", "1h")
+        self.assertEqual((ref["ref_state"], ref["bar_start"]), ("INVALID", None))
+        bad_macro = run(*scenarios()["macro_lineage_invalid"]).explanation["evidence_refs"][-1]
+        self.assertEqual((bad_macro["ref_state"], bad_macro["event_ids"]), ("INVALID", ()))
+
+    def test_2_future_or_invalid_nested_timestamp_not_authoritative(self):
+        s, l, _ = scenarios()["valid_long"]
+        clean = run(s, l)
+        for when, reason in ((pd.Timestamp(AT + timedelta(minutes=30)), "bar_not_closed_by_as_of"),  # 14:00
+                             (pd.Timestamp(AT - timedelta(minutes=30)), "bar_not_closed_by_as_of"),  # 13:00 open
+                             (pd.Timestamp(AT + timedelta(minutes=90)), "bar_not_closed_by_as_of"),
+                             (pd.Timestamp("2026-01-15 12:00"), "bar_timestamp_invalid"),  # Naive.
+                             ("not-a-time", "bar_timestamp_invalid")):
+            with self.subTest(when=str(when)):
+                tampered = dict(s)
+                tampered["1h"] = nested("1h", when)
+                r = run(tampered, l)
+                ref = self.ref(r, "structure", "1h")
+                self.assertEqual((ref["ref_state"], ref["reason"], ref["bar_start"]), ("INVALID", reason, None))
+                self.assertEqual(self.decision(r), self.decision(clean))  # 7-10: decision untouched.
+
+    def test_3_timeframe_incompatible_ref_not_authoritative(self):
+        s, l, _ = scenarios()["valid_long"]
+        clean = run(s, l)
+        for tf, when in (("1h", AT - timedelta(minutes=75)), ("15m", AT - timedelta(minutes=20)),
+                         ("5m", AT - timedelta(minutes=7))):
+            with self.subTest(tf=tf):
+                tampered = dict(s)
+                tampered[tf] = nested(tf, pd.Timestamp(when))
+                r = run(tampered, l)
+                ref = self.ref(r, "structure", tf)
+                self.assertEqual((ref["ref_state"], ref["reason"], ref["bar_start"]),
+                                 ("INVALID", "bar_misaligned_for_timeframe", None))
+                self.assertEqual(self.decision(r), self.decision(clean))
+
+    def test_4_5_6_valid_refs_for_each_timeframe(self):
+        r = run(*scenarios()["valid_long"][:2])
+        for source in ("structure", "liquidity"):
+            for tf in ("1h", "15m", "5m"):
+                ref = self.ref(r, source, tf)
+                self.assertEqual((ref["ref_state"], ref["reason"], ref["bar_start"], ref["symbol"]),
+                                 ("VALID", None, BAR[tf].isoformat(), "XAUUSD"))
+
+    def test_11_12_13_ref_anomalies_never_reach_planner_ai_or_risk(self):
+        s, l, _ = scenarios()["valid_long"]
+        tampered = dict(s)
+        tampered["15m"] = nested("15m", pd.Timestamp(AT + timedelta(hours=1)))
+        clean, odd = run(s, l), run(tampered, l)
+        self.assertEqual(self.ref(odd, "structure", "15m")["ref_state"], "INVALID")
+        self.assertEqual(self.plan_fields(crear_trade_plan(odd, FIVE_MIN, "XAUUSD", "run", AT)),
+                         self.plan_fields(crear_trade_plan(clean, FIVE_MIN, "XAUUSD", "run", AT)))
+        self.assertEqual(build_request(odd, None, None, None, "XAUUSD", "run", AT),
+                         build_request(clean, None, None, None, "XAUUSD", "run", AT))
+        self.assertEqual(audit_setup_id(odd), audit_setup_id(clean))
 
 
 class IdentityTests(unittest.TestCase):
