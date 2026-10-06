@@ -1,5 +1,31 @@
 # Agent Changelog
 
+## 2026-10-05 — V2 Phase 3 P3.2 (final regression, E2E, certification candidate)
+
+- Agent: Claude. Branch `v2/phase3-setup-validator`; starting SHA
+  `55e1585e9259d3dd456777d08ec31b64e482302a` (P3.1 accepted); final SHA = the commit that adds this entry.
+- LOW fix (metadata only): evidence references are VALID only for lineage-valid reports whose bar is
+  aligned to its timeframe and closed by as_of; otherwise UNAVAILABLE/INVALID with a reason, no bar.
+- F03-T09: `test_setup_validator_regression.py` (verbatim V1 oracle, 17 cases, real Planner/Risk/AI).
+  New `test_phase3_e2e.py` (real runtime). P3.1 `test_13` fixed (it compared None == None).
+- Skip explained: the git-dependent V1 rollback test (environmental). Carry-forward: same-setup re-entry
+  (owner policy), invalidation-window aging (pre-existing).
+- Focused 29/29; Phase 2 targeted 143/143; mutations 10/10 killed. REAL DISABLED; NAS100 OFF; flag OFF;
+  System Health inactive; schema 3. Status: **READY FOR INDEPENDENT CERTIFICATION** (Phase 3).
+
+## 2026-10-05 — V2 Phase 3 P3.1 (Setup Validator V2 core)
+
+- Agent: Claude. Branch `v2/phase3-setup-validator` from certified `main`
+  `c7aaafb4ff0fe35c6985d7089d8ea85a144b2121`; final SHA = the commit that adds this entry.
+- `agents/setup_validator.py`: frozen V1 decision (byte-identical) + structured explanation (checks,
+  details, evidence refs, setup identity); `core/contracts.py`: optional `SetupAssessment.explanation`;
+  `runtime/observability.py`: setup_id delegates to the validator (same values); `runtime/review.py`:
+  review report carries the explanation. No schema change; `storage/database.py` untouched.
+- Confidence not implemented (no defensible methodology). F03-T09/T11 not started.
+- Tests: new `test_setup_validator_v2.py` 15/15; mutations 5/5 killed; full suite 767 pass / 0 fail /
+  0 skip. REAL DISABLED; NAS100 OFF; V2 runtime activation not authorized; System Health inactive.
+- Status: **READY FOR INDEPENDENT REVIEW**.
+
 ## 2026-10-05 — V2 Phase 2 B2.3D regression preservation (test-only)
 
 - Agent: Claude. Branch `v2/phase2-market-evidence`; starting SHA

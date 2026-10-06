@@ -18,6 +18,8 @@ class ReviewReport:
     error: str | None = None
     provider_health: dict | None = None
     macro_evidence: tuple = ()
+    # V2 Phase 3: the Setup Validator explanation (decision reason, checks, evidence refs, setup_id).
+    setup: dict | None = None
 
     def payload(self):
         return asdict(self)
@@ -51,4 +53,5 @@ def build_review(key, deterministic, ai, audit_entries=()):
                         for item in (macro.evidence[0].get("macro_events", ()) if macro and macro.evidence else ()))
     return ReviewReport("1.0", ai.run_id, key, ai.symbol, ai.as_of.isoformat(),
                         ai.final_status, deterministic.setup_assessment.status,
-                        tuple(agents), risk_summary, {}, tuple(ai.warnings), macro_evidence=macro_items)
+                        tuple(agents), risk_summary, {}, tuple(ai.warnings), macro_evidence=macro_items,
+                        setup=getattr(deterministic.setup_assessment, "explanation", None) or None)  # Optional info.
