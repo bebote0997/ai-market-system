@@ -1,10 +1,37 @@
-# V2 Phase 4 — Trade Planner + Target/R:R Engine (P4.0 design & owner decision package)
+# V2 Phase 4 — Trade Planner + Target/R:R Engine
 
-Status: **P4.1 IMPLEMENTATION CANDIDATE — READY FOR INDEPENDENT REVIEW** (P4.0 design below; P4.1 section at the end).
-P4.1 implementation ≠ Phase 4 certification.
-Base: `main` @ `b8b7493d91b37156e653d8ce7a8850a9abd82fb0` (Phase 3 merged). Branch `v2/phase4-trade-planner`.
-No production code changed; trading behavior unchanged. PAPER only; REAL DISABLED; NAS100 OFF; V2 runtime
-activation NOT AUTHORIZED; System Health INACTIVE; trading DB schema 3.
+## Current state (final Phase 4 policy)
+
+Status: **independent Phase 4 certification PASS** on candidate `d012cd4ea61c0746b642779a995dd69150723943`; not
+yet merged. Base: `main` @ `b8b7493d91b37156e653d8ce7a8850a9abd82fb0` (Phase 3 merged). Branch
+`v2/phase4-trade-planner`.
+
+- **DEC-4.6 — V2 planning policy = FIXED 3R.** Planned R:R is exactly **3.00R**.
+- **DEC-4.7 — minimum acceptable actual fill-time R:R = 2.50.** This is an execution tolerance only; V2 is **not** a
+  2.5R strategy. A fill with actual R:R ≥ 2.50 executes as a fixed-3R plan that experienced execution displacement.
+- The certified Phase 3 structural invalidation remains the **SL authority**; the SL is immutable after planning and
+  is never derived from a ratio.
+- TP = entry ± 3 × risk, calculated at planning and **immutable** afterwards (never moved or re-anchored at the fill).
+- Risk independently recomputes the planned geometry (a declared R:R never overrides it); the Paper Broker
+  independently recomputes the actual fill-time geometry (actual fill + frozen SL/TP).
+- Structural target/obstacle evidence (swings, prior-day levels, liquidity) is **observational only**.
+- Production code changed in Phase 4 (opt-in paths; V1 behavior unchanged by default): `core/rr_contract.py`,
+  `agents/target_planner.py`, `floor/orchestrator.py`, `riesgo.py`, `ai/provider.py`,
+  `ai/agents/trade_reviewer_ai.py`, `execution/paper_broker.py`, `core/contracts.py`, `runtime/review.py`; offline
+  `replay/` package; `.gitignore` (git-ignores `data/replay/`). Phase 3 (Setup Validator, setup_id) unchanged.
+- P4.1A (target-policy lab) remains historical research evidence. P4.1B (invalidation lab) was aborted when DEC-4.6
+  superseded it; it changed neither Phase 3 nor production policy.
+- **Phase 3: CERTIFIED / CLOSED.** **Phase 4 runtime: OFF** (no runtime path selects a Phase 4 policy). REAL
+  EXECUTION DISABLED; NAS100 OFF; System Health INACTIVE; trading DB schema 3. No deploy has occurred.
+
+The chronological record follows unchanged: P4.0 design & owner decision package, P4.1, P4.1A, DEC-4.6, DEC-4.7.
+
+---
+
+## P4.0 — design & owner decision package (historical)
+
+As written at P4.0: P4.0 changed no production code; PAPER only; REAL DISABLED; NAS100 OFF; V2 runtime activation
+NOT AUTHORIZED; System Health INACTIVE; trading DB schema 3.
 
 ---
 
