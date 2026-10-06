@@ -21,7 +21,7 @@ gap and no double count. Not wired into the frozen V1 runtime.
 """
 from dataclasses import dataclass, replace
 
-from core.risk_policy import RISK_POLICY_V2_P5
+from core.risk_policy import RISK_POLICY_V2_P5, stamps_registered_semantics
 from core.rr_contract import POLICY_V2_F3
 from execution.paper_broker import PaperBroker
 from execution.risk_engine_v2 import evaluate
@@ -43,6 +43,8 @@ def reserve_and_submit(store, floor_report, instrument, *, account_id, as_of, se
                        policy=RISK_POLICY_V2_P5):
     """Risk-check and reserve one fixed-3R plan atomically against durable PAPER state (see module docstring)."""
     plan = getattr(floor_report, "trade_plan", None)
+    if not stamps_registered_semantics(policy):
+        return ReservationResult("NOT_SUBMITTED", "RISK_POLICY_NOT_REGISTERED", None, None, 0)
     if plan is None or getattr(plan, "policy_version", None) != POLICY_V2_F3 or floor_report.final_status != "PLAN_READY":
         return ReservationResult("NOT_SUBMITTED", "not_a_fixed_3r_plan_ready_report", None, None, 0)
     for attempt in (1, 2):
@@ -59,6 +61,10 @@ def reserve_and_submit(store, floor_report, instrument, *, account_id, as_of, se
         broker = PaperBroker(account, instrument, rr_policy=POLICY_V2_F3)
         broker.orders, broker.fills = orders, fills
         order = broker.submit_plan(replace(floor_report, risk_decision=result.decision), None, as_of)
+        if order is not None:
+            # P5.1C: durable policy identity, persisted in the order payload in the same guarded save. It is what
+            # lets any later evaluation (after restart) prove this order's worst permitted fill (8/7).
+            order.risk_policy_version = policy.version
         if order is None:
             store.event(as_of, floor_report.run_id, plan.symbol, SOURCE, EVENT, "INFO",
                         {**record, "risk_status": "REJECTED", "risk_reason": "broker_refused_submission"})

@@ -7,14 +7,17 @@ Gate order (first failing gate decides; the reason priority is this order):
   4 account drawdown gate      current_equity <= starting_equity x (1 - 5%) -> ACCOUNT_DRAWDOWN_LIMIT
   5 sizing: min(conservative x 1% / (D x m), conservative x 100% / (entry x m)), floored to the PAPER increment;
     TRUE planned money risk = quantity x D x m (never above the 1% ceiling)        -> PAPER_QUANTITY_BELOW_INCREMENT
-  6 symbol rule: one open position or pending order per symbol                   -> SYMBOL_EXPOSURE_LIMIT
-  7 aggregate: open risk + pending reserved risk + proposed reservation <= 2.30% x conservative
+  6 pending reservations: every PENDING order must carry a REGISTERED durable risk-policy identity
+    (``PaperOrder.risk_policy_version``); otherwise its worst permitted fill cannot be proven and NO new risk is
+    approved (the order itself is untouched)                                    -> UNKNOWN_PENDING_RISK_POLICY
+  7 symbol rule: one open position or pending order per symbol                   -> SYMBOL_EXPOSURE_LIMIT
+  8 aggregate: open risk + pending reserved risk + proposed reservation <= 2.30% x conservative
                                                                                  -> PORTFOLIO_RISK_LIMIT
 Risk amounts (money at risk to the stop, never quantity or notional):
-  open position  : max(0, (fill - SL) LONG | (SL - fill) SHORT) x quantity x multiplier  (persisted fill price; no
-                   market data; equals the worst-case decline of conservative equity when net unrealized >= 0 and
-                   over-states it otherwise, i.e. never under-states)
-  pending order  : |planned entry - SL| x quantity x multiplier x fill factor (8/7)  (the worst fill DEC-4.7 permits)
+  open position  : ENTRY-BASIS loss to stop = max(0, (fill - SL) LONG | (SL - fill) SHORT) x quantity x multiplier
+                   (persisted fill price; no market data). This is not the marked-equity decline to stop.
+  pending order  : |planned entry - SL| x quantity x multiplier x the fill factor of the order's OWN registered
+                   policy (8/7 for V2_P5_RISK_1: the worst fill DEC-4.7/DEC-5.7 permit). Never inferred from geometry.
   proposed trade : TRUE planned money risk x fill factor
 Exact arithmetic (Fraction) throughout; nothing is fetched, mutated or moved.
 """
@@ -23,7 +26,7 @@ from decimal import Decimal
 from fractions import Fraction
 
 from core.contracts import RiskDecision
-from core.risk_policy import RISK_POLICY_V2_P5
+from core.risk_policy import RISK_POLICY_V2_P5, registered_risk_policy, stamps_registered_semantics
 from core.rr_contract import POLICY_V2_F3, WITHIN_POLICY, classify, declared_matches, geometry, to_decimal
 
 
@@ -64,12 +67,27 @@ def position_risk(position):
     return max(Fraction(0), distance) * qty * mult
 
 
-def pending_risk(order, factor):
+def pending_reservation(order):
+    """Traceable reservation of one PENDING order, or None if its numbers are invalid.
+
+    ``reserved`` is None when the order's policy identity is UNKNOWN (absent or unregistered): no factor is guessed.
+    """
     entry, stop, qty, mult = (_f(order.planned_entry), _f(order.stop), _f(order.quantity),
                               _f(order.contract_multiplier))
     if None in (entry, stop, qty, mult):
         return None
-    return abs(entry - stop) * qty * mult * factor
+    planned = abs(entry - stop) * qty * mult
+    version = getattr(order, "risk_policy_version", None)
+    policy = registered_risk_policy(version)
+    factor = None if policy is None else policy.fill_money_risk_factor
+    trace = {"order_id": order.order_id, "symbol": order.symbol, "policy_identity_known": policy is not None,
+             "risk_policy_version": version if policy is not None else ("UNREGISTERED:" + version if version else "UNKNOWN"),
+             "planned_monetary_risk": _money(planned), "reservation_factor": None if factor is None else str(factor),
+             "reserved_monetary_risk": None if factor is None else _money(planned * factor),
+             "reservation_rule_source": ("core.risk_policy.REGISTERED_RISK_POLICIES[%s] (durable order identity)" % version
+                                         if policy is not None else "NONE: policy identity not provable"),
+             "fail_closed_reason": None if policy is not None else "UNKNOWN_PENDING_RISK_POLICY"}
+    return {"planned": planned, "reserved": None if factor is None else planned * factor, "trace": trace}
 
 
 def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, setup_id=None, at=None):
@@ -86,6 +104,9 @@ def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, set
                                          None, None, entry if isinstance(entry, (int, float)) else 0.0,
                                          getattr(plan, "stop", 0.0), getattr(plan, "target", 0.0), reason), record)
 
+    # 0 the evaluating policy must be a registered identity (its orders are stamped with ``policy.version``)
+    if not stamps_registered_semantics(policy):
+        return reject("RISK_POLICY_NOT_REGISTERED")
     # 1 account state
     if account is None:
         return reject("INVALID_ACCOUNT_STATE")
@@ -145,22 +166,31 @@ def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, set
         if position.symbol == plan.symbol:
             symbol_risk += risk
             symbol_count += 1
+    exposures, unknown = [], []
     for order in orders.values():
         if order.status != "PENDING":
             continue
-        risk = pending_risk(order, factor)
-        if risk is None:
+        item = pending_reservation(order)
+        if item is None:
             return reject("INVALID_ACCOUNT_STATE")
-        pending_reserved += risk
+        exposures.append(item["trace"])
         if order.symbol == plan.symbol:
-            symbol_risk += risk
             symbol_count += 1
+        if item["reserved"] is None:
+            unknown.append(order.order_id)
+            continue
+        pending_reserved += item["reserved"]
+        if order.symbol == plan.symbol:
+            symbol_risk += item["reserved"]
+    record.update(pending_exposures=exposures)
     proposed = planned_money * factor
     limit = conservative * policy.aggregate_portfolio_risk_fraction
     post_trade = open_risk + pending_reserved + proposed
     record.update(existing_open_risk=_money(open_risk), existing_pending_risk=_money(pending_reserved),
                   existing_symbol_risk=_money(symbol_risk), post_trade_portfolio_risk=_money(post_trade),
                   portfolio_risk_limit=_money(limit), correlation_state=policy.correlation_adjustment)
+    if unknown:  # The order is not touched: it keeps its normal lifecycle; only NEW risk is refused.
+        return reject("UNKNOWN_PENDING_RISK_POLICY", unknown_pending_orders=sorted(unknown))
     if symbol_count >= policy.max_positions_or_pending_per_symbol:
         return reject("SYMBOL_EXPOSURE_LIMIT")
     if post_trade > limit:
@@ -172,4 +202,4 @@ def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, set
     return RiskV2Result(decision, record)
 
 
-__all__ = ["RiskV2Result", "evaluate", "pending_risk", "position_risk"]
+__all__ = ["RiskV2Result", "evaluate", "pending_reservation", "position_risk"]

@@ -7,6 +7,8 @@ C crash before commit: nothing reserved; the lock is released to the next proces
 D crash after commit: exactly one reservation; the retry returns it (idempotent).
 E stale writer: PAPER state changed by another writer between evaluation and save; the save is refused and the
   evaluation is redone on the new state.
+P5.1C: reserved orders carry durable policy identity across processes, crashes and restarts; an identity-less
+(legacy / V1 / policy D) PENDING order blocks all NEW risk in every process and is never reinterpreted.
 """
 import json
 import subprocess
@@ -21,7 +23,9 @@ from pathlib import Path
 from execution.paper_broker import PaperBroker
 from execution.risk_reservation import EVENT
 from storage.database import Store
-from test_phase5_risk_engine import ACCOUNT, ROOT, account
+from core.risk_policy import RISK_POLICY_V2
+from execution.contracts import PaperOrder
+from test_phase5_risk_engine import ACCOUNT, AT, ROOT, account
 
 CHILD = textwrap.dedent('''
     import contextlib, json, os, sys
@@ -191,6 +195,69 @@ class RiskConcurrencyTests(unittest.TestCase):
         self.assertEqual(self.result(a, resume=True),
                          {"status": "REJECTED", "reason": "ACCOUNT_DRAWDOWN_LIMIT", "attempts": 2})
         self.assertEqual(self.state(), ([], [("run-a", "REJECTED")]))
+
+    # ---- P5.1C: durable policy identity under real processes -------------------------------------------------
+
+    def identities(self):
+        store = Store(self.path)
+        try:
+            _, orders, _ = store.load_paper(ACCOUNT)
+            return sorted((o.run_id, o.risk_policy_version) for o in orders.values())
+        finally:
+            store.close()
+
+    def seed_legacy(self, symbol="XAUUSD"):
+        """A PENDING order written by another (non-Phase-5) writer: no durable risk-policy identity."""
+        store = Store(self.path)
+        try:
+            held, orders, fills = store.load_paper(ACCOUNT)
+            expected = store.paper_state(held, orders, fills)
+            broker = PaperBroker(held)
+            broker.orders, broker.fills = orders, fills
+            args = {"XAUUSD": (2650.0, 2600.0, 2800.0, 2.0), "EURUSD": (1.085, 1.096, 1.052, 9090.0)}[symbol]
+            side = "LONG" if symbol == "XAUUSD" else "SHORT"
+            broker.orders["legacy"] = PaperOrder("1.0", "legacy", "run-legacy", symbol, side, args[3], *args[:3], 1.0,
+                                                 10000.0, 0.0, AT)
+            self.assertNotEqual(store.save_paper(broker, expected_state=expected), False)
+        finally:
+            store.close()
+
+    def test_proven_orders_keep_identity_across_processes_and_restarts(self):
+        self.race("23/1000")
+        self.assertEqual(self.identities(), [("run-a", RISK_POLICY_V2), ("run-b", RISK_POLICY_V2)])
+        a, _ = self.spawn("crash_after_commit", "XAU", "run-c")  # same symbol: rejected, nothing written
+        out, err = a.communicate(timeout=30)
+        self.assertEqual(json.loads(out)["reason"], "SYMBOL_EXPOSURE_LIMIT", err)
+        self.assertEqual(self.identities(), [("run-a", RISK_POLICY_V2), ("run-b", RISK_POLICY_V2)])
+
+    def test_crash_after_commit_identity_is_durable(self):
+        a, _ = self.spawn("crash_after_commit", "XAU", "run-a")
+        self.result(a, code=72)
+        self.assertEqual(self.identities(), [("run-a", RISK_POLICY_V2)])
+        retry, _ = self.spawn("normal", "XAU", "run-a")
+        self.assertEqual(self.result(retry)["status"], "DUPLICATE_RUN")
+        self.assertEqual(self.identities(), [("run-a", RISK_POLICY_V2)])
+
+    def test_unknown_pending_blocks_concurrent_new_risk_and_stays_unknown(self):
+        self.seed_legacy("XAUUSD")
+        before = self.state()
+        children = [self.spawn("normal", "EUR", "run-%d" % n) for n in range(2)]
+        for child, _ in children:
+            self.assertEqual(self.result(child), {"status": "REJECTED", "reason": "UNKNOWN_PENDING_RISK_POLICY",
+                                                  "attempts": 1})
+        for _ in range(2):  # restarts never reinterpret it
+            retry, _ = self.spawn("normal", "EUR", "run-retry")
+            self.assertEqual(self.result(retry)["reason"], "UNKNOWN_PENDING_RISK_POLICY")
+        self.assertEqual(self.identities(), [("run-legacy", None)])
+        self.assertEqual(self.state()[0], before[0])  # legacy order untouched
+
+    def test_stale_writer_adding_unknown_pending_forces_fail_closed(self):
+        a, signal = self.spawn("pause", "XAU", "run-a")
+        self.ready(a, signal)  # A approved on an empty portfolio, not yet saved.
+        self.seed_legacy("EURUSD")  # another writer commits an identity-less pending order
+        self.assertEqual(self.result(a, resume=True),
+                         {"status": "REJECTED", "reason": "UNKNOWN_PENDING_RISK_POLICY", "attempts": 2})
+        self.assertEqual(self.identities(), [("run-legacy", None)])
 
 
 if __name__ == "__main__":

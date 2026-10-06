@@ -47,6 +47,9 @@ class PaperOrder:
     cost_rate: float = 0.0
     as_of: Optional[object] = None
     status: str = "PENDING"
+    # V2 Phase 5 (P5.1C): durable identity of the registered risk policy that reserved this order. None = UNKNOWN
+    # (V1, policy D, legacy): never inferred from geometry. Omitted from the payload when None (legacy bytes kept).
+    risk_policy_version: Optional[str] = None
 
     def __post_init__(self):
         if not _valid_side(self.side):

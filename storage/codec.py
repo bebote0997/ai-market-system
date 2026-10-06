@@ -64,6 +64,8 @@ def paper_encode(obj):
         if name == "PaperAccount" and f.name in {"open_positions", "closed_trades"}:
             continue
         value = getattr(obj, f.name)
+        if name == "PaperOrder" and f.name == "risk_policy_version" and value is None:
+            continue  # Additive optional field: unknown-policy (V1/legacy) orders keep their exact payload.
         payload[f.name] = utc(value) if f.name in TIME_FIELDS and value is not None else value
     return safe_json(payload)
 

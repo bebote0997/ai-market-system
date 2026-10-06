@@ -14,7 +14,7 @@ from core.risk_policy import RISK_POLICY_V2, RISK_POLICY_V2_P5, fill_money_risk_
 from core.rr_contract import FILL_LIMITS, LIMITS, POLICY_V2_D, POLICY_V2_F3
 from execution.contracts import PaperAccount, PaperOrder, PaperPosition
 from execution.paper_broker import PaperBroker
-from execution.risk_engine_v2 import evaluate, pending_risk, position_risk
+from execution.risk_engine_v2 import evaluate, pending_reservation, position_risk
 from execution.risk_reservation import EVENT, reserve_and_submit
 from runtime.paper_contracts import paper_instruments
 from storage.database import SCHEMA_VERSION, Store
@@ -48,9 +48,10 @@ def position(symbol, side, fill, stop, target, qty, planned=None):
                          fill, stop, target, AT - timedelta(hours=1), last_price=fill, contract_multiplier=1.0)
 
 
-def pending(symbol, side, entry, stop, target, qty, order_id=None):
+def pending(symbol, side, entry, stop, target, qty, order_id=None, version=RISK_POLICY_V2):
+    """A PENDING order; ``version`` None = no durable policy identity (V1 / policy D / legacy)."""
     return PaperOrder("1.0", order_id or "ord-" + symbol, "run-" + symbol, symbol, side, qty, entry, stop, target, 1.0,
-                      10000.0, 0.0, AT - timedelta(minutes=5))
+                      10000.0, 0.0, AT - timedelta(minutes=5), risk_policy_version=version)
 
 
 def bar(symbol, price, minutes=5):
@@ -174,7 +175,7 @@ class PortfolioTests(unittest.TestCase):
         favorable = position("XAUUSD", "LONG", 2640.0, 2580.0, 2860.0, 1.428, planned=2650.0)
         self.assertEqual(position_risk(favorable), F(60) * F("1.428"))
         order = pending("EURUSD", "SHORT", 1.085, 1.096, 1.052, 9090.0)
-        self.assertEqual(pending_risk(order, P.fill_money_risk_factor), F("0.011") * 9090 * F(8, 7))
+        self.assertEqual(pending_reservation(order)["reserved"], F("0.011") * 9090 * F(8, 7))
 
     def test_two_max_trades_fit_third_symbol_cannot_add(self):
         held = account()
@@ -400,6 +401,186 @@ class RiskAuditHelperTests(unittest.TestCase):
             for side, stop, target in (("LONG", o[0] - 3, o[0] + 9), ("SHORT", o[0] + 3, o[0] - 9)):
                 kind, price, _ = exit_of(o, h, l, 0, side, stop, target)
                 self.assertEqual((kind, price), walk(o, h, l, 0, side, stop, target))
+
+
+class PolicyIdentityTests(unittest.TestCase):
+    """P5.1C: a pending reservation factor is applied only when the order's policy is proven by durable state."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="v2-p51c-")
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "trading_floor.db"
+        store = Store(self.path)
+        store.save_paper(PaperBroker(account()))
+        store.close()
+
+    def reopen(self):
+        """A brand-new connection: nothing survives from the previous one except durable rows (restart)."""
+        store = Store(self.path)
+        self.addCleanup(store.close)
+        return store
+
+    def raw_orders(self):
+        return [row[0] for row in self.reopen().db.execute("SELECT payload FROM paper_orders")]
+
+    def persist(self, *orders):
+        store = self.reopen()
+        held, existing, fills = store.load_paper(ACCOUNT)
+        broker = PaperBroker(held)
+        broker.orders, broker.fills = existing, fills
+        broker.orders.update({o.order_id: o for o in orders})
+        store.save_paper(broker)
+
+    def evaluate_after_restart(self, args=EUR_SHORT, policy=P):
+        held, orders, _ = self.reopen().load_paper(ACCOUNT)
+        return evaluate(f3_plan(*args, run_id="probe"), held, orders, INS[args[0]], policy), orders
+
+    def test_reviewer_high_regression_production_policy(self):
+        # Existing PENDING order with NO durable identity, planned $100 (XAU 2650/2600 x 2). Geometry is exactly 3R,
+        # but policy D (planned 2R..5R, fill floor 2R) can also produce it: worst fill 4/3 x planned under that policy.
+        self.persist(pending("XAUUSD", "LONG", 2650.0, 2600.0, 2800.0, 2.0, version=None))
+        result, _ = self.evaluate_after_restart()
+        proposed = F("99.990")
+        naive = (F(100) + proposed) * F(8, 7)  # what P5.1 computed: 228.56 <= 230 -> APPROVED (the HIGH)
+        supported = F(100) * fill_money_risk_factor(3, 2) + proposed * F(8, 7)  # 247.61 > 230
+        self.assertLessEqual(naive, F(230))
+        self.assertGreater(supported, F(230))
+        self.assertEqual(round(float(naive), 2), 228.56)
+        self.assertEqual(round(float(supported), 2), 247.61)
+        self.assertEqual(Decimal(result.record["portfolio_risk_limit"]), 230)  # real 2.30% production cap
+        self.assertNotEqual(result.decision.status, "APPROVED")
+        self.assertEqual(result.decision.reason, "UNKNOWN_PENDING_RISK_POLICY")
+        trace = result.record["pending_exposures"][0]
+        self.assertEqual((trace["policy_identity_known"], trace["risk_policy_version"], trace["reservation_factor"],
+                          trace["reserved_monetary_risk"], trace["fail_closed_reason"]),
+                         (False, "UNKNOWN", None, None, "UNKNOWN_PENDING_RISK_POLICY"))
+        self.assertEqual(Decimal(trace["planned_monetary_risk"]), 100)
+        self.assertEqual(result.record["unknown_pending_orders"], ["ord-XAUUSD"])
+
+    def test_geometry_alone_and_unregistered_stamps_are_not_identity(self):
+        for version in (None, "V2_P9_UNREGISTERED", ""):
+            with self.subTest(version=version):
+                order = pending("XAUUSD", "LONG", 2650.0, 2600.0, 2800.0, 2.0, version=version)
+                item = pending_reservation(order)
+                self.assertIsNone(item["reserved"])
+                self.assertFalse(item["trace"]["policy_identity_known"])
+                result = evaluate(f3_plan(*EUR_SHORT), account(), {"o": order}, INS["EURUSD"])
+                self.assertEqual(result.decision.reason, "UNKNOWN_PENDING_RISK_POLICY")
+        # A non-PENDING unknown order is not exposure.
+        done = replace(pending("XAUUSD", "LONG", 2650.0, 2600.0, 2800.0, 2.0, version=None), status="CANCELLED")
+        self.assertEqual(evaluate(f3_plan(*EUR_SHORT), account(), {"o": done}, INS["EURUSD"]).decision.status,
+                         "APPROVED")
+
+    def test_unknown_survives_restart_and_order_is_untouched(self):
+        self.persist(pending("XAUUSD", "LONG", 2650.0, 2600.0, 2800.0, 2.0, version=None))
+        raw = self.raw_orders()
+        self.assertNotIn("risk_policy_version", raw[0])  # legacy payload keeps its pre-P5.1C shape
+        for _ in range(3):  # retries / reloads never convert UNKNOWN into a known policy
+            result, orders = self.evaluate_after_restart()
+            self.assertEqual(result.decision.reason, "UNKNOWN_PENDING_RISK_POLICY")
+            self.assertIsNone(orders["ord-XAUUSD"].risk_policy_version)
+        self.assertEqual(self.raw_orders(), raw)
+        out = reserve_and_submit(self.reopen(), report(f3_plan(*EUR_SHORT, run_id="run-new")), INS["EURUSD"],
+                                 account_id=ACCOUNT, as_of=AT)
+        self.assertEqual((out.status, out.reason), ("REJECTED", "UNKNOWN_PENDING_RISK_POLICY"))
+        self.assertEqual(self.raw_orders(), raw)  # not deleted, cancelled or modified
+        # Normal lifecycle continues under the processing broker's unchanged rules (frozen V1 fills at 2650).
+        held, orders, _ = self.reopen().load_paper(ACCOUNT)
+        PaperBroker(held, INS["XAUUSD"]).process_next_bar(orders["ord-XAUUSD"], bar("XAUUSD", 2650.0))
+        self.assertEqual(orders["ord-XAUUSD"].status, "FILLED")
+
+    def test_reserved_order_identity_survives_restart_exact_8_7(self):
+        first = reserve_and_submit(self.reopen(), report(f3_plan(*XAU_LONG, run_id="run-a")), INS["XAUUSD"],
+                                   account_id=ACCOUNT, as_of=AT)
+        self.assertEqual(first.status, "RESERVED")
+        self.assertIn('"risk_policy_version":"' + RISK_POLICY_V2 + '"', self.raw_orders()[0])
+        result, orders = self.evaluate_after_restart()
+        self.assertEqual(orders[first.order.order_id].risk_policy_version, RISK_POLICY_V2)
+        self.assertEqual(result.decision.status, "APPROVED", result.record)
+        trace = result.record["pending_exposures"][0]
+        self.assertEqual((trace["policy_identity_known"], trace["risk_policy_version"], trace["reservation_factor"]),
+                         (True, RISK_POLICY_V2, "8/7"))
+        expected = F(100) * F(8, 7)
+        self.assertEqual(Decimal(trace["reserved_monetary_risk"]),
+                         Decimal(expected.numerator) / Decimal(expected.denominator))
+        self.assertEqual(Decimal(result.record["existing_pending_risk"]), Decimal(trace["reserved_monetary_risk"]))
+
+    def test_happy_path_reservation_is_true_planned_risk_times_8_7(self):
+        for qty, planned in ((2.0, 100), (1.5, 75), (1.26, 63), (0.5, 25)):  # 1.00%, 0.75%, 0.63%, 0.25%
+            with self.subTest(planned=planned):
+                self.setUp()
+                self.persist(pending("XAUUSD", "LONG", 2650.0, 2600.0, 2800.0, qty))
+                result, _ = self.evaluate_after_restart()
+                trace = result.record["pending_exposures"][0]
+                self.assertEqual(Decimal(trace["planned_monetary_risk"]), planned)
+                expected = F(planned) * F(8, 7)
+                self.assertEqual(Decimal(trace["reserved_monetary_risk"]),
+                                 Decimal(expected.numerator) / Decimal(expected.denominator))
+                self.assertEqual(result.decision.status, "APPROVED")
+
+    def test_known_plus_unknown_pending_fails_closed(self):
+        self.persist(pending("XAUUSD", "LONG", 2650.0, 2600.0, 2800.0, 0.5),
+                     pending("EURUSD", "SHORT", 1.085, 1.096, 1.052, 100.0, version=None))
+        result, _ = self.evaluate_after_restart(("XAUUSD", "SHORT", 2650.0, 2660.0))
+        self.assertEqual(result.decision.reason, "UNKNOWN_PENDING_RISK_POLICY")  # precedes the symbol rule
+        known = [t for t in result.record["pending_exposures"] if t["policy_identity_known"]]
+        self.assertEqual([t["risk_policy_version"] for t in known], [RISK_POLICY_V2])
+
+    def test_evaluating_policy_must_be_registered(self):
+        loose = replace(P, minimum_actual_fill_rr=F(2))  # same version string, different fill semantics
+        self.assertEqual(evaluate(f3_plan(*XAU_LONG), account(), {}, INS["XAUUSD"], loose).decision.reason,
+                         "RISK_POLICY_NOT_REGISTERED")
+        out = reserve_and_submit(self.reopen(), report(f3_plan(*XAU_LONG)), INS["XAUUSD"], account_id=ACCOUNT,
+                                 as_of=AT, policy=loose)
+        self.assertEqual((out.status, out.reason), ("NOT_SUBMITTED", "RISK_POLICY_NOT_REGISTERED"))
+        tighter_cap = replace(P, aggregate_portfolio_risk_fraction=F(15, 1000))  # limits only: still registered
+        self.assertEqual(evaluate(f3_plan(*XAU_LONG), account(), {}, INS["XAUUSD"], tighter_cap).decision.status,
+                         "APPROVED")
+
+
+class StampedFillBindingTests(unittest.TestCase):
+    """The stamped identity also binds the fill gate, so the reservation's worst fill holds for any broker."""
+
+    def order(self, version=RISK_POLICY_V2):
+        return PaperOrder("1.0", "o", "r", "XAUUSD", "LONG", 1.428, 2650.0, 2580.0, 2860.0, 1.0, 10000.0, 0.0, AT,
+                          risk_policy_version=version)
+
+    def test_any_broker_fills_stamped_order_only_within_8_7(self):
+        for rr_policy in (POLICY_V2_D, None, POLICY_V2_F3):
+            with self.subTest(broker=rr_policy):
+                broker = PaperBroker(account(), INS["XAUUSD"], rr_policy=rr_policy)
+                order = self.order()
+                broker.process_next_bar(order, bar("XAUUSD", 2667.0))  # R:R 193/87 = 2.22 (policy D would accept)
+                self.assertEqual((order.status, broker.journal[-1].details["reason"]),
+                                 ("REJECTED", "fill_rr_below_minimum"))
+                broker = PaperBroker(account(), INS["XAUUSD"], rr_policy=rr_policy)
+                order = self.order()
+                broker.process_next_bar(order, bar("XAUUSD", 2660.0))  # exactly 8/7: fills under every broker
+                self.assertEqual(order.status, "FILLED")
+                geometry = broker.journal[-2].details["fill_geometry"]
+                self.assertEqual((geometry["policy"], geometry["risk_policy_version"]), (POLICY_V2_F3, RISK_POLICY_V2))
+
+    def test_unregistered_stamp_is_rejected_at_fill(self):
+        broker = PaperBroker(account(), INS["XAUUSD"], rr_policy=POLICY_V2_F3)
+        order = self.order("V2_P9_UNREGISTERED")
+        broker.process_next_bar(order, bar("XAUUSD", 2650.0))
+        self.assertEqual((order.status, broker.journal[-1].details["reason"]),
+                         ("REJECTED", "unknown_order_risk_policy"))
+
+    def test_unstamped_orders_keep_broker_behavior_and_payload(self):
+        from storage.codec import paper_decode, paper_encode
+        legacy = self.order(None)
+        encoded = paper_encode(legacy)
+        self.assertNotIn("risk_policy_version", encoded)
+        self.assertEqual(paper_decode("PaperOrder", encoded), legacy)
+        self.assertEqual(paper_decode("PaperOrder", paper_encode(self.order())).risk_policy_version, RISK_POLICY_V2)
+        v1 = PaperBroker(account(), INS["XAUUSD"])
+        v1.process_next_bar(legacy, bar("XAUUSD", 2660.0))  # frozen V1: R:R 200/80 < 3 -> rejected, V1 reason
+        self.assertEqual(v1.journal[-1].details, {"reason": "post_fill_risk_or_geometry"})
+        d = PaperBroker(account(), INS["XAUUSD"], rr_policy=POLICY_V2_D)
+        unstamped = replace(self.order(None), quantity=1.0)  # money 87 <= 1% cap
+        d.process_next_bar(unstamped, bar("XAUUSD", 2667.0))  # policy D broker unchanged: R:R 2.22 >= 2 -> fills
+        self.assertEqual(unstamped.status, "FILLED")
 
 
 if __name__ == "__main__":

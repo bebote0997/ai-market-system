@@ -25,6 +25,7 @@ def fill_money_risk_factor(planned_rr, minimum_fill_rr):
 @dataclass(frozen=True)
 class RiskPolicy:
     version: str
+    rr_policy: str  # The fill/planning R:R policy bound to orders this policy reserves.
     per_trade_risk_fraction: Fraction  # DEC-5.1: ceiling, not a target
     notional_fraction_cap: Fraction  # DEC-5.1: 1x notional, no leverage
     aggregate_portfolio_risk_fraction: Fraction  # DEC-5.2
@@ -43,7 +44,7 @@ class RiskPolicy:
         return fill_money_risk_factor(self.planned_rr, self.minimum_actual_fill_rr)
 
     def as_record(self):
-        return {"version": self.version, "per_trade_risk_fraction": str(self.per_trade_risk_fraction),
+        return {"version": self.version, "rr_policy": self.rr_policy, "per_trade_risk_fraction": str(self.per_trade_risk_fraction),
                 "notional_fraction_cap": str(self.notional_fraction_cap),
                 "aggregate_portfolio_risk_fraction": str(self.aggregate_portfolio_risk_fraction),
                 "account_drawdown_fraction": str(self.account_drawdown_fraction),
@@ -57,6 +58,7 @@ class RiskPolicy:
 
 RISK_POLICY_V2_P5 = RiskPolicy(
     version=RISK_POLICY_V2,
+    rr_policy=POLICY_V2_F3,
     per_trade_risk_fraction=Fraction(1, 100),
     notional_fraction_cap=Fraction(1),
     aggregate_portfolio_risk_fraction=Fraction(23, 1000),
@@ -70,4 +72,21 @@ RISK_POLICY_V2_P5 = RiskPolicy(
     spread_threshold="UNAVAILABLE / INSUFFICIENT EVIDENCE (DEC-5.8)",
 )
 
-__all__ = ["RISK_POLICY_V2", "RISK_POLICY_V2_P5", "RiskPolicy", "fill_money_risk_factor"]
+# P5.1C: the ONLY policy versions whose pending orders may be reserved with a known factor. A stamped version that
+# is not registered here is UNKNOWN (fail closed), never mapped to a default.
+REGISTERED_RISK_POLICIES = {RISK_POLICY_V2_P5.version: RISK_POLICY_V2_P5}
+
+
+def registered_risk_policy(version):
+    return REGISTERED_RISK_POLICIES.get(version) if isinstance(version, str) else None
+
+
+def stamps_registered_semantics(policy):
+    """A policy may stamp orders only if its fill semantics equal the registered policy of the same version."""
+    registered = registered_risk_policy(policy.version)
+    return registered is not None and (policy.rr_policy, policy.planned_rr, policy.minimum_actual_fill_rr) == (
+        registered.rr_policy, registered.planned_rr, registered.minimum_actual_fill_rr)
+
+
+__all__ = ["REGISTERED_RISK_POLICIES", "RISK_POLICY_V2", "RISK_POLICY_V2_P5", "RiskPolicy", "fill_money_risk_factor",
+           "registered_risk_policy", "stamps_registered_semantics"]

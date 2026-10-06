@@ -238,6 +238,8 @@ def portfolio(cohort, rule):
         broker = PaperBroker(account, INS[plan.symbol], rr_policy=POLICY_V2_F3)
         broker.orders = orders
         order = broker.submit_plan(report(plan, result.decision, rec.get("setup_id")), None, plan.as_of)
+        if order is not None:
+            order.risk_policy_version = RISK_POLICY_V2_P5.version  # as reserve_and_submit stamps it (P5.1C)
         index = cohort.five[plan.symbol][0]
         k = int(index.searchsorted(slot + DELAY))
         if order is None or k >= len(index):

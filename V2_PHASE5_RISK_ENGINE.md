@@ -213,22 +213,30 @@ DISABLED · NAS100 OFF · runtime NOT wired / NOT activated · trading DB schema
 5. sizing: `q = floor_increment(min(C × 1% / (D × m), C × 100% / (entry × m)))`; TRUE planned money risk
    `R = q × D × m ≤ C × 1%` (exact arithmetic; the P5.0 float epsilon 100.00000000000001 cannot occur)
    → `PAPER_QUANTITY_BELOW_INCREMENT`
-6. open risk `Σ max(0, fill→SL distance) × qty × m` over open positions (persisted fill price, see S3)
-7. pending reserved risk `Σ |planned entry − SL| × qty × m × 8/7` over PENDING orders
+6. open risk `Σ max(0, fill→SL distance) × qty × m` over open positions (entry basis, see S3)
+7. pending reserved risk `Σ |planned entry − SL| × qty × m × factor(order's durable registered policy)` over
+   PENDING orders; any PENDING order without a provable identity → `UNKNOWN_PENDING_RISK_POLICY` (P5.1C)
 8. proposed reservation `R × 8/7`
 9. symbol rule: an open position or PENDING order on the symbol → `SYMBOL_EXPOSURE_LIMIT`
 10. aggregate `open + pending + proposed ≤ C × 2.30%` → `PORTFOLIO_RISK_LIMIT`
 11. `APPROVED`
 
-## S3. Authoritative price source for open risk
+## S3. Open-risk metric (corrected in P5.1C)
 
-Open risk uses the **persisted fill price** (`PaperPosition.entry_price`) to the frozen SL, never a market quote.
-(a) No market-data dependency or freshness ambiguity at decision time. (b) With the conservative equity basis it
-never under-states the remaining downside: a position in profit has its unrealized profit excluded from C, so the
-loss to SL relative to C is exactly fill→SL; a position at a loss already reduced C, so fill→SL over-states the
-remaining distance (conservative). Favorable fills reduce the reservation. At the worst permitted fill the pending
-reservation equals the open risk after the fill, so pending → fill has neither a gap nor a double count
-(`test_pending_to_fill_no_gap_no_double_count`).
+Open risk is **ENTRY-BASIS LOSS TO STOP**: persisted fill price (`PaperPosition.entry_price`) to the frozen SL,
+× quantity × multiplier. No market quote is read, so there is no price-source ambiguity at decision time.
+
+What this metric is and is not:
+- It is entry-basis capital at risk. It is **not** the decline of current marked equity to the stop. Example
+  (independent reviewer probe): fill-to-stop risk $100 while the current-price-to-stop decline is $200 for a position
+  in unrealized profit.
+- Conservative equity `C = min(current_equity, starting_equity + realized_pnl)` prevents unrealized profit from
+  increasing NEW-risk capacity. It does not make entry-basis risk equal to the marked-equity decline to stop.
+- Current marked-equity drawdown-to-stop remains a distinct possible future risk metric (carry-forward design note
+  CF-P5-OPENRISK). No Owner policy change is made here.
+
+At the worst permitted fill the pending reservation (planned × 8/7) equals the entry-basis open risk after the fill,
+so pending → fill has neither a gap nor a double count in this metric (`test_pending_to_fill_no_gap_no_double_count`).
 
 ## S4. Concurrency / restart (DEC-5.4)
 
@@ -247,7 +255,7 @@ row; E unrelated stale writer (realized loss crossing −5%) → save refused, r
 | Leverage | notional ≤ 100% of C | engine step 5 | worked examples (EUR LONG, XAU SHORT) |
 | Unrealized profit | never raises capacity | engine step 3 | `test_conservative_equity_basis` |
 | Aggregate | open + pending + proposed ≤ 2.30% of C | engine step 10 | `test_aggregate_limit_binds_*`, race A |
-| Pending orders | reserved at 8/7 × planned | engine step 7 | `test_open_and_pending_risk_amounts` |
+| Pending orders | reserved at planned × factor of the order's durable registered policy (8/7 for V2_P5_RISK_1); unknown identity → no new risk (P5.1C) | engine step 7 + order stamp | `PolicyIdentityTests`, `test_open_and_pending_risk_amounts` |
 | Symbol exposure | 1 open-or-pending per symbol | engine step 9 + broker open check | `test_symbol_rule_open_and_pending` |
 | Drawdown | no new entries at equity ≤ 95% of start | engine step 4 | `test_drawdown_gate_boundary`, race E |
 | Fill R:R | actual ≥ 2.50 (DEC-4.7) | broker `_fill_check` | Phase 4 tests, boundary 2660 |
@@ -298,3 +306,76 @@ for long periods; n is small and PnL is not a performance claim.
   fails closed for NAS100 (`instrument_contract_data_unavailable`: no PAPER contract).
 - Runtime wiring: NOT DONE (forbidden in P5.1). The frozen V1 runtime keeps V1 Risk; Risk V2 is reachable only via
   `reserve_and_submit` (explicit V2 path), like the Phase 4 opt-in planner.
+
+---
+
+# P5.1C — Certification-blocker correction: pending reservation bound to durable policy identity
+
+Status: implemented, **pending independent delta review** (author: Claude; not self-certified).
+
+## C1. Finding (independent P5.2 review, HIGH)
+
+`pending_risk` applied the fixed-3R factor 8/7 to every PENDING order, but persisted orders carried no policy identity.
+An order created under `POLICY_V2_D` (planned 2R–5R, fill floor 2R) can have the same 3R geometry: planned $100 is
+reserved at $114.29 while that policy's fill rule permits $133.33 (4/3). With a proposed $99.99 V2 trade the engine
+approved $228.56 ≤ $230 while supported exposure was $247.61 > $230 (DEC-5.2 violated).
+
+## C2. Order contract trace
+
+`PaperOrder` (dataclass) → `storage/codec.paper_encode` (every field to JSON) → `paper_orders.payload` (schema 3) →
+`paper_decode` (`cls(**data)`; absent keys take defaults). The fill policy belonged to the broker instance
+(`PaperBroker(rr_policy=...)`), not to the order: the pending-order gate uses a V1 broker; policy D uses `V2_D`.
+
+## C3. Design
+
+- `PaperOrder.risk_policy_version: Optional[str] = None`, additive. The codec omits it when `None`, so V1 / legacy /
+  policy-D payloads keep their exact bytes; schema stays 3; no DDL; `storage/database.py` untouched.
+- `core.risk_policy.REGISTERED_RISK_POLICIES = {"V2_P5_RISK_1": ...}`. Only a registered version yields a factor.
+  `stamps_registered_semantics(policy)` requires the evaluating policy's fill semantics (R:R policy, planned R:R,
+  fill floor) to equal the registered ones (limits such as the aggregate cap may differ, e.g. test policies).
+- `reserve_and_submit` stamps the order with `policy.version` inside the same guarded `save_paper`; the identity is
+  durable across save, restart, reload, retry and crash/recovery.
+- `risk_engine_v2.pending_reservation(order)`: known identity → `planned × registered factor`; absent, empty or
+  unregistered identity → UNKNOWN, no factor, NEW risk rejected `UNKNOWN_PENDING_RISK_POLICY` (Option A). Geometry is
+  never used as identity. Precedence: after sizing/open risk, before the symbol rule and the aggregate.
+- The stamp also binds the fill gate: `PaperBroker.process_next_bar` fills a stamped order under its registered
+  policy (fixed 3R: R:R ≥ 2.50 and money ≤ planned × 8/7) whatever broker processes it; an unregistered stamp is
+  rejected `unknown_order_risk_policy`. Unstamped orders keep the processing broker's existing behavior. Without
+  this binding a Policy-D broker could fill a stamped order at 4/3 and break its reservation.
+- Traceability: `pending_exposures[]` per PENDING order — order_id, symbol, `policy_identity_known`,
+  `risk_policy_version` (`UNKNOWN` / `UNREGISTERED:<v>` when not provable; never fabricated),
+  `planned_monetary_risk`, `reservation_factor`, `reserved_monetary_risk`, `reservation_rule_source`,
+  `fail_closed_reason`; plus `unknown_pending_orders` on rejection.
+
+## C4. Unknown / legacy pending orders
+
+Not deleted, cancelled, modified or re-stamped; SL/TP and fill semantics unchanged; they continue their normal
+lifecycle. Only NEW Phase 5 risk is refused until they leave PENDING. Option B (derived conservative bound) was not
+used: the bound depends on which broker processes the order (V1: R:R ≥ 3 and 1% caps; policy D: fill R:R 2–5 and 1%
+caps; fixed 3R: 8/7), which is not recorded for unstamped orders.
+
+## C5. Policy D audit
+
+Planned R:R 2–5 (`LIMITS[V2_D]`), fill R:R 2–5 (`FILL_LIMITS[V2_D]`), fill money cap 1% of current equity and of
+equity at submission (unchanged). Pending orders: yes, via the opt-in `floor.orchestrator` planner + generic
+`PaperBroker.submit_plan` (research path; not wired into the runtime). They share `paper_orders` with every other
+order and survive restart. Worst fill-risk expansion for planned Rp and fill floor Rf (frozen SL/TP): reward
+`Rp·D − x`, risk `D + x`; `(Rp·D − x)/(D + x) = Rf` ⇒ `D + x = D(1 + Rp)/(1 + Rf)`. Fixed 3R: 4/3.5 = 8/7; policy D
+at Rp = 3: 4/3; at Rp = 5: 2. Such orders are unstamped ⇒ UNKNOWN ⇒ fail closed.
+
+## C6. V1
+
+V1 orders are unstamped; their payload bytes and the frozen V1 fill gate are unchanged
+(`test_unstamped_orders_keep_broker_behavior_and_payload`). A V1 PENDING order in the same account blocks NEW Phase 5
+risk; V1 execution/management is unchanged.
+
+## C7. Evidence
+
+`PolicyIdentityTests`, `StampedFillBindingTests` (engine), four new real multi-process cases (identity across
+processes/restarts, crash-after-commit identity, unknown pending vs concurrent new risk, stale writer adding an unknown
+pending order). Replay audit re-run with stamped reservations: output identical to P5.1.
+
+## C8. Carry-forward
+
+- CF-P5-OPENRISK: entry-basis vs marked-equity decline to stop (S3).
+- NAS100 environment enablement (unchanged; Risk V2 fails closed without a PAPER contract).
