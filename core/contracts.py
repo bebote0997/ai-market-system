@@ -47,6 +47,9 @@ class TradePlan:
     cancel_conditions: tuple = ()
     run_id: Optional[str] = None
     as_of: Optional[datetime] = None
+    # V2 Phase 4: the R:R policy that produced the plan (V1 by default) and its target decision metadata.
+    policy_version: str = "V1"
+    target_decision: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -167,3 +170,5 @@ class FloorRunReport:
     risk_decision: Optional[RiskDecision]
     final_status: str
     warnings: Tuple[str, ...] = ()
+    # V2 Phase 4: Policy D target decision (empty under V1).
+    target_decision: dict = field(default_factory=dict)

@@ -1,5 +1,63 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 4 DEC-4.7 (fixed-3R fill execution floor 2.50R)
+
+- Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `de24ccd771dd28a8506fc7be3808ca9ca6bef45a`;
+  final SHA = the commit that adds this entry.
+- `core/rr_contract.py`: `FILL_LIMITS[POLICY_V2_F3] = 2.50` (execution tolerance; planning stays exactly 3R).
+  `execution/paper_broker.py`: V2 fill check with explicit reasons (`fill_rr_below_minimum`,
+  `fill_invalid_geometry`) and full fill telemetry; V1 fill gate byte-identical. `replay/fill_audit.py`: strict vs
+  DEC-4.7 comparison (vectorized). `test_phase4_fixed_3r.py`: DEC-4.7 boundary matrix (LONG/SHORT, exact 2.50).
+- Replay: fill rejection 47.37% -> 1.55% (runtime NEXT_CYCLE model). REAL DISABLED; NAS100 OFF; Phase 4 runtime
+  OFF; schema 3; Phase 3 unchanged. Status: **READY FOR INDEPENDENT PHASE 4 REVIEW** (not certified).
+
+## 2026-10-06 — V2 Phase 4 DEC-4.6 (fixed 3R policy) and fill-geometry audit
+
+- Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `944f29f40329788a554b8cbe4f781bd4e20d5d56`;
+  final SHA = the commit that adds this entry. P4.1B superseded (stopped, not committed).
+- `core/rr_contract.py` (`POLICY_V2_F3`, provisional `FILL_LIMITS`), `agents/target_planner.py`
+  (`plan_fixed_3r`), `floor/orchestrator.py` (opt-in policy), `riesgo.py` (`crear_configuracion_riesgo_fixed_3r`),
+  `ai/provider.py` (contract gate), `execution/paper_broker.py` (fill-geometry trace; V1 unchanged),
+  `replay/engine.py` (fill limits), new `replay/fill_audit.py`, `test_phase4_fixed_3r.py`.
+- Fill audit: ~47% fill rejection is sign-driven (every adverse tick) under both fill models; DEC-4.7 required.
+- REAL DISABLED; NAS100 OFF; Phase 4 runtime OFF; schema 3. Phase 3 not reopened. Status: **DEC-4.7 REQUIRED**.
+
+## 2026-10-06 — V2 Phase 4 P4.1A (Target Policy Lab, offline, DEC-4.5 option a)
+
+- Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `36d7fc5da1d15149b9be1de2570c2bb4a643f32d`;
+  final SHA = the commit that adds this entry. Offline only; no production code changed.
+- New `replay/lab.py` (pre-registered variants D0–D4, split, selection rule; sha256 `81e30c9c…c114`),
+  `replay/lab_run.py` (15-minute resumable runner), `replay/lab_report.py` (protocol-ordered report),
+  `test_phase4_lab.py` (lookahead and invariant tests).
+- Result: D0 0, D1 7, D2 53, D3 5 tradeable of 1,941 valid setups (12 months, 15-minute cadence); D2 selected on
+  discovery (32) and confirmed frequency on holdout (21); observational outcomes stop-dominated. Status:
+  **READY FOR OWNER DECISION**. REAL DISABLED; NAS100 OFF; Phase 4 runtime OFF; schema 3.
+
+## 2026-10-06 — V2 Phase 4 P4.1 (Policy D, single R:R contract, replay foundation)
+
+- Agent: Claude. Branch `v2/phase4-trade-planner`; starting SHA `f862176d6660b81a8574d8ba8007fb1504b7e402`
+  (P4.0); final SHA = the commit that adds this entry. Owner decisions DEC-4.1..4.4 recorded.
+- New `core/rr_contract.py` (single R:R authority), `agents/target_planner.py` (Policy D, explicit opt-in),
+  `replay/` (separate Replay Store, acquisition, lookahead-free engine, comparison). Changed: `riesgo.py`
+  (recompute R:R for every plan; Phase 4 config), `floor/orchestrator.py` (`planner_policy`, default V1),
+  `ai/provider.py` + `ai/agents/trade_reviewer_ai.py` (policy-aware deterministic gate; V1 unchanged),
+  `execution/paper_broker.py` (`rr_policy`, default V1 expression), `core/contracts.py` and `runtime/review.py`
+  (additive fields), `.gitignore` (`data/replay/`). Runtime cannot select Policy D.
+- Fixed: Risk declared-R:R trust (DEC-4.2). Tests: new Phase 4 suites 28/28; oracle updated for DEC-4.2;
+  mutations 12/12 killed. 12-month real-data replay: Policy D 0 plans (HIGH finding, owner decision).
+- REAL DISABLED; NAS100 OFF; schema 3; System Health inactive. Status: **READY FOR INDEPENDENT REVIEW**;
+  Phase 4 NOT certified.
+
+## 2026-10-06 — V2 Phase 4 P4.0 (Trade Planner + Target/R:R design & owner decision package)
+
+- Agent: Claude. Branch `v2/phase4-trade-planner` from `main` `b8b7493d91b37156e653d8ce7a8850a9abd82fb0`;
+  final SHA = the commit that adds this entry. Design/audit only: no production code changed.
+- `V2_PHASE4_TRADE_PLANNER.md`: V1 audit, evidence classification, invalidation-first design, policies
+  0/A/B/C/D, bands, scenarios, fail-closed matrix, replay/metrics/certification plans, 4 owner decisions.
+- `test_phase4_v1_planner_oracle.py`: frozen V1 planner/Risk/PAPER/AI/fill-gate outputs (6 tests).
+- Full suite once 783 pass / 0 fail / 0 skip. REAL DISABLED; NAS100 OFF; V2 runtime not authorized;
+  System Health inactive; schema 3. Status: **READY FOR OWNER DECISION**; P4.1 NOT STARTED.
+
 ## 2026-10-05 — V2 Phase 3 P3.2 (final regression, E2E, certification candidate)
 
 - Agent: Claude. Branch `v2/phase3-setup-validator`; starting SHA

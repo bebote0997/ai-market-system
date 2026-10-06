@@ -7,3 +7,4 @@ __pycache__/
 data/runtime/
 *.db-wal
 *.db-shm
+data/replay/

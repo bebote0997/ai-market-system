@@ -109,6 +109,22 @@ def crear_configuracion_riesgo_v2(
 	return config
 
 
+def crear_configuracion_riesgo_phase4():
+	"""V2 Phase 4 (DEC-4.2): V2 sizing unchanged; R:R policy 2R..5R recomputed from levels. Tests/replay only."""
+	from core.rr_contract import POLICY_V2_D
+	config = crear_configuracion_riesgo_v2()
+	config.update(rr_policy=POLICY_V2_D, ratio_minimo=2.0, ratio_maximo=5.0)
+	return config
+
+
+def crear_configuracion_riesgo_fixed_3r():
+	"""DEC-4.6: V2 sizing unchanged; planned R:R must recompute to exactly 3 from levels. Tests/replay only."""
+	from core.rr_contract import POLICY_V2_F3
+	config = crear_configuracion_riesgo_v2()
+	config.update(rr_policy=POLICY_V2_F3, ratio_minimo=3.0, ratio_maximo=3.0)
+	return config
+
+
 def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=None):
 	if isinstance(plan, TradePlan):
 		plan_data = plan.__dict__
@@ -132,8 +148,27 @@ def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=Non
 		return RiskDecision("1.0", "REJECTED", plan_data.get("symbol", ""), side, None, None, entry, stop, target, "instrument_contract_data_unavailable")
 	if (side == "LONG" and not stop < entry < target) or (side == "SHORT" and not target < entry < stop):
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_level_order")
-	if not _finito(rr) or rr < configuracion["ratio_minimo"]:
-		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_below_minimum")
+	from core.rr_contract import POLICY_V1, POLICY_V2_D, POLICY_V2_F3, RR_BELOW_FLOOR, WITHIN_POLICY, classify, declared_matches, geometry
+	policy = configuracion.get("rr_policy", POLICY_V1)
+	if policy == POLICY_V1:
+		if not _finito(rr) or rr < configuracion["ratio_minimo"]:
+			return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_below_minimum")
+	elif policy in (POLICY_V2_D, POLICY_V2_F3):
+		if plan_data.get("policy_version") != policy:
+			return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_policy_mismatch")
+	else:
+		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_policy_unknown")
+	# DEC-4.2: Risk never trusts the declared ratio; it recomputes it from the levels (single contract).
+	shape, _ = geometry(side, entry, stop, target)
+	if shape is None:
+		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_level_order")
+	if not declared_matches(rr, shape.rr):
+		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_declared_mismatch")
+	if policy in (POLICY_V2_D, POLICY_V2_F3):
+		outcome = classify(shape.rr, policy)
+		if outcome != WITHIN_POLICY:
+			reason = "rr_below_minimum" if outcome == RR_BELOW_FLOOR else "rr_above_maximum"
+			return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, reason)
 	risk_unitario = abs(entry - stop) * instrumento.contract_multiplier
 	risk_money = float(capital_actual) * configuracion["riesgo_por_operacion_pct"] / 100
 	capital_max = float(capital_actual) * configuracion["maximo_capital_pct"] / 100
