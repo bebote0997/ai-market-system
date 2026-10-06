@@ -181,3 +181,120 @@ Batch A — portfolio-risk core: risk-to-stop math, pending reservations, aggreg
 decision record, unified per-trade money limit shared with the broker (DEC-5.1/5.2/5.3/5.4/5.7). Batch B —
 drawdown/loss limits and abnormal-market policy (DEC-5.5/5.8), correlation grouping if adopted (DEC-5.6).
 Batch C — replay re-run of the fixed-3R cohort with the full gate stack, characterization diff, certification.
+
+---
+
+# P5.1 — Risk Engine V2 implementation (DEC-5.1 → DEC-5.8 approved)
+
+Status: implemented, **pending independent review** (author: Claude; not self-certified). PAPER only · REAL
+DISABLED · NAS100 OFF · runtime NOT wired / NOT activated · trading DB schema 3 · Phases 3/4 unchanged.
+
+## S1. Components
+
+| File | Role |
+|---|---|
+| `core/risk_policy.py` | Single versioned policy `V2_P5_RISK_1` (exact `Fraction`s): per-trade 1/100, notional 1, aggregate 23/1000, drawdown 5/100, planned R:R 3 and fill floor 5/2 read from `core.rr_contract`, fill money factor **derived** `(1+3)/(1+2.5) = 8/7`, max 1 position-or-pending per symbol, correlation OFF, daily loss NONE, volatility/spread UNAVAILABLE. |
+| `execution/risk_engine_v2.py` | Pure `evaluate(plan, account, orders, instrument, policy)` → `RiskDecision` + traceability record. No I/O, no market data, no mutation. |
+| `execution/risk_reservation.py` | `reserve_and_submit`: fresh durable load → run_id idempotency → evaluate → unchanged `PaperBroker.submit_plan` (fixed 3R) → ONE `save_paper(expected_state)` with the `RISK_V2_DECISION` journal row; one fresh re-evaluation on STALE, then fail closed. The PENDING order row **is** the reservation (no new table, no schema change). |
+| `execution/paper_broker.py` | DEC-5.7 for `POLICY_V2_F3` only: the hard-coded `0.01 × equity` fill caps are replaced by `actual fill money risk ≤ planned money risk × 8/7` (planned = order quantity × \|planned entry − SL\| × multiplier). V1 (`rr_policy=None`) and policy D unchanged. |
+| `replay/risk_audit.py` | Offline observational audit (standalone + chronological portfolio). |
+
+## S2. Gate order and rejection precedence (first failing gate decides)
+
+1. account state valid (finite equity/realized, positive starting equity) → `INVALID_ACCOUNT_STATE`
+2. plan geometry via the single R:R contract: policy `V2_P4_FIXED_3R` (`rr_policy_mismatch`), levels
+   (`invalid_numeric_value` / `invalid_level_order` / `invalid_side`), declared R:R matches (`rr_declared_mismatch`),
+   exactly 3R (`rr_below_minimum` / `rr_above_maximum`); instrument contract present
+   (`instrument_contract_data_unavailable`)
+3. conservative equity `C = min(current_equity, starting_equity + realized_pnl)`; `cash` is not an input;
+   `C ≤ 0` → `INVALID_ACCOUNT_STATE`
+4. drawdown: `current_equity ≤ starting_equity × 0.95` → `ACCOUNT_DRAWDOWN_LIMIT` (new entries only; never closes
+   or moves anything; no latch, no high-water mark, no daily or consecutive-loss rule)
+5. sizing: `q = floor_increment(min(C × 1% / (D × m), C × 100% / (entry × m)))`; TRUE planned money risk
+   `R = q × D × m ≤ C × 1%` (exact arithmetic; the P5.0 float epsilon 100.00000000000001 cannot occur)
+   → `PAPER_QUANTITY_BELOW_INCREMENT`
+6. open risk `Σ max(0, fill→SL distance) × qty × m` over open positions (persisted fill price, see S3)
+7. pending reserved risk `Σ |planned entry − SL| × qty × m × 8/7` over PENDING orders
+8. proposed reservation `R × 8/7`
+9. symbol rule: an open position or PENDING order on the symbol → `SYMBOL_EXPOSURE_LIMIT`
+10. aggregate `open + pending + proposed ≤ C × 2.30%` → `PORTFOLIO_RISK_LIMIT`
+11. `APPROVED`
+
+## S3. Authoritative price source for open risk
+
+Open risk uses the **persisted fill price** (`PaperPosition.entry_price`) to the frozen SL, never a market quote.
+(a) No market-data dependency or freshness ambiguity at decision time. (b) With the conservative equity basis it
+never under-states the remaining downside: a position in profit has its unrealized profit excluded from C, so the
+loss to SL relative to C is exactly fill→SL; a position at a loss already reduced C, so fill→SL over-states the
+remaining distance (conservative). Favorable fills reduce the reservation. At the worst permitted fill the pending
+reservation equals the open risk after the fill, so pending → fill has neither a gap nor a double count
+(`test_pending_to_fill_no_gap_no_double_count`).
+
+## S4. Concurrency / restart (DEC-5.4)
+
+Proven with real separate processes (`test_phase5_risk_concurrency.py`):
+A cross-symbol race that would exceed the aggregate (test policy 1.5%) → the loser re-evaluates on the winner's
+reservation → `PORTFOLIO_RISK_LIMIT`; B race that fits → both reserved (loser after one re-evaluation);
+same-symbol race → one admitted; C crash before commit (lock held, then `os._exit`) → nothing reserved, lock
+released, retry reserves; D crash after commit → retries return `DUPLICATE_RUN`, still one order and one decision
+row; E unrelated stale writer (realized loss crossing −5%) → save refused, re-evaluation → `ACCOUNT_DRAWDOWN_LIMIT`.
+
+## S5. Protection matrix (F05-T01)
+
+| Protection | Rule | Where | Test |
+|---|---|---|---|
+| Per-trade risk | ≤ 1% of C (ceiling); TRUE risk after floor | engine step 5 | `SizingTests` |
+| Leverage | notional ≤ 100% of C | engine step 5 | worked examples (EUR LONG, XAU SHORT) |
+| Unrealized profit | never raises capacity | engine step 3 | `test_conservative_equity_basis` |
+| Aggregate | open + pending + proposed ≤ 2.30% of C | engine step 10 | `test_aggregate_limit_binds_*`, race A |
+| Pending orders | reserved at 8/7 × planned | engine step 7 | `test_open_and_pending_risk_amounts` |
+| Symbol exposure | 1 open-or-pending per symbol | engine step 9 + broker open check | `test_symbol_rule_open_and_pending` |
+| Drawdown | no new entries at equity ≤ 95% of start | engine step 4 | `test_drawdown_gate_boundary`, race E |
+| Fill R:R | actual ≥ 2.50 (DEC-4.7) | broker `_fill_check` | Phase 4 tests, boundary 2660 |
+| Fill money | actual ≤ planned × 8/7 (DEC-5.7) | broker `_fill_money_check` | `FillMoneyRuleTests` |
+| Gap through SL | rejected (`fill_invalid_geometry`) | broker | `test_gap_through_stop_and_invalid_state` |
+| Correlation | OFF (DEC-5.6) | policy record only | `test_single_versioned_policy` |
+| Volatility / spread | UNAVAILABLE (DEC-5.8); existing gates kept | policy record only | idem |
+| Idempotency | run_id → same order, no second reservation | reservation | `test_retry_is_idempotent`, race D |
+| Atomicity | B2.3A whole-state CAS, one retry | reservation | races A–E |
+| Invalid SL/TP | owned by planner / R:R contract; Risk only recomputes | engine step 2 | `test_invalid_state_and_geometry_fail_closed` |
+
+## S6. Replay comparison (observational; constants not tuned)
+
+`python -m replay.risk_audit <replay_twelve_data_12m.db> <P4.1A lab_out> <out.json>`: 1,940 fixed-3R plans,
+NEXT_CYCLE fill, production engine + broker; old rule = R:R floor + the former 1% equity cap on the same rows.
+
+| Standalone (fresh 10,000 account) | all | discovery | holdout | EURUSD | XAUUSD |
+|---|---|---|---|---|---|
+| plans / Risk-approved | 1,940 / 1,940 | 1,221 / 1,221 | 719 / 719 | 949 / 949 | 991 / 991 |
+| old 1% rule: filled | 1,387 | 860 | 527 | 831 | 556 |
+| old: money-cap rejects | 523 | 351 | 172 | 102 | 421 |
+| DEC-5.7: filled | 1,910 | 1,211 | 699 | 933 | 977 |
+| DEC-5.7: money rejects | 0 | 0 | 0 | 0 | 0 |
+| R:R < 2.50 rejects (both rules) | 29 | 10 | 19 | 16 | 13 |
+| gap through SL (both rules) | 1 | 0 | 1 | 0 | 1 |
+| R:R ≥ 2.50 vs 8/7 disagreements | **0** | 0 | 0 | 0 | 0 |
+
+Planned risk % of equity: median 0.9988, p05 0.2999, max 1.0000 (EURUSD median 0.6344, notional-bound; XAUUSD
+0.9994). Actual fill risk % (DEC-5.7 filled): median 0.9684, p95 1.0545, max 1.1397. Actual/planned ratio: median
+0.9977, p95 1.0782, max 1.1420 (< 8/7 = 1.142857). The two fill gates are mathematically equivalent for exact 3R
+plans (`fill_money_risk_factor` derivation) and agree on every row; the money rule stays as defense in depth
+(`test_money_rule_is_independent_defense_in_depth`).
+
+Portfolio pass (chronological, one account, full gate stack, no costs): DEC-5.7 — 17 approved, 1,923
+`SYMBOL_EXPOSURE_LIMIT`, 17 filled, 0 `PORTFOLIO_RISK_LIMIT`, 0 `ACCOUNT_DRAWDOWN_LIMIT`, peak post-trade portfolio
+risk 2.1677% of C, minimum equity at decisions 9,917.51. Former 1% rule — 26 approved, 10 money-cap rejects, 16
+filled, peak 2.1670%. The one-per-symbol rule dominates because fixed-3R trades on far structural stops stay open
+for long periods; n is small and PnL is not a performance claim.
+
+## S7. Findings disposition
+
+- H1 (independent hard-coded 1% fill cap): FIXED for fixed 3R by DEC-5.7 (characterization test explicitly updated).
+- Missing aggregate / pending / drawdown controls: FIXED (S2).
+- Float epsilon above 1% (LOW): FIXED on the V2 path (exact arithmetic). Frozen V1 `riesgo.py` unchanged; its result
+  is floored by the PAPER increment before persistence.
+- `cash` never updated: DOCUMENTED; not an input of Risk V2.
+- NAS100 can be listed in `AI_FLOOR_ENABLED_SYMBOLS`: CARRY-FORWARD safety finding (runtime not redesigned). Risk V2
+  fails closed for NAS100 (`instrument_contract_data_unavailable`: no PAPER contract).
+- Runtime wiring: NOT DONE (forbidden in P5.1). The frozen V1 runtime keeps V1 Risk; Risk V2 is reachable only via
+  `reserve_and_submit` (explicit V2 path), like the Phase 4 opt-in planner.

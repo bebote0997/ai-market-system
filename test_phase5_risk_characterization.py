@@ -4,6 +4,7 @@ Pins what exists today — including gaps — so every P5.1 difference is an exp
 Non-production: imports production code read-only; changes nothing.
 """
 import inspect
+from decimal import Decimal
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -116,20 +117,28 @@ class FillMoneyRiskTests(unittest.TestCase):
                                         "high": open_price, "low": open_price, "close": open_price, "is_closed": True})
         return order.status, {e.event_type: e.details for e in broker.journal}
 
-    def test_broker_hard_coded_one_percent_money_cap_at_fill(self):
+    def test_fixed_3r_fill_money_limit_superseded_by_dec_5_7(self):
+        # P5.0 pinned a hard-coded 1% money cap at the fill (H1: 2651 was REJECTED post_fill_risk_or_geometry).
+        # P5.1 / DEC-5.7 explicitly supersedes it for fixed 3R: actual money risk <= planned money risk x 8/7.
         f3 = crear_configuracion_riesgo_fixed_3r()
-        self.assertEqual(self.fill(2650.0, f3, POLICY_V2_F3)[0], "FILLED")  # money risk exactly 1%
-        status, events = self.fill(2651.0, f3, POLICY_V2_F3)  # actual R:R 2.92 >= 2.50, money risk 1.02%
-        self.assertEqual((status, events["ORDER_REJECTED"]["reason"]), ("REJECTED", "post_fill_risk_or_geometry"))
-        # The broker cap does not follow the Risk configuration: approved at 0.5%, an adverse fill carrying 0.51%
-        # money risk (above the approved risk) still fills because the hard-coded cap is 1%.
+        self.assertEqual(self.fill(2650.0, f3, POLICY_V2_F3)[0], "FILLED")  # money risk exactly planned
+        status, events = self.fill(2651.0, f3, POLICY_V2_F3)  # actual R:R 2.92 >= 2.50, money 1.02 x planned
+        self.assertEqual(status, "FILLED")
+        self.assertEqual(Decimal(events["ORDER_FILLED"]["fill_geometry"]["actual_fill_money_risk"]), 102)
+        # The limit now follows the approved (TRUE planned) risk, not a fixed equity percentage: approved at 0.5%,
+        # the maximum fill money risk is 0.5% x 8/7.
         half = dict(f3, riesgo_por_operacion_pct=0.5)
         p = plan("XAUUSD", "LONG", 2650.0, 2600.0, 2800.0, policy=POLICY_V2_F3)
         self.assertEqual(evaluar_trade_plan(p, 10000.0, INS["XAUUSD"], half).capital_at_risk, 50.0)
         status, events = self.fill(2651.0, half, POLICY_V2_F3, risk_plan=p)
         self.assertEqual(status, "FILLED")
-        self.assertEqual(events["ORDER_FILLED"]["fill_geometry"]["actual_risk"], "51.0")  # x quantity 1.0 = 0.51%
+        geometry = events["ORDER_FILLED"]["fill_geometry"]
+        self.assertEqual((Decimal(geometry["actual_risk"]), Decimal(geometry["planned_money_risk"])), (51, 50))
+        self.assertTrue(geometry["maximum_fill_money_risk"].startswith("57.142857"))
 
+    def test_v1_fill_gate_keeps_hard_coded_one_percent_cap(self):
+        status, events = self.fill(2650.0, V1)  # frozen V1 path unchanged
+        self.assertEqual(status, "FILLED")
 
 if __name__ == "__main__":
     unittest.main()

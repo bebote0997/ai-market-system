@@ -4,6 +4,7 @@ from datetime import datetime
 
 import pandas as pd
 
+from core.rr_contract import POLICY_V2_F3
 from execution.contracts import PaperAccount, PaperFill, PaperOrder, PaperPosition
 
 
@@ -12,6 +13,11 @@ ORDER_STATUSES = {"PENDING", "FILLED", "CANCELLED", "REJECTED"}
 
 def _valid(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
+
+
+def _text(fraction):
+    from decimal import Decimal
+    return str(Decimal(fraction.numerator) / Decimal(fraction.denominator))
 
 
 def _aware(value):
@@ -99,6 +105,31 @@ class PaperBroker:
             return "fill_rr_below_minimum", telemetry
         return None, telemetry
 
+    def _fill_money_check(self, order):
+        """DEC-5.7 (fixed 3R only): actual fill money risk <= TRUE planned money risk x fill factor, where the factor
+        is derived by the single V2 risk policy from planned R:R 3.00 and the 2.50 fill floor (8/7). Planned money risk
+        is the order's own quantity x |planned entry - SL| x multiplier (the risk after quantity normalization), so the
+        limit follows the approved plan, never a hard-coded equity percentage. Exact arithmetic, no tolerance, no
+        resizing; SL/TP are never moved. Telemetry is added to ``last_fill_geometry``."""
+        from fractions import Fraction
+        from core.risk_policy import RISK_POLICY_V2_P5
+        from decimal import Decimal
+        from core.rr_contract import to_decimal
+        telemetry = self.last_fill_geometry
+        values = [to_decimal(v) for v in (order.planned_entry, order.stop, order.quantity, order.contract_multiplier)]
+        if any(v is None for v in values) or telemetry.get("actual_risk") is None:
+            return "post_fill_risk_or_geometry"
+        actual = Decimal(telemetry["actual_risk"])  # Exact geometry risk computed by _fill_check.
+        entry, stop, quantity, multiplier = (Fraction(v) for v in values)
+        factor = RISK_POLICY_V2_P5.fill_money_risk_factor
+        planned_money = abs(entry - stop) * quantity * multiplier
+        actual_money = Fraction(actual) * quantity * multiplier
+        limit = planned_money * factor
+        telemetry.update(risk_policy_version=RISK_POLICY_V2_P5.version, fill_money_risk_factor=str(factor),
+                         planned_money_risk=_text(planned_money), actual_fill_money_risk=_text(actual_money),
+                         maximum_fill_money_risk=_text(limit), fill_money_risk_ratio=_text(actual_money / planned_money))
+        return "fill_money_risk_above_limit" if actual_money > limit else None
+
     def process_next_bar(self, order, bar):
         if order is None or order.status != "PENDING":
             return None
@@ -128,9 +159,12 @@ class PaperBroker:
             details = {"reason": "post_fill_risk_or_geometry"}
         else:
             reason, self.last_fill_geometry = self._fill_check(order, fill_price)
-            if reason is None and (not _valid(current_equity) or not _valid(order.equity_at_submission)
-                                   or real_risk > current_equity * 0.01 or real_risk > order.equity_at_submission * 0.01):
-                reason = "post_fill_risk_or_geometry"  # Existing risk gates, unchanged.
+            if reason is None and (not _valid(current_equity) or not _valid(order.equity_at_submission)):
+                reason = "post_fill_risk_or_geometry"  # Invalid account/order state fails closed.
+            if reason is None and self.rr_policy == POLICY_V2_F3:
+                reason = self._fill_money_check(order)  # DEC-5.7 replaces the hard-coded 1% fill cap.
+            elif reason is None and (real_risk > current_equity * 0.01 or real_risk > order.equity_at_submission * 0.01):
+                reason = "post_fill_risk_or_geometry"  # Existing risk gates, unchanged for other V2 policies.
             rejected = reason is not None
             details = {"reason": reason, "fill_geometry": self.last_fill_geometry}
         if rejected:
