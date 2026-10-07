@@ -99,6 +99,10 @@ class OpenAIProvider(AIProvider):
         self.last_failure = None
         self.last_usage = {}
         self._monotonic = monotonic
+        # V2 P7.1 Batch C: optional monotonic deadline set per call by ai.resilience.GuardedProvider (None = unchanged
+        # behavior). With a deadline, each attempt's timeout is capped by the remaining budget and no retry starts
+        # when it could not begin before the deadline.
+        self.deadline = None
         # V2 P7.1 Batch B: sanitized telemetry of the most recent generate() (reset at its start). Never a key,
         # header or body: attempt numbers, HTTP status, typed kind, latencies and the response id only.
         self.last_call = None
@@ -125,8 +129,14 @@ class OpenAIProvider(AIProvider):
             http_status = error_type = error_code = retry_after = None
             timed_out = False
             started = self._monotonic()
+            timeout = self.timeout
+            if self.deadline is not None:
+                remaining = self.deadline - started
+                if remaining <= 0:
+                    raise OpenAIProviderError("AI_TIME_BUDGET_EXHAUSTED")
+                timeout = min(self.timeout, remaining)
             try:
-                raw = self._transport(payload, self.api_key, self.timeout)
+                raw = self._transport(payload, self.api_key, timeout)
                 self._attempt(attempt + 1, started, http_status=200)
                 return raw
             except HTTPError as exc:
@@ -157,12 +167,14 @@ class OpenAIProvider(AIProvider):
                 # urlopen raises TimeoutError on read and URLError(reason=TimeoutError) on connect.
                 timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
             self._attempt(attempt + 1, started, http_status=http_status, kind=kind)
-            if not transient or attempt == self.retries or (retry_after is not None and retry_after > 15):
+            delay = retry_after if retry_after is not None else min(4.0, 0.4 * 2 ** attempt)
+            budget_cut = self.deadline is not None and self._monotonic() + delay >= self.deadline
+            if (not transient or attempt == self.retries or (retry_after is not None and retry_after > 15)
+                    or budget_cut):
                 self.last_failure = kind
                 raise OpenAIProviderError(kind, http_status=http_status, error_type=error_type,
                                           error_code=error_code, retry_after=retry_after,
                                           timed_out=timed_out) from None
-            delay = retry_after if retry_after is not None else min(4.0, 0.4 * 2 ** attempt)
             self._sleep(delay + random.uniform(0, 0.1))
         raise AssertionError("unreachable")
 

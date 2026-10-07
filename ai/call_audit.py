@@ -88,6 +88,7 @@ def build_records(audit_entries, *, run_id, symbol, setup_id=None, pricing=None)
             "usage": usage, "usage_reported": usage is not None,
             "cost": (pricing or PricingTable()).estimate(model, usage),
             "health_before": call.get("health_before"), "health_after": call.get("health_after"),
+            "short_circuit_cause": call.get("short_circuit_cause"),
         })
     return records
 

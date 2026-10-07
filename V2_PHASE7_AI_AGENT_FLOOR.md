@@ -343,3 +343,102 @@ Batch A SHA: `2ab5e79a03a3192b813cb0e9ec295e9547976736`.
   (tested). After `persist`, rows are durable and a re-persist writes nothing. In no case is economic authority
   ambiguous: AI output is consumed only within the same cycle.
 - Tests: `test_phase7_ai_call_audit.py` (11). Full suite 980/980.
+
+Batch B SHA: `41d7f92c52e86252086f905bdf599dc21e870926`.
+
+## Batch C — resilience, health/recovery, alerts (OFF)
+
+- `ai/provider_health.py` — `ProviderHealthTracker`, in-process and cross-cycle, so no restart is needed. States
+  READY / DEGRADED / FAILED / UNKNOWN:
+  - UNKNOWN until the first provider evidence.
+  - Any provider answer (OK, model NO_DATA, MODEL_REPORTED_ERROR) → READY. If the previous state was DEGRADED or
+    FAILED, a `PROVIDER_RECOVERED` event is emitted with incident start, first-known-good time and duration.
+  - NON_TRANSIENT (QUOTA_EXHAUSTED, AUTH_ERROR, MODEL_UNAVAILABLE, NOT_CONFIGURED) → FAILED immediately.
+  - Transient or invalid provider output → DEGRADED, then FAILED after 3 consecutive.
+  - Skipped calls (SHORT_CIRCUITED, AI_TIME_BUDGET_EXHAUSTED) cause no transition.
+  - Events are emitted only on state changes. Content rejected by the validator (INVALID_SCHEMA,
+    UNGROUNDED_RESPONSE) is agent health, not provider health.
+- `ai/resilience.py` — `AICycleGuard` + `GuardedProvider`, one guard per cycle:
+  - **Short-circuit (DEC-7.4):** after a NON_TRANSIENT failure, every later agent of the same cycle is not called.
+    Its outcome is `SHORT_CIRCUITED` with `short_circuit_cause`. A quota outage costs **1 request per cycle**
+    instead of 5. The next cycle has a new guard, so nothing is disabled across cycles and recovery is detected on
+    the next call.
+  - **Time budget (DEC-7.5, default 120 s):** an agent starting after the deadline is not called
+    (`AI_TIME_BUDGET_EXHAUSTED`). The OpenAI adapter's optional `deadline` caps each attempt's timeout at the
+    remaining budget and starts no retry that could not begin before the deadline; the outcome stays truthful
+    (e.g. TIMEOUT).
+  - Every guard outcome is an agent ERROR, so it fails closed exactly like any provider failure. It can only remove
+    execution eligibility.
+- Retry behavior (unchanged by default): up to 3 attempts (retries=2) for 408/409/429-without-quota/5xx/timeout/
+  connection errors, backoff 0.4·2^n s + ≤ 0.1 s jitter or Retry-After ≤ 15 s. Immediate stop on quota/auth/404/other
+  4xx/Retry-After > 15 s/budget cut.
+- **Maximum theoretical AI latency per cycle:**
+  - unguarded (flag OFF): 5 agents × (3 × 30 s + ≤ 30 s of waits) ≈ 600 s;
+  - guarded: ≤ the cycle budget (120 s default), because attempts are capped by the remaining budget and later
+    agents are not called (tested with an injectable clock).
+- `ai/alerts.py` — `AIProviderAlerts(sink=None, enabled=False)` (DEC-7.9). It turns PROVIDER_FAILED /
+  PROVIDER_RECOVERED transitions into `NotificationEvent`s for the existing isolated sinks. Only an explicit
+  `enabled=True` with a sink delivers. Each (event, incident) is delivered at most once; repeated identical failures
+  produce no transition and so no alert. Delivery errors are swallowed. Messages carry typed outcomes and times only
+  (no key, header, body or balance). The test suite uses `FakeNotificationSink` only.
+- Runtime hook: `RuntimeConfig.v2_ai_resilience` (**OFF**; never from env; fingerprint unchanged while OFF). When ON,
+  the cycle's provider is wrapped in a new guard. Health transitions are journaled as `AI_PROVIDER_FAILED` /
+  `AI_PROVIDER_DEGRADED` / `AI_PROVIDER_RECOVERED` (source `ai_provider_health`) through `_audit_safely`. Alerts are
+  delivered only if an `ai_alerts` object is passed (default None = OFF). OFF vs ON over two real cycles (quota, then
+  recharge) gives identical decisions; ON makes 1 provider request instead of 5 in the quota cycle and journals
+  FAILED → RECOVERED.
+- Tests: `test_phase7_ai_resilience.py` (12). Full suite 992/992.
+
+## P7.1 summary
+
+| Item | Value |
+|---|---|
+| Starting SHA (P7.0) | `6f4f68c929df28fa5863d0a689bb5e38d6e6967b` |
+| Batch A | `2ab5e79a03a3192b813cb0e9ec295e9547976736` |
+| Batch B | `41d7f92c52e86252086f905bdf599dc21e870926` |
+| Batch C / final | the commit that adds this section (see the final report) |
+| Tests | 960 (P7.0) → 969 (A) → 980 (B) → 992 (C), 0 failures / errors / skips |
+| Economic behavior | unchanged (execution, core, agents, floor, riesgo, storage/database.py, runtime/gates.py untouched) |
+| AI authority | unchanged: veto only; `ai_availability`, AI_CALL, health and alerts are read by no gate |
+| Schema | 3 (journal rows only) |
+| Runtime activation | none: `v2_ai_call_audit` and `v2_ai_resilience` OFF and not settable from env; alerts OFF |
+
+Always-on, observability-only changes (approved DEC-7.1/7.6/7.3):
+- the appended `ai_outcome:<KIND>` warning;
+- AuditLog typed fields;
+- `ai_availability` in the AI report and review;
+- per-agent `usage` and `outcome` in the review;
+- the provider's sanitized `last_call`.
+
+Cost-estimation limitations: amounts are estimates from an Owner-supplied price table. They exclude any discounts,
+cached-input pricing, taxes or provider-side adjustments. No prepaid balance is available through this provider path,
+and none is claimed.
+
+Remaining risks (for P7.2):
+- MEDIUM: the AI_CALL durability and resilience benefits require future runtime activation of the two flags
+  (separate authorization).
+- MEDIUM (unchanged, Owner policy): macro NO_DATA strictness (DEC-7.7) and pending progression frozen during an AI
+  outage (DEC-7.11).
+- LOW: health state is in-process, so it resets to UNKNOWN on process restart (recovery after a restart is reported
+  as a first success, not a recovery).
+- LOW: free-text grounding unchanged (DEC-7.10).
+
+## P7.2 certification procedure (independent reviewer)
+
+1. Checkout the final P7.1 SHA. Confirm `git diff 405df6a -- execution core agents floor riesgo.py
+   storage/database.py runtime/gates.py render.yaml` is empty, and that `runtime/config.py` defaults and `from_env`
+   leave both flags OFF.
+2. Run the full offline suite (no network). Focus files: `test_phase7_ai_characterization.py`,
+   `test_phase7_ai_outcomes.py`, `test_phase7_ai_call_audit.py`, `test_phase7_ai_resilience.py`.
+3. Veto-only: AuthorityTests (forged AGREE/ACCEPT never upgrade NO_SETUP/WATCH/RISK_REJECTED; plan and risk objects
+   pass through by identity), `test_availability_is_never_authoritative`,
+   `test_ai_does_not_reach_conflict_or_risk_authorities`.
+4. Typed errors durable: `test_call_agent_preserves_typed_provider_kinds`, `test_review_payload_carries_typed_outcomes`,
+   `test_typed_failure_survives_into_the_record`.
+5. Tokens durable: `test_records_usage_attempts_ids_and_cost_labels`, `test_persist_is_atomic_idempotent_and_redacted`,
+   review `usage` in `test_off_vs_on_same_decision_and_durable_records`.
+6. Short-circuit / bounded retries / budget / recovery: `CycleGuardTests`,
+   `test_off_vs_on_same_decisions_fewer_calls_and_recovery_events`.
+7. Alerts OFF and deduplicated; no secret anywhere: `AlertTests`, redaction asserts.
+8. Re-verify REAL disabled, NAS100 off, schema 3, no deploy, and that `runtime/service.py` changes run only under the
+   OFF flags plus `_audit_safely`.

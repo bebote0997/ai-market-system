@@ -31,6 +31,9 @@ class RuntimeConfig:
     # V2 Phase 7 / P7.1 Batch B: durable AI_CALL rows (observability only; never a decision input). OFF by default;
     # from_env never sets it. Activation needs P7.2 certification and separate owner approval.
     v2_ai_call_audit: bool = False
+    # V2 Phase 7 / P7.1 Batch C: per-cycle AI short-circuit + time budget + provider health events. Fail-closed only
+    # (can only remove execution eligibility). OFF by default; from_env never sets it.
+    v2_ai_resilience: bool = False
 
     def __post_init__(self):
         if (self.cadence_minutes <= 0 or 60 % self.cadence_minutes or
@@ -47,6 +50,8 @@ class RuntimeConfig:
             raise ValueError("v2_position_catch_up must be a bool")
         if not isinstance(self.v2_ai_call_audit, bool):
             raise ValueError("v2_ai_call_audit must be a bool")
+        if not isinstance(self.v2_ai_resilience, bool):
+            raise ValueError("v2_ai_resilience must be a bool")
         if self.v2_position_catch_up and (
                 self.market_evidence_path is None
                 or Path(self.market_evidence_path).resolve() == Path(self.db_path).resolve()):
@@ -64,6 +69,8 @@ class RuntimeConfig:
             content["v2_position_catch_up"] = True
         if self.v2_ai_call_audit:  # OFF keeps the fingerprint byte-identical.
             content["v2_ai_call_audit"] = True
+        if self.v2_ai_resilience:  # OFF keeps the fingerprint byte-identical.
+            content["v2_ai_resilience"] = True
         return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
     @classmethod

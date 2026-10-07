@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 7 P7.1 Batch C (resilience, health/recovery, alerts OFF)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor`; previous SHA `41d7f92` (Batch B); final SHA = the commit that
+  adds this entry.
+- `ai/provider_health.py` (READY/DEGRADED/FAILED/UNKNOWN, recovery events), `ai/resilience.py` (per-cycle
+  non-transient short-circuit + AI time budget; fail-closed only), `ai/alerts.py` (typed, deduplicated, OFF by
+  default), `ai/openai_provider.py` (optional deadline caps attempts/retries), `runtime/config.py` +
+  `runtime/service.py` (`v2_ai_resilience` flag, OFF, health events via `_audit_safely`).
+- Tests: `test_phase7_ai_resilience.py` (12). Full suite 992/992. Economic behavior, AI authority, schema and runtime
+  activation unchanged. Status: **P7.1 READY FOR P7.2 INDEPENDENT REVIEW**.
+
 ## 2026-10-07 — V2 Phase 7 P7.1 Batch B (durable AI_CALL observability)
 
 - Agent: Claude. Branch `v2/phase7-ai-agent-floor`; previous SHA `2ab5e79` (Batch A).
