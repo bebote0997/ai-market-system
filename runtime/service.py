@@ -47,7 +47,8 @@ class OperationalRuntime:
 
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
                  instruments=None, clock=None, risk_config=None, paper_enabled=True,
-                 diagnostic_outside_session=False, recovery_stale_after_seconds=120):
+                 diagnostic_outside_session=False, recovery_stale_after_seconds=120, ai_pricing=None,
+                 ai_soft_budget=None, ai_cycle_budget_seconds=120.0, ai_alerts=None):
         self.config = config or RuntimeConfig.from_env()
         self.paper_enabled = bool(paper_enabled)
         self.diagnostic_outside_session = bool(diagnostic_outside_session) and not self.paper_enabled
@@ -75,6 +76,13 @@ class OperationalRuntime:
                                                  else InMemoryMacroNewsProvider())
         self.instruments = instruments or {}
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        # V2 P7.1 Batch B: optional Owner price table / soft budget for AI_CALL rows (used only when the flag is ON).
+        self.ai_pricing, self.ai_soft_budget = ai_pricing, ai_soft_budget
+        # V2 P7.1 Batch C (used only when v2_ai_resilience is ON): per-cycle budget, in-process provider health
+        # (cross-cycle, so recovery is observed without restart) and optional alerts (None = OFF).
+        from ai.provider_health import ProviderHealthTracker
+        self.ai_cycle_budget_seconds, self.ai_alerts = ai_cycle_budget_seconds, ai_alerts
+        self.ai_health = ProviderHealthTracker()
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
         self.store = Store(self.config.db_path)
         self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
@@ -198,6 +206,22 @@ class OperationalRuntime:
             if result.status != "STALE":
                 return None
         return STALE_PAPER_STATE
+
+    def _record_ai_health(self, events, run_id, symbol):
+        """Observability only: journal provider health transitions; alerts only if an alerts object was supplied."""
+        for event in events:
+            self.store.event(self.clock(), run_id, symbol, "ai_provider_health", "AI_" + event["event"],
+                             "WARNING" if event["event"] != "PROVIDER_RECOVERED" else "INFO", event)
+        if self.ai_alerts is not None:
+            self.ai_alerts.process(events, symbol=symbol)
+
+    def _record_ai_calls(self, audit, ai, deterministic, symbol, key):
+        from ai.call_audit import build_records, evaluate_soft_budget, persist
+        records = build_records(audit.entries, run_id=ai.run_id, symbol=symbol,
+                                setup_id=audit_setup_id(deterministic.setup_assessment), pricing=self.ai_pricing)
+        at = self.clock()
+        persist(self.store, records, at=at, owner_key=key, symbol=symbol)
+        evaluate_soft_budget(self.store, records, self.ai_soft_budget, at=at)
 
     def _snapshot(self, vm):
         plan = None if vm.plan is None else {k: getattr(vm.plan, k) for k in
@@ -330,12 +354,23 @@ class OperationalRuntime:
                     run_id, symbol)
             stage = "ai"
             audit = AuditLog()
-            ai = run_ai(deterministic, self.ai_provider, audit)
+            ai_provider = self.ai_provider
+            if self.config.v2_ai_resilience:  # V2 P7.1: fail-closed short-circuit + time budget for THIS cycle only
+                from ai.resilience import AICycleGuard, GuardedProvider
+                ai_provider = GuardedProvider(self.ai_provider, AICycleGuard(self.ai_cycle_budget_seconds),
+                                              self.ai_health, clock=self.clock)
+            ai = run_ai(deterministic, ai_provider, audit)
+            if self.config.v2_ai_resilience:
+                health_events = self.ai_health.drain()
+                self._audit_safely(lambda: self._record_ai_health(health_events, run_id, symbol), run_id, symbol)
             if not self.store.owns_slot(key, symbol):
                 raise RuntimeError("slot ownership lost")
             self.store.save_reports(key, deterministic, ai, audit.entries)
             self._audit_safely(lambda: self.store.record_analysis_events(self.clock(), deterministic, ai),
                                run_id, symbol)
+            if self.config.v2_ai_call_audit:  # V2 P7.1: observability only; a failure never changes the cycle.
+                self._audit_safely(lambda: self._record_ai_calls(audit, ai, deterministic, symbol, key),
+                                   run_id, symbol)
             provider_failed = any(r is not None and r.status == "ERROR" for r in (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review, ai.ai_trade_review))
             with self.store.transaction():
                 self.store.set_state("ai_provider", "ERROR" if provider_failed else "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")

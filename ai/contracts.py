@@ -77,6 +77,8 @@ class AIFloorReport:
     warnings: Tuple[str, ...] = ()
     prompt_versions: dict = field(default_factory=dict)
     provider_metadata: dict = field(default_factory=dict)
+    # V2 P7.1 (DEC-7.6): NON-AUTHORITATIVE availability summary (ai.outcomes.ai_availability). Never read by any gate.
+    ai_availability: dict = field(default_factory=dict)
 
 
 def evidence_ids(deterministic_evidence):

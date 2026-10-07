@@ -1,5 +1,57 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 7 P7.1F (P7.2 FAIL correction: late AI response after the cycle budget)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase7-ai-agent-floor`; failed P7.2 candidate
+  `564a4276698d2229fd1afda6cb91d784cba358a8`; final SHA = the commit that adds this entry.
+- P7.2 independent certification: **FAIL** (HIGH: a valid response completing after the 120 s AI cycle budget was
+  accepted and left `paper_policy` True).
+- `ai/resilience.py`: post-call deadline re-check; late responses fail closed as `AI_TIME_BUDGET_EXHAUSTED`
+  (`late_response_rejected`), boundary `remaining <= 0` = exhausted. `ai/runtime.py` / `ai/call_audit.py`: late-response
+  fields and truthfully consumed usage in the audit record.
+- New `test_phase7_ai_budget_boundary.py` (9; 5 fail on 564a427). Full suite 1001/1001. Fail-closed removal of
+  eligibility only; no authority, economic, schema or runtime-activation change. Status: **READY FOR P7.2
+  RE-CERTIFICATION**.
+
+## 2026-10-07 — V2 Phase 7 P7.1 Batch C (resilience, health/recovery, alerts OFF)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor`; previous SHA `41d7f92` (Batch B); final SHA = the commit that
+  adds this entry.
+- `ai/provider_health.py` (READY/DEGRADED/FAILED/UNKNOWN, recovery events), `ai/resilience.py` (per-cycle
+  non-transient short-circuit + AI time budget; fail-closed only), `ai/alerts.py` (typed, deduplicated, OFF by
+  default), `ai/openai_provider.py` (optional deadline caps attempts/retries), `runtime/config.py` +
+  `runtime/service.py` (`v2_ai_resilience` flag, OFF, health events via `_audit_safely`).
+- Tests: `test_phase7_ai_resilience.py` (12). Full suite 992/992. Economic behavior, AI authority, schema and runtime
+  activation unchanged. Status: **P7.1 READY FOR P7.2 INDEPENDENT REVIEW**.
+
+## 2026-10-07 — V2 Phase 7 P7.1 Batch B (durable AI_CALL observability)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor`; previous SHA `2ab5e79` (Batch A).
+- `ai/call_audit.py` (AI_CALL records, evidence fingerprint, estimated cost, observational soft budgets),
+  `ai/openai_provider.py` (sanitized per-call attempts/response id), `ai/runtime.py` (call timing + fingerprint),
+  `runtime/review.py` (provider-reported usage per agent), `runtime/config.py` + `runtime/service.py`
+  (`v2_ai_call_audit` flag, OFF, observability-only hook).
+- Tests: `test_phase7_ai_call_audit.py` (11). Full suite 980/980. No economic or authority change.
+
+## 2026-10-07 — V2 Phase 7 P7.1 Batch A (typed AI outcomes + ai_availability)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor`; starting SHA `6f4f68c929df28fa5863d0a689bb5e38d6e6967b`.
+- `ai/outcomes.py` (typed taxonomy, non-authoritative availability); `ai/runtime.py` (typed `ai_outcome:` warning
+  appended, AuditLog outcome/error_kind/http_status); `ai/contracts.py` + `ai/orchestrator.py` (`ai_availability`);
+  `runtime/review.py` (agent outcome + availability in the review). No gate reads any of it; final_status unchanged.
+- Tests: `test_phase7_ai_outcomes.py` (9); two P7.0 characterization assertions explicitly superseded (DEC-7.1).
+  Full suite 969/969.
+
+## 2026-10-07 — V2 Phase 7 P7.0 (AI Agent Floor: audit, characterization, design gate)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor` from `main` `405df6a8b18172cd94da23b9e48380a4405ba8cd`;
+  final SHA = the commit that adds this entry. Audit only; no production code changed; no runtime activation.
+- `V2_PHASE7_AI_AGENT_FLOOR.md` (architecture, agent contracts, provider taxonomy, authority matrix, fail-closed,
+  retries, token/cost observability, health state machine, incident mapping, DEC-7.1..7.11, P7.1 plan, P7.2 gates);
+  `test_phase7_ai_characterization.py` (15 tests, no live provider calls). Legacy V1 Phase 7 artifacts untouched.
+- Key finding (HIGH, operational): typed provider failure kinds (quota vs rate limit vs auth vs timeout) are not
+  persisted. No AI authority violation found. Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-07 — V2 Phase 6 P6.1E (same-run candidate identity: immutable run claim)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
