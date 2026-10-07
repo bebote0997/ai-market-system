@@ -1,5 +1,17 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 6 P6.1D (P6-STALE-01 correction: journal-safe stale outcomes)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
+  `7648eb9c52ab123a38f256a845d3661772df317b` (failed P6.2); final SHA = the commit that adds this entry.
+- `execution/conflict_path.py`: after a double stale the durable same-run outcome (order / decisive decision) wins
+  (`DUPLICATE_RUN`, nothing appended); otherwise ≤ 1 sanitized non-decisive `CONFLICT_ATTEMPT_STALE` row per run
+  (no provisional order_id). `commit_decision_rows` also refuses when the run already has an order; `DUPLICATE`
+  reconciles to the durable outcome.
+- New `test_phase6_stale_regression.py` (5 real-process tests; fails 5/5 on 7648eb9, passes after the fix).
+- Runtime, storage, Phase 5 unchanged; schema 3; REAL DISABLED; NAS100 OFF. Status: **READY FOR INDEPENDENT DELTA
+  REVIEW**.
+
 ## 2026-10-06 — V2 Phase 6 P6.1 (conflict engine, durable setup_id, atomic conflict + Risk V2 path)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA

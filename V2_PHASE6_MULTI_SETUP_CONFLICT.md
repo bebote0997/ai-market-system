@@ -300,8 +300,8 @@ Fresh load + B2.3A comparison value → idempotency (an order for the run_id, or
   `reserve_and_submit` now delegates to it with identical behavior):
   - REJECTED: `RISK_V2_DECISION` + `CONFLICT_DECISION` rows in one state-verified transaction.
   - APPROVED: order + `RISK_V2_DECISION` + `CONFLICT_DECISION(RESERVED)` in **one** `save_paper(expected_state)`.
-- Any state change → nothing written → reload, recompute conflict **and** Risk, once. A second conflict → STALE, with an
-  informative row that claims no economic action. A stale ALLOW or stale BLOCK never leaves a decisive trace.
+- Any state change → nothing written → reload, recompute conflict **and** Risk, once. After a second conflict, see
+  P10 (P6.1D). A stale ALLOW or stale BLOCK never leaves a decisive trace.
 
 ## P5. Existing management and pending progression (H-6.1 / H-6.2)
 
@@ -357,3 +357,58 @@ Code-downgrade limitation (MEDIUM, documented): pre-P6.1 code rejects payloads c
 `paper_decode`), exactly like pre-P5.1C code and `risk_policy_version`. Rolling the code back over a DB that already
 holds stamped Phase 6 rows is therefore not supported. The supported rollback is to stop calling the path (current
 state: never called by the runtime).
+
+---
+
+# P6.1D — P6-STALE-01 correction (independent P6.2 review, HIGH)
+
+Status: corrected, **pending independent delta review** (author: Claude; not self-certified).
+
+## P10. Root cause and correction
+
+Cause (7648eb9 `submit_with_conflict_control`): after the second lost CAS, the path built the STALE row as
+`{**record, ...}`. That copied the last **provisional** record, including the `order_id` of an order built in memory
+but never committed. It then wrote the row with an **unguarded** `store.event`, without reading the durable outcome of
+the same run_id. If another process had meanwhile committed `RESERVED / SUBMITTED` (or BLOCKED / RISK_REJECTED) for
+that run, the journal ended with a contradictory `STALE_STATE / NOT_SUBMITTED` row naming a nonexistent order.
+
+Correction (orchestration only; Phase 5, storage and runtime unchanged):
+1. **Authoritative durable outcome wins.** After a double stale, `_after_double_stale` reads, under one BEGIN
+   IMMEDIATE, whether the run_id has a committed order or a decisive `CONFLICT_DECISION`. If so, nothing is written
+   and the result is `DUPLICATE_RUN` (`run_id_already_submitted` with the committed order, or
+   `run_id_already_decided` with the decisive record).
+2. **Legitimate stale is non-decisive and sanitized.** With no durable outcome, at most one `CONFLICT_ATTEMPT_STALE`
+   row per run_id is written in that same transaction. It is a different event type from `CONFLICT_DECISION`, carries
+   `decisive: false`, `economic_action: NONE`, and is built from scratch. It has no `order_id`, `decision`,
+   `execution_status`, risk or reservation field. Idempotency ignores it, so a later retry or restart of the run
+   decides normally.
+3. **Same class, other exits.** `commit_decision_rows` (BLOCKED / RISK_REJECTED) now also refuses when an order for the
+   run already exists, besides a decisive row or a changed state. The RESERVED path re-reads decisive rows of the run
+   just before its guarded save. Every `DUPLICATE` outcome now reconciles to the durable order/decision.
+
+Terminal-path audit:
+
+| Exit | Write | Guard |
+|---|---|---|
+| NOT_SUBMITTED | none | — |
+| DUPLICATE_RUN | none | — |
+| BLOCKED | one decision row | state CAS + no decisive row + no run order, one transaction |
+| RISK_REJECTED | risk + decision rows | same |
+| RESERVED | order + risk + decision rows | `save_paper(expected_state)` |
+| STALE | ≤ 1 sanitized observation | no run order + no decisive row + no prior observation, one transaction |
+| exception | none (transactions roll back) | — |
+
+Journal invariants (asserted for every case of `test_phase6_stale_regression.py`): per run_id ≤ 1 order and
+≤ 1 decisive decision; no `CONFLICT_DECISION` with `STALE_STATE`; every row naming an order_id references a committed
+order of that run; BLOCKED / RISK_REJECTED coexist with no order; observations are non-decisive, carry no economic
+identifier, and number ≤ 1.
+
+Old-candidate proof: the permanent regression (5 real-process tests) fails 5/5 on 7648eb9. Case A shows exactly the
+reported contradiction: `RESERVED / SUBMITTED order=12e2…` (real) followed by `STALE_STATE / NOT_SUBMITTED
+order=7537…` (never existed). It passes 5/5 after the correction.
+
+Residual (separately reported, not the same root cause): the RESERVED path's `save_paper` (in the hash-pinned
+`storage/database.py`) cannot atomically re-check same-run journal rows. A same-run BLOCKED/RISK_REJECTED row and a
+RESERVED order could coexist only if two callers used the SAME run_id with DIFFERENT inputs (report or policy) on the
+same PAPER state. Equal inputs on an equal state give the same deterministic decision. The pre-save re-read narrows
+the window. The runtime's run_id is one per slot (`claim_slot`), and the path is not wired into the runtime.

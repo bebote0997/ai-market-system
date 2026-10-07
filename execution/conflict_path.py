@@ -15,7 +15,12 @@ One call, on the durable trading DB (no other database; no cross-DB atomicity):
              APPROVED -> order (stamped with setup_id and risk policy) + RISK_V2_DECISION + CONFLICT_DECISION rows in
              ONE ``save_paper(expected_state)``. A recorded "RESERVED" therefore exists only together with its order.
   6 any state change between 2 and 5 (other symbol, a fill, a close, a competing reservation) -> nothing written;
-    reload and recompute conflict AND Risk once; a second conflict -> STALE (an informative, non-economic row).
+    reload and recompute conflict AND Risk once. After a second conflict (P6.1D, P6-STALE-01) the durable outcome is
+    read under BEGIN IMMEDIATE: if this run_id already has a committed order or a decisive CONFLICT_DECISION
+    (written by any process), that AUTHORITATIVE outcome wins and is returned as DUPLICATE_RUN — nothing is appended.
+    Otherwise at most one sanitized ``CONFLICT_ATTEMPT_STALE`` observation per run_id is written: a different event
+    type, never a decision, built from scratch (no provisional order_id, reservation, risk or SUBMITTED field), and
+    ignored by idempotency, so a later retry of the run still decides normally.
 It never closes, cancels, replaces, modifies or re-stamps existing orders/positions and never moves SL/TP.
 """
 from dataclasses import dataclass
@@ -29,6 +34,7 @@ from execution.conflict_engine import CONFLICT_POLICY_VERSION, classify
 from execution.risk_reservation import EVENT as RISK_EVENT, SOURCE as RISK_SOURCE, prepare_reservation
 
 EVENT = "CONFLICT_DECISION"
+STALE_EVENT = "CONFLICT_ATTEMPT_STALE"  # non-decisive observation (P6.1D); never read as an outcome
 SOURCE = "conflict_engine"
 DECISIVE = ("BLOCKED", "RISK_REJECTED", "RESERVED")
 
@@ -83,15 +89,20 @@ def prior_decision(store, run_id):
     return None
 
 
+def _run_order(orders, run_id):
+    return next((o for o in orders.values() if o.run_id == run_id), None)
+
+
 def commit_decision_rows(store, account_id, expected_state, rows, *, run_id, owner_key=None, symbol=None):
-    """Journal ``rows`` only if the whole PAPER state is still ``expected_state`` and no decisive row exists for
-    ``run_id``, under one BEGIN IMMEDIATE. Returns COMMITTED | STALE | DUPLICATE. No economic state is written."""
+    """Journal ``rows`` only if the whole PAPER state is still ``expected_state`` and the run has neither an order nor
+    a decisive row, under one BEGIN IMMEDIATE. Returns COMMITTED | STALE | DUPLICATE. No economic state is written."""
     with store.transaction():
         if owner_key is not None and not store.owns_slot(owner_key, symbol):
             raise RuntimeError("conflict journal without slot ownership")
-        if prior_decision(store, run_id) is not None:
+        durable = store.load_paper(account_id)
+        if prior_decision(store, run_id) is not None or _run_order(durable[1], run_id) is not None:
             return "DUPLICATE"
-        if store.paper_state(*store.load_paper(account_id)) != expected_state:
+        if store.paper_state(*durable) != expected_state:
             return "STALE"
         for timestamp, source, event, payload in rows:
             store._event(timestamp, run_id, symbol, source, event, "INFO", payload)
@@ -130,8 +141,7 @@ def submit_with_conflict_control(store, floor_report, instrument, *, account_id,
             if outcome == "COMMITTED":
                 return ConflictPathResult("BLOCKED", conflict.reason_code, conflict, None, record, attempt)
             if outcome == "DUPLICATE":
-                return ConflictPathResult("DUPLICATE_RUN", "run_id_already_decided", conflict, None,
-                                          prior_decision(store, run_id), attempt)
+                return _reconciled(store, account_id, run_id, attempt)
             continue
         prepared = prepare_reservation(floor_report, instrument, account, orders, fills, as_of=as_of,
                                        setup_id=setup_id, policy=policy, stamp_setup_id=True)
@@ -145,21 +155,46 @@ def submit_with_conflict_control(store, floor_report, instrument, *, account_id,
             if outcome == "COMMITTED":
                 return ConflictPathResult("RISK_REJECTED", prepared.reason, conflict, None, record, attempt)
             if outcome == "DUPLICATE":
-                return ConflictPathResult("DUPLICATE_RUN", "run_id_already_decided", conflict, None,
-                                          prior_decision(store, run_id), attempt)
+                return _reconciled(store, account_id, run_id, attempt)
             continue
         order = prepared.order
         record = {**base, **risk, "decision": "RESERVED", "execution_status": "SUBMITTED", "order_id": order.order_id}
         prepared.broker._event(as_of, run_id, symbol, order.order_id, EVENT, record)  # same guarded save as the order
+        if prior_decision(store, run_id) is not None:  # a same-run decision committed since this attempt loaded
+            return _reconciled(store, account_id, run_id, attempt)
         if store.save_paper(prepared.broker, owner_key=owner_key, symbol=symbol,
                             expected_state=expected_state) is not False:
             return ConflictPathResult("RESERVED", "approved", conflict, order, record, attempt)
-    stale = {**(record or {}), "run_id": run_id, "setup_id": setup_id, "decision": "STALE_STATE",
-             "economic_action": "NONE", "execution_status": "NOT_SUBMITTED", "attempts": 2,
-             "conflict_policy_version": CONFLICT_POLICY_VERSION}
-    store.event(as_of, run_id, symbol, SOURCE, EVENT, "WARNING", stale)  # informative only; claims no approval
-    return ConflictPathResult("STALE", "STALE_STATE", None, None, stale, 2)
+    return _after_double_stale(store, account_id, run_id, symbol, setup_id, as_of, owner_key)
 
 
-__all__ = ["ConflictPathResult", "EVENT", "candidate", "commit_decision_rows", "prior_decision",
+def _reconciled(store, account_id, run_id, attempts):
+    """The durable outcome of ``run_id`` (order and/or decisive row) as DUPLICATE_RUN; writes nothing."""
+    order = _run_order(store.load_paper(account_id)[1], run_id)
+    if order is not None:
+        return ConflictPathResult("DUPLICATE_RUN", "run_id_already_submitted", None, order,
+                                  prior_decision(store, run_id), attempts)
+    return ConflictPathResult("DUPLICATE_RUN", "run_id_already_decided", None, None, prior_decision(store, run_id),
+                              attempts)
+
+
+def _after_double_stale(store, account_id, run_id, symbol, setup_id, as_of, owner_key):
+    """P6-STALE-01: authoritative durable outcome wins; otherwise one sanitized, non-decisive observation per run."""
+    observation = {"run_id": run_id, "setup_id": setup_id, "symbol": symbol, "observation": "STALE_STATE",
+                   "attempts": 2, "economic_action": "NONE", "decisive": False,
+                   "conflict_policy_version": CONFLICT_POLICY_VERSION}  # built from scratch: no provisional fields
+    with store.transaction():
+        if owner_key is not None and not store.owns_slot(owner_key, symbol):
+            raise RuntimeError("conflict journal without slot ownership")
+        decided = (_run_order(store.load_paper(account_id)[1], run_id) is not None
+                   or prior_decision(store, run_id) is not None)
+        if not decided and store.db.execute("SELECT 1 FROM journal WHERE event_type=? AND run_id=?",
+                                            (STALE_EVENT, run_id)).fetchone() is None:
+            store._event(as_of, run_id, symbol, SOURCE, STALE_EVENT, "WARNING", observation)
+    if decided:
+        return _reconciled(store, account_id, run_id, 2)
+    return ConflictPathResult("STALE", "STALE_STATE", None, None, observation, 2)
+
+
+__all__ = ["ConflictPathResult", "EVENT", "STALE_EVENT", "candidate", "commit_decision_rows", "prior_decision",
            "submit_with_conflict_control"]
