@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-06 — V2 Phase 6 P6.0 (multi-setup / position conflict: audit, characterization, owner decisions)
+
+- Agent: Claude. Branch `v2/phase6-multi-setup-conflict` from `main` `b3e93dfcff06233a7f0d22748d626e9a4b8d57bf`;
+  final SHA = the commit that adds this entry. Audit only; no production code changed; no runtime behavior changed.
+- `V2_PHASE6_MULTI_SETUP_CONFLICT.md` (behavior map, data model, setup_id, taxonomy, Risk V2 integration,
+  concurrency, observability, replay, DEC-6.1..6.11, P6.1 plan); `test_phase6_conflict_characterization.py`
+  (12 tests); `replay/conflict_audit.py` (offline, observational).
+- Findings: same-symbol multi-position structurally unsafe (latent HIGH); pending progression coupled to the
+  current-cycle analysis (HIGH design constraint); setup_id is opportunity identity, not thesis identity.
+- REAL DISABLED; NAS100 OFF; schema 3; runtime OFF. Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-06 — V2 Phase 5 P5.1C (certification-blocker correction: durable pending-risk policy identity)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase5-risk-engine`; starting SHA
