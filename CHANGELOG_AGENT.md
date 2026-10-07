@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 7 P7.0 (AI Agent Floor: audit, characterization, design gate)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor` from `main` `405df6a8b18172cd94da23b9e48380a4405ba8cd`;
+  final SHA = the commit that adds this entry. Audit only; no production code changed; no runtime activation.
+- `V2_PHASE7_AI_AGENT_FLOOR.md` (architecture, agent contracts, provider taxonomy, authority matrix, fail-closed,
+  retries, token/cost observability, health state machine, incident mapping, DEC-7.1..7.11, P7.1 plan, P7.2 gates);
+  `test_phase7_ai_characterization.py` (15 tests, no live provider calls). Legacy V1 Phase 7 artifacts untouched.
+- Key finding (HIGH, operational): typed provider failure kinds (quota vs rate limit vs auth vs timeout) are not
+  persisted. No AI authority violation found. Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-07 — V2 Phase 6 P6.1E (same-run candidate identity: immutable run claim)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
