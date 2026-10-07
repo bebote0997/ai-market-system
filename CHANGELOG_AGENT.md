@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 7 P7.1 Batch B (durable AI_CALL observability)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor`; previous SHA `2ab5e79` (Batch A).
+- `ai/call_audit.py` (AI_CALL records, evidence fingerprint, estimated cost, observational soft budgets),
+  `ai/openai_provider.py` (sanitized per-call attempts/response id), `ai/runtime.py` (call timing + fingerprint),
+  `runtime/review.py` (provider-reported usage per agent), `runtime/config.py` + `runtime/service.py`
+  (`v2_ai_call_audit` flag, OFF, observability-only hook).
+- Tests: `test_phase7_ai_call_audit.py` (11). Full suite 980/980. No economic or authority change.
+
 ## 2026-10-07 — V2 Phase 7 P7.1 Batch A (typed AI outcomes + ai_availability)
 
 - Agent: Claude. Branch `v2/phase7-ai-agent-floor`; starting SHA `6f4f68c929df28fa5863d0a689bb5e38d6e6967b`.

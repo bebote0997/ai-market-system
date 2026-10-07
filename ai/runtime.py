@@ -4,6 +4,8 @@ directly, so every AI call is validated the same way.
 """
 import copy
 import dataclasses
+from datetime import datetime, timezone
+import time
 
 from ai.contracts import AI_SCHEMA_VERSION, AIResponse, validate_ai_response
 from ai.outcomes import (MODEL_REPORTED_ERROR, NO_DATA, OK, OUTCOME_WARNING_PREFIX, classify_exception,
@@ -44,6 +46,9 @@ class AuditLog:
             "outcome": typed.get("outcome"),
             "error_kind": typed.get("error_kind"),
             "http_status": typed.get("http_status"),
+            # V2 P7.1 Batch B (DEC-7.2/7.10): call timing/attempts/response id and the evidence fingerprint.
+            "call": typed.get("call"),
+            "evidence_fingerprint": typed.get("evidence_fingerprint"),
         }
         self.entries.append(entry)
         return entry
@@ -66,17 +71,22 @@ def call_agent(provider, request, audit_log=None):
     down the rest of the floor run. Skips the call entirely (cost control)
     when there is no deterministic evidence to interpret.
     """
+    from ai.call_audit import evidence_fingerprint
     evidence_id_list = tuple(
         item.get("evidence_id") for item in request.deterministic_evidence if isinstance(item, dict)
     )
+    fingerprint = evidence_fingerprint(request)
     if not has_usable_evidence(request):
         response = _no_data_response(request)
         if audit_log is not None:
             audit_log.record(request.run_id, request.agent_name, request.prompt_version, evidence_id_list, response,
-                             "skipped_no_data", {}, outcome=NO_DATA)
+                             "skipped_no_data", {}, outcome=NO_DATA, call={"called": False},
+                             evidence_fingerprint=fingerprint)
         return response
 
     error_kind = http_status = None
+    call = {"called": True, "requested_at": datetime.now(timezone.utc).isoformat()}
+    started = time.perf_counter()
     try:
         response = provider.generate(request)
     except Exception as error:  # noqa: BLE001 - any provider failure is isolated
@@ -100,10 +110,17 @@ def call_agent(provider, request, audit_log=None):
         else:
             outcome = NO_DATA if response.status == "NO_DATA" else OK
     if audit_log is not None:
+        call.update(responded_at=datetime.now(timezone.utc).isoformat(),
+                    latency_ms=round((time.perf_counter() - started) * 1000, 3))
+        detail = getattr(provider, "last_call", None)
+        if isinstance(detail, dict):  # provider-level attempts / response id / health (sanitized by the provider)
+            call.update({k: detail[k] for k in ("attempts", "response_id", "health_before", "health_after")
+                         if k in detail})
         audit_log.record(
             request.run_id, request.agent_name, request.prompt_version, evidence_id_list,
             response, reason, getattr(provider, "metadata", {}),
-            outcome=outcome, error_kind=error_kind, http_status=http_status,
+            outcome=outcome, error_kind=error_kind, http_status=http_status, call=call,
+            evidence_fingerprint=fingerprint,
         )
     return response
 

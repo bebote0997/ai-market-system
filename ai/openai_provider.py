@@ -1,5 +1,5 @@
 """OpenAI Responses adapter. Advisory output only; ai.runtime validates grounding."""
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 import random
@@ -87,7 +87,7 @@ class OpenAIProvider(AIProvider):
     name = "openai"
 
     def __init__(self, *, api_key=None, model=None, timeout=30, retries=2,
-                 transport=None, sleep=time.sleep):
+                 transport=None, sleep=time.sleep, monotonic=time.monotonic):
         self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
         self.model = model or os.environ.get("OPENAI_MODEL", "gpt-5.6-terra")
         self.timeout = float(timeout)
@@ -98,6 +98,10 @@ class OpenAIProvider(AIProvider):
         self._sleep = sleep
         self.last_failure = None
         self.last_usage = {}
+        self._monotonic = monotonic
+        # V2 P7.1 Batch B: sanitized telemetry of the most recent generate() (reset at its start). Never a key,
+        # header or body: attempt numbers, HTTP status, typed kind, latencies and the response id only.
+        self.last_call = None
 
     @property
     def metadata(self):
@@ -109,14 +113,22 @@ class OpenAIProvider(AIProvider):
             return "NOT_CONFIGURED"
         return "ERROR" if self.last_failure else "READY" if self.last_usage else "DEGRADED"
 
+    def _attempt(self, number, started, http_status=None, kind=None):
+        if self.last_call is not None:
+            self.last_call["attempts"].append({"attempt": number, "http_status": http_status, "kind": kind,
+                                               "latency_ms": round((self._monotonic() - started) * 1000, 3)})
+
     def _post(self, payload):
         if not self.api_key:
             raise OpenAIProviderError("NOT_CONFIGURED")
         for attempt in range(self.retries + 1):
             http_status = error_type = error_code = retry_after = None
             timed_out = False
+            started = self._monotonic()
             try:
-                return self._transport(payload, self.api_key, self.timeout)
+                raw = self._transport(payload, self.api_key, self.timeout)
+                self._attempt(attempt + 1, started, http_status=200)
+                return raw
             except HTTPError as exc:
                 http_status = exc.code
                 retry_after = retry_after_seconds(exc.headers)
@@ -144,6 +156,7 @@ class OpenAIProvider(AIProvider):
                 transient, kind = True, "CONNECTION_ERROR"
                 # urlopen raises TimeoutError on read and URLError(reason=TimeoutError) on connect.
                 timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
+            self._attempt(attempt + 1, started, http_status=http_status, kind=kind)
             if not transient or attempt == self.retries or (retry_after is not None and retry_after > 15):
                 self.last_failure = kind
                 raise OpenAIProviderError(kind, http_status=http_status, error_type=error_type,
@@ -157,6 +170,7 @@ class OpenAIProvider(AIProvider):
         """Unchanged provider call plus a passive SYSTEM HEALTH observation (V2 Phase 1).
         The original result is returned and the original exception re-raised unchanged."""
         started = time.perf_counter()
+        self.last_call = {"requested_at": datetime.now(timezone.utc).isoformat(), "attempts": [], "response_id": None}
         try:
             response = self._generate_unobserved(request)
         except Exception as error:
@@ -199,6 +213,10 @@ class OpenAIProvider(AIProvider):
                                 "strict": True, "schema": response_schema}},
         }
         raw = self._post(payload)
+        response_id = raw.get("id") if isinstance(raw, dict) else None
+        if (isinstance(response_id, str) and 0 < len(response_id) <= 128
+                and response_id.replace("_", "").replace("-", "").isalnum()):
+            self.last_call["response_id"] = response_id  # e.g. resp_...; identifier only, never content
         if not isinstance(raw, dict) or raw.get("status") != "completed":
             self.last_failure = "INCOMPLETE_RESPONSE"
             raise OpenAIProviderError("INCOMPLETE_RESPONSE")

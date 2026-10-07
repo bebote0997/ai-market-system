@@ -307,3 +307,39 @@ pending progression unchanged). AI stays veto-only. No runtime activation, no ec
 - Superseded P7.0 characterization (explicit): the "kind collapse" test now pins typed propagation, and the grounding
   test expects the appended typed warning.
 - Tests: `test_phase7_ai_outcomes.py` (9). Full suite 969/969.
+
+Batch A SHA: `2ab5e79a03a3192b813cb0e9ec295e9547976736`.
+
+## Batch B — durable AI_CALL observability, usage, estimated cost
+
+- `ai/openai_provider.py`: sanitized `last_call` per `generate()`. It holds `requested_at`, attempts (`attempt`,
+  `http_status`, typed `kind`, `latency_ms`) and the response id (`resp_…`, identifier-shaped only). No key, header,
+  prompt or body. Behavior and retries are unchanged.
+- `ai/runtime.call_agent`: the AuditLog entry carries `call` (`called`, request/response timestamps, latency, provider
+  attempts, response id) and `evidence_fingerprint`.
+- Evidence fingerprint `V2_P7_EVIDENCE_1` (DEC-7.10) = sha256 of canonical JSON {symbol, agent, role, supplied
+  deterministic evidence}. No run_id, timestamps or prompt. Positional evidence ids are unchanged.
+- `ai/call_audit.py` (DEC-7.2/7.3):
+  - **AI_CALL record `V2_P7_AI_CALL_1`**: run_id, setup_id, symbol, call_sequence, agent, provider, model,
+    prompt_version, evidence_fingerprint, evidence_ids, called, requested_at, responded_at, latency_ms, attempts,
+    retries, attempt_log, response_id, status, outcome, error_kind, http_status, validation, usage
+    {input, output, total} or null, usage_reported, cost, health_before, health_after.
+  - `persist()` writes one cycle's rows in ONE transaction (all or nothing) and skips an existing
+    (run_id, call_sequence), so retries and restarts never duplicate.
+  - Key names avoid the substring "token" because `safe_json` deliberately strips such keys as potential secrets.
+    That filter is not weakened.
+- Cost: `PricingTable` (Owner-configured USD per 1M input/output units) → `{"basis": "ESTIMATED", "currency",
+  "amount", "pricing_source": "OWNER_CONFIGURED_TABLE"}`. Otherwise `PRICE_NOT_CONFIGURED` or `USAGE_UNAVAILABLE`
+  (usage is never invented). No balance, credit or funds concept exists anywhere.
+- Soft budgets (`SoftBudget`: cycle/daily estimated cost, cycle/daily usage total): crossing a threshold writes one
+  `AI_SOFT_BUDGET` row per scope (`effect: OBSERVATION_ONLY`). Nothing blocks or allows anything.
+- Default-durable usage: `review_reports.agents[].usage` (provider-reported or null), with no flag.
+- Runtime hook: `RuntimeConfig.v2_ai_call_audit` (**OFF**; `from_env` never sets it; fingerprint unchanged while
+  OFF). When ON, the AI_CALL rows and soft budget are written after `save_reports` through `_audit_safely`, so a
+  failure is logged and the cycle is unchanged. The OFF/ON decision and orders are identical (tested). A missing
+  record is never read as approval.
+- Crash windows: before or during the provider call, or after the response but before `save_reports`, the run is
+  recovered as FAILED (existing `recover()`) with no AI_CALL rows. During `persist`, the transaction rolls back
+  (tested). After `persist`, rows are durable and a re-persist writes nothing. In no case is economic authority
+  ambiguous: AI output is consumed only within the same cycle.
+- Tests: `test_phase7_ai_call_audit.py` (11). Full suite 980/980.

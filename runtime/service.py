@@ -47,7 +47,8 @@ class OperationalRuntime:
 
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
                  instruments=None, clock=None, risk_config=None, paper_enabled=True,
-                 diagnostic_outside_session=False, recovery_stale_after_seconds=120):
+                 diagnostic_outside_session=False, recovery_stale_after_seconds=120, ai_pricing=None,
+                 ai_soft_budget=None):
         self.config = config or RuntimeConfig.from_env()
         self.paper_enabled = bool(paper_enabled)
         self.diagnostic_outside_session = bool(diagnostic_outside_session) and not self.paper_enabled
@@ -75,6 +76,8 @@ class OperationalRuntime:
                                                  else InMemoryMacroNewsProvider())
         self.instruments = instruments or {}
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        # V2 P7.1 Batch B: optional Owner price table / soft budget for AI_CALL rows (used only when the flag is ON).
+        self.ai_pricing, self.ai_soft_budget = ai_pricing, ai_soft_budget
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
         self.store = Store(self.config.db_path)
         self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
@@ -198,6 +201,14 @@ class OperationalRuntime:
             if result.status != "STALE":
                 return None
         return STALE_PAPER_STATE
+
+    def _record_ai_calls(self, audit, ai, deterministic, symbol, key):
+        from ai.call_audit import build_records, evaluate_soft_budget, persist
+        records = build_records(audit.entries, run_id=ai.run_id, symbol=symbol,
+                                setup_id=audit_setup_id(deterministic.setup_assessment), pricing=self.ai_pricing)
+        at = self.clock()
+        persist(self.store, records, at=at, owner_key=key, symbol=symbol)
+        evaluate_soft_budget(self.store, records, self.ai_soft_budget, at=at)
 
     def _snapshot(self, vm):
         plan = None if vm.plan is None else {k: getattr(vm.plan, k) for k in
@@ -336,6 +347,9 @@ class OperationalRuntime:
             self.store.save_reports(key, deterministic, ai, audit.entries)
             self._audit_safely(lambda: self.store.record_analysis_events(self.clock(), deterministic, ai),
                                run_id, symbol)
+            if self.config.v2_ai_call_audit:  # V2 P7.1: observability only; a failure never changes the cycle.
+                self._audit_safely(lambda: self._record_ai_calls(audit, ai, deterministic, symbol, key),
+                                   run_id, symbol)
             provider_failed = any(r is not None and r.status == "ERROR" for r in (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review, ai.ai_trade_review))
             with self.store.transaction():
                 self.store.set_state("ai_provider", "ERROR" if provider_failed else "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")

@@ -29,6 +29,11 @@ class ReviewReport:
         return asdict(self)
 
 
+def _usage(response):
+    from ai.call_audit import usage_of
+    return usage_of(getattr(response, "model_metadata", None)) if response.status in {"OK", "PARTIAL", "NO_DATA"} else None
+
+
 def build_review(key, deterministic, ai, audit_entries=()):
     audit = {entry["agent"]: entry for entry in audit_entries}
     agents = []
@@ -45,6 +50,7 @@ def build_review(key, deterministic, ai, audit_entries=()):
                        "evidence_conflicting": response.conflicting_evidence,
                        "validation": entry.get("validation", "NOT_RECORDED"),
                        "outcome": entry.get("outcome"),  # V2 P7.1 typed outcome (None when not recorded)
+                       "usage": _usage(response),  # V2 P7.1 provider-reported usage, or None (never invented)
                        "warnings": response.warnings})
     risk = deterministic.risk_decision
     risk_summary = None if risk is None else {field: getattr(risk, field) for field in
