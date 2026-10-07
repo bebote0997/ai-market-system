@@ -1,5 +1,54 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 6 P6.1E (same-run candidate identity: immutable run claim)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
+  `6bcf7cc0b732c39c5096d1bddeea5ae14a0a252e` (failed review); final SHA = the commit that adds this entry.
+- New `execution/candidate_identity.py`: canonical fingerprint `V2_P6_CANDIDATE_1` and the immutable, non-economic
+  `RUN_CANDIDATE_CLAIM` (one BEGIN IMMEDIATE, schema 3, no DDL). `execution/conflict_path.py`: claim before any
+  decision; mismatch → `RUN_ID_CANDIDATE_MISMATCH`; pre-claim history → `RUN_ID_IDENTITY_UNKNOWN`; claim re-verified
+  in decision transactions; reconciliation refuses non-matching orders/decisions; P6.1D pre-save re-read removed.
+- New `test_phase6_candidate_identity.py`, `test_phase6_candidate_race.py` (real processes; fails on 6bcf7cc,
+  passes now). Runtime, storage, Phase 5 unchanged; REAL DISABLED; NAS100 OFF. Rollback MEDIUM still pending.
+  Status: **READY FOR INDEPENDENT DELTA REVIEW**.
+
+## 2026-10-06 — V2 Phase 6 P6.1D (P6-STALE-01 correction: journal-safe stale outcomes)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
+  `7648eb9c52ab123a38f256a845d3661772df317b` (failed P6.2); final SHA = the commit that adds this entry.
+- `execution/conflict_path.py`: after a double stale the durable same-run outcome (order / decisive decision) wins
+  (`DUPLICATE_RUN`, nothing appended); otherwise ≤ 1 sanitized non-decisive `CONFLICT_ATTEMPT_STALE` row per run
+  (no provisional order_id). `commit_decision_rows` also refuses when the run already has an order; `DUPLICATE`
+  reconciles to the durable outcome.
+- New `test_phase6_stale_regression.py` (5 real-process tests; fails 5/5 on 7648eb9, passes after the fix).
+- Runtime, storage, Phase 5 unchanged; schema 3; REAL DISABLED; NAS100 OFF. Status: **READY FOR INDEPENDENT DELTA
+  REVIEW**.
+
+## 2026-10-06 — V2 Phase 6 P6.1 (conflict engine, durable setup_id, atomic conflict + Risk V2 path)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
+  `f83b63c70bfc6ba35e7ecf4afc1c977272b5d97c`; final SHA = the commit that adds this entry.
+- New: `execution/conflict_engine.py` (pure classification, `V2_P6_CONFLICT_1`), `execution/conflict_path.py`
+  (conflict + Risk V2 + reservation in one guarded save; `CONFLICT_DECISION` rows), `test_phase6_conflict_engine.py`,
+  `test_phase6_conflict_concurrency.py` (real multi-process A–L).
+- Changed: optional `setup_id` on `PaperOrder`/`PaperPosition` (omitted when None; schema 3), broker fill inherits it,
+  `storage/codec.py` optional-identity omission, `execution/risk_reservation.py` extracts `prepare_reservation`
+  (Phase 5 behavior identical), `replay/conflict_audit.py` uses the engine, one P6.0 characterization assertion
+  explicitly superseded by DEC-6.1, `V2_PHASE6_MULTI_SETUP_CONFLICT.md` P6.1 section.
+- Replay reproduces P6.0 exactly (21 / 1,020 / 882 / 17 / pending 0). Runtime unchanged; no flag; REAL DISABLED;
+  NAS100 OFF. Status: **READY FOR INDEPENDENT REVIEW**.
+
+## 2026-10-06 — V2 Phase 6 P6.0 (multi-setup / position conflict: audit, characterization, owner decisions)
+
+- Agent: Claude. Branch `v2/phase6-multi-setup-conflict` from `main` `b3e93dfcff06233a7f0d22748d626e9a4b8d57bf`;
+  final SHA = the commit that adds this entry. Audit only; no production code changed; no runtime behavior changed.
+- `V2_PHASE6_MULTI_SETUP_CONFLICT.md` (behavior map, data model, setup_id, taxonomy, Risk V2 integration,
+  concurrency, observability, replay, DEC-6.1..6.11, P6.1 plan); `test_phase6_conflict_characterization.py`
+  (12 tests); `replay/conflict_audit.py` (offline, observational).
+- Findings: same-symbol multi-position structurally unsafe (latent HIGH); pending progression coupled to the
+  current-cycle analysis (HIGH design constraint); setup_id is opportunity identity, not thesis identity.
+- REAL DISABLED; NAS100 OFF; schema 3; runtime OFF. Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-06 — V2 Phase 5 P5.1C (certification-blocker correction: durable pending-risk policy identity)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase5-risk-engine`; starting SHA

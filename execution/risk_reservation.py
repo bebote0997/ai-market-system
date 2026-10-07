@@ -39,6 +39,44 @@ class ReservationResult:
     attempts: int
 
 
+@dataclass(frozen=True)
+class PreparedReservation:
+    """Outcome of one Risk V2 evaluation + order build on a loaded state, before any write (P6.1 composition)."""
+    status: str  # APPROVED | REJECTED
+    reason: str
+    record: dict  # Phase 5 traceability record
+    journal_record: dict  # RISK_V2_DECISION payload to persist
+    broker: object  # PaperBroker holding the new order + its RISK_V2_DECISION event (APPROVED only)
+    order: object
+
+
+def prepare_reservation(floor_report, instrument, account, orders, fills, *, as_of, setup_id=None,
+                        policy=RISK_POLICY_V2_P5, stamp_setup_id=False):
+    """Risk V2 evaluation and order construction on an already loaded state. Pure with respect to storage: the caller
+    persists ``broker`` with ``save_paper(expected_state)`` (APPROVED) or journals ``journal_record`` (REJECTED).
+    ``stamp_setup_id`` (Phase 6 path only) writes the authoritative ``setup_id`` into the new order."""
+    plan = floor_report.trade_plan
+    result = evaluate(plan, account, orders, instrument, policy, setup_id=setup_id, at=as_of)
+    record = result.record
+    if result.decision.status != "APPROVED":
+        return PreparedReservation("REJECTED", result.decision.reason, record, record, None, None)
+    broker = PaperBroker(account, instrument, rr_policy=POLICY_V2_F3)
+    broker.orders, broker.fills = orders, fills
+    order = broker.submit_plan(replace(floor_report, risk_decision=result.decision), None, as_of)
+    if order is None:
+        return PreparedReservation("REJECTED", "broker_refused_submission", record,
+                                   {**record, "risk_status": "REJECTED", "risk_reason": "broker_refused_submission"},
+                                   None, None)
+    # P5.1C: durable policy identity, persisted in the order payload in the same guarded save. It is what lets any
+    # later evaluation (after restart) prove this order's worst permitted fill (8/7).
+    order.risk_policy_version = policy.version
+    if stamp_setup_id:
+        order.setup_id = setup_id  # P6.1 / DEC-6.1: durable opportunity identity; inherited by the position at fill.
+    record = {**record, "order_id": order.order_id}
+    broker._event(as_of, order.run_id, order.symbol, order.order_id, EVENT, record)
+    return PreparedReservation("APPROVED", "approved", record, record, broker, order)
+
+
 def reserve_and_submit(store, floor_report, instrument, *, account_id, as_of, setup_id=None, owner_key=None,
                        policy=RISK_POLICY_V2_P5):
     """Risk-check and reserve one fixed-3R plan atomically against durable PAPER state (see module docstring)."""
@@ -53,27 +91,16 @@ def reserve_and_submit(store, floor_report, instrument, *, account_id, as_of, se
         if existing is not None:
             return ReservationResult("DUPLICATE_RUN", "run_id_already_submitted", existing, None, attempt)
         expected_state = store.paper_state(account, orders, fills)
-        result = evaluate(plan, account, orders, instrument, policy, setup_id=setup_id, at=as_of)
-        record = result.record
-        if result.decision.status != "APPROVED":
-            store.event(as_of, floor_report.run_id, plan.symbol, SOURCE, EVENT, "INFO", record)
-            return ReservationResult("REJECTED", result.decision.reason, None, record, attempt)
-        broker = PaperBroker(account, instrument, rr_policy=POLICY_V2_F3)
-        broker.orders, broker.fills = orders, fills
-        order = broker.submit_plan(replace(floor_report, risk_decision=result.decision), None, as_of)
-        if order is not None:
-            # P5.1C: durable policy identity, persisted in the order payload in the same guarded save. It is what
-            # lets any later evaluation (after restart) prove this order's worst permitted fill (8/7).
-            order.risk_policy_version = policy.version
-        if order is None:
-            store.event(as_of, floor_report.run_id, plan.symbol, SOURCE, EVENT, "INFO",
-                        {**record, "risk_status": "REJECTED", "risk_reason": "broker_refused_submission"})
-            return ReservationResult("REJECTED", "broker_refused_submission", None, record, attempt)
-        record = {**record, "order_id": order.order_id}
-        broker._event(as_of, order.run_id, order.symbol, order.order_id, EVENT, record)
-        if store.save_paper(broker, owner_key=owner_key, symbol=plan.symbol, expected_state=expected_state) is not False:
-            return ReservationResult("RESERVED", "approved", order, record, attempt)
+        prepared = prepare_reservation(floor_report, instrument, account, orders, fills, as_of=as_of,
+                                       setup_id=setup_id, policy=policy)
+        record = prepared.record
+        if prepared.status != "APPROVED":
+            store.event(as_of, floor_report.run_id, plan.symbol, SOURCE, EVENT, "INFO", prepared.journal_record)
+            return ReservationResult("REJECTED", prepared.reason, None, record, attempt)
+        if store.save_paper(prepared.broker, owner_key=owner_key, symbol=plan.symbol,
+                            expected_state=expected_state) is not False:
+            return ReservationResult("RESERVED", "approved", prepared.order, record, attempt)
     return ReservationResult("STALE", "STALE_PAPER_STATE", None, record, 2)
 
 
-__all__ = ["EVENT", "ReservationResult", "reserve_and_submit"]
+__all__ = ["EVENT", "PreparedReservation", "ReservationResult", "prepare_reservation", "reserve_and_submit"]
