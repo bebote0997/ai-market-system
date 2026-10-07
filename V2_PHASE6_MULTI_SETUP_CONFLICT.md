@@ -384,7 +384,7 @@ Correction (orchestration only; Phase 5, storage and runtime unchanged):
    decides normally.
 3. **Same class, other exits.** `commit_decision_rows` (BLOCKED / RISK_REJECTED) now also refuses when an order for the
    run already exists, besides a decisive row or a changed state. The RESERVED path re-reads decisive rows of the run
-   just before its guarded save. Every `DUPLICATE` outcome now reconciles to the durable order/decision.
+   just before its guarded save (removed in P6.1E: superseded by the immutable run claim, P11-P13). Every `DUPLICATE` outcome now reconciles to the durable order/decision.
 
 Terminal-path audit:
 
@@ -407,8 +407,83 @@ Old-candidate proof: the permanent regression (5 real-process tests) fails 5/5 o
 reported contradiction: `RESERVED / SUBMITTED order=12e2…` (real) followed by `STALE_STATE / NOT_SUBMITTED
 order=7537…` (never existed). It passes 5/5 after the correction.
 
-Residual (separately reported, not the same root cause): the RESERVED path's `save_paper` (in the hash-pinned
-`storage/database.py`) cannot atomically re-check same-run journal rows. A same-run BLOCKED/RISK_REJECTED row and a
+Residual (separately reported in P6.1D; **superseded by P6.1E / P11**): the RESERVED path's `save_paper` (in the
+hash-pinned `storage/database.py`) cannot atomically re-check same-run journal rows. A same-run BLOCKED/RISK_REJECTED row and a
 RESERVED order could coexist only if two callers used the SAME run_id with DIFFERENT inputs (report or policy) on the
 same PAPER state. Equal inputs on an equal state give the same deterministic decision. The pre-save re-read narrows
 the window. The runtime's run_id is one per slot (`claim_slot`), and the path is not wired into the runtime.
+
+---
+
+# P6.1E — Same-run candidate identity & atomic idempotency (independent review, HIGH)
+
+Status: corrected, **pending independent delta review** (author: Claude; not self-certified).
+
+## P11. Root cause
+
+`save_paper(expected_state)` compares only the PAPER economic state. A BLOCKED or RISK_REJECTED decision is
+journal-only: it changes no PAPER state. Caller A (run `shared`, EURUSD, NO_CONFLICT) paused before its save, and
+caller B (same run, a different XAUUSD candidate) committed `XAUUSD BLOCKED`. A's CAS still matched, so A committed
+`EURUSD RESERVED`. That left two candidate truths for one run_id. P6.1D's pre-save re-read only narrowed this window,
+and it is removed.
+
+## P12. Candidate identity contract (`execution/candidate_identity.py`)
+
+Fingerprint `V2_P6_CANDIDATE_1` = sha256 of canonical JSON (sorted keys, `,`/`:` separators, ASCII) over:
+account_id · symbol · setup_id (Phase 3) · side · planner policy · planned entry / SL / TP and declared R:R ·
+plan as_of (UTC ISO; it becomes the order's as_of) · conflict policy version · full risk policy record (versioned
+limits and fill semantics) · instrument contract (symbol, price/quantity increments, multiplier).
+
+Numbers are canonical decimals: `Decimal(repr(float))`, normalized, fixed notation, so 2650 == 2650.0. Excluded:
+run_id (the key), quantity (a Risk output), timestamps of decisions, warnings, scout evidence. No `repr()`/`hash()` of
+objects and no unordered serialization.
+
+## P13. Durable claim
+
+`RUN_CANDIDATE_CLAIM` journal row, same trading DB, schema 3, no DDL. Acquired by check-then-insert inside ONE
+`BEGIN IMMEDIATE` (`claim_run`), so it is serialized across processes and connections. It is never updated or deleted,
+and the first row is authoritative (only one can exist). Payload: fingerprint version, fingerprint, canonical fields,
+`economic_action: NONE`, `decisive: false`. It is not a conflict decision, Risk approval, reservation, submission or
+rejection.
+
+| Claim state for the run | Requested fingerprint | Result |
+|---|---|---|
+| none, no history | any | `CLAIMED` → normal path |
+| none, but an order or decisive row exists (pre-claim / Phase 5 API) | any | `NOT_SUBMITTED / RUN_ID_IDENTITY_UNKNOWN`; no claim invented |
+| exists | equal | `SAME` → idempotent continuation / reconciliation |
+| exists | different | `NOT_SUBMITTED / RUN_ID_CANDIDATE_MISMATCH`; nothing written; claim untouched |
+
+Why no TOCTOU remains: the claim is immutable once written, so a caller that verified "the claim is mine" can never
+be contradicted by a different candidate. Every other writer of that run_id has the same fingerprint, so the same
+deterministic outcome on the same PAPER state, and a CAS failure on any other state. Defense in depth:
+`commit_decision_rows` re-verifies the claim inside its own transaction. Reconciliation (`_reconciled`) refuses
+(`RUN_ID_CANDIDATE_MISMATCH`) an order or decisive row that does not match the claim (INV-6.6/6.7). Decision and stale
+rows carry `candidate_fingerprint`.
+
+Crash after claim: the claim alone has no economic effect. The same candidate resumes normally; a different one stays
+refused (real-process test). `CONFLICT_ATTEMPT_STALE` observations remain non-decisive and are not identity barriers.
+P6-STALE-01 stays closed: `test_phase6_stale_regression.py` is unchanged and passes.
+
+Legacy: runs with decisive rows or orders created before claims existed (P6.1/P6.1D, or the identity-unaware Phase 5
+`reserve_and_submit`) get no retroactive claim. The Phase 6 path refuses them (`RUN_ID_IDENTITY_UNKNOWN`) and never
+rewrites history.
+
+## P14. Invariants and evidence
+
+INV-6.1 one run_id → one candidate · 6.2 different candidate fails closed · 6.3 same candidate converges · 6.4 a claim
+is not approval · 6.5 claim-only crash recoverable · 6.6 decisive outcome matches the claim · 6.7 committed order
+matches the claim · 6.8 P6-STALE-01 closed · 6.9 no second same-symbol exposure · 6.10 Risk V2 mandatory after
+NO_CONFLICT.
+
+- `test_phase6_candidate_identity.py`: fingerprint canonicalization and sensitivity (symbol, setup_id, direction,
+  entry, SL, TP, declared R:R, as_of, multiple fields, policy, instrument, account); sequential collisions after
+  BLOCKED, RISK_REJECTED, RESERVED and claim-only; policy mismatch; stale observation not a barrier; legacy history
+  fails closed; a foreign order under a claimed run is never adopted.
+- `test_phase6_candidate_race.py` (real processes): the exact review reproduction; a concurrent matrix (different
+  symbol, setup_id, direction, geometry); identical-candidate convergence; claim-only crash + restart. On 6bcf7cc it
+  fails 7/7 subtests. The exact case shows `[('XAUUSD', 'BLOCKED'), ('EURUSD', 'RESERVED')]` for one run, and the
+  matrix shows the second symptom: the loser adopting a different candidate's order as DUPLICATE_RUN. It passes on the
+  corrected HEAD.
+
+The rollback MEDIUM (pre-P6.1 code cannot decode stamped `setup_id`) remains **unresolved, pending independent
+adjudication**. The new claim rows are journal rows: older code ignores them.

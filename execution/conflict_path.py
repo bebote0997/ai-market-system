@@ -4,6 +4,10 @@ One call, on the durable trading DB (no other database; no cross-DB atomicity):
 
   1 validate the candidate: PLAN_READY fixed-3R plan of a VALID_SETUP of the same symbol/side/run; its setup_id is the
     certified Phase 3 ``setup_identity`` of that assessment (and must equal the explanation's id when present).
+  1b (P6.1E) bind run_id to this candidate: ``candidate_identity.claim_run`` (immutable RUN_CANDIDATE_CLAIM, one
+    BEGIN IMMEDIATE). A run already bound to a different fingerprint -> NOT_SUBMITTED / RUN_ID_CANDIDATE_MISMATCH; a
+    run with pre-claim history (order or decisive row) -> NOT_SUBMITTED / RUN_ID_IDENTITY_UNKNOWN. Nothing else
+    happens for such callers, so two different candidates can never both become authoritative for one run_id.
   2 load durable PAPER state; capture the B2.3A whole-state comparison value.
   3 idempotency: an order for this run_id, or a decisive CONFLICT_DECISION row for it -> DUPLICATE_RUN, no write.
   4 conflict = ``conflict_engine.classify`` on that state.
@@ -29,7 +33,9 @@ import json
 
 from agents.setup_validator import setup_identity
 from core.risk_policy import RISK_POLICY_V2_P5, stamps_registered_semantics
-from core.rr_contract import POLICY_V2_F3
+from core.rr_contract import POLICY_V2_F3, to_decimal
+from execution.candidate_identity import (CLAIMED, MISMATCH, SAME, candidate_fields, claim_run, claimed_fingerprint,
+                                         fingerprint)
 from execution.conflict_engine import CONFLICT_POLICY_VERSION, classify
 from execution.risk_reservation import EVENT as RISK_EVENT, SOURCE as RISK_SOURCE, prepare_reservation
 
@@ -93,12 +99,16 @@ def _run_order(orders, run_id):
     return next((o for o in orders.values() if o.run_id == run_id), None)
 
 
-def commit_decision_rows(store, account_id, expected_state, rows, *, run_id, owner_key=None, symbol=None):
-    """Journal ``rows`` only if the whole PAPER state is still ``expected_state`` and the run has neither an order nor
-    a decisive row, under one BEGIN IMMEDIATE. Returns COMMITTED | STALE | DUPLICATE. No economic state is written."""
+def commit_decision_rows(store, account_id, expected_state, rows, *, run_id, owner_key=None, symbol=None,
+                         candidate_fingerprint=None):
+    """Journal ``rows`` only if the whole PAPER state is still ``expected_state``, the run has neither an order nor a
+    decisive row, and (P6.1E) the run's claim is ``candidate_fingerprint``, under one BEGIN IMMEDIATE.
+    Returns COMMITTED | STALE | DUPLICATE | MISMATCH. No economic state is written."""
     with store.transaction():
         if owner_key is not None and not store.owns_slot(owner_key, symbol):
             raise RuntimeError("conflict journal without slot ownership")
+        if candidate_fingerprint is not None and claimed_fingerprint(store, run_id) != candidate_fingerprint:
+            return "MISMATCH"
         durable = store.load_paper(account_id)
         if prior_decision(store, run_id) is not None or _run_order(durable[1], run_id) is not None:
             return "DUPLICATE"
@@ -118,30 +128,41 @@ def submit_with_conflict_control(store, floor_report, instrument, *, account_id,
     if invalid is not None:
         return ConflictPathResult("NOT_SUBMITTED", invalid, None, None, None, 0)
     plan, run_id, symbol = floor_report.trade_plan, floor_report.run_id, floor_report.symbol
+    try:
+        fields = candidate_fields(floor_report, instrument, account_id=account_id, setup_id=setup_id, policy=policy,
+                                  conflict_policy_version=CONFLICT_POLICY_VERSION)
+    except (AttributeError, TypeError, ValueError):
+        return ConflictPathResult("NOT_SUBMITTED", "candidate_identity_invalid", None, None, None, 0)
+    print_ = fingerprint(fields)
+    claim = claim_run(store, run_id=run_id, symbol=symbol, fields=fields, as_of=as_of, owner_key=owner_key,
+                      has_history=lambda s: (_run_order(s.load_paper(account_id)[1], run_id) is not None
+                                             or prior_decision(s, run_id) is not None))
+    if claim == MISMATCH:
+        return ConflictPathResult("NOT_SUBMITTED", "RUN_ID_CANDIDATE_MISMATCH", None, None, None, 0)
+    if claim not in (CLAIMED, SAME):
+        return ConflictPathResult("NOT_SUBMITTED", "RUN_ID_IDENTITY_UNKNOWN", None, None, None, 0)
     record = None
     for attempt in (1, 2):
         account, orders, fills = store.load_paper(account_id)
-        existing = next((o for o in orders.values() if o.run_id == run_id), None)
-        if existing is not None:
-            return ConflictPathResult("DUPLICATE_RUN", "run_id_already_submitted", None, existing, None, attempt)
-        prior = prior_decision(store, run_id)
-        if prior is not None:
-            return ConflictPathResult("DUPLICATE_RUN", "run_id_already_decided", None, None, prior, attempt)
+        if _run_order(orders, run_id) is not None or prior_decision(store, run_id) is not None:
+            return _reconciled(store, account_id, run_id, attempt, fields, print_)
         expected_state = store.paper_state(account, orders, fills)
         conflict = classify(symbol=symbol, direction=plan.side, setup_id=setup_id, account=account, orders=orders,
                             entry=plan.entry, stop=plan.stop, target=plan.target, as_of=as_of)
-        base = {"run_id": run_id, "setup_id": setup_id, "attempt": attempt, **conflict.as_record(),
+        base = {"run_id": run_id, "setup_id": setup_id, "candidate_fingerprint": print_, "attempt": attempt,
+                **conflict.as_record(),
                 "risk_policy_version": None, "risk_status": "NOT_EVALUATED", "risk_reason": None,
                 "portfolio_risk_before": None, "proposed_reservation": None, "portfolio_risk_after": None,
                 "portfolio_risk_limit": None, "order_id": None}
         if conflict.status == "BLOCK":
             record = {**base, "decision": "BLOCKED", "execution_status": "NOT_SUBMITTED"}
             outcome = commit_decision_rows(store, account_id, expected_state, [(as_of, SOURCE, EVENT, record)],
-                                           run_id=run_id, owner_key=owner_key, symbol=symbol)
+                                           run_id=run_id, owner_key=owner_key, symbol=symbol,
+                                           candidate_fingerprint=print_)
             if outcome == "COMMITTED":
                 return ConflictPathResult("BLOCKED", conflict.reason_code, conflict, None, record, attempt)
-            if outcome == "DUPLICATE":
-                return _reconciled(store, account_id, run_id, attempt)
+            if outcome in ("DUPLICATE", "MISMATCH"):
+                return _reconciled(store, account_id, run_id, attempt, fields, print_)
             continue
         prepared = prepare_reservation(floor_report, instrument, account, orders, fills, as_of=as_of,
                                        setup_id=setup_id, policy=policy, stamp_setup_id=True)
@@ -151,37 +172,52 @@ def submit_with_conflict_control(store, floor_report, instrument, *, account_id,
             outcome = commit_decision_rows(store, account_id, expected_state,
                                            [(as_of, RISK_SOURCE, RISK_EVENT, prepared.journal_record),
                                             (as_of, SOURCE, EVENT, record)],
-                                           run_id=run_id, owner_key=owner_key, symbol=symbol)
+                                           run_id=run_id, owner_key=owner_key, symbol=symbol,
+                                           candidate_fingerprint=print_)
             if outcome == "COMMITTED":
                 return ConflictPathResult("RISK_REJECTED", prepared.reason, conflict, None, record, attempt)
-            if outcome == "DUPLICATE":
-                return _reconciled(store, account_id, run_id, attempt)
+            if outcome in ("DUPLICATE", "MISMATCH"):
+                return _reconciled(store, account_id, run_id, attempt, fields, print_)
             continue
         order = prepared.order
         record = {**base, **risk, "decision": "RESERVED", "execution_status": "SUBMITTED", "order_id": order.order_id}
-        prepared.broker._event(as_of, run_id, symbol, order.order_id, EVENT, record)  # same guarded save as the order
-        if prior_decision(store, run_id) is not None:  # a same-run decision committed since this attempt loaded
-            return _reconciled(store, account_id, run_id, attempt)
+        # Same guarded save as the order. No journal re-check is needed here (P6.1E): the run's claim is immutable and
+        # ours, so any other writer of this run_id has the same fingerprint and, on the same PAPER state, the same
+        # deterministic outcome; on a different state this CAS fails.
+        prepared.broker._event(as_of, run_id, symbol, order.order_id, EVENT, record)
         if store.save_paper(prepared.broker, owner_key=owner_key, symbol=symbol,
                             expected_state=expected_state) is not False:
             return ConflictPathResult("RESERVED", "approved", conflict, order, record, attempt)
-    return _after_double_stale(store, account_id, run_id, symbol, setup_id, as_of, owner_key)
+    return _after_double_stale(store, account_id, run_id, symbol, setup_id, as_of, owner_key, fields, print_)
 
 
-def _reconciled(store, account_id, run_id, attempts):
-    """The durable outcome of ``run_id`` (order and/or decisive row) as DUPLICATE_RUN; writes nothing."""
+def _order_matches(order, fields):
+    """INV-6.7: a committed order of the run carries the claimed candidate's symbol, side, levels and setup_id."""
+    try:
+        levels = [format(to_decimal(v).normalize(), "f") for v in (order.planned_entry, order.stop, order.target)]
+    except AttributeError:
+        return False
+    return (order.symbol, order.side, getattr(order, "setup_id", None), *levels) == (
+        fields["symbol"], fields["side"], fields["setup_id"], fields["entry"], fields["stop"], fields["target"])
+
+
+def _reconciled(store, account_id, run_id, attempts, fields, print_):
+    """The durable outcome of ``run_id`` as DUPLICATE_RUN; writes nothing. INV-6.6/6.7: an order or decisive row that
+    does not match the claimed candidate is never returned as this candidate's outcome (fail closed)."""
     order = _run_order(store.load_paper(account_id)[1], run_id)
+    prior = prior_decision(store, run_id)
+    if (order is not None and not _order_matches(order, fields)) or (
+            prior is not None and prior.get("candidate_fingerprint") != print_):
+        return ConflictPathResult("NOT_SUBMITTED", "RUN_ID_CANDIDATE_MISMATCH", None, None, None, attempts)
     if order is not None:
-        return ConflictPathResult("DUPLICATE_RUN", "run_id_already_submitted", None, order,
-                                  prior_decision(store, run_id), attempts)
-    return ConflictPathResult("DUPLICATE_RUN", "run_id_already_decided", None, None, prior_decision(store, run_id),
-                              attempts)
+        return ConflictPathResult("DUPLICATE_RUN", "run_id_already_submitted", None, order, prior, attempts)
+    return ConflictPathResult("DUPLICATE_RUN", "run_id_already_decided", None, None, prior, attempts)
 
 
-def _after_double_stale(store, account_id, run_id, symbol, setup_id, as_of, owner_key):
+def _after_double_stale(store, account_id, run_id, symbol, setup_id, as_of, owner_key, fields, print_):
     """P6-STALE-01: authoritative durable outcome wins; otherwise one sanitized, non-decisive observation per run."""
     observation = {"run_id": run_id, "setup_id": setup_id, "symbol": symbol, "observation": "STALE_STATE",
-                   "attempts": 2, "economic_action": "NONE", "decisive": False,
+                   "attempts": 2, "economic_action": "NONE", "decisive": False, "candidate_fingerprint": print_,
                    "conflict_policy_version": CONFLICT_POLICY_VERSION}  # built from scratch: no provisional fields
     with store.transaction():
         if owner_key is not None and not store.owns_slot(owner_key, symbol):
@@ -192,7 +228,7 @@ def _after_double_stale(store, account_id, run_id, symbol, setup_id, as_of, owne
                                             (STALE_EVENT, run_id)).fetchone() is None:
             store._event(as_of, run_id, symbol, SOURCE, STALE_EVENT, "WARNING", observation)
     if decided:
-        return _reconciled(store, account_id, run_id, 2)
+        return _reconciled(store, account_id, run_id, 2, fields, print_)
     return ConflictPathResult("STALE", "STALE_STATE", None, None, observation, 2)
 
 

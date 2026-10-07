@@ -1,5 +1,17 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 6 P6.1E (same-run candidate identity: immutable run claim)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
+  `6bcf7cc0b732c39c5096d1bddeea5ae14a0a252e` (failed review); final SHA = the commit that adds this entry.
+- New `execution/candidate_identity.py`: canonical fingerprint `V2_P6_CANDIDATE_1` and the immutable, non-economic
+  `RUN_CANDIDATE_CLAIM` (one BEGIN IMMEDIATE, schema 3, no DDL). `execution/conflict_path.py`: claim before any
+  decision; mismatch → `RUN_ID_CANDIDATE_MISMATCH`; pre-claim history → `RUN_ID_IDENTITY_UNKNOWN`; claim re-verified
+  in decision transactions; reconciliation refuses non-matching orders/decisions; P6.1D pre-save re-read removed.
+- New `test_phase6_candidate_identity.py`, `test_phase6_candidate_race.py` (real processes; fails on 6bcf7cc,
+  passes now). Runtime, storage, Phase 5 unchanged; REAL DISABLED; NAS100 OFF. Rollback MEDIUM still pending.
+  Status: **READY FOR INDEPENDENT DELTA REVIEW**.
+
 ## 2026-10-06 — V2 Phase 6 P6.1D (P6-STALE-01 correction: journal-safe stale outcomes)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase6-multi-setup-conflict`; starting SHA
