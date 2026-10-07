@@ -67,7 +67,8 @@ def build_records(audit_entries, *, run_id, symbol, setup_id=None, pricing=None)
         call = dict(entry.get("call") or {})
         metadata = dict(getattr(response, "model_metadata", {}) or {})
         provider = dict(entry.get("provider_metadata") or {})
-        usage = usage_of(metadata) if entry.get("outcome") == "OK" else None
+        # Usage of a late (rejected) response was really consumed: keep it truthfully (P7.1F); never invented.
+        usage = usage_of(metadata) if entry.get("outcome") == "OK" else call.get("late_response_usage")
         model = provider.get("model") or metadata.get("model")
         records.append({
             "record_version": RECORD_VERSION, "run_id": run_id, "setup_id": setup_id, "symbol": symbol,
@@ -89,6 +90,8 @@ def build_records(audit_entries, *, run_id, symbol, setup_id=None, pricing=None)
             "cost": (pricing or PricingTable()).estimate(model, usage),
             "health_before": call.get("health_before"), "health_after": call.get("health_after"),
             "short_circuit_cause": call.get("short_circuit_cause"),
+            "late_response_rejected": bool(call.get("late_response_rejected", False)),
+            "late_response_status": call.get("late_response_status"),
         })
     return records
 

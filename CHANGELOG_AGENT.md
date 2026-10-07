@@ -1,5 +1,18 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 7 P7.1F (P7.2 FAIL correction: late AI response after the cycle budget)
+
+- Agent: Claude (author; not the reviewer). Branch `v2/phase7-ai-agent-floor`; failed P7.2 candidate
+  `564a4276698d2229fd1afda6cb91d784cba358a8`; final SHA = the commit that adds this entry.
+- P7.2 independent certification: **FAIL** (HIGH: a valid response completing after the 120 s AI cycle budget was
+  accepted and left `paper_policy` True).
+- `ai/resilience.py`: post-call deadline re-check; late responses fail closed as `AI_TIME_BUDGET_EXHAUSTED`
+  (`late_response_rejected`), boundary `remaining <= 0` = exhausted. `ai/runtime.py` / `ai/call_audit.py`: late-response
+  fields and truthfully consumed usage in the audit record.
+- New `test_phase7_ai_budget_boundary.py` (9; 5 fail on 564a427). Full suite 1001/1001. Fail-closed removal of
+  eligibility only; no authority, economic, schema or runtime-activation change. Status: **READY FOR P7.2
+  RE-CERTIFICATION**.
+
 ## 2026-10-07 — V2 Phase 7 P7.1 Batch C (resilience, health/recovery, alerts OFF)
 
 - Agent: Claude. Branch `v2/phase7-ai-agent-floor`; previous SHA `41d7f92` (Batch B); final SHA = the commit that

@@ -6,7 +6,11 @@
   so recovery is detected on the next call; nothing is disabled across cycles and no restart is needed;
 - once the cycle's AI time budget is spent, later agents are not called and fail with AI_TIME_BUDGET_EXHAUSTED; a call
   in flight gets the remaining budget as its deadline (the adapter shortens its per-attempt timeout and stops retrying
-  when a retry cannot start before the deadline).
+  when a retry cannot start before the deadline);
+- P7.1F (P7.2 HIGH): the budget is checked BEFORE the call AND AFTER it returns. A response that completes when the
+  budget is spent is NOT accepted: the agent fails closed with AI_TIME_BUDGET_EXHAUSTED (``late_response_rejected``),
+  even if the provider answered validly. Boundary (deterministic, conservative): remaining = deadline - now;
+  remaining > 0 -> within budget; remaining <= 0 (elapsed >= budget, including exactly at the deadline) -> exhausted.
 Every guard outcome is an agent ERROR, i.e. fail closed exactly like any provider failure: it can only remove
 execution eligibility, never add it. No deterministic calculation reads the guard.
 """
@@ -18,9 +22,10 @@ from ai.outcomes import AI_TIME_BUDGET_EXHAUSTED, NON_TRANSIENT, OK, SHORT_CIRCU
 class AIGuardError(RuntimeError):
     """A call the guard did not make. Sanitized: kind and (for a short-circuit) the non-transient cause only."""
 
-    def __init__(self, kind, cause=None):
+    def __init__(self, kind, cause=None, late_response=False):
         self.kind = kind
         self.cause = cause
+        self.late_response = late_response  # the provider DID answer, but after the cycle deadline (not a timeout)
         self.http_status = None
         super().__init__(kind)
 
@@ -86,6 +91,14 @@ class GuardedProvider:
                 self.provider.deadline = None
         _, after = self._observe(OK, request)  # the provider answered; content validity is judged by the validator
         self._capture(before, after)
+        if self.guard.remaining() <= 0:
+            # P7.1F: the global budget is authoritative over provider success. The late answer is recorded truthfully
+            # (it completed; its usage was consumed) but never accepted for the trading path; no later agent is called
+            # because the budget stays exhausted for the rest of this cycle.
+            from ai.call_audit import usage_of
+            self.last_call.update(late_response_rejected=True, late_response_status=getattr(response, "status", None),
+                                  late_response_usage=usage_of(getattr(response, "model_metadata", None)))
+            raise AIGuardError(AI_TIME_BUDGET_EXHAUSTED, late_response=True)
         return response
 
     def _capture(self, before, after):

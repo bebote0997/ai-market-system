@@ -442,3 +442,56 @@ Remaining risks (for P7.2):
 7. Alerts OFF and deduplicated; no secret anywhere: `AlertTests`, redaction asserts.
 8. Re-verify REAL disabled, NAS100 off, schema 3, no deploy, and that `runtime/service.py` changes run only under the
    OFF flags plus `_audit_safely`.
+
+---
+
+# P7.2 result: FAIL (independent review) → P7.1F correction
+
+**P7.2 independent certification of `564a4276698d2229fd1afda6cb91d784cba358a8`: FAIL — PR NOT READY.** The audit trail
+is preserved; that candidate is not certified. (The author self-review before it found no defect. It missed this
+HIGH because its fake provider respected the capped timeout.)
+
+## HIGH — AI time-budget overrun can still produce execution eligibility
+
+Reproduced by the independent reviewer: budget 120 s; five valid fake responses of 25 s each. The fifth call began
+with ≈ 20 s left, the fake provider ignored the capped timeout and returned validly at 125 s. All outcomes were OK,
+`final_status` PLAN_READY and `paper_policy(ai)` True.
+
+Root cause: `GuardedProvider.generate` checked the budget only BEFORE calling the provider. A provider/transport that
+returns after the deadline (despite the capped timeout) was accepted on the only success return path.
+
+## Fix (P7.1F, `ai/resilience.py`)
+
+- The budget is checked BEFORE the call and AFTER `provider.generate(...)` returns. A late response is not accepted.
+  `AIGuardError(AI_TIME_BUDGET_EXHAUSTED, late_response=True)` makes the agent fail closed (ERROR) through the normal
+  `call_agent` path. The budget stays exhausted, so no later agent of the cycle is called.
+- Truthful observability: the AuditLog / AI_CALL record keeps the provider attempts, the response id,
+  `late_response_rejected: true`, `late_response_status` (what the provider answered) and the usage it really
+  consumed. The outcome is `AI_TIME_BUDGET_EXHAUSTED`, never TIMEOUT (the provider did not time out). Provider health
+  records the answer (READY); agent/trading outcome is budget exhaustion.
+- Return-path audit: the success path at the end of `GuardedProvider.generate` is the only path that returns a
+  response. The guard-error and provider-exception paths already fail. The adapter's own deadline only shortens
+  attempts. No other bypass exists. Unguarded runs (flag OFF) have no budget by design (unchanged).
+- Boundary (deterministic, conservative): `remaining = deadline − now`. `remaining > 0` (elapsed < budget) → within
+  budget; `remaining ≤ 0` (elapsed == budget or elapsed > budget) → exhausted. The same rule applies before and after
+  the call.
+- Economic effect: only removal of eligibility after the budget expires. AI authority is not increased; strategy,
+  setup, levels, quantity, Risk V2, Conflict Engine, freshness, sessions, macro NO_DATA and pending policy are
+  unchanged.
+
+## Regression evidence
+
+`test_phase7_ai_budget_boundary.py` (9 tests):
+- the reviewer's exact scenario (125 s elapsed, 4 × OK + AI_TIME_BUDGET_EXHAUSTED, `paper_policy` False, 5 provider
+  calls, none after);
+- not reported as a provider timeout;
+- before the deadline → accepted;
+- exactly at the deadline → fail closed;
+- just inside → accepted;
+- exhausted before the call → provider not called;
+- provider TIMEOUT before the deadline stays TIMEOUT;
+- budget expiring during a successful OpenAI call (usage, response id and attempts kept);
+- retry/backoff crossing the deadline → fail closed.
+
+Run against the failed candidate `564a427` (temporary detached worktree, removed): 5/9 FAIL, including the exact
+scenario (`['OK','OK','OK','OK','OK']`). On the corrected candidate: 9/9 PASS. Full suite 1001/1001.

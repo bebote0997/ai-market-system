@@ -115,7 +115,8 @@ def call_agent(provider, request, audit_log=None):
         detail = getattr(provider, "last_call", None)
         if isinstance(detail, dict):  # provider-level attempts / response id / health (sanitized by the provider)
             call.update({k: detail[k] for k in ("attempts", "response_id", "health_before", "health_after",
-                                                 "short_circuit_cause") if k in detail})
+                                                 "short_circuit_cause", "late_response_rejected",
+                                                 "late_response_status", "late_response_usage") if k in detail})
         audit_log.record(
             request.run_id, request.agent_name, request.prompt_version, evidence_id_list,
             response, reason, getattr(provider, "metadata", {}),
