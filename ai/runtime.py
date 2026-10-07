@@ -3,14 +3,17 @@ call-count control. No component outside this module invokes a provider
 directly, so every AI call is validated the same way.
 """
 import copy
+import dataclasses
 
 from ai.contracts import AI_SCHEMA_VERSION, AIResponse, validate_ai_response
+from ai.outcomes import (MODEL_REPORTED_ERROR, NO_DATA, OK, OUTCOME_WARNING_PREFIX, classify_exception,
+                         classify_validation)
 
 
-def _error_response(request, reason):
+def _error_response(request, *warnings):
     return AIResponse(
         AI_SCHEMA_VERSION, request.run_id, request.as_of, request.symbol,
-        request.agent_name, "ERROR", warnings=(reason,),
+        request.agent_name, "ERROR", warnings=tuple(warnings),
     )
 
 
@@ -27,7 +30,8 @@ class AuditLog:
     def __init__(self):
         self.entries = []
 
-    def record(self, run_id, agent_name, prompt_version, evidence_id_list, response, validation_reason, provider_metadata):
+    def record(self, run_id, agent_name, prompt_version, evidence_id_list, response, validation_reason, provider_metadata,
+               **typed):
         entry = {
             "run_id": run_id,
             "agent": agent_name,
@@ -36,6 +40,10 @@ class AuditLog:
             "response": response,
             "validation": validation_reason,
             "provider_metadata": dict(provider_metadata or {}),
+            # V2 P7.1 (DEC-7.1): typed outcome, sanitized provider error kind and HTTP status (never a body or key).
+            "outcome": typed.get("outcome"),
+            "error_kind": typed.get("error_kind"),
+            "http_status": typed.get("http_status"),
         }
         self.entries.append(entry)
         return entry
@@ -64,22 +72,38 @@ def call_agent(provider, request, audit_log=None):
     if not has_usable_evidence(request):
         response = _no_data_response(request)
         if audit_log is not None:
-            audit_log.record(request.run_id, request.agent_name, request.prompt_version, evidence_id_list, response, "skipped_no_data", {})
+            audit_log.record(request.run_id, request.agent_name, request.prompt_version, evidence_id_list, response,
+                             "skipped_no_data", {}, outcome=NO_DATA)
         return response
 
+    error_kind = http_status = None
     try:
         response = provider.generate(request)
     except Exception as error:  # noqa: BLE001 - any provider failure is isolated
-        response = _error_response(request, f"provider_exception:{type(error).__name__}")
+        outcome = classify_exception(error)
+        kind = getattr(error, "kind", None)
+        error_kind = kind if isinstance(kind, str) else None
+        status = getattr(error, "http_status", None)
+        http_status = status if isinstance(status, int) and not isinstance(status, bool) else None
+        # DEC-7.1: the typed outcome is ADDED after the unchanged legacy warning (System Health reads warnings[0]).
+        response = _error_response(request, f"provider_exception:{type(error).__name__}",
+                                   OUTCOME_WARNING_PREFIX + outcome)
         reason = "provider_exception"
     else:
         valid, reason = validate_ai_response(response, request)
         if not valid:
-            response = _error_response(request, reason)
+            outcome = classify_validation(reason)
+            response = _error_response(request, reason, OUTCOME_WARNING_PREFIX + outcome)
+        elif response.status == "ERROR":  # schema-valid response in which the model itself reports an error
+            outcome = MODEL_REPORTED_ERROR
+            response = dataclasses.replace(response, warnings=tuple(response.warnings) + (OUTCOME_WARNING_PREFIX + outcome,))
+        else:
+            outcome = NO_DATA if response.status == "NO_DATA" else OK
     if audit_log is not None:
         audit_log.record(
             request.run_id, request.agent_name, request.prompt_version, evidence_id_list,
             response, reason, getattr(provider, "metadata", {}),
+            outcome=outcome, error_kind=error_kind, http_status=http_status,
         )
     return response
 

@@ -280,3 +280,30 @@ gap. The 2026-10-02 RATE_LIMITED event was on the market-data path and must not 
 5. Observability failure cannot change any decision (fault injection).
 6. Replay of a synthetic quota incident (offline) reproduces the September signature and recovery.
 7. Phase 2–6 regressions and the full suite green; REAL disabled; NAS100 off; schema 3; runtime OFF.
+
+---
+
+# P7.1 — Controlled implementation (DEC-7.1 → DEC-7.11 approved)
+
+Owner interpretations: **DEC-7.7 strict** (macro_ai NO_DATA keeps blocking execution) and **DEC-7.11** (Phase 2
+pending progression unchanged). AI stays veto-only. No runtime activation, no economic change.
+
+## Batch A — typed outcomes + ai_availability
+
+- `ai/outcomes.py`: typed per-call outcomes. Provider: AUTH_ERROR, RATE_LIMITED, QUOTA_EXHAUSTED,
+  MODEL_UNAVAILABLE (HTTP 404), TIMEOUT (CONNECTION_ERROR with `timed_out`), CONNECTION_ERROR, INVALID_RESPONSE
+  (INCOMPLETE / INVALID_STRUCTURED), PROVIDER_FAILURE (5xx, other 4xx), NOT_CONFIGURED, UNKNOWN_PROVIDER_ERROR (any
+  non-provider exception). Validator: INVALID_SCHEMA, UNGROUNDED_RESPONSE. Model: MODEL_REPORTED_ERROR (schema-valid
+  response with status ERROR). Plus OK and NO_DATA. Sets: NON_TRANSIENT = {AUTH_ERROR, QUOTA_EXHAUSTED,
+  MODEL_UNAVAILABLE, NOT_CONFIGURED}; TRANSIENT = {RATE_LIMITED, TIMEOUT, CONNECTION_ERROR, PROVIDER_FAILURE}.
+- `ai/runtime.call_agent` (DEC-7.1): every ERROR response keeps its existing first warning (System Health reads
+  `warnings[0]`) and gets `ai_outcome:<OUTCOME>` appended. The AuditLog entry records `outcome`, sanitized
+  `error_kind` and `http_status` (never a body or key). Typed errors are therefore durable through the existing
+  `agent_decisions.warnings` and `review_reports.agents[].outcome`.
+- `ai_availability` (DEC-7.6) on `AIFloorReport` and in `review_reports`: `{version V2_P7_AI_AVAILABILITY_1,
+  authoritative: false, state ALL_AVAILABLE | PARTIAL_FAILURE | TOTAL_FAILURE | NO_AGENTS, agents, failed_agents,
+  failure_outcomes, no_data_agents}`. It is computed after `final_status` and read by no gate (source-checked).
+  `final_status` semantics are unchanged.
+- Superseded P7.0 characterization (explicit): the "kind collapse" test now pins typed propagation, and the grounding
+  test expects the appended typed warning.
+- Tests: `test_phase7_ai_outcomes.py` (9). Full suite 969/969.

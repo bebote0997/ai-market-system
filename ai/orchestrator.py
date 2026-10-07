@@ -19,6 +19,7 @@ REAL_EXECUTION remains DISABLED; this module never talks to a broker.
 """
 from ai.agents import liquidity_ai, macro_ai, setup_reviewer_ai, structure_ai, trade_reviewer_ai
 from ai.contracts import AI_SCHEMA_VERSION, AIFloorReport, VALID_FLOOR_STATUSES
+from ai.outcomes import ai_availability
 from ai.prompts import (
     LIQUIDITY_PROMPT_VERSION,
     MACRO_PROMPT_VERSION,
@@ -93,4 +94,7 @@ def run(deterministic_report, provider, audit_log=None):
         warnings=tuple(dict.fromkeys(warnings)),
         prompt_versions=dict(PROMPT_VERSIONS),
         provider_metadata=dict(getattr(provider, "metadata", {})),
+        ai_availability=ai_availability({r.agent_name: r for r in (ai_structure, ai_liquidity, ai_macro,
+                                                                     ai_setup_review, ai_trade_review)
+                                         if r is not None}),  # computed AFTER final_status; observational only
     )

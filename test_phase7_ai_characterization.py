@@ -123,24 +123,31 @@ class ProviderErrorTaxonomyTests(unittest.TestCase):
 
 
 class ErrorPropagationTests(unittest.TestCase):
-    def test_call_agent_collapses_every_provider_kind_into_one_warning(self):
+    def test_call_agent_preserves_typed_provider_kinds(self):
+        # P7.0 pinned the collapse into one warning (H-7.1). P7.1 / DEC-7.1 explicitly supersedes it: the legacy
+        # warning stays first (System Health reads warnings[0]) and the typed outcome is appended and audited.
         quota = b'{"error":{"code":"insufficient_quota"}}'
-        seen = {}
-        for name, effect in (("quota", http(429, quota)), ("rate", http(429)), ("auth", http(401)),
-                             ("timeout", lambda: (_ for _ in ()).throw(TimeoutError()))):
-            p, _, _ = provider(effect, retries=0)
-            log = AuditLog()
-            response = call_agent(p, request(), log)
-            entry = log.entries[-1]
-            seen[name] = (response.status, response.warnings, entry["validation"], entry["provider_metadata"],
-                          p.last_failure)
-        # The specific kind survives ONLY on provider.last_failure (and the inactive System Health hook).
-        self.assertEqual({v[:4] == seen["quota"][:4] for v in seen.values()}, {True})
-        self.assertEqual(seen["quota"][:3], ("ERROR", ("provider_exception:OpenAIProviderError",), "provider_exception"))
-        self.assertEqual(seen["quota"][3], {"provider": "openai", "model": "gpt-5.6-terra"})
-        self.assertEqual({k: v[4] for k, v in seen.items()},
-                         {"quota": "QUOTA_EXHAUSTED", "rate": "RATE_LIMITED", "auth": "AUTH_ERROR",
-                          "timeout": "CONNECTION_ERROR"})
+        expected = {"quota": ("QUOTA_EXHAUSTED", "QUOTA_EXHAUSTED", 429), "rate": ("RATE_LIMITED", "RATE_LIMITED", 429),
+                    "auth": ("AUTH_ERROR", "AUTH_ERROR", 401), "timeout": ("TIMEOUT", "CONNECTION_ERROR", None),
+                    "connect": ("CONNECTION_ERROR", "CONNECTION_ERROR", None),
+                    "model": ("MODEL_UNAVAILABLE", "MODEL_UNAVAILABLE", 404),
+                    "server": ("PROVIDER_FAILURE", "PROVIDER_ERROR", 500),
+                    "invalid": ("INVALID_RESPONSE", "INVALID_STRUCTURED_RESPONSE", None)}
+        effects = {"quota": http(429, quota), "rate": http(429), "auth": http(401),
+                   "timeout": lambda: (_ for _ in ()).throw(TimeoutError()),
+                   "connect": lambda: (_ for _ in ()).throw(URLError("x")), "model": http(404), "server": http(500),
+                   "invalid": completed(data="{bad")}
+        for name, effect in effects.items():
+            with self.subTest(case=name):
+                p, _, _ = provider(effect, retries=0)
+                log = AuditLog()
+                response = call_agent(p, request(), log)
+                entry = log.entries[-1]
+                outcome, kind, status = expected[name]
+                self.assertEqual(response.warnings, ("provider_exception:OpenAIProviderError", "ai_outcome:" + outcome))
+                self.assertEqual((entry["outcome"], entry["error_kind"], entry["http_status"], entry["validation"]),
+                                 (outcome, kind, status, "provider_exception"))
+                self.assertEqual(p.last_failure, kind)
 
     def test_usage_tokens_are_returned_but_dropped_by_persistence_whitelist(self):
         p, _, _ = provider(completed())
@@ -179,7 +186,9 @@ class GroundingTests(unittest.TestCase):
         bad = AIResponse("1.0", "run-1", NOW, "XAUUSD", "structure_ai", "OK", supporting_evidence=("invented",))
         self.assertEqual(validate_ai_response(bad, request()), (False, "ungrounded_supporting_evidence"))
         p, _, _ = provider(completed(supporting_evidence=["invented"]))
-        self.assertEqual(call_agent(p, request()).warnings, ("ungrounded_supporting_evidence",))
+        # P7.1 / DEC-7.1: the validation reason stays first; the typed outcome is appended.
+        self.assertEqual(call_agent(p, request()).warnings,
+                         ("ungrounded_supporting_evidence", "ai_outcome:UNGROUNDED_RESPONSE"))
 
     def test_free_text_and_bias_are_not_validated_against_evidence(self):
         # Evidence ids are positional labels (e.g. structure_1h, macro_event_0), not content hashes; free text is

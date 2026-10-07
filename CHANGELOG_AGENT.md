@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 7 P7.1 Batch A (typed AI outcomes + ai_availability)
+
+- Agent: Claude. Branch `v2/phase7-ai-agent-floor`; starting SHA `6f4f68c929df28fa5863d0a689bb5e38d6e6967b`.
+- `ai/outcomes.py` (typed taxonomy, non-authoritative availability); `ai/runtime.py` (typed `ai_outcome:` warning
+  appended, AuditLog outcome/error_kind/http_status); `ai/contracts.py` + `ai/orchestrator.py` (`ai_availability`);
+  `runtime/review.py` (agent outcome + availability in the review). No gate reads any of it; final_status unchanged.
+- Tests: `test_phase7_ai_outcomes.py` (9); two P7.0 characterization assertions explicitly superseded (DEC-7.1).
+  Full suite 969/969.
+
 ## 2026-10-07 — V2 Phase 7 P7.0 (AI Agent Floor: audit, characterization, design gate)
 
 - Agent: Claude. Branch `v2/phase7-ai-agent-floor` from `main` `405df6a8b18172cd94da23b9e48380a4405ba8cd`;

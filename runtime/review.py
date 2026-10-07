@@ -22,6 +22,8 @@ class ReviewReport:
     setup: dict | None = None
     # V2 Phase 4: Policy D target decision (absent under V1).
     target_decision: dict | None = None
+    # V2 Phase 7 (DEC-7.6): non-authoritative AI availability summary; observability only.
+    ai_availability: dict | None = None
 
     def payload(self):
         return asdict(self)
@@ -42,6 +44,7 @@ def build_review(key, deterministic, ai, audit_entries=()):
                        "evidence_supporting": response.supporting_evidence,
                        "evidence_conflicting": response.conflicting_evidence,
                        "validation": entry.get("validation", "NOT_RECORDED"),
+                       "outcome": entry.get("outcome"),  # V2 P7.1 typed outcome (None when not recorded)
                        "warnings": response.warnings})
     risk = deterministic.risk_decision
     risk_summary = None if risk is None else {field: getattr(risk, field) for field in
@@ -57,4 +60,5 @@ def build_review(key, deterministic, ai, audit_entries=()):
                         ai.final_status, deterministic.setup_assessment.status,
                         tuple(agents), risk_summary, {}, tuple(ai.warnings), macro_evidence=macro_items,
                         setup=getattr(deterministic.setup_assessment, "explanation", None) or None,  # Optional info.
-                        target_decision=getattr(deterministic, "target_decision", None) or None)
+                        target_decision=getattr(deterministic, "target_decision", None) or None,
+                        ai_availability=getattr(ai, "ai_availability", None) or None)
