@@ -236,3 +236,124 @@ fill), Phase 5 (Risk V2, 2.30%, 5% DD, reservations, policy identity, 8/7). Full
 With DEC-6.11 A nothing in the runtime changes. If B is authorized later: flag `v2_conflict_engine` OFF by default.
 OFF restores today's `EXISTING_POSITION → SKIP` exactly. The only durable traces are additive fields and journal
 rows, so rollback needs no migration and leaves economics intact.
+
+---
+
+# P6.1 — Implementation (DEC-6.1 → DEC-6.11 approved)
+
+Status: implemented, **pending independent review** (author: Claude; not self-certified). Library / composable path /
+replay only (DEC-6.11 A): `runtime/service.py` and `runtime/config.py` are unchanged; there is no Phase 6 flag and
+no runtime wiring. PAPER only · REAL DISABLED · NAS100 OFF · schema 3.
+
+Approved rule: **analysis may continue; new same-symbol economic exposure may not.**
+
+## P1. Decisions as implemented
+
+| Decision | Implementation |
+|---|---|
+| DEC-6.1 B | `PaperOrder.setup_id`, `PaperPosition.setup_id`: optional, default None (UNKNOWN). `storage/codec.OPTIONAL_IDENTITY_FIELDS` omits them when None, so legacy bytes are unchanged; schema 3, no DDL. Only the Phase 6 path stamps an order. The broker fill copies the order's id to the position; it is never re-derived or inferred from geometry. |
+| DEC-6.2 A | No SAME_THESIS / NEW_STRUCTURE / TREND_CHANGE class. A different setup_id never means "different thesis". |
+| DEC-6.3 A | Same-direction exposure → `SAME_DIRECTION_NEW_SETUP` → BLOCK. No pyramiding. |
+| DEC-6.4 A | One open-or-pending exposure per symbol is unchanged; `PaperAccount` is not redesigned. |
+| DEC-6.5 A / 6.6 A | Opposite exposure → `OPPOSITE_SETUP` → BLOCK. Never close, reverse, net, hedge, cancel, resize or move SL/TP. |
+| DEC-6.7 A | Pending exposure is preserved (not cancelled, replaced, modified or re-stamped); the new setup is blocked. |
+| DEC-6.8 | Phase 5 `SYMBOL_EXPOSURE_LIMIT` is unchanged and still authoritative (defense in depth behind the conflict engine). |
+| DEC-6.9 A | `CONFLICT_DECISION` journal rows in the trading DB, written atomically with the economic outcome (P4). |
+| DEC-6.10 | CF-P5-OPENRISK unchanged (entry-basis loss to stop). |
+| DEC-6.11 A | Pure `execution/conflict_engine.py` + composable `execution/conflict_path.py` + `replay/conflict_audit.py`. |
+
+## P2. Conflict contract (`execution/conflict_engine.py`, policy `V2_P6_CONFLICT_1`)
+
+`classify(symbol, direction, setup_id, account, orders, entry, stop, target, as_of)` → frozen `ConflictDecision`:
+status ALLOW/BLOCK, classification, conflict_kind (`EXISTING_POSITION_CONFLICT` / `EXISTING_PENDING_CONFLICT`),
+reason_code, economic_action (`CONTINUE_TO_RISK` / `BLOCK_NEW_EXPOSURE`), requires_risk_evaluation, new candidate
+fields, every same-symbol exposure (kind, id, run_id, direction, setup_id or UNKNOWN, entry, SL, TP, quantity) and the
+blocking entity (open position first, else the first PENDING order by id).
+
+| Precedence | Classification | Reason code |
+|---|---|---|
+| invalid direction / no candidate setup_id | INVALID_CANDIDATE | INVALID_DIRECTION / MISSING_NEW_SETUP_ID |
+| no same-symbol exposure | NO_CONFLICT (≠ risk approval) | NO_CONFLICT |
+| exposure setup_id unknown | UNKNOWN_SETUP_ID | UNKNOWN_EXISTING_SETUP_ID |
+| same setup_id | DUPLICATE_SETUP | DUPLICATE_SETUP |
+| same direction | SAME_DIRECTION_NEW_SETUP | SAME_DIRECTION_POSITION_CONFLICT / SAME_DIRECTION_PENDING_CONFLICT |
+| opposite direction | OPPOSITE_SETUP | OPPOSITE_POSITION_CONFLICT / OPPOSITE_PENDING_CONFLICT |
+
+Path reasons: `RESERVED/approved`, `RISK_REJECTED/<Risk V2 reason>` (e.g. `PORTFOLIO_RISK_LIMIT`,
+`ACCOUNT_DRAWDOWN_LIMIT`, `SYMBOL_EXPOSURE_LIMIT`, `UNKNOWN_PENDING_RISK_POLICY`), `DUPLICATE_RUN`
+(`run_id_already_submitted` / `run_id_already_decided`), `STALE/STALE_STATE`, `NOT_SUBMITTED/<candidate reason>`.
+Authority: reads only. It has no write, close, cancel or SL/TP assignment (source-checked by tests); AI has no access.
+
+## P3. Durable identity lifecycle
+
+Setup (Phase 3 `setup_identity` of the VALID assessment; must equal the explanation's id when present) → order
+(stamped in the guarded save, with `risk_policy_version`) → fill (position copies `order.setup_id`) → restart
+(decoded unchanged). Legacy/V1/Phase 5-path objects keep `None` → `UNKNOWN_EXISTING_SETUP_ID`. They are never
+re-stamped, including after fills and restarts.
+
+## P4. Atomicity (`execution/conflict_path.submit_with_conflict_control`)
+
+Fresh load + B2.3A comparison value → idempotency (an order for the run_id, or a decisive decision row) → classify →
+- BLOCK: one `CONFLICT_DECISION` row in a BEGIN IMMEDIATE transaction that first re-verifies the whole PAPER state and
+  the absence of a decisive row for the run_id (`commit_decision_rows`). No order, no economic write.
+- ALLOW → Phase 5 `prepare_reservation` (the Phase 5 evaluation and order build, extracted unchanged;
+  `reserve_and_submit` now delegates to it with identical behavior):
+  - REJECTED: `RISK_V2_DECISION` + `CONFLICT_DECISION` rows in one state-verified transaction.
+  - APPROVED: order + `RISK_V2_DECISION` + `CONFLICT_DECISION(RESERVED)` in **one** `save_paper(expected_state)`.
+- Any state change → nothing written → reload, recompute conflict **and** Risk, once. A second conflict → STALE, with an
+  informative row that claims no economic action. A stale ALLOW or stale BLOCK never leaves a decisive trace.
+
+## P5. Existing management and pending progression (H-6.1 / H-6.2)
+
+- Nothing in the runtime changed. Management (step 2) and pending progression (step 6) are untouched.
+- A blocked or rejected Phase 6 decision writes no economic state (whole PAPER state byte-identical; tested), so it
+  cannot interfere: after an opposite-setup block, SL and TP hits still close the position through `TradeManager`, and
+  a blocked candidate leaves an existing (even legacy) pending order free to fill (tested).
+- Future runtime wiring (separate authorization) must call the path only at step 7, after step 6, without feeding
+  `final_status` / AI health. At that point it cannot freeze pending progression. No HIGH blocker.
+
+## P6. Concurrency (real processes, `test_phase6_conflict_concurrency.py`)
+
+A same setup_id → one order, loser `DUPLICATE_SETUP`; B/C different ids same direction → loser
+`SAME_DIRECTION_PENDING_CONFLICT`; D opposite → loser `OPPOSITE_PENDING_CONFLICT`, no hedge; E cross-symbol → both
+reserved, or `PORTFOLIO_RISK_LIMIT` under a 1.5% test cap; F position closes mid-evaluation → stale BLOCK discarded,
+recomputed reservation; G pending fills mid-evaluation → recomputed `SAME_DIRECTION_POSITION_CONFLICT`, setup_id
+inherited; H crash before commit → nothing durable, retry reserves; I/J crash after commit → durable order + setup_id,
+retries `DUPLICATE_RUN`, new run `DUPLICATE_SETUP`; K legacy None stays UNKNOWN; L unknown Phase 5 pending policy
+still fails closed.
+
+## P7. Replay (`replay/conflict_audit.py`, observational)
+
+The P6.0 identity view and all six exposure-state counts are reproduced exactly. Engine classification of the 1,940
+VALID records: DUPLICATE_SETUP 21 · SAME_DIRECTION_POSITION_CONFLICT 1,020 (= 51 + 969) · OPPOSITE_POSITION_CONFLICT
+882 · NO_CONFLICT 17 · pending 0. No thesis, structure or trend labels.
+
+## P8. F06 mapping (evidence, not certification)
+
+| Task | Status / evidence |
+|---|---|
+| F06-T01 Duplicate setup | implemented: `DUPLICATE_SETUP` on durable setup_id; technical retry = `DUPLICATE_RUN` (separate) |
+| F06-T02 Same thesis | **N/A, not determinable from current evidence** (DEC-6.2 A) |
+| F06-T03 Same trend / new setup | deterministic subset only: same direction, different setup_id (no trend classification) |
+| F06-T04 New structure | **N/A, not determinable** |
+| F06-T05 Trend change | **N/A, not determinable** |
+| F06-T06 Opposite setup | implemented: `OPPOSITE_SETUP`, block, no close |
+| F06-T07 Position conflict | implemented: `EXISTING_POSITION_CONFLICT` / `EXISTING_PENDING_CONFLICT` |
+| F06-T08 Existing vs new | classification + trace of both entities |
+| F06-T09 Direction + setup_id | both in the decision and the record |
+| F06-T10 Entry/SL/TP | recorded for both; never mutated (tests) |
+| F06-T11 Existing + new risk | Risk V2 record: portfolio before, proposed reservation |
+| F06-T12 Combined risk | portfolio after vs the 2.30% limit |
+| F06-T13 Risk revalidation | every economic path goes through Risk V2; a forced wrong ALLOW is still rejected by `SYMBOL_EXPOSURE_LIMIT` |
+| F06-T14 Contrary signal | analyzed and blocked; existing position untouched and still managed |
+
+## P9. Limitations and rollback
+
+Not supported (by policy): SAME_THESIS, NEW_STRUCTURE, TREND_CHANGE, more than one position per symbol, hedging,
+netting. The V1 runtime still decides `EXISTING_POSITION` / `PENDING_ORDER` exactly as before. Rollback: stop calling
+the path. The only durable traces are additive optional fields (ignored by V1, omitted when None) and journal rows; no
+migration, no state rewrite.
+Code-downgrade limitation (MEDIUM, documented): pre-P6.1 code rejects payloads containing `setup_id` (strict
+`paper_decode`), exactly like pre-P5.1C code and `risk_policy_version`. Rolling the code back over a DB that already
+holds stamped Phase 6 rows is therefore not supported. The supported rollback is to stop calling the path (current
+state: never called by the runtime).

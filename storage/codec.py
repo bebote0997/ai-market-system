@@ -9,6 +9,10 @@ from execution.contracts import PaperAccount, PaperOrder, PaperFill, PaperPositi
 
 PAPER_TYPES = {c.__name__: c for c in (PaperAccount, PaperOrder, PaperFill, PaperPosition, ClosedTrade)}
 TIME_FIELDS = {"as_of", "opened_at", "last_processed_at", "fill_timestamp", "exited_at"}
+# Additive optional V2 identity fields: omitted from the payload when None, so legacy/V1 objects keep their exact
+# serialized bytes (P5.1C risk_policy_version, Phase 6 setup_id). Absent keys decode to the dataclass default None.
+OPTIONAL_IDENTITY_FIELDS = {"PaperOrder": frozenset({"risk_policy_version", "setup_id"}),
+                            "PaperPosition": frozenset({"setup_id"})}
 PUBLIC_METADATA_KEYS = {"provider", "model", "version", "model_version", "prompt_version", "schema_version", "deterministic"}
 
 
@@ -64,8 +68,8 @@ def paper_encode(obj):
         if name == "PaperAccount" and f.name in {"open_positions", "closed_trades"}:
             continue
         value = getattr(obj, f.name)
-        if name == "PaperOrder" and f.name == "risk_policy_version" and value is None:
-            continue  # Additive optional field: unknown-policy (V1/legacy) orders keep their exact payload.
+        if value is None and f.name in OPTIONAL_IDENTITY_FIELDS.get(name, ()):
+            continue  # Additive optional identity: unknown (V1/legacy) objects keep their exact payload.
         payload[f.name] = utc(value) if f.name in TIME_FIELDS and value is not None else value
     return safe_json(payload)
 

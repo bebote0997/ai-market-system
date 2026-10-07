@@ -190,7 +190,8 @@ class PaperBroker:
         fill = PaperFill("1.0", str(uuid.uuid4()), order.order_id, order.run_id, order.symbol, order.side, order.quantity, order.planned_entry, fill_price, bar["timestamp"])
         order.status = "FILLED"
         self.fills[fill.fill_id] = fill
-        position = PaperPosition("1.0", str(uuid.uuid4()), order.order_id, order.run_id, order.symbol, order.side, order.quantity, order.planned_entry, fill.fill_price, order.stop, order.target, fill.fill_timestamp, last_price=fill.fill_price, contract_multiplier=order.contract_multiplier, cost_rate=order.cost_rate)
+        position = PaperPosition("1.0", str(uuid.uuid4()), order.order_id, order.run_id, order.symbol, order.side, order.quantity, order.planned_entry, fill.fill_price, order.stop, order.target, fill.fill_timestamp, last_price=fill.fill_price, contract_multiplier=order.contract_multiplier, cost_rate=order.cost_rate,
+                                 setup_id=getattr(order, "setup_id", None))  # Phase 6: inherited, never re-derived
         self.account.open_positions[position.symbol] = position
         self._event(fill.fill_timestamp, order.run_id, order.symbol, fill.fill_id, "ORDER_FILLED",
                     {"fill_geometry": self.last_fill_geometry} if policy is not None else None)

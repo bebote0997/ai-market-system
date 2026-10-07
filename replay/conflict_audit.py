@@ -9,6 +9,8 @@ Cohort: the 1,940 P4.1A VALID_SETUP slots with a V1 plan (same records as ``repl
 2) EXPOSURE: the chronological DEC-5.7 single-account pass of ``replay.risk_audit`` (production Risk V2 + broker),
    recording, for every VALID record, the same-symbol exposure that existed at that slot (OPEN / PENDING / none),
    direction relation, setup_id relation and invalidation relation to the exposure's originating setup.
+P6.1: also classifies every record with the implemented ``execution.conflict_engine`` (blocked candidates
+never reach Risk V2, exactly as the Phase 6 path).
 Usage: python -m replay.conflict_audit <store.db> <p41a_lab_out> <out.json>
 """
 import heapq
@@ -20,6 +22,7 @@ import pandas as pd
 
 from core.risk_policy import RISK_POLICY_V2_P5
 from core.rr_contract import POLICY_V2_F3
+from execution.conflict_engine import classify
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
 from execution.risk_engine_v2 import evaluate
@@ -56,7 +59,7 @@ def exposure_view(cohort):
     """The DEC-5.7 chronological pass of replay.risk_audit.portfolio, observing conflicts before each decision."""
     account = PaperAccount("1.0", "audit", START, START, START)
     orders, events, seq, origin = {}, [], 0, {}  # origin: run_id -> originating record
-    states, by_symbol = Counter(), Counter()
+    states, by_symbol, engine = Counter(), Counter(), Counter()
 
     def mark(at):
         unrealized = 0.0
@@ -111,6 +114,12 @@ def exposure_view(cohort):
                    "SAME_INVALIDATION" if first["invalidation"] == rec["invalidation"] else "DIFFERENT_INVALIDATION")
         states[" | ".join(key)] += 1
         by_symbol[symbol + " | " + key[0]] += 1
+        # P6.1: the implemented pure engine on the same state (durable setup_id carried by orders -> positions).
+        decision = classify(symbol=symbol, direction=rec["side"], setup_id=rec["setup_id"], account=account,
+                            orders=orders)
+        engine[f"{decision.classification} | {decision.reason_code}"] += 1
+        if decision.status == "BLOCK":
+            continue  # P6.1 policy: same-symbol exposure blocks before Risk V2 (Risk's symbol rule agrees)
         plan = cohort.plan(rec, f"cf-{n}")
         result = evaluate(plan, account, orders, INS[symbol], setup_id=rec.get("setup_id"), at=plan.as_of)
         if result.decision.status != "APPROVED":
@@ -124,10 +133,12 @@ def exposure_view(cohort):
             orders.pop(getattr(order, "order_id", None), None)
             continue
         order.risk_policy_version = RISK_POLICY_V2_P5.version
+        order.setup_id = rec["setup_id"]  # as the Phase 6 path stamps it; the fill copies it to the position
         origin[order.run_id] = rec
         seq += 1
         heapq.heappush(events, (index[k], seq, "FILL", (order, k)))
-    return {"states": dict(sorted(states.items())), "by_symbol": dict(sorted(by_symbol.items()))}
+    return {"states": dict(sorted(states.items())), "by_symbol": dict(sorted(by_symbol.items())),
+            "engine_classification": dict(sorted(engine.items()))}
 
 
 def main(store_path, p41a_dir, out_path):

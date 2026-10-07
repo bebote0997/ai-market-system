@@ -116,10 +116,13 @@ class SetupIdentityTests(unittest.TestCase):
                         valid(symbol="EURUSD")):
             self.assertNotEqual(setup_identity(changed)[0], base)
 
-    def test_entry_sl_tp_are_not_identity_and_orders_positions_carry_no_setup_id(self):
+    def test_entry_sl_tp_are_not_identity_and_order_position_setup_id_is_optional(self):
         self.assertNotIn("entry", setup_identity(valid())[1])
+        # P6.0 pinned "orders/positions carry no setup_id". P6.1 / DEC-6.1 explicitly supersedes it with an additive
+        # OPTIONAL durable field: default None (UNKNOWN), omitted from the payload when None (legacy bytes kept).
         for cls in (PaperOrder, PaperPosition):
-            self.assertNotIn("setup_id", {f.name for f in dataclasses.fields(cls)})
+            field = {f.name: f for f in dataclasses.fields(cls)}["setup_id"]
+            self.assertIsNone(field.default)
         # The only durable link is run_id -> review_reports.execution.setup_id (audit record, not an execution gate).
         source = inspect.getsource(__import__("runtime.observability", fromlist=["x"]))
         self.assertIn("never used as execution gates", source)

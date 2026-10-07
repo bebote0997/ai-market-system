@@ -50,6 +50,9 @@ class PaperOrder:
     # V2 Phase 5 (P5.1C): durable identity of the registered risk policy that reserved this order. None = UNKNOWN
     # (V1, policy D, legacy): never inferred from geometry. Omitted from the payload when None (legacy bytes kept).
     risk_policy_version: Optional[str] = None
+    # V2 Phase 6 (DEC-6.1): durable Phase 3 setup identity of the opportunity that created this order. None = UNKNOWN
+    # (V1 / legacy / Phase 5 path): never inferred from geometry. Omitted from the payload when None.
+    setup_id: Optional[str] = None
 
     def __post_init__(self):
         if not _valid_side(self.side):
@@ -93,6 +96,8 @@ class PaperPosition:
     contract_multiplier: Optional[float] = None
     cost_rate: float = 0.0
     last_processed_at: Optional[object] = None
+    # V2 Phase 6 (DEC-6.1): inherited from the originating order at fill; None = UNKNOWN. Omitted when None.
+    setup_id: Optional[str] = None
 
     def __post_init__(self):
         if not _valid_side(self.side):
