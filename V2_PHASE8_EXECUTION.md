@@ -647,3 +647,132 @@ Review the exact final SHA of this batch series:
 
 A later, separate review after an Owner-approved controlled activation would be the only path to closing HIGH-8.1
 for the runtime.
+
+# P8.4F — Fixes for the P8.5 independent review (Copilot) blockers
+
+Baseline `0f6752782e505ff8b81204976109c7fe3fb1beaf`. Only the three confirmed defects were changed; no strategy, Risk
+Engine, AI, schema or flag-default change. PAPER only, REAL OFF, NAS100 OFF, schema 3, flag OFF by default, nothing
+activated. The P8.5 report itself was not attached to the P8.4F prompt; the fixes follow the summary of findings in
+that prompt.
+
+| Fix | Finding | Commit |
+|---|---|---|
+| FIX1 | R2 / HIGH: the Evidence Store preflight could approve a read-only store | `70ff008` |
+| FIX2 | R3 / MEDIUM: the preview could assign a pending order a bar at or before its as_of | `3d59ecc` |
+| FIX3 | R4 / HIGH: the revision gate could say CLEAR without reviewing every anomaly | `e2ab0c5` |
+
+## FIX1 — persistent write probe (`runtime/config.py::catch_up_storage_checks`)
+
+- **Root cause:** `CREATE TEMP TABLE` writes to SQLite's temp database, which works on a read-only main database, so
+  `catch_up_evidence_writable_schema` was true for a read-only Evidence Store.
+- **Fix:** `BEGIN IMMEDIATE` (takes the write lock), `CREATE TABLE main.…` + `INSERT`, always `ROLLBACK`; then the
+  schema must be unchanged (no residue) and the file and its directory must be writable. Any error → false (fail
+  closed).
+- **Test:** `test_read_only_evidence_store_fails_and_probe_leaves_no_residue`. Before (baseline): `True is not False`.
+  After: read-only → false, writable → true, no residue.
+
+## FIX2 — pending gate eligibility (`replay/activation_preview.py`)
+
+- **Root cause:** the preview reported the newest closed bar as the gate bar without the runtime's rule that a bar may
+  progress an order only if it starts strictly after the order's as_of.
+- **Fix:** the gate bar is reported only when it is eligible; otherwise `gate_bar = null`,
+  `expected_status = STAYS_PENDING_NO_ELIGIBLE_BAR`. New field `expected_status` (`EVALUATED_ON_GATE_BAR` or the
+  above).
+- **Test:** `test_pending_order_never_assigned_a_bar_at_or_before_its_as_of`: an order with as_of 13:30 previewed at the
+  13:30 slot; then a real runtime cycle runs on an isolated copy. Before: the preview gave gate 13:25 while the runtime
+  left the order PENDING with 0 fills. After: the preview reports no gate and STAYS_PENDING, which agrees with the
+  runtime. The existing test (a later slot, where the gate equals the runtime's) is unchanged.
+
+## FIX3 — revision gate coverage by anomaly identity (`runtime/revision_review.py`, `runtime/service.py`)
+
+- **Root causes:**
+  - `demo_gate(trading_db, evidence_db=None)` skipped the coverage check without the Evidence DB, so it returned
+    CLEAR, and the CLI exited 0.
+  - Coverage was matched by (symbol, timeframe, bar_start). A second, different revision of an already-classified
+    bar therefore counted as classified.
+- **Fix:**
+  - **Identity:** each journal record carries the Evidence DB `anomaly_id`. The runtime resolves it from the presented
+    bar digest (`presented_digest` of the REVISION anomaly). `review_key` = `anomaly_id`.
+  - **Unidentifiable revisions** are never recorded under a guessed identity, so they remain UNCLASSIFIED.
+  - **Dedup and reviews** are keyed by `anomaly_id`. Decisions are durable journal rows.
+  - **Gate:** the Evidence DB is required (`--evidence-db` is mandatory in the CLI). The gate is BLOCKED on
+    `EVIDENCE_DB_MISSING`, `EVIDENCE_DB_UNREADABLE`, `UNCLASSIFIED`, `CLASSIFICATION_WITHOUT_ANOMALY` (a record
+    whose anomaly is not in the given Evidence DB) or `MATERIAL_UNREVIEWED`. It is CLEAR only when every REVISION
+    anomaly is classified by id and no material one is unreviewed.
+  - **Legacy rows** without `anomaly_id` never count as coverage.
+  - **Report fields:** the report adds `blockers`, `anomalies`, `classified` and `orphan_classifications`.
+- **Superseded (explicit):** the P8.4 assertion `demo_gate(db)["status"] == "CLEAR"` in
+  `test_flag_off_never_records_revisions`. It now expects BLOCKED / `EVIDENCE_DB_MISSING`.
+- **Tests (`RevisionGateCoverageTests`, 5 new):**
+  - false CLEAR #1: missing Evidence DB → BLOCKED; the gate never creates the file; CLI exit 3; CLI without
+    `--evidence-db` is rejected;
+  - false CLEAR #2: second revision of a classified bar → BLOCKED, with the exact unclassified anomaly_id;
+  - two material revisions of one bar: separate records; re-presentation is deduplicated; a partial review still
+    blocks; full review → CLEAR, durable across a later cycle;
+  - a classification without a matching anomaly → BLOCKED;
+  - unidentifiable revision → no record.
+- **Before/after:**
+  - Before (baseline, direct reproduction): gate without the Evidence DB = CLEAR (CLI exit 0) while one anomaly was
+    unclassified; 2 anomalies with 1 classified = CLEAR.
+  - After: both BLOCKED.
+
+## Suite
+
+- After FIX1: 1063 OK; after FIX2: 1064 OK; after FIX3: 1069 OK (local).
+- CI reports the known environmental skip (`test_system_health` needs git on PATH).
+- `git diff --check` clean.
+
+## Remaining risks
+
+1. **Same class as FIX1, not changed (out of scope):** the trading DB `db_writable_schema` checks in `cloud_preflight`
+   and `demo_runner.preflight` still use a TEMP-table probe. They can report a read-only trading DB as writable.
+   Recommended as a separate, authorized fix.
+2. FIX3 identity depends on the evidence engine's `presented_digest` payload field and `bars_from_frame` producing the
+   same digest as ingestion (the same function is used for both). If the lookup fails, the anomaly stays UNCLASSIFIED
+   and the gate stays BLOCKED (fail closed, never CLEAR).
+3. `ESCALATED` still counts as reviewed for the gate (unchanged P8.4 semantics; an Owner policy question).
+4. Every P8.4 open risk is unchanged:
+   - DEC-8.10 vs the global flag;
+   - experiment continuity;
+   - historic divergence is report-only;
+   - materiality is evaluated against the positions open at ingestion;
+   - MEDIUM-8.2/8.3/8.4 and LOW-8.5.
+5. HIGH-8.1 stays **OPEN** for the operational runtime; Phase 8 stays **BLOCKED**; nothing is certified.
+
+## Proposal (NOT implemented) — per-symbol catch-up configuration
+
+- **Problem:**
+  - DEC-8.10 wants XAUUSD first, but `AI_FLOOR_V2_POSITION_CATCH_UP` is global over `enabled_symbols`.
+  - `cloud_preflight` requires `enabled_symbols == ("XAUUSD", "EURUSD")`.
+- **Proposal:**
+  - **Variable:** `AI_FLOOR_V2_POSITION_CATCH_UP_SYMBOLS`, an explicit comma list such as `XAUUSD`.
+    - It is valid only with the flag at `"1"`.
+    - Every entry must be in `enabled_symbols`.
+    - NAS100 is rejected.
+    - Empty, duplicate, unknown or whitespace-ambiguous values fail closed.
+    - The flag ON without the list is either an error or means all enabled symbols; this is an Owner decision.
+  - **Runtime:** the catch-up and pending gate apply only to listed symbols. Other symbols keep the newest-bar path,
+    unchanged.
+  - **Evidence:** evidence ingestion stays for all enabled symbols, so watermarks exist when a symbol is added later.
+  - **Preflight:** the configured scope is reported. `enabled_symbols` stays `("XAUUSD", "EURUSD")`, so no preflight
+    weakening is needed.
+  - **Fingerprint:** the scope is part of the config fingerprint (experiment drift is explicit).
+  - **Preview:** `--first-scope` is checked against the configured scope.
+  - **Tests:**
+    - the scope matrix;
+    - EURUSD is unchanged while XAUUSD catches up;
+    - adding a symbol later starts from its own durable watermark (DEC-8.7, no retroactive correction);
+    - rollback, by removing a symbol or the flag.
+- **Requires Owner authorization:** a decision on the default meaning of flag ON without a list, and a new independent
+  review.
+
+## Next independent review required (P8.5 re-review)
+
+Review final SHA of P8.4F:
+- the three fixes and their adversarial tests;
+- the explicit supersession;
+- that no other behaviour changed (flag OFF path untouched, inventory tests intact);
+- full suite and CI.
+
+Then decide whether P8.4 R1–R4 can be accepted. HIGH-8.1 for the runtime still needs a later Owner-approved controlled
+activation and its own review.

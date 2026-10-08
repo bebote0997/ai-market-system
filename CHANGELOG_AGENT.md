@@ -1,5 +1,19 @@
 # Agent Changelog
 
+## 2026-10-08 — V2 Phase 8 P8.4F (fixes for the P8.5 independent review blockers)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `0f67527`; final SHA = the commit that adds this entry.
+- FIX1 `70ff008` (R2 HIGH): Evidence Store preflight uses a persistent write probe (BEGIN IMMEDIATE + main table +
+  ROLLBACK, no residue) instead of a TEMP table; a read-only store fails closed.
+- FIX2 `3d59ecc` (R3 MEDIUM): activation preview reports a pending gate bar only if it starts strictly after the
+  order's as_of (`expected_status`), as the runtime does.
+- FIX3 `e2ab0c5` (R4 HIGH): revision gate requires the Evidence DB and full coverage by `anomaly_id` (records carry
+  the evidence anomaly id; dedup/review by id; BLOCKED on missing DB, unclassified, orphan or material unreviewed).
+  P8.4 flag-OFF CLEAR assertion explicitly superseded.
+- Tests +7 (FIX1 1, FIX2 1, FIX3 5; one assertion superseded). Full suite 1069. Same-class TEMP probe on the trading DB preflight reported,
+  not changed. Per-symbol catch-up proposal documented, not implemented. Nothing activated; HIGH-8.1 OPEN for the
+  runtime; Phase 8 BLOCKED; not certified.
+
 ## 2026-10-08 — V2 Phase 8 P8.4 Batch 3 (R4 REVISION visibility + pre-DEMO gate)
 
 - Agent: Claude. Branch `v2/phase8-execution`; previous SHA `fc5f8b6`; final SHA = the commit that adds this entry.
