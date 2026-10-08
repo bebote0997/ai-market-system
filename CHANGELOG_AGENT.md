@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 8 P8.0 (Execution / Fill / Trade Manager: audit and certification plan)
+
+- Agent: Claude. Branch `v2/phase8-execution` from `main` `2753130d22abc33e12caf766e8ed5dfba17a8b70`; final SHA = the
+  commit that adds this entry. Audit only; no production code changed; no runtime activation.
+- `V2_PHASE8_EXECUTION.md` (architecture map, F08-T01..T17 matrix, findings, P8.1 batches, P8.2 gate, rollback,
+  DEC-8.1..8.5); `test_phase8_execution_characterization.py` (4 tests: finish() DB-failure fail-stop + recovery,
+  startup orphan / quantity-mismatch refusal, pending without time-in-force).
+- HIGH-8.1: the default runtime evaluates SL/TP only on the newest 5m bar per cycle (the certified catch-up is OFF).
+  Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-07 — V2 Phase 7 P7.1F (P7.2 FAIL correction: late AI response after the cycle budget)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase7-ai-agent-floor`; failed P7.2 candidate
