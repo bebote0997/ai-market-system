@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-10-08 — V2 Phase 8 P8.4 Batch 3 (R4 REVISION visibility + pre-DEMO gate)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `fc5f8b6`; final SHA = the commit that adds this entry.
+- `runtime/revision_review.py` (classification MATERIAL/non-material, deduplicated EVIDENCE_REVISION journal rows,
+  system_state summary, Owner review, read-only pre-DEMO gate + CLI); `runtime/service.py` (flag-ON-only hook via
+  _audit_safely). P8.1B scenario 17 assertion explicitly superseded (LOW-8.6 resolved by R4).
+- `test_phase8_revision_review.py` (6). Full suite 1062. No activation; HIGH-8.1 OPEN for the default runtime;
+  Phase 8 BLOCKED. Open risks and the copied-DB simulation procedure documented.
+
 ## 2026-10-08 — V2 Phase 8 P8.4 Batch 2 (R3 read-only activation preview)
 
 - Agent: Claude. Branch `v2/phase8-execution`; previous SHA `4fe10bd`; final SHA = the commit that adds this entry.

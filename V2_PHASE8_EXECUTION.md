@@ -554,3 +554,96 @@ Batch 1 SHA: `4fe10bdd3a9017a2af2775c52c4e72d091db73b5` (CI 37779990370 success)
 - **Usage:** `python -m replay.activation_preview --trading-db COPY.db --as-of 2026-…Z [--evidence-db EV_COPY.db]
   [--bars-json bars.json] [--first-scope XAUUSD] --out report.json` (exit 0 = sources unchanged).
 - Tests: `test_phase8_activation_preview.py` (5). Full suite 1056.
+
+Batch 2 SHA: `fc5f8b6ddbbedecdab3f0b49d6629062cf00089a` (CI 37780913252 success).
+
+## Batch 3 — R4 REVISION visibility + pre-DEMO gate (`runtime/revision_review.py`)
+
+- **Unchanged certified rule:** the first committed bar stays authoritative; nothing is rewritten, moved, closed or
+  opened.
+- **Runtime hook** (flag ON path only, after a successful ingestion, through `_audit_safely`, so a failure never
+  changes the cycle):
+  - each revision reported by this cycle's ingestion is classified by comparing the presented snapshot bar with the
+    committed bar;
+  - **MATERIAL** = the presented 5m bar crosses an open position's SL or TP (open beyond or high/low touch) that the
+    committed bar did not, for a position opened before the bar; 1h/15m revisions are non-material (they never feed
+    position management);
+  - one `EVIDENCE_REVISION` journal row per (symbol, timeframe, bar_start, presented OHLC), deduplicated across cycles
+    and restarts (WARNING if material);
+  - system_state `evidence_revisions` = {recorded, unreviewed, material_unreviewed} for health views.
+- **Owner review:** `python -m runtime.revision_review review --trading-db … --key <review_key> --decision
+  ACCEPTED_FIRST_COMMITTED|ESCALATED --reviewer …` writes `EVIDENCE_REVISION_REVIEWED`. Run it against the
+  operational DB only during the Owner's review.
+- **Pre-DEMO gate** (read-only, `mode=ro`): `python -m runtime.revision_review gate --trading-db … --evidence-db …`
+  - **BLOCKED** (exit 3) while any material revision is unreviewed, or any REVISION anomaly of the evidence DB has no
+    journal classification (UNCLASSIFIED; e.g. recorded before R4 or after a classification failure);
+  - non-material unreviewed revisions are listed as warnings;
+  - CLEAR = exit 0.
+- **Module boundary:** it reads `evidence_anomalies` with plain SQLite and receives the evidence engine object from the
+  runtime, so the certified Phase 2 inventory tests are unchanged.
+- **Superseded characterization (explicit):** P8.1B scenario 17 pinned LOW-8.6 ("revision not in the trading
+  journal"). It now asserts the `EVIDENCE_REVISION` row. Its "first committed wins / position stays open" assertions
+  are unchanged.
+- Tests: `test_phase8_revision_review.py` (6): benign → visible, gate CLEAR with a warning; material → BLOCKED until
+  reviewed, positions untouched; no duplicates across cycles/restart; classification failure → UNCLASSIFIED blocks and
+  the cycle is unchanged; gate read-only (hashes) and CLI exit codes; flag OFF records nothing. Full suite 1062.
+
+## P8.4 status
+
+| Item | Status |
+|---|---|
+| R1 route | done; OFF by default; exact `"1"` + separate evidence path; ambiguous values fail closed |
+| R2 preflight | done; fail-closed Evidence Store checks only when ON; no fallback |
+| R3 preview | done; read-only on copies; predictions equal a real first cycle |
+| R4 REVISION | done; journal + health state + review + pre-DEMO gate |
+| Activation | **not performed**; no Render change; no deploy |
+| HIGH-8.1 | **OPEN** for the operational runtime (flag OFF); closed only for the isolated catch-up component (P8.2) |
+| Phase 8 | **BLOCKED** (DEC-8.9) |
+
+## Open risks
+
+1. **DEC-8.10 vs the current runtime shape.** The flag is global over `enabled_symbols`, and `cloud_preflight`
+   requires `enabled_symbols == ("XAUUSD", "EURUSD")`. An XAUUSD-only first activation therefore needs a design
+   decision: either run with `enabled_symbols=("XAUUSD",)` (a preflight change plus configuration drift) or a
+   per-symbol catch-up scope. Not implemented.
+2. **Experiment continuity.** With the flag ON the config fingerprint changes, so a running experiment's cloud
+   preflight reports drift (`experiment_resumable` False). Activation needs an Owner decision on the experiment
+   (new experiment or controlled continuity).
+3. **Historic divergence** (DEC-8.7) is reported, never corrected. Positions may stay open although a pre-activation
+   bar touched SL/TP.
+4. REVISION materiality is evaluated against currently open positions at the time of ingestion only.
+5. Unchanged: MEDIUM-8.2 (no TIF), MEDIUM-8.3 (fail-stop run label), MEDIUM-8.4 (old code on stamped rows), LOW-8.5
+   (Store not closed on fail-closed startup).
+6. The R1–R4 runtime paths run only when the flag is ON, so they are exercised only by isolated tests until activation.
+
+## Procedure — later simulation with a copied operational DB (no activation)
+
+1. Owner provides **copies** of `trading_floor.db` and, if any exists, the Evidence DB. Copy after a WAL checkpoint, or
+   use the preview's backup-API copy. Record their SHA-256.
+2. Export closed 5m bars (provider) covering every open position from `opened_at` to the chosen `as_of`, as
+   `[{symbol, bar_start, open, high, low, close}]`.
+3. `python -m replay.activation_preview --trading-db COPY.db [--evidence-db EV_COPY.db] --bars-json bars.json
+   --as-of <slot> --first-scope XAUUSD --out preview.json`. The exit code must be 0 (`source_unchanged`).
+4. Review `historic_missed` (DEC-8.7, report only), `expected_close`, `MISSING_BARS`, pending gate bars and REVISIONs.
+5. On a **second** copy: build a test config with `v2_position_catch_up=True` and temporary evidence/trading paths; run
+   one cycle with a bars provider replaying the export. Reconcile closes, prices, net PnL and realized PnL exactly with
+   `preview.json`. Rerun the slot (DUPLICATE), run one more slot (no duplicate close), then roll back to flag OFF on
+   the copy.
+6. `python -m runtime.revision_review gate --trading-db COPY2.db --evidence-db EV2.db` → the result must be CLEAR, or
+   every item must be reviewed.
+7. Record SHA, input hashes, outputs and PASS/FAIL. Any mismatch is a stop criterion (P8.1B gate).
+
+## Next independent review required (P8.5, e.g. Copilot)
+
+Review the exact final SHA of this batch series:
+- R1/R2 route and preflight (no accidental activation, fail-closed matrix, OFF reports unchanged, inventory tests
+  intact);
+- R3 read-only guarantees and oracle agreement with real cycles;
+- R4 classification, dedup, review and the gate (BLOCKED/CLEAR semantics);
+- the superseded LOW-8.6 assertion;
+- full suite with the environmental skip explained; CI;
+- PAPER, REAL OFF, NAS100 OFF, schema 3;
+- confirmation that HIGH-8.1 stays OPEN for the operational runtime and Phase 8 stays BLOCKED.
+
+A later, separate review after an Owner-approved controlled activation would be the only path to closing HIGH-8.1
+for the runtime.

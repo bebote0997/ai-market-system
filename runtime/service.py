@@ -156,7 +156,7 @@ class OperationalRuntime:
                 from storage.evidence_store import EvidenceStore
                 self.evidence = MarketEvidenceEngine(EvidenceStore(self.config.market_evidence_path),
                                                      enabled_symbols=self.config.enabled_symbols)
-            self.evidence.ingest_snapshot(symbol, snapshot, as_of=slot)
+            self._last_ingest = self.evidence.ingest_snapshot(symbol, snapshot, as_of=slot)
             return None
         except Exception as exc:  # noqa: BLE001 - any evidence failure blocks PAPER economics
             LOG.warning("symbol=%s component=market_evidence event=%s error_type=%s",
@@ -177,6 +177,19 @@ class OperationalRuntime:
             if result.status != "STALE":
                 return None
         return STALE_PAPER_STATE
+
+    def _record_revisions(self, symbol, snapshot, run_id):
+        from runtime import revision_review
+        results = self._last_ingest or {}
+        if not any(getattr(r, "revisions", ()) for r in results.values()):
+            return
+        committed = {(tf, bar.bar_start): {"open": bar.open, "high": bar.high, "low": bar.low, "close": bar.close}
+                     for tf, result in results.items() if result.revisions
+                     for bar in self.evidence.committed(symbol, tf) if bar.bar_start in result.revisions}
+        account, _, _ = self.store.load_paper(self.config.account_id)
+        positions = [] if account is None else [p for p in account.open_positions.values() if p.symbol == symbol]
+        records = revision_review.classify(symbol, snapshot, results, committed, positions)
+        revision_review.journal(self.store, records, at=self.clock(), run_id=run_id)
 
     def _committed_bar(self, symbol, start):
         """B2.3C: the committed 5m Evidence bar starting at ``start`` (the current cycle's bar) in the
@@ -292,7 +305,10 @@ class OperationalRuntime:
                 return "NO_DATA"
             paper_blocked = None  # B2.3B: reason PAPER economics are blocked this cycle (flag ON only).
             if self.config.v2_position_catch_up:
+                self._last_ingest = None
                 paper_blocked = self._ingest_evidence(symbol, snapshot, slot)
+                if paper_blocked is None:  # V2 P8.4 R4: REVISION visibility; observability only, never a decision
+                    self._audit_safely(lambda: self._record_revisions(symbol, snapshot, run_id), run_id, symbol)
             fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, slot, self.config.max_age_seconds)
             if fresh:
                 # The slot bounds evidence; wall time bounds execution freshness.

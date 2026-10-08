@@ -270,7 +270,10 @@ class RevisionTests(Harness):
         finally:
             evidence.close()
         self.assertEqual(kinds.get("REVISION"), 1)
-        self.assertFalse(any("REVISION" in e[0] for e in journal))
+        # P8.1B pinned LOW-8.6 ("the revision is not in the trading journal"). P8.4 R4 / DEC-8.8 explicitly supersedes
+        # that: the revision is now journaled once as EVIDENCE_REVISION (observability only); the first committed bar
+        # stays authoritative and the position stays open (asserted above).
+        self.assertEqual([e[0] for e in journal if "REVISION" in e[0]], ["EVIDENCE_REVISION"])
 
 
 # ---------------------------------------------------------------- 14: randomized oracle comparison
