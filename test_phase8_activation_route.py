@@ -120,6 +120,32 @@ class R2PreflightTests(unittest.TestCase):
         self.assertFalse(catch_up_storage_checks(self.config(valid), mount=self.mount,
                                                disk_mounted=False)["catch_up_evidence_durable"])
 
+    def test_read_only_evidence_store_fails_and_probe_leaves_no_residue(self):
+        """P8.5 HIGH regression: the former TEMP-table probe passed a read-only Evidence DB."""
+        import os
+        import sqlite3
+        import stat
+        path = self.mount / "market_evidence.db"
+        EvidenceStore(path).close()
+
+        def schema():
+            db = sqlite3.connect(path)
+            try:
+                return (sorted(r[0] for r in db.execute("SELECT name FROM sqlite_master")),
+                        db.execute("SELECT COUNT(*) FROM market_evidence").fetchone()[0],
+                        db.execute("PRAGMA integrity_check").fetchone()[0])
+            finally:
+                db.close()
+        before = schema()
+        self.assertTrue(catch_up_storage_checks(self.config(path), mount=self.mount)["catch_up_evidence_writable_schema"])
+        self.assertEqual(schema(), before)  # persistent probe rolled back: no table, no row, integrity ok
+        os.chmod(path, stat.S_IREAD)
+        self.addCleanup(os.chmod, path, stat.S_IREAD | stat.S_IWRITE)
+        checks = catch_up_storage_checks(self.config(path), mount=self.mount)
+        self.assertIs(checks["catch_up_evidence_writable_schema"], False)
+        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "x"}
+        self.assertFalse(cloud_preflight(self.config(path), env=env, disk_mounted=True).infra_ready)
+
     def test_cloud_preflight_is_not_ready_on_any_evidence_failure(self):
         env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "x"}
         good = cloud_preflight(self.config(self.mount / "market_evidence.db"), env=env, disk_mounted=True)

@@ -121,13 +121,21 @@ def catch_up_storage_checks(config, *, mount=None, disk_mounted=True):
         return checks
     try:
         if path.exists():
+            # P8.4F (P8.5 HIGH): a TEMP table lives in SQLite's temp database and proves nothing about the file. Probe a
+            # PERSISTENT write on ``main`` inside an explicit transaction that is ALWAYS rolled back (no residue), and
+            # require OS write access to the file and to its directory (rollback journal / WAL / SHM).
             store = EvidenceStore(path)
             try:
-                with store.transaction():
-                    store.db.execute("CREATE TEMP TABLE IF NOT EXISTS evidence_write_probe(value INTEGER)")
-                    store.db.execute("INSERT INTO evidence_write_probe VALUES(1)")
-                    store.db.execute("DELETE FROM evidence_write_probe")
-                checks["catch_up_evidence_writable_schema"] = True
+                tables_before = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master")}
+                store.db.execute("BEGIN IMMEDIATE")
+                try:
+                    store.db.execute("CREATE TABLE main.p8_preflight_write_probe(value INTEGER)")
+                    store.db.execute("INSERT INTO main.p8_preflight_write_probe VALUES(1)")
+                finally:
+                    store.db.execute("ROLLBACK")
+                tables_after = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master")}
+                checks["catch_up_evidence_writable_schema"] = (
+                    tables_after == tables_before and os.access(path, os.W_OK) and os.access(path.parent, os.W_OK))
             finally:
                 store.close()
         else:
