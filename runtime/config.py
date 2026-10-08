@@ -94,6 +94,31 @@ class RuntimeConfig:
                    macro_provider_mode=os.environ.get("AI_FLOOR_MACRO_PROVIDER", "none"))
 
 
+def persistent_write_probe(db, path):
+    """V2 Phase 8 / P8.4F-G (DEC-8.11): True only if the SQLite database at ``path`` (open on connection ``db`` in
+    autocommit mode) accepts a PERSISTENT write. A TEMP table lives in SQLite's temp database and proves nothing about
+    the file, so the probe takes the write lock (BEGIN IMMEDIATE), creates and fills a table on ``main``, and ALWAYS
+    rolls back: no data, schema or schema-version change. It also requires OS write access to the file and to its
+    directory (rollback journal / WAL / SHM). SQLite errors propagate; callers treat them as not writable."""
+    path = Path(path)
+    if not (os.access(path, os.W_OK) and os.access(path.parent, os.W_OK)):
+        return False
+
+    def schema():
+        return (db.execute("SELECT type, name, sql FROM main.sqlite_master ORDER BY type, name").fetchall(),
+                db.execute("PRAGMA main.schema_version").fetchone()[0], db.execute("PRAGMA main.user_version").fetchone()[0])
+
+    before = schema()
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        db.execute("CREATE TABLE main.v2_preflight_write_probe(value INTEGER)")
+        db.execute("INSERT INTO main.v2_preflight_write_probe VALUES(1)")
+    finally:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+    return schema() == before
+
+
 def catch_up_storage_checks(config, *, mount=None, disk_mounted=True):
     """V2 Phase 8 / P8.4 (DEC-8.6, R2): fail-closed checks of the Market Evidence Store, ONLY when
     ``v2_position_catch_up`` is ON ({} otherwise). Never creates the store: an absent store needs a writable parent
@@ -121,21 +146,10 @@ def catch_up_storage_checks(config, *, mount=None, disk_mounted=True):
         return checks
     try:
         if path.exists():
-            # P8.4F (P8.5 HIGH): a TEMP table lives in SQLite's temp database and proves nothing about the file. Probe a
-            # PERSISTENT write on ``main`` inside an explicit transaction that is ALWAYS rolled back (no residue), and
-            # require OS write access to the file and to its directory (rollback journal / WAL / SHM).
+            # P8.4F (P8.5 HIGH): a PERSISTENT write probe on ``main``, always rolled back (no residue).
             store = EvidenceStore(path)
             try:
-                tables_before = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master")}
-                store.db.execute("BEGIN IMMEDIATE")
-                try:
-                    store.db.execute("CREATE TABLE main.p8_preflight_write_probe(value INTEGER)")
-                    store.db.execute("INSERT INTO main.p8_preflight_write_probe VALUES(1)")
-                finally:
-                    store.db.execute("ROLLBACK")
-                tables_after = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master")}
-                checks["catch_up_evidence_writable_schema"] = (
-                    tables_after == tables_before and os.access(path, os.W_OK) and os.access(path.parent, os.W_OK))
+                checks["catch_up_evidence_writable_schema"] = persistent_write_probe(store.db, path)
             finally:
                 store.close()
         else:

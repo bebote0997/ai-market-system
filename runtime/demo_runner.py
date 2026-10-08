@@ -46,17 +46,15 @@ def preflight(config, *, env=None):
         "openai_credential": bool(env.get("OPENAI_API_KEY")),
         "openai_model": env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
     }
-    from runtime.config import catch_up_storage_checks
+    from runtime.config import catch_up_storage_checks, persistent_write_probe
     checks.update(catch_up_storage_checks(config, mount=None, disk_mounted=True))  # V2 P8.4 R2; {} while OFF
     try:
         store = Store(config.db_path)
         try:
             checks["db_writable_schema"] = store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-            if checks["db_writable_schema"]:
-                with store.transaction():
-                    store.db.execute("CREATE TEMP TABLE IF NOT EXISTS phase7_write_probe(value INTEGER)")
-                    store.db.execute("INSERT INTO phase7_write_probe VALUES(1)")
-                    store.db.execute("DELETE FROM phase7_write_probe")
+            # P8.4G (DEC-8.11, P8.5R HIGH): persistent write probe, always rolled back (see persistent_write_probe).
+            checks["db_writable_schema"] = checks["db_writable_schema"] and persistent_write_probe(
+                store.db, config.db_path)
             checks["experiment_not_started"] = store.get_state("experiment_started") != "1"
         finally:
             store.close()

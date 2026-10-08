@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from runtime.config import RuntimeConfig, catch_up_storage_checks
+from runtime.config import RuntimeConfig, catch_up_storage_checks, persistent_write_probe
 from runtime.demo_runner import REAL_EXECUTION_ENABLED
 from storage.database import Store
 from storage.codec import parse_utc
@@ -76,11 +76,9 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
             store = Store(path)
             try:
                 checks["db_writable_schema"] = store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-                if checks["db_writable_schema"]:
-                    with store.transaction():
-                        store.db.execute("CREATE TEMP TABLE IF NOT EXISTS cloud_write_probe(value INTEGER)")
-                        store.db.execute("INSERT INTO cloud_write_probe VALUES(1)")
-                        store.db.execute("DELETE FROM cloud_write_probe")
+                # P8.4G (DEC-8.11, P8.5R HIGH): a TEMP table proved nothing about the file; probe a persistent write
+                # that is always rolled back (no data, schema or schema-version change).
+                checks["db_writable_schema"] = checks["db_writable_schema"] and persistent_write_probe(store.db, path)
                 checks["experiment_not_started"] = store.get_state("experiment_started") != "1"
                 if not checks["experiment_not_started"]:
                     # A restart must retain the experiment identity and ledger.
