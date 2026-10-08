@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-10-08 — V2 Phase 8 P8.4 Batch 2 (R3 read-only activation preview)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `4fe10bd`; final SHA = the commit that adds this entry.
+- `replay/activation_preview.py` (offline, read-only: backup-API copies, source hashes, independent Decimal oracle;
+  watermarks, historic missed SL/TP report-only, catch-up bars, expected closes/PnL, pending gate bars, REVISIONs,
+  risks) and `test_phase8_activation_preview.py` (5: prediction equals a real flag-ON cycle on a separate copy).
+  Full suite 1056. No runtime change; no activation.
+
 ## 2026-10-08 — V2 Phase 8 P8.4 Batch 1 (R1 activation route + R2 evidence preflight; flag OFF)
 
 - Agent: Claude. Branch `v2/phase8-execution`; previous SHA `8d8f98e`; final SHA = the commit that adds this entry.

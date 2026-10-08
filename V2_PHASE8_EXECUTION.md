@@ -524,3 +524,33 @@ only for that local environment.
   preflight matrix (absent/existing/garbage/outside mount/missing parent/same name/not mounted), cloud and local
   NOT_READY, no fallback, and an env-built config running only in a temporary directory with a clean restart
   (DUPLICATE). Full suite 1051.
+
+Batch 1 SHA: `4fe10bdd3a9017a2af2775c52c4e72d091db73b5` (CI 37779990370 success).
+
+## Batch 2 — R3 read-only activation preview (`replay/activation_preview.py`)
+
+- **Read-only by construction.**
+  - Each source (trading DB, optional Evidence DB) is copied into a private temporary directory with SQLite's backup
+    API from a `mode=ro` connection; only the copies are read (`Store(..., readonly=True)`).
+  - Source files (and `-wal`/`-shm`) are hashed before and after; the report carries `source_unchanged`.
+  - The CLI refuses to write its report over a source.
+  - The module contains no write SQL and never calls `TradeManager`, `process_bar` or `save_paper`
+    (source-checked).
+- **Report `V2_P8_ACTIVATION_PREVIEW_1`:**
+  - per open position: watermark, `historic_missed` (DEC-8.7: REPORT ONLY; activation never revisits those bars),
+    `catch_up_bars` (what the first flag-ON cycle processes), `expected_close` (bar, price, reason, net PnL),
+    `coverage_gaps`, `in_first_activation_scope` (DEC-8.10: XAUUSD);
+  - `expected_realized_after_first_cycle`;
+  - pending orders (gate bar, bars that would be journaled not evaluated);
+  - REVISION anomalies;
+  - risks: HISTORIC_DIVERGENCE, IMMEDIATE_CLOSE_EXPECTED, MISSING_BARS, NO_BAR_DATA,
+    OUTSIDE_FIRST_ACTIVATION_SCOPE, PENDING_ORDERS_PRESENT, REVISION_PRESENT.
+- **Bars** come from an Evidence DB copy and/or a JSON export
+  (`[{symbol, bar_start, open, high, low, close}]`) for periods the Evidence Store never saw (e.g. positions opened
+  while the flag was OFF).
+- **Independent oracle** (Decimal, own precedence, includes the position's cost): the preview's prediction equals the
+  real first flag-ON cycle run on a separate copy (exit bar, price, reason, net PnL, realized PnL), and the pending
+  order's predicted gate bar and not-evaluated bars equal the runtime's (tested).
+- **Usage:** `python -m replay.activation_preview --trading-db COPY.db --as-of 2026-…Z [--evidence-db EV_COPY.db]
+  [--bars-json bars.json] [--first-scope XAUUSD] --out report.json` (exit 0 = sources unchanged).
+- Tests: `test_phase8_activation_preview.py` (5). Full suite 1056.
