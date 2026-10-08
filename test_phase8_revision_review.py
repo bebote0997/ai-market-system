@@ -40,7 +40,8 @@ class RevisionReviewTests(Harness):
         rows, summary = self.rows()
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]["bar_start"], rows[0]["material"], rows[0]["affected"]), (bar(2).isoformat(), False, []))
-        self.assertEqual(json.loads(summary), {"recorded": 1, "unreviewed": 1, "material_unreviewed": 0})
+        self.assertEqual(json.loads(summary), {"recorded": 1, "unreviewed": 1, "material_unreviewed": 0,
+                                               "escalated_unresolved": 0})  # P8.4G adds the escalated count
         gate = demo_gate(self.db, self.ev)
         self.assertEqual((gate["status"], len(gate["non_material_unreviewed"]), gate["unclassified"]), ("CLEAR", 1, []))
         self.assertIn("XAUUSD", self.paper()[0].open_positions)
@@ -101,6 +102,10 @@ class RevisionReviewTests(Harness):
         key = self.rows()[0][0]["review_key"]
         self.assertEqual(main(["review", "--trading-db", str(self.db), "--key", key, "--decision", "ESCALATED",
                                "--reviewer", "owner"]), 0)
+        # P8.4G (DEC-8.12) supersedes the P8.4 expectation "ESCALATED -> gate exit 0": ESCALATED is not final.
+        self.assertEqual(main(["gate", "--trading-db", str(self.db), "--evidence-db", str(self.ev)]), 3)
+        self.assertEqual(main(["review", "--trading-db", str(self.db), "--key", key, "--decision",
+                               "ACCEPTED_FIRST_COMMITTED", "--reviewer", "owner"]), 0)
         self.assertEqual(main(["gate", "--trading-db", str(self.db), "--evidence-db", str(self.ev)]), 0)
 
     def test_flag_off_never_records_revisions(self):
@@ -175,6 +180,10 @@ class RevisionGateCoverageTests(Harness):
                          ("BLOCKED", [ids[1]]))
         self.assertEqual(main(["review", "--trading-db", str(self.db), "--key", ids[1], "--decision", "ESCALATED",
                                "--reviewer", "owner"]), 0)
+        # P8.4G (DEC-8.12) supersedes the P8.4F expectation that ESCALATED resolves: still BLOCKED until final.
+        self.assertEqual(demo_gate(self.db, self.ev)["blockers"], ["ESCALATED_UNRESOLVED"])
+        self.assertEqual(main(["review", "--trading-db", str(self.db), "--key", ids[1], "--decision",
+                               "ACCEPTED_FIRST_COMMITTED", "--reviewer", "owner"]), 0)
         self.cycle(S3 + timedelta(minutes=30), {}, flag=True)  # decisions are durable across a restart/cycle
         gate = demo_gate(self.db, self.ev)
         self.assertEqual((gate["status"], gate["blockers"], gate["anomalies"], gate["classified"]),
@@ -198,3 +207,99 @@ class RevisionGateCoverageTests(Harness):
         records = revision_review.classify("XAUUSD", {}, {"5m": SimpleNamespace(revisions=(bar(2).isoformat(),))},
                                            {}, [], {})
         self.assertEqual(records, [])
+
+
+class EscalationTests(Harness):
+    """P8.4G FIX B (DEC-8.12, P8.5R HIGH): ESCALATED is never a final resolution."""
+
+    def review(self, key, decision, reviewer="owner", note=""):
+        store = Store(self.db)
+        try:
+            record_review(store, key, decision=decision, reviewer=reviewer, note=note)
+        finally:
+            store.close()
+
+    def reviews(self):
+        return RevisionReviewTests.rows(self, revision_review.REVIEW_EVENT)[0]
+
+    def committed_digest(self):
+        db = sqlite3.connect(self.ev)
+        try:
+            return db.execute("SELECT digest, payload FROM market_evidence WHERE timeframe='5m' AND bar_start=?",
+                              (bar(2).isoformat(),)).fetchone()
+        finally:
+            db.close()
+
+    def material(self):
+        self.seed()
+        self.cycle(S1, {}, flag=True)
+        self.cycle(S2, MATERIAL, flag=True)
+        return RevisionReviewTests.rows(self)[0][0]["anomaly_id"]
+
+    def test_material_escalated_blocks_until_explicit_final_decision(self):
+        key = self.material()
+        committed, paper = self.committed_digest(), self.paper()[0]
+        self.assertEqual(demo_gate(self.db, self.ev)["blockers"], ["MATERIAL_UNREVIEWED"])  # no review
+        self.review(key, "ESCALATED", note="provider asked")
+        gate = demo_gate(self.db, self.ev)
+        self.assertEqual((gate["status"], gate["blockers"], [r["anomaly_id"] for r in gate["escalated_unresolved"]]),
+                         ("BLOCKED", ["ESCALATED_UNRESOLVED"], [key]))
+        self.assertEqual(json.loads(RevisionReviewTests.rows(self)[1])["escalated_unresolved"], 1)
+        self.review(key, "ACCEPTED_FIRST_COMMITTED", note="provider confirmed; committed bar stays authoritative")
+        gate = demo_gate(self.db, self.ev)
+        self.assertEqual((gate["status"], gate["blockers"], gate["resolved"]), ("CLEAR", [], 1))
+        history = self.reviews()  # append-only, auditable
+        self.assertEqual([(r["decision"], r["final"], r["previous_decision"], r["anomaly_id"]) for r in history],
+                         [("ESCALATED", False, None, key), ("ACCEPTED_FIRST_COMMITTED", True, "ESCALATED", key)])
+        self.assertEqual(self.committed_digest(), committed)  # committed bar never modified
+        after = self.paper()[0]
+        self.assertEqual((after.open_positions, after.closed_trades, after.cash, after.realized_pnl),
+                         (paper.open_positions, paper.closed_trades, paper.cash, paper.realized_pnl))
+
+    def test_non_material_escalated_also_blocks(self):
+        self.seed()
+        self.cycle(S1, {}, flag=True)
+        self.cycle(S2, BENIGN, flag=True)
+        key = RevisionReviewTests.rows(self)[0][0]["anomaly_id"]
+        self.assertEqual(demo_gate(self.db, self.ev)["status"], "CLEAR")  # unreviewed non-material: warning only
+        self.review(key, "ESCALATED")
+        self.assertEqual(demo_gate(self.db, self.ev)["blockers"], ["ESCALATED_UNRESOLVED"])
+
+    def test_escalation_after_a_final_decision_reopens_and_keeps_history(self):
+        key = self.material()
+        self.review(key, "ACCEPTED_FIRST_COMMITTED")
+        self.assertEqual(demo_gate(self.db, self.ev)["status"], "CLEAR")
+        self.review(key, "ESCALATED", note="new information")
+        self.assertEqual(demo_gate(self.db, self.ev)["blockers"], ["ESCALATED_UNRESOLVED"])
+        self.assertEqual([r["decision"] for r in self.reviews()], ["ACCEPTED_FIRST_COMMITTED", "ESCALATED"])
+
+    def test_new_partial_revision_never_erases_previous_decisions(self):
+        key = self.material()
+        self.review(key, "ACCEPTED_FIRST_COMMITTED")
+        self.cycle(S3, MATERIAL_2, flag=True)  # a second anomaly of the same bar arrives later
+        self.cycle(S3 + timedelta(minutes=15), MATERIAL, flag=True)  # the first content re-presented: no duplicate
+        gate = demo_gate(self.db, self.ev)
+        second = [r["anomaly_id"] for r in gate["material_unreviewed"]]
+        self.assertEqual((gate["status"], gate["blockers"], gate["resolved"], len(second)),
+                         ("BLOCKED", ["MATERIAL_UNREVIEWED"], 1, 1))
+        self.assertNotEqual(second[0], key)
+        self.assertEqual([r["anomaly_id"] for r in self.reviews()], [key])  # first decision intact
+        self.review(second[0], "ESCALATED")
+        self.assertEqual(demo_gate(self.db, self.ev)["blockers"], ["ESCALATED_UNRESOLVED"])
+        self.review(second[0], "ACCEPTED_FIRST_COMMITTED")
+        self.assertEqual(demo_gate(self.db, self.ev)["status"], "CLEAR")
+
+    def test_unclassified_still_blocks_even_when_everything_recorded_is_resolved(self):
+        key = self.material()
+        self.review(key, "ACCEPTED_FIRST_COMMITTED")
+        with patch("runtime.revision_review.classify", side_effect=RuntimeError("bug")):
+            self.cycle(S3, MATERIAL_2, flag=True)
+        self.assertEqual(demo_gate(self.db, self.ev)["blockers"], ["UNCLASSIFIED"])
+
+    def test_review_requires_known_anomaly_valid_decision_and_reviewer(self):
+        key = self.material()
+        for kwargs in ({"key": key, "decision": "RESOLVED"}, {"key": "unknown", "decision": "ESCALATED"},
+                       {"key": key, "decision": "ACCEPTED_FIRST_COMMITTED", "reviewer": "  "}):
+            with self.assertRaises(ValueError):
+                self.review(**kwargs)
+        self.assertEqual(self.reviews(), [])
