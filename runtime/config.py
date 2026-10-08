@@ -24,8 +24,9 @@ class RuntimeConfig:
     ai_provider_mode: str = "deterministic"
     macro_provider_mode: str = "none"
     # V2 Phase 2 / B2.3B: Market Evidence ingestion + chronological position catch-up. OFF by
-    # default; no environment variable can enable it (from_env never sets it). Activation needs
-    # B2.3D, independent certification and separate owner approval.
+    # default. V2 Phase 8 / P8.4 (DEC-8.6, R1): from_env reads it ONLY from the exact value
+    # AI_FLOOR_V2_POSITION_CATCH_UP="1" together with AI_FLOOR_MARKET_EVIDENCE_PATH; any other non-empty
+    # value fails closed. Activation itself still needs the P8 activation gate and Owner approval.
     v2_position_catch_up: bool = False
     market_evidence_path: Path | None = None
     # V2 Phase 7 / P7.1 Batch B: durable AI_CALL rows (observability only; never a decision input). OFF by default;
@@ -79,9 +80,59 @@ class RuntimeConfig:
         load_local_env()
         enabled = tuple(s.strip().upper() for s in
                         os.environ.get("AI_FLOOR_ENABLED_SYMBOLS", ",".join(DEFAULT_ENABLED_SYMBOLS)).split(","))
+        catch_up = os.environ.get("AI_FLOOR_V2_POSITION_CATCH_UP", "")
+        if catch_up not in ("", "0", "1"):
+            raise ValueError("AI_FLOOR_V2_POSITION_CATCH_UP must be unset, '0' or '1'")  # never a truthy guess
+        evidence_path = os.environ.get("AI_FLOOR_MARKET_EVIDENCE_PATH") or None
         return cls(db_path=Path(os.environ.get("AI_FLOOR_DB_PATH", "data/runtime/trading_floor.db")),
+                   v2_position_catch_up=catch_up == "1",  # __post_init__ rejects ON without a separate evidence path
+                   market_evidence_path=None if evidence_path is None else Path(evidence_path),
                    enabled_symbols=enabled,
                    scheduler_enabled=os.environ.get("AI_FLOOR_SCHEDULER", "0") == "1",
                    market_provider_mode=os.environ.get("AI_FLOOR_MARKET_PROVIDER", "twelve_data"),
                    ai_provider_mode=os.environ.get("AI_FLOOR_AI_PROVIDER", "deterministic"),
                    macro_provider_mode=os.environ.get("AI_FLOOR_MACRO_PROVIDER", "none"))
+
+
+def catch_up_storage_checks(config, *, mount=None, disk_mounted=True):
+    """V2 Phase 8 / P8.4 (DEC-8.6, R2): fail-closed checks of the Market Evidence Store, ONLY when
+    ``v2_position_catch_up`` is ON ({} otherwise). Never creates the store: an absent store needs a writable parent
+    on the durable mount; an existing one must open with the evidence schema and accept a write probe. There is no
+    fallback: with any check False the preflight is NOT_READY (no silent degradation to the newest-bar path)."""
+    if not config.v2_position_catch_up:
+        return {}
+    import sqlite3
+    from storage.evidence_store import EvidenceStore
+    raw = config.market_evidence_path
+    path = None if raw is None else Path(raw)
+    checks = {"catch_up_evidence_path_set": path is not None,
+              "catch_up_evidence_separate": False, "catch_up_evidence_durable": False,
+              "catch_up_evidence_writable_schema": False}
+    if path is None:
+        return checks
+    checks["catch_up_evidence_separate"] = (path.resolve() != Path(config.db_path).resolve()
+                                            and path.name != Path(config.db_path).name)
+    if mount is not None:
+        checks["catch_up_evidence_durable"] = bool(disk_mounted) and path.is_absolute() and (
+            path == mount or Path(mount) in path.parents)
+    else:
+        checks["catch_up_evidence_durable"] = bool(disk_mounted)
+    if not checks["catch_up_evidence_separate"]:
+        return checks
+    try:
+        if path.exists():
+            store = EvidenceStore(path)
+            try:
+                with store.transaction():
+                    store.db.execute("CREATE TEMP TABLE IF NOT EXISTS evidence_write_probe(value INTEGER)")
+                    store.db.execute("INSERT INTO evidence_write_probe VALUES(1)")
+                    store.db.execute("DELETE FROM evidence_write_probe")
+                checks["catch_up_evidence_writable_schema"] = True
+            finally:
+                store.close()
+        else:
+            parent = path.parent
+            checks["catch_up_evidence_writable_schema"] = parent.is_dir() and os.access(parent, os.W_OK)
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+        checks["catch_up_evidence_writable_schema"] = False
+    return checks

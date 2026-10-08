@@ -471,3 +471,56 @@ Criteria for the final independent review:
 - **GO** for DEC-8.6 (R1–R3 implementation with the flag still OFF) as the next batch, followed by D on an
   Owner-provided DB copy.
 - **Phase 8 status: BLOCKED** (HIGH-8.1 OPEN on the operational runtime; path A evidence recorded).
+
+---
+
+# P8.2 independent verdict (Copilot), recorded as received from the Owner
+
+Candidate `0744868573e1e3e76fa070eefeaa9781f03e70ed`; CI 37720604915 SUCCESS; no production change since `main`.
+
+| Area | Verdict |
+|---|---|
+| T01, T03–T06, T09–T11, T13, T14, T16, T17 | PASS |
+| T02 | PASS with accepted risk (no time-in-force) |
+| T12 | PASS with scope (CAS/locks; not a certification of a runtime-wired Conflict Engine) |
+| T15 | PASS with accepted fail-stop |
+| T07 / T08 | **Path A (isolated catch-up) PASS; Path B (flag-OFF runtime) FAIL** |
+| HIGH-8.1 | closed only for the catch-up component; **OPEN for Path B** |
+| MEDIUM | 8.2 (pending without TIF), 8.3 (fail-stop + run/review mismatch), 8.4 (rollback to old code) |
+| LOW | 8.5 (Store not closed on failed constructor); 8.6 (REVISION visibility: a **mandatory pre-DEMO condition**) |
+| Global | **BLOCKED** for an integral runtime certification or future DEMO |
+
+**Correction to earlier author reports.** CI and the reviewer's run show **1035 tests with 1 skip**. The skipped test
+(`test_system_health … frozen_v1_baseline_code_opens_trading_db_after_sidecar_use`) needs `git` on `PATH`; it passed
+when run separately. The author's local runs had `git` on `PATH` and reported 1035 OK. Both are true; "0 skipped" holds
+only for that local environment.
+
+# P8.4 — Safe activation preparation (no activation). Owner decisions DEC-8.6 … DEC-8.10 approved.
+
+## Batch 1 — R1 configuration + R2 preflight
+
+- **R1** (`runtime/config.py`, `from_env`): `v2_position_catch_up` is enabled **only** by the exact value
+  `AI_FLOOR_V2_POSITION_CATCH_UP="1"`, together with `AI_FLOOR_MARKET_EVIDENCE_PATH`.
+  - Unset or `"0"` → OFF.
+  - Any other value (`true`, `yes`, `2`, `" 1"`, …) → `ValueError`, so startup fails closed instead of guessing.
+  - `"1"` without an evidence path, or with a path equal to the trading DB → `ValueError` (existing validation).
+  - An evidence path alone never enables anything.
+  - The AI flags still have no env route.
+  - The default remains OFF. The fingerprint changes when ON, so a running experiment's cloud preflight reports
+    configuration drift (`experiment_resumable` False). That is an additional barrier against accidental activation.
+- **R2** (`runtime.config.catch_up_storage_checks`, used by `cloud_preflight` and the local doctor `preflight`). It adds
+  checks **only when the flag is ON**, so the OFF reports are byte-identical:
+  - `catch_up_evidence_path_set`;
+  - `catch_up_evidence_separate` (different path and file name from the trading DB);
+  - `catch_up_evidence_durable` (on the durable mount);
+  - `catch_up_evidence_writable_schema`: an existing store opens with the evidence schema and accepts a write probe;
+    an absent store needs a writable parent and is **never created by the preflight**.
+  - Any False → `NOT_READY`.
+  - The check lives in `runtime/config.py`, so the certified Phase 2 inventory tests (only `runtime/config.py` and
+    `runtime/service.py` reference the evidence/catch-up modules) still hold unchanged.
+- **No silent degradation**: with the flag ON and an unusable Evidence Store, the cycle journals
+  `EVIDENCE_UNAVAILABLE` and makes **no** `TradeManager` call. There is no newest-bar fallback (tested).
+- Tests: `test_phase8_activation_route.py` (10): defaults, exact-value parsing, ambiguous values fail closed, the
+  preflight matrix (absent/existing/garbage/outside mount/missing parent/same name/not mounted), cloud and local
+  NOT_READY, no fallback, and an env-built config running only in a temporary directory with a clean restart
+  (DUPLICATE). Full suite 1051.

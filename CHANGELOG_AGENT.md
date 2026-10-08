@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-10-08 — V2 Phase 8 P8.4 Batch 1 (R1 activation route + R2 evidence preflight; flag OFF)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `8d8f98e`; final SHA = the commit that adds this entry.
+- `runtime/config.py`: `from_env` enables catch-up only for `AI_FLOOR_V2_POSITION_CATCH_UP="1"` + a separate evidence path;
+  ambiguous values fail closed; `catch_up_storage_checks` (fail-closed Evidence Store preflight, ON only).
+  `runtime/cloud.py` / `runtime/demo_runner.py`: preflights include those checks (OFF reports unchanged).
+- `test_phase8_activation_route.py` (10). Full suite 1051. P8.2 independent verdict recorded; author skip-count
+  statement corrected (CI: 1 environmental skip). No activation; HIGH-8.1 OPEN for the default runtime.
+
 ## 2026-10-08 — V2 Phase 8 P8.3 (HIGH-8.1 closure preparation; no activation)
 
 - Agent: Claude. Branch `v2/phase8-execution`; previous SHA `0744868`; final SHA = the commit that adds this entry.
