@@ -186,9 +186,21 @@ class OperationalRuntime:
         committed = {(tf, bar.bar_start): {"open": bar.open, "high": bar.high, "low": bar.low, "close": bar.close}
                      for tf, result in results.items() if result.revisions
                      for bar in self.evidence.committed(symbol, tf) if bar.bar_start in result.revisions}
+        from data.market_evidence import bars_from_frame
+        anomaly_ids = {}  # P8.4F: identity = the evidence database's REVISION anomaly for the presented content
+        for tf, result in results.items():
+            if result.revisions and tf in snapshot:
+                for bar in bars_from_frame(snapshot[tf], symbol=symbol, timeframe=tf):
+                    if bar.bar_start in result.revisions:
+                        row = self.evidence.store.db.execute(
+                            "SELECT anomaly_id FROM evidence_anomalies WHERE kind='REVISION' AND symbol=? AND "
+                            "timeframe=? AND bar_start=? AND json_extract(payload,'$.presented_digest')=?",
+                            (symbol, tf, bar.bar_start, bar.digest)).fetchone()
+                        if row is not None:
+                            anomaly_ids[(tf, bar.bar_start)] = row[0]
         account, _, _ = self.store.load_paper(self.config.account_id)
         positions = [] if account is None else [p for p in account.open_positions.values() if p.symbol == symbol]
-        records = revision_review.classify(symbol, snapshot, results, committed, positions)
+        records = revision_review.classify(symbol, snapshot, results, committed, positions, anomaly_ids)
         revision_review.journal(self.store, records, at=self.clock(), run_id=run_id)
 
     def _committed_bar(self, symbol, start):

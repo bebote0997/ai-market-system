@@ -6,15 +6,17 @@ moves, closes or opens anything. Observability only:
   MATERIAL when the presented bar crosses an open position's SL or TP (open beyond, or high/low touch) that the
   committed bar did not cross, for a position opened before the bar. Only 5m bars feed position management, so 1h/15m
   revisions are recorded as non-material.
-- ``journal``: one ``EVIDENCE_REVISION`` row per (symbol, timeframe, bar_start, presented OHLC) in the trading journal,
-  deduplicated across cycles/restarts, plus a ``evidence_revisions`` system_state summary for health views.
-- ``record_review``: an Owner decision (``EVIDENCE_REVISION_REVIEWED``) for one revision.
-- ``demo_gate``: READ-ONLY. BLOCKED while any material revision is unreviewed, or any REVISION anomaly of the evidence
-  database has no classification in the trading journal (UNCLASSIFIED). Non-material unreviewed ones are warnings.
+- ``journal``: one ``EVIDENCE_REVISION`` row per REVISION anomaly (its ``anomaly_id`` in the evidence database is the
+  identity and the review key), deduplicated across cycles/restarts, plus a ``evidence_revisions`` system_state
+  summary for health views. A revision whose anomaly cannot be identified is not recorded, so it stays UNCLASSIFIED.
+- ``record_review``: an Owner decision (``EVIDENCE_REVISION_REVIEWED``) for one anomaly.
+- ``demo_gate``: READ-ONLY; the evidence database is REQUIRED. CLEAR only with full coverage: every REVISION anomaly
+  has a classification by ``anomaly_id``, every classification refers to an existing anomaly, and no material one is
+  unreviewed. Otherwise BLOCKED (also when the evidence database is missing or unreadable). Non-material unreviewed
+  ones are warnings.
 """
 from datetime import datetime, timezone
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -36,20 +38,19 @@ def _crosses(side, ohlc, level, kind):
     return (ohlc["low"] <= level or ohlc["open"] <= level) if stop_like else (ohlc["high"] >= level or ohlc["open"] >= level)
 
 
-def review_key(symbol, timeframe, bar_start, presented):
-    canonical = json.dumps({"symbol": symbol, "timeframe": timeframe, "bar_start": bar_start, "presented": presented},
-                           sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def classify(symbol, snapshot, ingest_results, committed_bars, positions):
+def classify(symbol, snapshot, ingest_results, committed_bars, positions, anomaly_ids):
     """Records for every revision reported by this cycle's ingestion.
 
     ``ingest_results``: {timeframe: IngestResult}; ``committed_bars``: {(timeframe, bar_start): bar with OHLC};
-    ``positions``: open positions (PaperPosition) of ``symbol``."""
+    ``positions``: open positions (PaperPosition) of ``symbol``; ``anomaly_ids``: {(timeframe, bar_start): anomaly_id
+    of the REVISION anomaly the evidence database recorded for the presented content}. A revision without an
+    identified anomaly is skipped (never guessed): the gate then reports that anomaly as UNCLASSIFIED."""
     records = []
     for timeframe, result in sorted((ingest_results or {}).items()):
         for bar_start in getattr(result, "revisions", ()) or ():
+            anomaly_id = anomaly_ids.get((timeframe, bar_start))
+            if anomaly_id is None:
+                continue
             frame = snapshot.get(timeframe)
             start = datetime.fromisoformat(bar_start)
             try:
@@ -69,10 +70,10 @@ def classify(symbol, snapshot, ingest_results, committed_bars, positions):
                         if _crosses(position.side, presented, level, kind) and not _crosses(position.side, committed,
                                                                                             level, kind):
                             affected.append({"position_id": position.position_id, "level": kind, "price": level})
-            records.append({"symbol": symbol, "timeframe": timeframe, "bar_start": bar_start, "committed": committed,
-                            "presented": presented, "material": bool(affected), "affected": affected,
-                            "rule": "FIRST_COMMITTED_BAR_AUTHORITATIVE (unchanged)",
-                            "review_key": review_key(symbol, timeframe, bar_start, presented)})
+            records.append({"anomaly_id": anomaly_id, "symbol": symbol, "timeframe": timeframe,
+                            "bar_start": bar_start, "committed": committed, "presented": presented,
+                            "material": bool(affected), "affected": affected,
+                            "rule": "FIRST_COMMITTED_BAR_AUTHORITATIVE (unchanged)", "review_key": anomaly_id})
     return records
 
 
@@ -86,13 +87,13 @@ def _summary(db):
 
 
 def journal(store, records, *, at, run_id):
-    """Write each new revision once (deduplicated by review_key) and refresh the health summary. Returns rows written."""
+    """Write each new anomaly once (deduplicated by anomaly_id) and refresh the health summary. Returns rows written."""
     written = 0
     with store.transaction():
         for record in records:
             exists = store.db.execute(
-                "SELECT 1 FROM journal WHERE event_type=? AND json_extract(payload,'$.review_key')=?",
-                (EVENT, record["review_key"])).fetchone()
+                "SELECT 1 FROM journal WHERE event_type=? AND json_extract(payload,'$.anomaly_id')=?",
+                (EVENT, record["anomaly_id"])).fetchone()
             if exists is None:
                 store._event(at, run_id, record["symbol"], SOURCE, EVENT,
                              "WARNING" if record["material"] else "INFO", record)
@@ -102,12 +103,12 @@ def journal(store, records, *, at, run_id):
 
 
 def record_review(store, key, *, decision, reviewer, note="", at=None):
-    """Owner decision for one recorded revision (never changes evidence or PAPER state)."""
+    """Owner decision for one recorded anomaly (``key`` = its anomaly_id); never changes evidence or PAPER state."""
     if decision not in DECISIONS:
         raise ValueError(f"decision must be one of {DECISIONS}")
     at = at or datetime.now(timezone.utc)
     with store.transaction():
-        row = store.db.execute("SELECT symbol FROM journal WHERE event_type=? AND json_extract(payload,'$.review_key')=?",
+        row = store.db.execute("SELECT symbol FROM journal WHERE event_type=? AND json_extract(payload,'$.anomaly_id')=?",
                                (EVENT, key)).fetchone()
         if row is None:
             raise ValueError("unknown review_key")
@@ -120,32 +121,49 @@ def _ro(path):
     return sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
 
 
-def demo_gate(trading_db, evidence_db=None):
-    """READ-ONLY pre-DEMO gate. CLEAR only with no material unreviewed and no unclassified revision."""
+def demo_gate(trading_db, evidence_db):
+    """READ-ONLY pre-DEMO gate. CLEAR only with full anomaly coverage by ``anomaly_id`` and no material unreviewed."""
+    blockers = []
+    anomalies = {}
+    if evidence_db is None or not Path(evidence_db).is_file():
+        blockers.append("EVIDENCE_DB_MISSING")
+    else:
+        try:
+            ev = _ro(evidence_db)
+            try:
+                for a in ev.execute("SELECT anomaly_id, symbol, timeframe, bar_start FROM evidence_anomalies "
+                                    "WHERE kind='REVISION' ORDER BY symbol, timeframe, bar_start, anomaly_id"):
+                    anomalies[a[0]] = {"anomaly_id": a[0], "symbol": a[1], "timeframe": a[2], "bar_start": a[3]}
+            finally:
+                ev.close()
+        except sqlite3.Error:
+            blockers.append("EVIDENCE_DB_UNREADABLE")
     db = _ro(trading_db)
     try:
-        rows = [json.loads(r[0]) for r in db.execute("SELECT payload FROM journal WHERE event_type=?", (EVENT,))]
+        rows = [json.loads(r[0]) for r in db.execute("SELECT payload FROM journal WHERE event_type=? ORDER BY id",
+                                                     (EVENT,))]
         reviewed = {json.loads(r[0]).get("review_key") for r in db.execute(
             "SELECT payload FROM journal WHERE event_type=?", (REVIEW_EVENT,))}
     finally:
         db.close()
-    classified = {(r["symbol"], r["timeframe"], r["bar_start"]) for r in rows}
-    unclassified = []
-    if evidence_db is not None:
-        ev = _ro(evidence_db)
-        try:
-            anomalies = ev.execute("SELECT symbol, timeframe, bar_start, anomaly_id FROM evidence_anomalies "
-                                   "WHERE kind='REVISION' ORDER BY symbol, bar_start").fetchall()
-        finally:
-            ev.close()
-        unclassified = [{"symbol": a[0], "timeframe": a[1], "bar_start": a[2], "anomaly_id": a[3]}
-                        for a in anomalies if (a[0], a[1], a[2]) not in classified]
-    unreviewed = [r for r in rows if r["review_key"] not in reviewed]
+    classified = {}
+    for row in rows:  # first record per anomaly; legacy rows without anomaly_id never count as coverage
+        if row.get("anomaly_id"):
+            classified.setdefault(row["anomaly_id"], row)
+    unclassified = [a for key, a in anomalies.items() if key not in classified]
+    orphans = [] if blockers else [r for key, r in classified.items() if key not in anomalies]
+    unreviewed = [r for key, r in classified.items() if key not in reviewed]
     material = [r for r in unreviewed if r["material"]]
-    status = "BLOCKED" if material or unclassified else "CLEAR"
-    return {"status": status, "material_unreviewed": material, "unclassified": unclassified,
-            "non_material_unreviewed": [r for r in unreviewed if not r["material"]], "recorded": len(rows),
-            "reviewed": len(reviewed)}
+    if unclassified:
+        blockers.append("UNCLASSIFIED")
+    if orphans:
+        blockers.append("CLASSIFICATION_WITHOUT_ANOMALY")
+    if material:
+        blockers.append("MATERIAL_UNREVIEWED")
+    return {"status": "BLOCKED" if blockers else "CLEAR", "blockers": blockers, "anomalies": len(anomalies),
+            "classified": len(classified), "material_unreviewed": material, "unclassified": unclassified,
+            "orphan_classifications": orphans, "non_material_unreviewed": [r for r in unreviewed if not r["material"]],
+            "recorded": len(rows), "reviewed": len(reviewed)}
 
 
 def main(argv=None):
@@ -153,7 +171,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     gate = sub.add_parser("gate")
     gate.add_argument("--trading-db", required=True)
-    gate.add_argument("--evidence-db")
+    gate.add_argument("--evidence-db", required=True)
     review = sub.add_parser("review")
     review.add_argument("--trading-db", required=True)
     review.add_argument("--key", required=True)
