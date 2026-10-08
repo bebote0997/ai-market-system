@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-08 — V2 Phase 8 P8.3 (HIGH-8.1 closure preparation; no activation)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `0744868`; final SHA = the commit that adds this entry.
+  Tests and docs only; no production code changed; no flag activated; no operational DB touched.
+- `test_phase8_activation_simulation.py` (6): first-activation simulation on temporary DBs. Missed touches before
+  activation are NOT retroactively corrected (watermark); touches since the last flag-OFF cycle close at the true
+  bar; pending orders, REVISION detection, P&L reconciliation and rollback.
+- Doc P8.3: diagnosis (A), minimal plan R1-R5 (B), activation risks (C), isolated simulation procedure (D), REVISION
+  handling (E), certification conditions (F), DEC-8.6..8.10 (G). Recommendation: activation NO-GO now; Phase 8
+  BLOCKED; P8.2 report not available to the agent.
+
 ## 2026-10-07 — V2 Phase 8 P8.1B (isolated certification of the chronological SL/TP catch-up)
 
 - Agent: Claude. Branch `v2/phase8-execution`; previous SHA `0bb6927` (P8.1A); final SHA = the commit that adds

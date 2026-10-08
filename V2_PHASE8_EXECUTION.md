@@ -343,3 +343,131 @@ documented). Recommended next step: **P8.2 independent certification** with the 
 
 Optionally, with authorization: the two one-line LOW fixes (LOW-8.5 Store close on fail-closed startup; DEC-8.3 run
 label).
+
+---
+
+# P8.3 — HIGH-8.1 closure preparation and final-certification plan (no activation)
+
+## 1. Independent P8.2 verdict: recorded scope
+
+The full P8.2 report was **not available to this agent**: it is not on the branch, in a PR, in commit comments or in
+the docs. Only what the Owner's P8.3 brief states is recorded: HEAD `0744868573e1e3e76fa070eefeaa9781f03e70ed` is
+"partially certified" by Copilot P8.2. The exact PASS/FAIL per F08 task and any findings of that review must be
+attached to this document by the Owner. Nothing below assumes them.
+
+## A. Final diagnosis of HIGH-8.1
+
+- **Path B (operational runtime, `v2_position_catch_up` OFF): OPEN.** Each 15-minute cycle passes only the newest
+  closed 5m bar to `TradeManager`. SL/TP touches in the other two bars are never evaluated (pinned since Phase 2;
+  re-characterized in P8.1B and P8.3).
+- **Path A (catch-up ON, isolated):** the P8.1B evidence (independent oracle, crashes, races, 40 randomized cases)
+  supports closure as a component, subject to the independent review.
+- **New activation facts (P8.3, tested on temporary DBs):**
+  1. **No retroactive correction.** The catch-up watermark is `last_processed_at`, which the flag-OFF path advances
+     to the newest bar every cycle. Touches missed **before** activation sit behind the watermark and are never
+     revisited (test a). Activation stops new misses; it does not repair past ones.
+  2. Touches **between** the last flag-OFF cycle and the first flag-ON cycle are closed by the first activation cycle,
+     at the true bar and price (test b). With the flag OFF the same data is missed (test b2).
+  3. Pending orders across activation: filled only on the current gated bar; bars strictly after `as_of` journaled
+     `PENDING_NOT_EVALUATED` (test c).
+  4. Provider revisions after activation are detectable (REVISION anomaly) and not applied (test d).
+  5. Rollback to flag OFF is clean: no duplicate processing; the Evidence Store is left intact. From then on, misses
+     return (test e).
+  6. **The activation route does not exist yet:** `RuntimeConfig.from_env()` never reads the flag or an evidence path,
+     and `cloud_preflight` does not validate an evidence store on the durable mount. Activating on Render therefore
+     needs an authorized production change.
+
+## B. Minimal resolution plan
+
+| Step | Change | Type | Authorization |
+|---|---|---|---|
+| R1 | `from_env`: read `AI_FLOOR_V2_POSITION_CATCH_UP` (`"1"` only) and `AI_FLOOR_MARKET_EVIDENCE_PATH`; default OFF; existing validation keeps rejecting a missing or identical path | production (config only) | **DEC-8.6** |
+| R2 | `cloud_preflight`: when the flag is ON, require the evidence path on the durable mount, distinct from the trading DB, writable, schema-valid | production (preflight only) | DEC-8.6 |
+| R3 | read-only **activation preview** tool: from copies of the trading DB and the evidence/provider bars, list open positions, watermarks, pending orders, oracle-expected closes after the watermark, historic divergence before it, and REVISION anomalies | offline tool (not runtime) | DEC-8.6 |
+| R4 | surface REVISION anomalies in health/journal (LOW-8.6) | production (observability) | DEC-8.8 B |
+| R5 | activation itself (Render env + restart) | operational | separate Owner GO |
+
+No economic rule, strategy, Risk, AI or Conflict behavior changes in R1–R4.
+
+## C. Activation risks
+
+| Risk | Effect | Mitigation |
+|---|---|---|
+| historic divergence (touches missed before activation) | positions that "should" be closed stay open; PnL differs from a bar-by-bar view | R3 preview reports them; DEC-8.7 decides the treatment; never auto-closed |
+| first-cycle retroactive closes (touches since the last flag-OFF cycle) | immediate closes at the activation cycle | expected, oracle-predicted by R3 before activation |
+| evidence store on non-durable disk | catch-up loses its record at restart | R2 preflight blocks it |
+| REVISION anomalies | provider corrections silently ignored | E below; DEC-8.8 |
+| evidence failure | `EVIDENCE_UNAVAILABLE` blocks PAPER economics for the symbol | fail-closed by design; stop criterion if repeated |
+| larger cycle work (ingest + catch-up) | longer cycle | measured in the controlled first cycle |
+| AI outage freezes pending orders | unchanged policy (DEC-7.11) | none (policy) |
+| rollback | misses resume | documented; flag OFF only, no data rewrite |
+
+## D. Isolated simulation procedure (before any activation)
+
+1. Obtain a **copy** of the operational trading DB (never the original; Owner-provided). Checkpoint WAL, then run
+   `integrity_check`.
+2. Obtain the 5m bars (provider export or Evidence Store copy) covering every open position since `opened_at`.
+3. Run R3 (or, until R3 exists, the procedure of `test_phase8_activation_simulation.py`) on the copy:
+   - per open position: watermark, oracle result over **[opened_at, now]** (full history) and over
+     **(watermark, now]** (what activation will do);
+   - per pending order: `as_of`, expected gate bar;
+   - REVISION anomalies.
+4. Execute one flag-ON cycle **on the copy** with the real runtime (temporary evidence path).
+5. Reconcile: closes, exit bars, prices, realized PnL and equity must equal the oracle for (watermark, now]. Any
+   full-history divergence is reported for DEC-8.7.
+6. Repeat the cycle (must be DUPLICATE), then one more slot (no duplicate close), then rollback to OFF on the copy
+   (clean).
+7. Record SHA, inputs (hashes), outputs and PASS/FAIL. Covered today by `test_phase8_activation_simulation.py`
+   (6 tests) on synthetic data.
+
+## E. REVISION anomalies
+
+- Detection (read-only): `SELECT symbol, timeframe, bar_start, kind, payload FROM evidence_anomalies WHERE
+  kind='REVISION'` (helper `revisions()` in the simulation tests).
+- Review before DEMO, for each revision:
+  - does the revised bar cross an open or historic position's SL/TP that the committed bar did not?
+  - classify it as benign (no level crossed) or material (a level crossed);
+  - record the decision.
+- Gate: zero **unreviewed** revisions, and zero material revisions without an Owner decision. The certified rule
+  ("first committed wins") is kept; nothing is rewritten.
+- Optional R4: journal/health surfacing so revisions are visible in operations.
+
+## F. Conditions for final Phase 8 certification
+
+Formal certification **cannot** honestly be issued while path B carries an open HIGH on F08-T07/T08, which are core
+Phase 8 tasks. Options:
+1. Keep Phase 8 **BLOCKED** (recommended). Record the component evidence (T01–T06, T09–T17 on the current runtime;
+   T07/T08 for path A) as partial results.
+2. Certify Phase 8 **only after** R1–R3 + DEC-8.7/8.8 + a successful controlled activation (D on a copy, then the
+   operational first cycle under the P8.1B gate) and a new independent review.
+
+Criteria for the final independent review:
+- exact SHA;
+- F08 matrix re-run;
+- reviewer-written adversarial tests on the activated configuration;
+- activation-preview evidence on an operational copy;
+- first-cycle reconciliation equal to the oracle;
+- zero unreviewed REVISIONs;
+- full suite and CI PASS;
+- PAPER, REAL OFF, NAS100 OFF, schema 3;
+- no open CRITICAL/HIGH;
+- PASS/FAIL report.
+
+## G. Owner decisions pending
+
+| ID | Decision | Options | Recommendation |
+|---|---|---|---|
+| DEC-8.6 | authorize R1–R3 (activation route + preflight + preview tool; flag still OFF) | A authorize · B defer | **A** |
+| DEC-8.7 | historic divergence before activation | A report only, never auto-close · B Owner-run manual reconciliation (outside the automated system) | **A** |
+| DEC-8.8 | REVISION handling | A review gate only · B gate + R4 surfacing | **B** |
+| DEC-8.9 | Phase 8 status until activation | A BLOCKED with partial component evidence · B certify with open HIGH | **A** |
+| DEC-8.10 | activation scope | A one symbol first (XAUUSD), then EURUSD · B both | **A** |
+| — | attach the P8.2 independent report | — | required |
+
+## H. Recommendation
+
+- **Activation: NO-GO now.** No route exists without a production change; the P8.2 report is not attached;
+  historic-divergence and REVISION reviews on an operational copy have not been done.
+- **GO** for DEC-8.6 (R1–R3 implementation with the flag still OFF) as the next batch, followed by D on an
+  Owner-provided DB copy.
+- **Phase 8 status: BLOCKED** (HIGH-8.1 OPEN on the operational runtime; path A evidence recorded).
