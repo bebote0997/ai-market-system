@@ -240,3 +240,106 @@ Plus a written **activation gate** for the future DEMO:
 - the rollback (flag OFF) steps.
 
 Its exit criterion is HIGH-8.1 closable for the flag-ON path while it stays explicitly open for the flag-OFF runtime.
+
+---
+
+# P8.1B — Isolated certification of the chronological SL/TP catch-up (tests only)
+
+`v2_position_catch_up` is ON **only** inside `test_phase8_catch_up_certification.py`, on temporary trading and
+evidence databases. Every other flag stays OFF; runtime defaults and `from_env` are unchanged (asserted). No
+production code changed.
+
+**Independent oracle.** Decimal arithmetic and its own reading of the documented precedence. Per bar, in time order:
+open beyond SL → exit at open; open beyond TP → exit at open; SL touched → exit at SL; TP touched → exit at TP; SL
+before TP when both are touched in one bar. It does not import or call `TradeManager`. Each run is compared on exit
+bar, exit price, reason, net PnL, realized PnL, equity and the number of `POSITION_CLOSED` events.
+
+## Evidence
+
+Shared setup:
+- Position opened 13:05, quantity 10, multiplier 1, cost 0.
+- Cycle slot 13:30; managed bars B1–B4 = 13:10, 13:15, 13:20, 13:25.
+- Flat bar = 100.00 / 100.05 / 99.95 / 100.00.
+- LONG: entry 100, SL 95, TP 110. SHORT: entry 100, SL 105, TP 90.
+- Persistence for every row = one `POSITION_CLOSED` journal row, a closed trade, and the position row CLOSED.
+
+| # | Scenario | Bar sequence (non-flat bars, O/H/L/C) | Expected (oracle) | Observed | Position | SL/TP | PnL | Result |
+|---|---|---|---|---|---|---|---|---|
+| 1 | LONG SL touched in an intermediate bar | B2 100/100.5/94/96 | B2 @95 stop | B2 @95 stop | CLOSED | SL | −50 | PASS |
+| 2 | LONG TP touched in an intermediate bar | B2 100/111/99.5/108 | B2 @110 target | same | CLOSED | TP | +100 | PASS |
+| 3 | SHORT SL touched in an intermediate bar | B3 100/106/99.5/104 | B3 @105 stop | same | CLOSED | SL | −50 | PASS |
+| 4 | SHORT TP touched in an intermediate bar | B2 100/100.5/89/91 | B2 @90 target | same | CLOSED | TP | +100 | PASS |
+| 5a | LONG gap below SL | B2 93/94/92/93.5 | B2 @93 stop (open) | same | CLOSED | SL (gap) | −70 | PASS |
+| 5b | LONG gap above TP | B2 112/113/111.5/112.5 | B2 @112 target (open) | same | CLOSED | TP (gap) | +120 | PASS |
+| 5c | SHORT gap above SL | B2 107/108/106.5/107.5 | B2 @107 stop (open) | same | CLOSED | SL (gap) | −70 | PASS |
+| 5d | SHORT gap below TP | B2 88/89/87.5/88.5 | B2 @88 target (open) | same | CLOSED | TP (gap) | +120 | PASS |
+| 6a | LONG SL and TP in the same bar | B2 100/111/94/100 | B2 @95 stop (existing precedence) | same | CLOSED | SL | −50 | PASS |
+| 6b | SHORT SL and TP in the same bar | B3 100/106/89/100 | B3 @105 stop | same | CLOSED | SL | −50 | PASS |
+| — | no touch | all flat | open | open | OPEN | — | 0 | PASS |
+| 7 | cadence jump (13:30 cycle missed) | 13:40 100/100.4/94.5/95.5; cycles 13:15, 13:45 | each bar 13:10–13:40 processed exactly once; 13:40 @95 stop | same (bar spy) | CLOSED | SL | −50 | PASS |
+| 8 | crash BEFORE the close commit (real process, exit inside the transaction) | scenario 1 | nothing committed; restart closes at B2 @95 | same | OPEN → CLOSED | SL | −50 | PASS |
+| 9 | crash AFTER the close commit (real process) | scenario 1 | durable close; 2 restarts add nothing | 1 close, 1 realized PnL | CLOSED | SL | −50 | PASS |
+| 10 | two processes compete (A computes the close and pauses; B recovers A's stale lock 15 min later and closes) | scenario 1 | one close; A loses ownership → ERROR, no write | same | CLOSED | SL | −50 | PASS |
+| 11 | pending order, no position | B2 dip 94 | fills only on the current gated bar (B4); B1–B3 journaled PENDING_NOT_EVALUATED; the B2 dip before the fill is ignored | same | OPEN at B4 | — | — | PASS |
+| 12 | evidence persistence failure, then recovery | scenario 1 | cycle 1: EVIDENCE_UNAVAILABLE, no economics; cycle 2 closes at the true bar B2 (not the newest) | same | CLOSED | SL | −50 | PASS |
+| 13 | AI provider failure during management | scenario 2 + a VALID setup | close still applied; no new order | same | CLOSED | TP | +100 | PASS |
+| 14 | 40 randomized LONG/SHORT 4-bar sequences (seed 20261007; open/high/low/close ±6–7) | random | oracle | equal in all 40 (exit bar, price, reason, PnL, equity, one close) | mixed | mixed | mixed | PASS |
+| 15 | same cycle repeated | scenario 1 | DUPLICATE; next slot changes nothing | same | CLOSED | SL | −50 | PASS |
+| 16 | full traceability | submit 13:15 (V1 plan 100/90/130) → fill 13:25 gate bar → 13:45 dip → 14:00 catch-up | one run_id across ORDER_SUBMITTED → ORDER_FILLED(fill_id) → POSITION_OPENED(position_id) → POSITION_CLOSED(trade_id); `origin_order_id` and `position_id` linked; close 13:45 @90 stop | same | CLOSED | SL | −10 × qty | PASS |
+| 17 | (extra) provider revises an already committed bar | B2 flat first, later revised to a stop touch | first committed bar wins (Phase 2); REVISION anomaly; no close | same | OPEN | — | 0 | PASS (LOW-8.6) |
+| B | default runtime (flag OFF), scenarios 1–4 | same data | — | position stays OPEN (newest bar only) | OPEN | missed | — | characterized |
+
+## HIGH-8.1 status
+
+- **Path A (flag ON, isolated tests):** every scenario passes against the independent oracle, including crashes, races,
+  cadence jumps, evidence failure, AI failure and 40 randomized sequences. The evidence supports **closing HIGH-8.1
+  for the flag-ON path, subject to independent confirmation in P8.2** (the author does not self-certify).
+- **Path B (default runtime, flag OFF):** **HIGH-8.1 remains OPEN.** The same data leaves positions open after
+  intermediate SL/TP touches (characterized). A PASS on A does not protect B.
+
+## New findings
+
+- **LOW-8.6:** a provider revision of an already committed bar is handled by the certified "first committed wins"
+  rule and recorded only in `evidence_anomalies` (REVISION). It is not surfaced in the trading journal or health. A
+  stop visible only in revised data is not applied.
+- No CRITICAL / HIGH / MEDIUM new.
+
+## Future activation gate for `v2_position_catch_up` (documented only; nothing activated)
+
+1. **Preconditions:**
+   - P8.2 independent PASS for path A;
+   - an Owner decision to activate;
+   - a separate `market_evidence_path` on durable storage (never the trading DB);
+   - backups of both DBs;
+   - the single scheduler authority stopped.
+2. **Data compatibility:** schema 3; Evidence Store schema present or creatable; no stamped forward rows that the
+   deployed code cannot read (DEC-8.4 procedure).
+3. **Existing positions:** for each open position, record `opened_at`, `last_processed_at`, SL and TP. The first
+   flag-ON cycle processes every committed bar after the watermark. Expect immediate closes if intermediate touches
+   happened while the flag was OFF. Compute the expected result with the independent oracle **before** activation.
+4. **First controlled cycle:** one symbol, PAPER only, at a session slot. Watch for `EVIDENCE_UNAVAILABLE` (must be
+   absent), bars processed equal to bars expected, and no duplicate journal rows.
+5. **SL/TP validation:** compare the closes and PnL of the first N cycles with the oracle over the committed evidence
+   (exact match required).
+6. **Logs and persistence:** the evidence watermark advances; positions' `last_processed_at` equals the newest
+   committed bar; `PENDING_NOT_EVALUATED` rows only for non-current bars; no REVISION anomalies left unreviewed.
+7. **Rollback:** stop the scheduler; set the flag OFF (config only; fingerprint returns to V1); keep the Evidence Store
+   (read-only, for audit). Positions stay valid: the V1 path continues from `last_processed_at`. No data rewrite.
+8. **Immediate stop criteria:**
+   - any oracle mismatch;
+   - a duplicate close or realized PnL;
+   - `STATE_INCONSISTENCY`;
+   - repeated `EVIDENCE_UNAVAILABLE` / `STALE_PAPER_STATE`;
+   - a position closed on a bar at or before its `opened_at`;
+   - any order not explained by the normal submit path.
+
+## Recommendation for the next batch
+
+P8.1C/D/E are not needed under the current decisions (DEC-8.2 no TIF; DEC-8.3 fail-stop accepted; DEC-8.4 procedure
+documented). Recommended next step: **P8.2 independent certification** with the separation of DEC-8.5:
+- current runtime T01–T06, T09–T17 (T02 with the accepted late-fill risk);
+- T07/T08 certified only for path A as an isolated component;
+- HIGH-8.1 open for path B.
+
+Optionally, with authorization: the two one-line LOW fixes (LOW-8.5 Store close on fail-closed startup; DEC-8.3 run
+label).

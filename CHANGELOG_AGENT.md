@@ -1,5 +1,17 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 8 P8.1B (isolated certification of the chronological SL/TP catch-up)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `0bb6927` (P8.1A); final SHA = the commit that adds
+  this entry. Tests only; `v2_position_catch_up` ON only inside temporary test databases; runtime defaults unchanged.
+- `test_phase8_catch_up_certification.py` (14 methods: 11 deterministic intermediate-touch/gap/same-bar cases vs an
+  independent Decimal oracle, flag-OFF contrast, cadence jump, repeated cycle, pending interplay, evidence failure,
+  AI failure, 40 randomized oracle sequences, full traceability chain, provider revision, and real-process crash
+  before/after the close commit and a two-process race).
+- HIGH-8.1: evidence supports closure for the flag-ON path (pending P8.2 independent confirmation); it remains OPEN
+  for the default flag-OFF runtime. New LOW-8.6 (revisions visible only in evidence anomalies). Activation gate
+  documented, nothing activated.
+
 ## 2026-10-07 — V2 Phase 8 P8.1A (adversarial execution tests, tests only)
 
 - Agent: Claude. Branch `v2/phase8-execution`; previous SHA `c5ba9d5` (P8.0); final SHA = the commit that adds this
