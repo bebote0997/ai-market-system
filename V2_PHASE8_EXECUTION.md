@@ -776,3 +776,112 @@ Review final SHA of P8.4F:
 
 Then decide whether P8.4 R1–R4 can be accepted. HIGH-8.1 for the runtime still needs a later Owner-approved controlled
 activation and its own review.
+
+# P8.4G — Fixes for the two HIGH findings of the Copilot P8.5R re-review
+
+Baseline `b5a8c3ca86f2788cc0f17e0f4dce2c8fdceed3b7`. Owner decisions DEC-8.11 (trading DB persistent-write check) and
+DEC-8.12 (ESCALATED is not final) approved. The P8.5R report was referenced as attached but was not present in the
+prompt; the fixes follow the findings as stated in the P8.4G prompt.
+
+| Fix | Finding | Commit |
+|---|---|---|
+| FIX A | P8.5R HIGH: the trading DB preflights accepted a read-only DB (TEMP probe) | `1dc82c8` |
+| FIX B | P8.5R HIGH: a material ESCALATED anomaly cleared the revision gate | `87dfd62` |
+
+Files: `runtime/config.py`, `runtime/cloud.py`, `runtime/demo_runner.py`, `runtime/revision_review.py` and tests only.
+No strategy, Risk Engine, AI, storage, broker or schema change. PAPER only, REAL OFF, NAS100 OFF, flags OFF by
+default.
+
+## FIX A — trading DB persistent write (DEC-8.11)
+
+- **Root cause:** `cloud_preflight` and `demo_runner.preflight` probed with `CREATE TEMP TABLE`, which SQLite keeps
+  in its temp database. A read-only trading DB still opens (SQLite falls back to read-only) and passes
+  `quick_check`, so it was reported writable.
+- **Fix:** `runtime/config.py::persistent_write_probe(db, path)`, shared by the three preflights (trading DB, cloud
+  and local, plus the Evidence Store check from P8.4F FIX1). It works as follows:
+  1. It requires OS write access to the file and its directory.
+  2. It takes the write lock (`BEGIN IMMEDIATE`), creates a table on `main` and inserts a row.
+  3. It always rolls back, including after an error.
+  4. It requires `sqlite_master`, `PRAGMA schema_version` and `PRAGMA user_version` to be unchanged.
+  - SQLite errors propagate to the callers, which already map them to `db_writable_schema = False`.
+- **Results:**
+  - read-only DB, insufficient permissions, a SQLite error during the probe, or a corrupt file → NOT_READY;
+  - a valid DB → INFRA_READY / READY as before, with the file byte-identical (no economic, schema or version change,
+    no residue).
+- **Tests:** `test_phase8_trading_db_preflight.py` (5).
+- **Before/after:** before (baseline reproduction), a read-only trading DB gave `db_writable_schema: True`, cloud
+  `INFRA_READY` and local `READY`. After: `False` / `NOT_READY` for both.
+
+## FIX B — ESCALATED is not final (DEC-8.12)
+
+- **Root cause:** `demo_gate` treated any `EVIDENCE_REVISION_REVIEWED` row as resolution, whatever its decision.
+- **Fix:**
+  - Decisions are append-only journal rows: history is never deleted or rewritten. The effective decision of an
+    anomaly is its latest row (journal order), keyed by `anomaly_id`.
+  - Each review row records `decision`, `final`, `previous_decision`, `reviewer` (required, non-blank) and `note`.
+  - The gate is BLOCKED by `MATERIAL_UNREVIEWED` (material, no decision) and by `ESCALATED_UNRESOLVED`, in addition to
+    the P8.4F blockers (`EVIDENCE_DB_MISSING`, `EVIDENCE_DB_UNREADABLE`, `UNCLASSIFIED`,
+    `CLASSIFICATION_WITHOUT_ANOMALY`).
+  - The health summary adds `escalated_unresolved`. `unreviewed` and `material_unreviewed` now count anomalies without
+    a final decision.
+
+### Permitted decisions and their consequences
+
+| Decision | Final | Consequence |
+|---|---|---|
+| `ACCEPTED_FIRST_COMMITTED` | yes | The Owner accepts the certified rule for this anomaly: the first committed bar stays authoritative. The anomaly is resolved for the gate. Evidence and PAPER state are unchanged. |
+| `ESCALATED` | no | Needs investigation. The gate is BLOCKED (material or not) until a later final decision. |
+| no decision | — | Material: BLOCKED. Non-material: warning only (unchanged). |
+
+- **Re-escalation:** ESCALATED after a final decision re-opens the anomaly; both rows remain.
+- **No path to change a committed bar:** no decision changes a committed bar, and none exists to accept the presented
+  bar. If an escalation concludes the committed bar was wrong, the gate stays BLOCKED until the Owner authorizes a
+  separate procedure.
+- **Later anomalies:** a later anomaly of the same bar (partial revision) has its own `anomaly_id`. It never alters
+  earlier decisions and blocks on its own until resolved.
+
+### Superseded expectations (explicit)
+
+- `test_gate_is_read_only_and_cli_exit_codes`: ESCALATED → gate exit 0 (P8.4) is now exit 3; a final decision → 0.
+- `test_multiple_revisions_of_one_bar_are_reviewed_individually_and_persist`: ESCALATED → CLEAR (P8.4F) is now
+  BLOCKED `ESCALATED_UNRESOLVED`; a final decision → CLEAR.
+- `test_non_material_revision_is_visible_and_only_a_warning`: the summary adds `escalated_unresolved`.
+
+### Tests and before/after
+
+- **Tests:** `EscalationTests` (6):
+  - material ESCALATED → BLOCKED, then final → CLEAR, with an auditable history; the committed bar digest and the
+    PAPER account are unchanged;
+  - non-material ESCALATED → BLOCKED;
+  - re-escalation re-opens and keeps history;
+  - a new partial revision does not erase an earlier decision;
+  - unclassified still blocks;
+  - review validation.
+- **Before/after:** before (baseline reproduction), a material anomaly with only ESCALATED gave CLEAR. After: BLOCKED
+  `ESCALATED_UNRESOLVED`.
+
+## Suite and verification
+
+- Full suite: 1074 OK after FIX A, 1080 OK after FIX B (local). `git diff --check` clean.
+- Diff `b5a8c3c..HEAD`: the preflights, `revision_review` and tests only.
+- `REAL_EXECUTION_ENABLED = False`; default `enabled_symbols = (XAUUSD, EURUSD)`; `v2_position_catch_up` and the
+  scheduler are OFF by default.
+
+## Open risks
+
+1. `cloud_preflight` still creates a missing trading DB (unchanged pre-existing behaviour; the probe then runs on it).
+2. On Windows, directory write permission cannot be reproduced with `chmod`; the test simulates it by patching
+   `os.access`.
+3. The decision vocabulary is minimal (one final decision). Any outcome other than "first committed stays
+   authoritative" has no in-system resolution, by design.
+4. P8.4F remaining risks and the P8.4 open risks are unchanged. **HIGH-8.1 stays OPEN** for the operational runtime;
+   **Phase 8 stays BLOCKED**; nothing is certified or activated.
+
+## Next independent review required (P8.5R2)
+
+Review the final SHA of P8.4G:
+- FIX A on both preflights and the shared probe (including the Evidence Store reuse);
+- FIX B semantics and the decision table;
+- the three superseded expectations;
+- that no economic, strategy or Risk Engine behaviour changed;
+- full suite and CI.

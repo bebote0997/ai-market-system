@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-08 — V2 Phase 8 P8.4G (fixes for the two P8.5R HIGH findings)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `b5a8c3c`; final SHA = the commit that adds this entry.
+- FIX A `1dc82c8` (DEC-8.11): `persistent_write_probe` (BEGIN IMMEDIATE + main table + ROLLBACK, schema/version
+  unchanged, OS write access) replaces the TEMP probes of `cloud_preflight` and `demo_runner.preflight`; read-only,
+  permission or SQLite errors -> NOT_READY. `test_phase8_trading_db_preflight.py` (5).
+- FIX B `87dfd62` (DEC-8.12): only ACCEPTED_FIRST_COMMITTED is final; effectively ESCALATED anomalies block the gate;
+  append-only auditable review rows. `EscalationTests` (6); three earlier expectations explicitly superseded.
+- Full suite 1080. No activation; HIGH-8.1 OPEN for the runtime; Phase 8 BLOCKED; not certified.
+
 ## 2026-10-08 — V2 Phase 8 P8.4F (fixes for the P8.5 independent review blockers)
 
 - Agent: Claude. Branch `v2/phase8-execution`; baseline `0f67527`; final SHA = the commit that adds this entry.
