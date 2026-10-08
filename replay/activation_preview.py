@@ -173,11 +173,17 @@ def preview(trading_db, *, as_of, evidence_db=None, bars_json=None, account_id="
     pending = []
     for order in sorted((o for o in orders.values() if o.status == "PENDING"), key=lambda o: o.order_id):
         series = [b for b in bars.get(order.symbol, []) if parse_utc(b["bar_start"]) + FIVE <= as_of]
-        gate = series[-1]["bar_start"] if series else None
+        newest = series[-1]["bar_start"] if series else None
+        # P8.4F (P8.5 MEDIUM): same temporal rule as the runtime gate and PaperBroker: the current bar may progress the
+        # order only if it starts STRICTLY after the order's as_of; otherwise the order stays PENDING this cycle.
+        eligible = newest is not None and parse_utc(newest) > order.as_of
+        gate = newest if eligible else None
         skipped = [b["bar_start"] for b in series
                    if parse_utc(b["bar_start"]) > order.as_of and b["bar_start"] != gate]
         pending.append({"order_id": order.order_id, "symbol": order.symbol, "side": order.side,
-                        "as_of": utc(order.as_of), "gate_bar": gate, "not_evaluated_bars": skipped,
+                        "as_of": utc(order.as_of), "gate_bar": gate,
+                        "expected_status": "EVALUATED_ON_GATE_BAR" if eligible else "STAYS_PENDING_NO_ELIGIBLE_BAR",
+                        "not_evaluated_bars": skipped,
                         "risk_policy_version": order.risk_policy_version, "setup_id": order.setup_id})
     if pending:
         risks.append({"risk": "PENDING_ORDERS_PRESENT", "count": len(pending)})

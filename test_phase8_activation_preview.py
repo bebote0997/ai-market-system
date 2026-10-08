@@ -109,6 +109,22 @@ class PreviewTests(Harness):
         self.assertEqual(sorted(e[2]["bar_start"] for e in journal if e[0] == "PENDING_NOT_EVALUATED"),
                          item["not_evaluated_bars"])
 
+    def test_pending_order_never_assigned_a_bar_at_or_before_its_as_of(self):
+        """P8.5 MEDIUM regression: the preview predicted the 13:25 bar for an order created at 13:30."""
+        pending = PaperOrder("1.0", "pend", "run-pend", "XAUUSD", "LONG", 1.0, 100.0, 95.0, 130.0, 1.0, 10000.0, 0.0,
+                             S1)
+        self.seed(side=None, pending=pending)
+        report = preview(self.db, as_of=S1, bars_json=bars_json(Path(self.tmp.name) / "b.json", {}, S1))
+        item = report["pending_orders"][0]
+        self.assertEqual((item["gate_bar"], item["expected_status"], item["not_evaluated_bars"]),
+                         (None, "STAYS_PENDING_NO_ELIGIBLE_BAR", []))
+        copy = Path(self.tmp.name) / "isolated_copy.db"
+        shutil.copyfile(self.db, copy)
+        self.db = copy  # the real runtime on an isolated copy agrees: not progressed at the S1 cycle
+        self.cycle(S1, {}, flag=True)
+        _, orders, fills, _ = self.paper()
+        self.assertEqual((orders["pend"].status, fills), ("PENDING", {}))
+
     def test_cli_is_read_only_and_refuses_to_overwrite_sources(self):
         self.seed()
         bars = bars_json(Path(self.tmp.name) / "b.json", {}, S2)
