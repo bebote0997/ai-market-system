@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-07 — V2 Phase 8 P8.1A (adversarial execution tests, tests only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `c5ba9d5` (P8.0); final SHA = the commit that adds this
+  entry. No production code changed; all flags OFF.
+- `test_phase8_adversarial.py` (12: SQLite failure matrix, fill transitions, scheduler/locks, conflicts, PAPER
+  safety, rollback fail-closed + restore idempotency) and `test_phase8_process_races.py` (4 real-process: crash
+  after/before submit commit, same-slot race, live-run recovered by another process).
+- Results: no phantom or duplicate order in any scenario. DEC-8.3 investigation documented (fail-stop accepted;
+  optional truthfulness tweak needs authorization); LOW-8.5 Store not closed on fail-closed startup. Rollback
+  procedure (DEC-8.4) and certification separation (DEC-8.5) documented. HIGH-8.1 remains OPEN for the default runtime.
+
 ## 2026-10-07 — V2 Phase 8 P8.0 (Execution / Fill / Trade Manager: audit and certification plan)
 
 - Agent: Claude. Branch `v2/phase8-execution` from `main` `2753130d22abc33e12caf766e8ed5dfba17a8b70`; final SHA = the

@@ -147,3 +147,96 @@ confirmed; evidence of recovery and idempotency; PASS/FAIL report. The author do
 
 Recommendation: **READY** for P8.1 once DEC-8.1 … DEC-8.5 are decided (P8.1A can start immediately, since it is
 tests only).
+
+---
+
+# P8.1A — Adversarial tests (tests only; flags OFF; no production change)
+
+Owner decisions applied:
+- **DEC-8.1:** `v2_position_catch_up` stays OFF in the runtime. HIGH-8.1 stays OPEN for the default runtime. The
+  chronological path is tested only in isolation (P8.1B), and an activation gate is required before any DEMO.
+- **DEC-8.2:** no pending time-in-force. The late-fill risk is documented (MEDIUM-8.2 accepted as existing policy).
+- **DEC-8.3:** investigate finish() failures; propose, do not implement.
+- **DEC-8.4:** rollback procedure + fail-closed tests, no runtime change.
+- **DEC-8.5:** certification of the current runtime and of isolated V2 components are separate. Nothing that depends
+  on an OFF flag is certified as active.
+
+## Tests added
+
+`test_phase8_adversarial.py` (12, in-process) and `test_phase8_process_races.py` (4, real processes). Every scenario
+asserts the PAPER invariants: ≤ 1 order per run, no fill without a FILLED order, every open position has a FILLED origin
+order with equal quantity, a restart succeeds, and a re-run of the slot is DUPLICATE.
+
+| Area | Scenario | Result |
+|---|---|---|
+| SQLite failure matrix | injected failure in `save_reports` / submit `save_paper` / `record_execution` / `record_analysis_events` | first two: cycle ERROR, **0 orders**; audit-only: decision stands, **1 order**; next slot after restart never duplicates |
+| | `finish()` raising after the order committed | the order stands once. The exception escapes the cycle; the lock is held until restart. Recovery marks the run FAILED / `interrupted_run` while the review keeps `execution: SUBMITTED` (DEC-8.3) |
+| | journal failure inside the economic save (fill) | whole fill rolled back atomically; a later cycle fills exactly once |
+| Fills / transitions | submit → fill → terminal; restarts | 1 order, 1 fill, 1 position; never refilled; REJECTED/CANCELLED never progressed |
+| Scheduler / locks | same-slot tick twice | `["PLAN_READY"]`, then `["DUPLICATE"]`; 1 order |
+| | hard interruption (finish never runs) | lock kept at a restart 1 min later (120 s threshold); recovered 15 min later |
+| Restart duplication (real processes) | crash **after** the submit commit (exit before record/finish) | 1 PENDING order; restart recovers (run FAILED `interrupted_run`), fills it once; further restarts DUPLICATE |
+| | crash **before** the submit COMMIT (exit inside the transaction) | 0 orders, 0 ORDER_SUBMITTED; the next slot submits exactly once |
+| Lock race (real processes) | two processes, same slot | one cycle, one run, one order |
+| | process B recovers a still-live run of process A (local runtime, no lifetime lock) | B trades; A loses slot ownership → ERROR with no economic write; **exactly 1 order** (ownership is re-checked inside `save_paper`'s transaction) |
+| Conflicts | pending + new same-symbol setup; open LONG + opposite SHORT | `PENDING_ORDER`; `EXISTING_POSITION`; 1 order; LONG untouched |
+| PAPER safety | REAL constant, NAS100, cloud runner, flags | `REAL_EXECUTION_ENABLED` False; NAS100 not enabled and not in PAPER contracts (cycle raises); no live-broker class; all V2 flags False from env; cloud runner refuses without activation env |
+| Rollback (DEC-8.4) | a row with an unknown future field | startup fails closed (`invalid paper payload`); the row is not rewritten |
+| | Phase 5/6-stamped rows | read by current code |
+| | restore from a WAL-checkpointed copy | the next slot runs once on each copy; reruns DUPLICATE; identical order states |
+
+## DEC-8.3 investigation result
+
+- No phantom or duplicate order at any injected point. Failures before the submit commit leave no order; failures
+  after it leave exactly one.
+- `finish()` failure: fail-stop. The exception leaves `run_cycle`/`tick`. The cloud runner exits and restarts with
+  `recover(stale=0)` under its lifetime lock. The local CLI recovers runs older than 120 s.
+- Truthfulness nuance (MEDIUM-8.3, unchanged): after such a recovery the run is `FAILED / ERROR / interrupted_run`,
+  while the review's `execution` record (SUBMITTED + order_id) and the journal `ORDER_SUBMITTED` show the order. The
+  economic truth is in the order tables and journal. The run status describes the process interruption.
+- **Proposed minimal change (not implemented, optional):** none required for correctness. If the Owner wants a
+  truthful run label, `recover()` could set `error = "interrupted_after_execution"` when a review execution record
+  exists. That touches the hash-pinned `storage/database.py`, so it needs an explicit authorization and a pinned-hash
+  update. Recommendation: **accept fail-stop + document (option A).**
+- LOW-8.5 (new): when startup fails closed on an undecodable row, `OperationalRuntime.__init__` does not close its
+  Store (the connection is released only by garbage collection). Harmless to economics. A one-line fix can be made if
+  authorized.
+
+## DEC-8.4 rollback procedure (no runtime change)
+
+1. Stop the single scheduler authority (SIGTERM; the cloud runner lifetime lock guarantees one writer).
+2. `PRAGMA wal_checkpoint(FULL)`; copy the DB; `PRAGMA integrity_check` on the copy.
+3. Detect forward rows:
+   `SELECT COUNT(*) FROM paper_orders WHERE payload LIKE '%"setup_id"%' OR payload LIKE '%"risk_policy_version"%'`
+   (same for `paper_positions`).
+4. If 0: rolling back to any schema-3 code is compatible. If > 0: the target code must be ≥ P5.1C / P6.1. Older code
+   fails closed at startup by design (tested). Never edit or strip rows.
+5. Restore = start the chosen code on the copy. `recover()` closes interrupted runs. Run one cycle, verify the
+   invariants, and verify a rerun of the slot is DUPLICATE (tested).
+
+## DEC-8.5 certification separation
+
+| Scope | Certifiable now | Basis |
+|---|---|---|
+| Current runtime (flags OFF): T01–T06, T09–T17 | yes (P8.2) | existing + P8.1A tests |
+| Current runtime: T07/T08 | **no**: HIGH-8.1 open (newest bar only) | DEC-8.1 |
+| Current runtime: T02 late fills | certify with accepted risk | DEC-8.2 |
+| Isolated V2 components (catch-up, P1 gate, Risk V2, conflict path, AI resilience) | as components, flag ON in tests only, never as active runtime behavior | P8.1B |
+
+## Recommendation for P8.1B
+
+Isolated flag-ON certification suite for the chronological path (tests only; `v2_position_catch_up` OFF by default):
+- SL/TP touched in intermediate bars, for LONG and SHORT, gap ordering and same-bar precedence;
+- cadence jumps and missed cycles;
+- restart exactly-once and real-process races with catch-up;
+- P1 pending gate interplay;
+- Evidence Store failure fail-closed;
+- combination with an AI outage;
+- equivalence of final P&L versus a bar-by-bar oracle.
+
+Plus a written **activation gate** for the future DEMO:
+- the preconditions to flip the flag (separate evidence path, backup, Owner approval);
+- a first-cycle verification checklist;
+- the rollback (flag OFF) steps.
+
+Its exit criterion is HIGH-8.1 closable for the flag-ON path while it stays explicitly open for the flag-OFF runtime.
