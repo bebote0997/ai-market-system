@@ -94,8 +94,7 @@ def _digest(rows_by_table):
     return {"edg_version": EDG_VERSION, "edg": H(EDG_STATE_PREFIX, cj(summary)), "tables": tables}
 
 
-def edg(conn):
-    """Complete economic digest of the database open on ``conn`` (read-only use). Fails closed on schema drift."""
+def _read_tables(conn):
     rows_by_table = {}
     for name, key in EDG_TABLES:
         exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
@@ -106,6 +105,30 @@ def edg(conn):
         if key not in columns:
             raise ValueError(f"economic table {name} lacks its primary key {key}")
         rows_by_table[name] = [dict(zip(columns, tuple(row))) for row in cursor.fetchall()]
+    return rows_by_table
+
+
+def edg(conn):
+    """Complete economic digest of the database open on ``conn`` (read-only use). Fails closed on schema drift.
+
+    All five tables are read inside ONE SQLite read transaction, so the digest is a single consistent snapshot, never
+    a mix of states committed by a concurrent writer between two SELECTs (WAL: one snapshot; rollback journal: the
+    SHARED lock is held until the end). If the caller already holds a transaction it is reused and never committed or
+    rolled back here (the digest then reflects the caller's own view). Otherwise a deferred, read-only transaction is
+    opened and ended here; it writes nothing. If a transaction cannot be confirmed, the call fails closed.
+    """
+    owned = not conn.in_transaction
+    if owned:
+        conn.execute("BEGIN")
+    try:
+        if not conn.in_transaction:
+            raise RuntimeError("EDG requires a single read transaction; consistency cannot be guaranteed")
+        rows_by_table = _read_tables(conn)
+        if not conn.in_transaction:
+            raise RuntimeError("EDG read transaction ended during the calculation; snapshot not consistent")
+    finally:
+        if owned and conn.in_transaction:
+            conn.execute("ROLLBACK")  # our own read-only transaction: nothing to undo, releases the snapshot
     return _digest(rows_by_table)
 
 

@@ -247,6 +247,121 @@ class VerifierTests(Base):
         users = [p.name for p in (ROOT / "runtime").glob("*.py") if "economic_digest" in p.read_text(encoding="utf-8")]
         self.assertEqual(users, [])
 
+    def test_refuses_the_source_wal_and_shm_through_any_equivalent_path(self):
+        for suffix in ("", "-wal", "-shm"):
+            target = Path(str(self.db) + suffix)
+            if not target.exists():
+                target.write_bytes(b"keep-" + suffix.encode())
+            content = target.read_bytes()
+            spellings = [str(target), str(self.dir / "sub" / ".." / target.name), os.path.relpath(target)]
+            if os.name == "nt":
+                spellings.append(str(target).upper())
+            for name, make_link in (("sym", os.symlink), ("hard", os.link)):
+                link = self.dir / f"{name}{suffix or '-db'}.json"
+                try:
+                    make_link(target, link)
+                except (OSError, NotImplementedError):
+                    continue  # links not permitted on this host
+                spellings.append(str(link))
+            for out in spellings:
+                with self.subTest(suffix=suffix, out=out), self.assertRaises(SystemExit):
+                    verifier_main(["--trading-db", str(self.db), "--out", out])
+                self.assertEqual(target.read_bytes(), content)
+
+
+class Interleaved:
+    """Connection proxy: after paper_accounts has been fully read, a concurrent writer runs before the next table."""
+
+    def __init__(self, conn, write):
+        self._conn, self._write, self.outcome = conn, write, None
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def execute(self, sql, *args):
+        if self.outcome is None and 'FROM "paper_orders"' in sql:
+            self.outcome = self._write()
+        return self._conn.execute(sql, *args)
+
+
+class SnapshotTests(Base):
+    def writer(self):
+        conn = sqlite3.connect(self.db, timeout=0, isolation_level=None)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("UPDATE paper_accounts SET payload=payload||' '")  # a table already read
+            conn.execute("UPDATE closed_trades SET payload=payload||' '")  # a table not read yet
+            try:
+                conn.execute("COMMIT")
+                return "committed"
+            except sqlite3.OperationalError as exc:
+                conn.execute("ROLLBACK")
+                return exc
+        finally:
+            conn.close()
+
+    def interleaved_digest(self):
+        conn = sqlite3.connect(self.db, isolation_level=None)
+        try:
+            proxy = Interleaved(conn, self.writer)
+            result = edg(proxy)
+            self.assertFalse(conn.in_transaction)  # its own read transaction is ended
+            return result, proxy.outcome
+        finally:
+            conn.close()
+
+    def test_wal_concurrent_commit_is_invisible_to_a_running_digest(self):
+        self.raw("PRAGMA journal_mode=WAL")
+        base = digest_of(self.db)
+        result, outcome = self.interleaved_digest()
+        self.assertEqual(outcome, "committed")
+        self.assertEqual(result, base)  # the pre-write snapshot, not a mix
+        after = digest_of(self.db)
+        self.assertNotEqual(after["tables"]["paper_accounts"]["digest"], base["tables"]["paper_accounts"]["digest"])
+        self.assertNotEqual(after["tables"]["closed_trades"]["digest"], base["tables"]["closed_trades"]["digest"])
+
+    def test_rollback_journal_concurrent_commit_is_blocked_during_the_digest(self):
+        base = digest_of(self.db)
+        result, outcome = self.interleaved_digest()
+        self.assertIsInstance(outcome, sqlite3.OperationalError)  # SHARED lock held across all five tables
+        self.assertEqual(result, base)
+        self.assertEqual(digest_of(self.db), base)
+
+    def test_caller_transaction_is_reused_and_never_ended(self):
+        base = digest_of(self.db)
+        conn = sqlite3.connect(self.db, isolation_level=None)
+        try:
+            conn.execute("BEGIN")
+            conn.execute("UPDATE paper_orders SET payload=payload||' ' WHERE order_id='pend'")
+            inside = edg(conn)
+            self.assertTrue(conn.in_transaction)  # no COMMIT / ROLLBACK by edg
+            self.assertNotEqual(inside["edg"], base["edg"])  # the caller's own view
+            conn.execute("ROLLBACK")
+            self.assertEqual(edg(conn), base)
+        finally:
+            conn.close()
+        legacy = sqlite3.connect(self.db)  # default Python isolation_level
+        try:
+            self.assertEqual(edg(legacy), base)
+            self.assertFalse(legacy.in_transaction)
+        finally:
+            legacy.close()
+
+    def test_fails_closed_without_a_confirmed_transaction(self):
+        conn = sqlite3.connect(self.db, isolation_level=None)
+
+        class NoTransaction:
+            in_transaction = False
+
+            def execute(self, sql, *args):
+                return conn.execute(sql, *args)
+
+        try:
+            with self.assertRaises(RuntimeError):
+                edg(NoTransaction())
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

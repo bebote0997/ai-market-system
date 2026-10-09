@@ -10,6 +10,7 @@ Usage: python -m replay.economic_verifier --trading-db COPY.db [--account paper-
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -74,14 +75,30 @@ def verify(trading_db, *, account_id="paper-main"):
                     "digests detect persistent divergence only, never an alteration reverted between observations."}
 
 
+def _norm(path):
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _targets_source(out, trading_db):
+    """True if ``out`` is the source DB or its ``-wal`` / ``-shm`` file: equivalent spellings, case, symlinks (both
+    the given and the resolved source location) and, for existing files, the same file through any other link."""
+    protected = [str(base) + suffix for base in {Path(trading_db).absolute(), Path(os.path.realpath(trading_db))}
+                 for suffix in ("", "-wal", "-shm")]
+    if _norm(out) in {_norm(path) for path in protected}:
+        return True
+    if not os.path.exists(out):
+        return False
+    return any(os.path.exists(path) and os.path.samefile(out, path) for path in protected)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read-only economic digest verifier (PAPER).")
     parser.add_argument("--trading-db", required=True)
     parser.add_argument("--account", default="paper-main")
     parser.add_argument("--out")
     args = parser.parse_args(argv)
-    if args.out and Path(args.out).resolve() == Path(args.trading_db).resolve():
-        raise SystemExit("refusing to write the report over the source database")
+    if args.out and _targets_source(args.out, args.trading_db):
+        raise SystemExit("refusing to write the report over the source database or its -wal/-shm files")
     report = verify(args.trading_db, account_id=args.account)
     text = json.dumps(report, indent=2, sort_keys=True)
     if args.out:
