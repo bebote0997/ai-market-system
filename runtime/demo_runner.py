@@ -46,8 +46,9 @@ def preflight(config, *, env=None):
         "openai_credential": bool(env.get("OPENAI_API_KEY")),
         "openai_model": env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
     }
-    from runtime.config import catch_up_storage_checks, persistent_write_probe
+    from runtime.config import catch_up_scope_checks, catch_up_storage_checks, persistent_write_probe
     checks.update(catch_up_storage_checks(config, mount=None, disk_mounted=True))  # V2 P8.4 R2; {} while OFF
+    checks.update(catch_up_scope_checks(config))  # V2 P1-B: scope and STRICT evidence; {} while OFF
     try:
         store = Store(config.db_path)
         try:

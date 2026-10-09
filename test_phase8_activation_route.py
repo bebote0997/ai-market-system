@@ -150,7 +150,13 @@ class R2PreflightTests(unittest.TestCase):
     def test_cloud_preflight_is_not_ready_on_any_evidence_failure(self):
         env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "x"}
         good = cloud_preflight(self.config(self.mount / "market_evidence.db"), env=env, disk_mounted=True)
-        self.assertTrue(good.infra_ready, good.checks)
+        storage = {k: v for k, v in good.checks.items()
+                   if k.startswith("catch_up_") and k != "catch_up_evidence_contiguous"}
+        self.assertTrue(storage and all(storage.values()), good.checks)  # every R2 storage check still passes
+        # P1-B (Owner decision, STRICT fail-closed): superseded expectation. An absent / empty Evidence Store no longer
+        # yields INFRA_READY: catch_up_evidence_contiguous is False until contiguous evidence exists (the READY case
+        # with real contiguous evidence is demonstrated in test_phase8_scope_preflight.py).
+        self.assertEqual((good.checks["catch_up_evidence_contiguous"], good.infra_ready), (False, False))
         bad = cloud_preflight(self.config(Path(self.tmp.name) / "outside.db"), env=env, disk_mounted=True)
         self.assertFalse(bad.infra_ready)
         self.assertEqual(bad.status, "NOT_READY")

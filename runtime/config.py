@@ -173,6 +173,78 @@ def persistent_write_probe(db, path):
     return schema() == before
 
 
+def catch_up_scope_checks(config, *, as_of=None):
+    """V2 Phase 8 / P1-B (DEC-8.14 / 8.16, P8.6 design 1.4 and 1.7): preflight checks of the per-symbol catch-up
+    scope, ONLY when the flag is ON ({} otherwise, so the OFF report is unchanged). READ-ONLY.
+
+    - ``catch_up_scope_valid``: the scope is canonical, non-empty, inside enabled_symbols, never NAS100.
+    - ``catch_up_evidence_contiguous`` (STRICT, around the clock): for every in-scope symbol, the newest closed 5m bar
+      at ``as_of`` is committed in the Evidence Store, and for every open position of that symbol every 5m bar after
+      its watermark up to that bar is committed, with no GAP anomaly and no uncommitted LATE anomaly in the window.
+      No calendar, backfill or synthetic bar. An absent or empty Evidence Store fails (Owner decision: the first
+      activation needs a prior evidence-preparation stage; no exception)."""
+    if not config.v2_position_catch_up:
+        return {}
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from storage.codec import parse_utc
+    scope, enabled = tuple(config.v2_position_catch_up_symbols), tuple(config.enabled_symbols)
+    checks = {"catch_up_scope_valid": False, "catch_up_evidence_contiguous": False}
+    try:
+        checks["catch_up_scope_valid"] = bool(scope) and parse_catch_up_symbols(",".join(scope), enabled) == scope
+    except ValueError:
+        pass
+    five = timedelta(minutes=5)
+    now = datetime.now(timezone.utc)
+    as_of = (as_of or now).astimezone(timezone.utc)
+    if as_of > now:
+        return checks  # NE6: a future as-of is never accepted
+    newest = as_of.replace(minute=as_of.minute - as_of.minute % 5, second=0, microsecond=0) - five
+    evidence_path = config.market_evidence_path
+    if evidence_path is None or not Path(evidence_path).is_file():
+        return checks
+    positions = {}
+    trading = Path(config.db_path)
+    try:
+        if trading.is_file():
+            db = sqlite3.connect(trading.resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                for (payload,) in db.execute("SELECT payload FROM paper_positions "
+                                             "WHERE json_extract(payload,'$.status')='OPEN'"):
+                    data = json.loads(payload)
+                    watermark = data.get("last_processed_at") or data.get("opened_at")
+                    positions.setdefault(data.get("symbol"), []).append(parse_utc(watermark))
+            finally:
+                db.close()
+        ev = sqlite3.connect(Path(evidence_path).resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            for symbol in scope:
+                committed = {parse_utc(b) for (b,) in ev.execute(
+                    "SELECT bar_start FROM market_evidence WHERE symbol=? AND timeframe='5m'", (symbol,))}
+                if newest not in committed:
+                    return checks  # trailing gap / stale / empty evidence
+                anomalies = [(kind, parse_utc(b)) for kind, b in ev.execute(
+                    "SELECT kind, bar_start FROM evidence_anomalies WHERE symbol=? AND timeframe='5m' "
+                    "AND kind IN ('GAP','LATE')", (symbol,))]
+                for watermark in positions.get(symbol, []):
+                    start = watermark.replace(second=0, microsecond=0)
+                    start = start.replace(minute=start.minute - start.minute % 5)
+                    stamp = start + five if start <= watermark else start
+                    while stamp <= newest:
+                        if stamp not in committed:
+                            return checks
+                        stamp += five
+                    for kind, bar_start in anomalies:
+                        if watermark < bar_start <= newest and (kind == "GAP" or bar_start not in committed):
+                            return checks
+        finally:
+            ev.close()
+    except (OSError, ValueError, TypeError, sqlite3.Error):
+        return checks
+    checks["catch_up_evidence_contiguous"] = True
+    return checks
+
+
 def catch_up_storage_checks(config, *, mount=None, disk_mounted=True):
     """V2 Phase 8 / P8.4 (DEC-8.6, R2): fail-closed checks of the Market Evidence Store, ONLY when
     ``v2_position_catch_up`` is ON ({} otherwise). Never creates the store: an absent store needs a writable parent

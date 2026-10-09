@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from runtime.config import RuntimeConfig, catch_up_storage_checks, persistent_write_probe
+from runtime.config import RuntimeConfig, catch_up_scope_checks, catch_up_storage_checks, persistent_write_probe
 from runtime.demo_runner import REAL_EXECUTION_ENABLED
 from storage.database import Store
 from storage.codec import parse_utc
@@ -103,7 +103,8 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
             checks["db_writable_schema"] = False
     checks["experiment_state_compatible"] = (
         checks["experiment_not_started"] or checks["experiment_resumable"])
-    catch_up_checks = catch_up_storage_checks(config, mount=mount, disk_mounted=disk_mounted)
+    catch_up_checks = {**catch_up_storage_checks(config, mount=mount, disk_mounted=disk_mounted),
+                       **catch_up_scope_checks(config)}  # P1-B: scope and STRICT evidence; {} while OFF
     checks.update(catch_up_checks)  # empty while the catch-up flag is OFF: the OFF report is unchanged
     infrastructure = (
         "paper_only", "enabled_symbols", "market_provider", "ai_provider",

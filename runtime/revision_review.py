@@ -263,11 +263,13 @@ def _ro(path):
     return sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
 
 
-def demo_gate(trading_db, evidence_db):
+def demo_gate(trading_db, evidence_db, enabled_symbols=None):
     """READ-ONLY pre-DEMO gate. CLEAR only with full anomaly coverage by ``anomaly_id``, a VALID final decision for every
     material anomaly, no effectively ESCALATED anomaly, no invalid latest review (LOW-1), no review without a recorded
     anomaly, no classification that mismatches its anomaly, exactly one classification per anomaly, and no malformed
     classification row."""
+    from runtime.config import DEFAULT_ENABLED_SYMBOLS
+    enabled = tuple(DEFAULT_ENABLED_SYMBOLS if enabled_symbols is None else enabled_symbols)
     blockers = []
     anomalies = {}
     if evidence_db is None or not Path(evidence_db).is_file():
@@ -335,6 +337,11 @@ def demo_gate(trading_db, evidence_db):
         blockers.append("MATERIAL_UNREVIEWED")
     if escalated:
         blockers.append("ESCALATED_UNRESOLVED")
+    # P1-B (design 1.6, DEC-8.15): coverage is never filtered by scope; an anomaly of a symbol that is not enabled
+    # (e.g. NAS100) cannot come from the runtime and blocks for Owner investigation.
+    disabled = [a for a in anomalies.values() if a["symbol"] not in enabled]
+    if disabled:
+        blockers.append("ANOMALY_FOR_DISABLED_SYMBOL")
     if invalid_latest:
         blockers.append("INVALID_REVIEW_RECORD")
     if without_record:
@@ -352,6 +359,7 @@ def demo_gate(trading_db, evidence_db):
             "invalid_reviews": invalid_latest, "historical_invalid_reviews": historical_invalid,
             "reviews_without_record": without_record, "classification_mismatches": mismatches,
             "classification_conflicts": conflicts, "classification_malformed": malformed,
+            "anomalies_for_disabled_symbols": disabled,
             "resolved": sum(1 for key in classified if effective.get(key) in FINAL_DECISIONS),
             "recorded": len(classification_rows), "reviewed": len(effective)}
 
@@ -362,6 +370,7 @@ def main(argv=None):
     gate = sub.add_parser("gate")
     gate.add_argument("--trading-db", required=True)
     gate.add_argument("--evidence-db", required=True)
+    gate.add_argument("--enabled-symbols", default="XAUUSD,EURUSD")
     review = sub.add_parser("review")
     review.add_argument("--trading-db", required=True)
     review.add_argument("--key", required=True)
@@ -370,7 +379,8 @@ def main(argv=None):
     review.add_argument("--note", default="")
     args = parser.parse_args(argv)
     if args.command == "gate":
-        result = demo_gate(args.trading_db, args.evidence_db)
+        result = demo_gate(args.trading_db, args.evidence_db,
+                           tuple(s for s in args.enabled_symbols.split(",") if s))
         print(json.dumps(result, indent=2, default=str))
         return 0 if result["status"] == "CLEAR" else 3
     from storage.database import Store

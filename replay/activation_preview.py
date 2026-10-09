@@ -16,7 +16,10 @@ anomalies of the evidence copy, data coverage gaps, and a list of pre-activation
 The oracle is independent of the audited component: Decimal arithmetic; per bar, in time order: open beyond SL -> exit
 at open; open beyond TP -> exit at open; SL touched -> SL; TP touched -> TP; SL before TP within one bar.
 Usage: python -m replay.activation_preview --trading-db PATH --as-of ISO [--evidence-db PATH] [--bars-json PATH]
-       [--account paper-main] [--first-scope XAUUSD] --out report.json
+       [--account paper-main] [--catch-up-symbols XAUUSD] [--enabled-symbols XAUUSD,EURUSD] --out report.json
+V2 P1-B: ``--catch-up-symbols`` (same strict grammar as the runtime) replaces ``--first-scope``. Positions inside the
+scope follow the CATCH_UP path (every closed bar after the watermark); the others follow NEWEST_BAR (only the newest
+closed bar), with ``ongoing_high_8_1_exposure``.
 """
 from datetime import timedelta, timezone
 from decimal import Decimal
@@ -113,8 +116,11 @@ def _gaps(bars):
     return [utc(a) for a, b in zip(starts, starts[1:]) if b - a > FIVE]
 
 
-def preview(trading_db, *, as_of, evidence_db=None, bars_json=None, account_id="paper-main", first_scope=("XAUUSD",)):
+def preview(trading_db, *, as_of, evidence_db=None, bars_json=None, account_id="paper-main",
+            catch_up_symbols=("XAUUSD",), enabled_symbols=("XAUUSD", "EURUSD")):
+    from runtime.config import parse_catch_up_symbols
     from storage.database import Store  # read-only use of the copy
+    scope = parse_catch_up_symbols(",".join(catch_up_symbols), tuple(enabled_symbols))
     as_of = as_of.astimezone(timezone.utc)
     sources = [Path(trading_db)] + ([Path(evidence_db)] if evidence_db else [])
     before = {str(p): _fingerprint(p) for p in sources}
@@ -144,6 +150,9 @@ def preview(trading_db, *, as_of, evidence_db=None, bars_json=None, account_id="
         watermark = position.last_processed_at or opened
         historic = _closed_between(series, opened, watermark)
         forward = _closed_between(series, watermark, as_of)
+        path = "CATCH_UP" if symbol in scope else "NEWEST_BAR"
+        if path == "NEWEST_BAR":  # the legacy cycle evaluates only the newest closed bar
+            forward = forward[-1:]  # forward ends at the newest closed bar whenever it is after the watermark
         args = (position.side, position.entry_price, position.stop, position.target, position.quantity,
                 position.contract_multiplier or 1.0, position.cost_rate)
         missed = oracle(*args, historic)
@@ -157,7 +166,8 @@ def preview(trading_db, *, as_of, evidence_db=None, bars_json=None, account_id="
                 "quantity": position.quantity, "opened_at": utc(opened), "watermark": utc(watermark),
                 "historic_bars_checked": len(historic), "historic_missed": missed,
                 "catch_up_bars": [b["bar_start"] for b in forward], "expected_close": expected,
-                "coverage_gaps": coverage_gaps, "in_first_activation_scope": symbol in first_scope}
+                "coverage_gaps": coverage_gaps, "path": path, "in_catch_up_scope": symbol in scope,
+                "ongoing_high_8_1_exposure": path == "NEWEST_BAR"}
         positions.append(item)
         if missed is not None:
             risks.append({"risk": "HISTORIC_DIVERGENCE", "symbol": symbol, "detail": missed,
@@ -168,8 +178,9 @@ def preview(trading_db, *, as_of, evidence_db=None, bars_json=None, account_id="
             risks.append({"risk": "NO_BAR_DATA", "symbol": symbol})
         if coverage_gaps:
             risks.append({"risk": "MISSING_BARS", "symbol": symbol, "detail": coverage_gaps})
-        if symbol not in first_scope:
-            risks.append({"risk": "OUTSIDE_FIRST_ACTIVATION_SCOPE", "symbol": symbol})
+        if symbol not in scope:
+            risks.append({"risk": "OUTSIDE_CATCH_UP_SCOPE", "symbol": symbol,
+                          "treatment": "NEWEST_BAR path; HIGH-8.1 exposure continues; TECHNICAL_ONLY (DEC-8.16)"})
     pending = []
     for order in sorted((o for o in orders.values() if o.status == "PENDING"), key=lambda o: o.order_id):
         series = [b for b in bars.get(order.symbol, []) if parse_utc(b["bar_start"]) + FIVE <= as_of]
@@ -192,7 +203,9 @@ def preview(trading_db, *, as_of, evidence_db=None, bars_json=None, account_id="
     return {"report_version": REPORT_VERSION, "as_of": utc(as_of), "account_id": account_id,
             "read_only": True, "source_unchanged": before == after, "source_hashes": before,
             "realized_pnl": account.realized_pnl, "expected_realized_after_first_cycle": str(expected_realized),
-            "positions": positions, "pending_orders": pending, "revisions": revisions, "risks": risks}
+            "positions": positions, "pending_orders": pending, "revisions": revisions, "risks": risks,
+            "catch_up_symbols": list(scope),
+            "certification_eligibility": "TECHNICAL_ONLY" if set(scope) != set(enabled_symbols) else "REQUIRES_G8_INT"}
 
 
 def main(argv=None):
@@ -202,7 +215,8 @@ def main(argv=None):
     parser.add_argument("--evidence-db")
     parser.add_argument("--bars-json")
     parser.add_argument("--account", default="paper-main")
-    parser.add_argument("--first-scope", default="XAUUSD")
+    parser.add_argument("--catch-up-symbols", default="XAUUSD")
+    parser.add_argument("--enabled-symbols", default="XAUUSD,EURUSD")
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     sources = {Path(p).resolve() for p in (args.trading_db, args.evidence_db, args.bars_json) if p}
@@ -210,7 +224,8 @@ def main(argv=None):
         raise SystemExit("refusing to write the report over a source file")
     report = preview(args.trading_db, as_of=parse_utc(args.as_of), evidence_db=args.evidence_db,
                      bars_json=args.bars_json, account_id=args.account,
-                     first_scope=tuple(s.strip() for s in args.first_scope.split(",") if s.strip()))
+                     catch_up_symbols=tuple(args.catch_up_symbols.split(",")),
+                     enabled_symbols=tuple(args.enabled_symbols.split(",")))
     Path(args.out).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     return 0 if report["source_unchanged"] else 2
 

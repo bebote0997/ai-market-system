@@ -85,7 +85,7 @@ class PreviewTests(Harness):
         report = preview(self.db, as_of=S2, evidence_db=self.ev)
         self.assertEqual([r["bar_start"] for r in report["revisions"]], [bar(2).isoformat()])
         kinds = {r["risk"] for r in report["risks"]}
-        self.assertTrue({"REVISION_PRESENT", "NO_BAR_DATA", "OUTSIDE_FIRST_ACTIVATION_SCOPE"} <= kinds)  # EURUSD
+        self.assertTrue({"REVISION_PRESENT", "NO_BAR_DATA", "OUTSIDE_CATCH_UP_SCOPE"} <= kinds)  # EURUSD (P1-B: renamed with --catch-up-symbols)
         gap_report = preview(self.db, as_of=later, bars_json=rows)
         self.assertTrue(any(r["risk"] == "MISSING_BARS" for r in gap_report["risks"]))
         self.assertEqual(report["pending_orders"], [])  # the pending order filled on the 13:40 gate bar (S2 cycle)
