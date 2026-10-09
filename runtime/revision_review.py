@@ -225,7 +225,7 @@ def _ro(path):
 def demo_gate(trading_db, evidence_db):
     """READ-ONLY pre-DEMO gate. CLEAR only with full anomaly coverage by ``anomaly_id``, a VALID final decision for every
     material anomaly, no effectively ESCALATED anomaly, no invalid latest review (LOW-1), no review without a recorded
-    anomaly and no classification that mismatches its anomaly."""
+    anomaly, no classification that mismatches its anomaly, and exactly one classification per anomaly."""
     blockers = []
     anomalies = {}
     if evidence_db is None or not Path(evidence_db).is_file():
@@ -249,19 +249,25 @@ def demo_gate(trading_db, evidence_db):
     finally:
         db.close()
     effective = _effective(states)
-    classified = {}
-    for row in rows:  # first record per anomaly; legacy rows without anomaly_id never count as coverage
+    classified, all_classifications = {}, {}
+    for row in rows:  # legacy rows without anomaly_id never count as coverage
         if row.get("anomaly_id"):
             classified.setdefault(row["anomaly_id"], row)
+            all_classifications.setdefault(row["anomaly_id"], []).append(row)
+    # P1-A hotfix: journal() writes exactly one classification per anomaly_id, so more than one (even identical) is
+    # tampering or a defect and blocks; no row can hide another (fail-closed).
+    conflicts = [{"anomaly_id": key, "count": len(group)} for key, group in all_classifications.items()
+                 if len(group) > 1]
     evidence_ok = not blockers
     unclassified = [a for key, a in anomalies.items() if key not in classified]
     orphans = [] if not evidence_ok else [r for key, r in classified.items() if key not in anomalies]
     # LOW-1 (design 4.5): a classification counts only if it matches its anomaly's symbol / timeframe / bar_start.
+    # P1-A hotfix: EVERY classification row of the anomaly is checked, whatever its order.
     mismatches = [] if not evidence_ok else [
         {"anomaly_id": key, "classification": [r.get("symbol"), r.get("timeframe"), r.get("bar_start")],
          "anomaly": [anomalies[key]["symbol"], anomalies[key]["timeframe"], anomalies[key]["bar_start"]]}
-        for key, r in classified.items() if key in anomalies and
-        (r.get("symbol"), r.get("timeframe"), r.get("bar_start")) !=
+        for key, group in all_classifications.items() if key in anomalies for r in group
+        if (r.get("symbol"), r.get("timeframe"), r.get("bar_start")) !=
         (anomalies[key]["symbol"], anomalies[key]["timeframe"], anomalies[key]["bar_start"])]
     invalid_latest = [states[key] for key in classified if key in states and not states[key]["valid"]]
     unreviewed = [r for key, r in classified.items() if key not in effective]
@@ -282,12 +288,15 @@ def demo_gate(trading_db, evidence_db):
         blockers.append("REVIEW_WITHOUT_RECORD")
     if mismatches:
         blockers.append("CLASSIFICATION_MISMATCH")
+    if conflicts:
+        blockers.append("CLASSIFICATION_CONFLICT")
     return {"status": "BLOCKED" if blockers else "CLEAR", "blockers": blockers, "anomalies": len(anomalies),
             "classified": len(classified), "material_unreviewed": material, "escalated_unresolved": escalated,
             "unclassified": unclassified, "orphan_classifications": orphans,
             "non_material_unreviewed": [r for r in unreviewed if not r["material"]],
             "invalid_reviews": invalid_latest, "historical_invalid_reviews": historical_invalid,
             "reviews_without_record": without_record, "classification_mismatches": mismatches,
+            "classification_conflicts": conflicts,
             "resolved": sum(1 for key in classified if effective.get(key) in FINAL_DECISIONS),
             "recorded": len(rows), "reviewed": len(effective)}
 

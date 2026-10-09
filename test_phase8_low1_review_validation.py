@@ -220,3 +220,77 @@ class LowOneReviewValidationTests(Harness):
         self.review(key, "ACCEPTED_FIRST_COMMITTED")
         gate = self.gate()
         self.assertEqual((gate["status"], gate["invalid_reviews"], gate["historical_invalid_reviews"]), ("CLEAR", [], []))
+
+
+class ClassificationConflictTests(Harness):
+    """P1-A hotfix (Copilot HIGH on f8299cb): every classification of an anomaly is validated; duplicates block."""
+
+    def setup_genuine(self):
+        self.seed()
+        self.cycle(S1, {}, flag=True)
+        self.cycle(S2, MATERIAL, flag=True)  # the runtime writes exactly one genuine classification
+        store = Store(self.db)
+        try:
+            return json.loads(store.db.execute("SELECT payload FROM journal WHERE event_type=?",
+                                               (revision_review.EVENT,)).fetchone()[0])
+        finally:
+            store.close()
+
+    def write_classifications(self, rows, *, replace_genuine=False):
+        """Simulated tampering on the temporary test DB: append classification rows (optionally after removing the
+        genuine one so the order can be inverted), then a valid final review."""
+        store = Store(self.db)
+        try:
+            with store.transaction():
+                if replace_genuine:
+                    store.db.execute("DELETE FROM journal WHERE event_type=?", (revision_review.EVENT,))
+                for row in rows:
+                    store._event(datetime.now(timezone.utc), None, "XAUUSD", SOURCE, revision_review.EVENT, "INFO",
+                                 row)
+            record_review(store, rows[0]["anomaly_id"], decision="ACCEPTED_FIRST_COMMITTED", reviewer="owner")
+        finally:
+            store.close()
+
+    def gate(self):
+        return LowOneReviewValidationTests.gate(self)
+
+    def journal_snapshot(self):
+        return LowOneReviewValidationTests.journal_snapshot(self)
+
+    def test_genuine_then_contradictory_blocks_copilot_case(self):
+        genuine = self.setup_genuine()
+        self.write_classifications([dict(genuine, bar_start=bar(3).isoformat())])  # second row, contradictory
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"]),
+                         ("BLOCKED", ["CLASSIFICATION_MISMATCH", "CLASSIFICATION_CONFLICT"]))
+        self.assertEqual(gate["classification_mismatches"][0]["classification"][2], bar(3).isoformat())
+
+    def test_contradictory_then_genuine_blocks(self):
+        genuine = self.setup_genuine()
+        self.write_classifications([dict(genuine, bar_start=bar(3).isoformat()), genuine], replace_genuine=True)
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"]),
+                         ("BLOCKED", ["CLASSIFICATION_MISMATCH", "CLASSIFICATION_CONFLICT"]))
+
+    def test_identical_duplicate_blocks(self):
+        genuine = self.setup_genuine()
+        self.write_classifications([dict(genuine)])
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"]), ("BLOCKED", ["CLASSIFICATION_CONFLICT"]))
+        self.assertEqual(gate["classification_conflicts"][0]["count"], 2)
+
+    def test_duplicate_differing_only_in_material_blocks(self):
+        genuine = self.setup_genuine()
+        self.write_classifications([dict(genuine, material=False, affected=[])])
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"]), ("BLOCKED", ["CLASSIFICATION_CONFLICT"]))
+
+    def test_single_genuine_classification_still_clears(self):
+        genuine = self.setup_genuine()
+        store = Store(self.db)
+        try:
+            record_review(store, genuine["anomaly_id"], decision="ACCEPTED_FIRST_COMMITTED", reviewer="owner")
+        finally:
+            store.close()
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"], gate["classification_conflicts"]), ("CLEAR", [], []))
