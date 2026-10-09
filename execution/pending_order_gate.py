@@ -134,13 +134,25 @@ def _journal_not_evaluated(store, account_id, symbol, bars, current, owner_key):
     return tuple(keys), written
 
 
+def _notify(observer, event, **data):
+    """V2 P3 REX observer hook (O-4): evidence only. Never changes a decision or state; failures are ignored."""
+    if observer is None:
+        return
+    try:
+        observer(event, **data)
+    except Exception:  # noqa: BLE001 - REX evidence can never affect PAPER economics
+        pass
+
+
 def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None, instrument=None,
-                        owner_key=None):
+                        owner_key=None, observer=None):
     """Apply P1 to the PENDING PAPER orders of ``symbol``.
 
     ``store`` is the trading ``storage.database.Store``; ``evidence`` a ``MarketEvidenceEngine``
     (read only). ``gate`` is the ``CurrentCycleGate`` of the calling cycle, or None when that
     cycle failed/crashed or there is no cycle. ``owner_key`` is passed through for slot ownership.
+    ``observer`` (V2 P3 REX, O-4; None = legacy) receives the exact gate bar, the pending order iteration order and
+    ``expected_state`` before ``save_paper``; it can change neither a decision nor any state; failures are ignored.
     """
     if not _aware(as_of):
         raise ValueError("as_of: timezone-aware datetime required")
@@ -152,12 +164,17 @@ def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None
     bars = _committed_bars(evidence, symbol, min(o.as_of for o in pending), as_of)
     current = _current_bar_time(gate, symbol, bars)
     keys, written = _journal_not_evaluated(store, account_id, symbol, bars, current, owner_key)
+    newest = bars[-1].bar_start if bars else None
     if current is None:
+        _notify(observer, "pending_gate_not_evaluated", reason=REASON, newest_committed_bar_start=newest,
+                gate_passed=None if gate is None else gate.passed(), not_evaluated=keys)
         return PendingGateResult(symbol, "NOT_EVALUATED", REASON, keys, written, ())
     account, orders, fills = store.load_paper(account_id)  # Durable state only.
     broker = PaperBroker(account, instrument)
     broker.orders, broker.fills = orders, fills
     expected_state = store.paper_state(broker.account, broker.orders, broker.fills)
+    _notify(observer, "pending_gate", bar=dict(gate.bar), current=current, newest_committed_bar_start=newest,
+            order_ids=[o.order_id for o in _pending(broker.orders, symbol)], expected_state=expected_state)
     evaluated = []
     for order in _pending(broker.orders, symbol):
         if current > order.as_of:  # V1 order temporal rule: never a bar at or before order.as_of.

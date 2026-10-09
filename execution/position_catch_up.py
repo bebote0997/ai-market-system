@@ -83,11 +83,24 @@ def _load(store, account_id, instrument):
     return broker
 
 
-def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=None, owner_key=None):
+def _notify(observer, event, **data):
+    """V2 P3 REX observer hook (O-4): evidence only. Never changes a decision or state; failures are ignored."""
+    if observer is None:
+        return
+    try:
+        observer(event, **data)
+    except Exception:  # noqa: BLE001 - REX evidence can never affect PAPER economics
+        pass
+
+
+def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=None, owner_key=None,
+                      observer=None):
     """Apply every eligible committed closed 5m bar to the open position of ``symbol``.
 
     ``store`` is the trading ``storage.database.Store``; ``evidence`` is a ``MarketEvidenceEngine``.
     ``owner_key`` is passed to ``save_paper`` unchanged (slot ownership when called from a cycle).
+    ``observer`` (V2 P3 REX, O-4; None = legacy) receives the exact bar and ``expected_state`` before each
+    ``save_paper``; it can change neither a decision nor any state, and its failures are ignored.
     """
     if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("as_of: timezone-aware datetime required")
@@ -105,6 +118,8 @@ def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=
         if position is None or bar.start <= _watermark(position):
             break  # Closed, or progressed by another writer: never apply a bar twice.
         expected_state = store.paper_state(broker.account, broker.orders, broker.fills)
+        _notify(observer, "catch_up_bar", bar=_bar(bar), bar_start=bar.bar_start, digest=bar.digest,
+                open_positions=list(broker.account.open_positions), expected_state=expected_state)
         closed = TradeManager(broker.account, broker).process_bar(_bar(bar))
         if store.save_paper(broker, owner_key=owner_key, symbol=symbol, expected_state=expected_state) is False:
             stale = True

@@ -245,7 +245,8 @@ class VerifierTests(Base):
 
     def test_no_runtime_module_imports_the_library_yet(self):
         users = [p.name for p in (ROOT / "runtime").glob("*.py") if "economic_digest" in p.read_text(encoding="utf-8")]
-        self.assertEqual(users, [])
+        # Superseded by P3 (Owner authorization 2026-10-09): the REX writer is the ONLY runtime user of the library.
+        self.assertEqual(users, ["rex.py"])
 
     def test_refuses_the_source_wal_and_shm_through_any_equivalent_path(self):
         for suffix in ("", "-wal", "-shm"):

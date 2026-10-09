@@ -11,6 +11,7 @@ SUPPORTED_SYMBOLS = MARKETS
 DEFAULT_ENABLED_SYMBOLS = ("XAUUSD", "EURUSD")
 # V2 Phase 8 / P1-B (DEC-8.13, DEC-8.16): per-symbol catch-up scope.
 CATCH_UP_SYMBOLS_ENV = "AI_FLOOR_V2_POSITION_CATCH_UP_SYMBOLS"
+REX_ENV = "AI_FLOOR_V2_REX"  # V2 Phase 8 / P3: REX evidence flag (OFF by default)
 CATCH_UP_EXCLUDED_SYMBOLS = ("NAS100",)  # never in the catch-up scope, even if a future config enables it
 _SCOPE_TOKEN = re.compile(r"[A-Z0-9]+")
 
@@ -62,6 +63,10 @@ class RuntimeConfig:
     # V2 Phase 7 / P7.1 Batch C: per-cycle AI short-circuit + time budget + provider health events. Fail-closed only
     # (can only remove execution eligibility). OFF by default; from_env never sets it.
     v2_ai_resilience: bool = False
+    # V2 Phase 8 / P3 (DEC-8.22-d; DEC-8.21b PROVISIONAL, implementation only): REX run evidence in the journal
+    # (observability only, alternative B). OFF by default; from_env reads only the exact value AI_FLOOR_V2_REX="1".
+    # Implementation is not activation: turning it on operationally needs a separate Owner authorization.
+    v2_rex: bool = False
 
     def __post_init__(self):
         if (self.cadence_minutes <= 0 or 60 % self.cadence_minutes or
@@ -80,6 +85,8 @@ class RuntimeConfig:
             raise ValueError("v2_ai_call_audit must be a bool")
         if not isinstance(self.v2_ai_resilience, bool):
             raise ValueError("v2_ai_resilience must be a bool")
+        if not isinstance(self.v2_rex, bool):
+            raise ValueError("v2_rex must be a bool")
         if self.v2_position_catch_up and (
                 self.market_evidence_path is None
                 or Path(self.market_evidence_path).resolve() == Path(self.db_path).resolve()):
@@ -107,6 +114,8 @@ class RuntimeConfig:
             content["v2_ai_call_audit"] = True
         if self.v2_ai_resilience:  # OFF keeps the fingerprint byte-identical.
             content["v2_ai_resilience"] = True
+        if self.v2_rex:  # P3: OFF keeps the fingerprint byte-identical.
+            content["v2_rex"] = True
         return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
     def catch_up_applies(self, symbol):
@@ -137,9 +146,13 @@ class RuntimeConfig:
         if catch_up != "1" and raw_scope is not None:
             raise ValueError(f"{CATCH_UP_SYMBOLS_ENV} is set while the catch-up flag is OFF")  # DEC-8.13
         scope = parse_catch_up_symbols(raw_scope, enabled) if catch_up == "1" else ()
+        rex = os.environ.get(REX_ENV, "")
+        if rex not in ("", "0", "1"):
+            raise ValueError(f"{REX_ENV} must be unset, '0' or '1'")  # never a truthy guess
         return cls(db_path=Path(os.environ.get("AI_FLOOR_DB_PATH", "data/runtime/trading_floor.db")),
                    v2_position_catch_up=catch_up == "1",  # __post_init__ rejects ON without a separate evidence path
                    v2_position_catch_up_symbols=scope,
+                   v2_rex=rex == "1",
                    market_evidence_path=None if evidence_path is None else Path(evidence_path),
                    enabled_symbols=enabled,
                    scheduler_enabled=os.environ.get("AI_FLOOR_SCHEDULER", "0") == "1",

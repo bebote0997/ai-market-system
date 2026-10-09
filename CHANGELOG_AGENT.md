@@ -1,5 +1,34 @@
 # Agent Changelog
 
+## 2026-10-09 — V2 Phase 8 P3 REX, G14 oracle and G15 chain verifier (DEC-8.22-d; implementation only)
+
+- Agent: Claude. Branch `v2/phase8-p3` from the certified P2a-lib `f707b32` (`v2/phase8-execution` fast-forwarded
+  `a43d10e..f707b32`, no merge commit; `main` unchanged). Owner decisions O-1…O-7 (2026-10-09).
+- New:
+  - `runtime/rex.py`: `rex_encode` (typed, unambiguous), `RexRecorder` (stages ST0–ST10, write evidence,
+    `rex_digest = H("V2REX/1", cj(...))`, payload limit, failure isolation), `RexStore` (`save_paper` forwarded
+    unchanged), `RexProviderProbe` (AI request identity). Journal rows `source='rex'` (REX_WRITE / REX_RUN /
+    REX_FAILURE); no schema change. EDG / psh only in a read transaction opened on a connection without one;
+    `data_version` + `total_changes` + CAS read-back as integrity evidence, with their limits documented.
+  - `replay/rex_oracle.py`: independent G14 oracle (standard library only): F1, ST4 V1 sizing (`float.hex`), F1b,
+    V-P1…V-P3, A1–A4, H1, P1, legacy and gated pending eligibility, the V1 fill gate clause by clause, ST8, ST9,
+    ST2 management; every write reproduced from its pre-state; reconstructed values labelled.
+  - `replay/rex_chain.py`: read-only G15 verifier on a backup-API copy; best result `SQLITE_CHECKS_PASS / NOT VERIFIED`.
+  - Tests: `test_phase8_rex_writer.py`, `test_phase8_rex_inertness.py`, `test_phase8_rex_oracle.py`,
+    `test_phase8_rex_chain.py`.
+- Changed: `runtime/config.py` (`AI_FLOOR_V2_REX`, OFF by default, legacy fingerprint unchanged when OFF);
+  `runtime/service.py` (REX stages, RexStore / observer / probe only when ON; flag OFF path call-identical);
+  `execution/position_catch_up.py`, `execution/pending_order_gate.py` (`observer=None` hooks, failures ignored);
+  `test_phase8_economic_digest.py` (explicit supersession, Owner authorization 2026-10-09: `runtime/rex.py` is now
+  the only runtime importer of the P2a library).
+- Not changed: `storage/database.py` (hash-pinned), `storage/economic_digest.py`, risk, adapter, broker, AI, floor.
+- Inertness: twin ON/OFF runs byte-identical in the five PAPER tables, runs and non-REX journal, also under injected
+  failures at every REX point.
+- Known limit (fail closed): an AI request never handed to a provider (no usable evidence) has no observable request
+  symbol/as_of, so V-P1 fails for that run (REQUEST_IDENTITY_NOT_OBSERVED).
+- Flag OFF; no activation, deploy, PR or merge. B-STRICT not certified; DEC-8.18 PENDING. Phase 8 BLOCKED;
+  HIGH-8.1 OPEN; M-5 OPEN.
+
 ## 2026-10-08 — V2 Phase 8 P8.6 Owner decisions and implementation handoff (documentation only)
 
 - Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`.

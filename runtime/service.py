@@ -14,7 +14,8 @@ from ai.runtime import AuditLog
 from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
-from execution.pending_order_gate import CurrentCycleGate, PendingGateEvidenceError, gate_pending_orders
+from execution.pending_order_gate import (BLOCKING_FINAL_STATUSES, CurrentCycleGate, PendingGateEvidenceError,
+                                          gate_pending_orders)
 from execution.position_catch_up import CatchUpEvidenceError, catch_up_position
 from execution.trade_manager import TradeManager
 from floor.orchestrator import run as run_floor
@@ -140,19 +141,21 @@ class OperationalRuntime:
         broker.fills = fills
         return broker
 
-    def _guarded_paper_write(self, symbol, key, apply):
+    def _guarded_paper_write(self, symbol, key, apply, store=None):
         """B2.3A: run ``apply(broker)`` on freshly loaded durable PAPER state and persist it only if
         that state is still current (B2.1 ``expected_state``, revalidated under BEGIN IMMEDIATE).
 
         ``apply`` returns (save, result). On STALE the computation is discarded and redone once from
         a fresh load. Returns (broker, result), or (None, None) when both attempts were stale.
+        ``store`` (V2 P3) is the run's REX store proxy, or None (legacy: ``self.store``).
         """
+        writer = self.store if store is None else store
         for _ in range(2):
             broker = self._broker(symbol)
             expected_state = self.store.paper_state(broker.account, broker.orders, broker.fills)
             save, result = apply(broker)
-            if not save or self.store.save_paper(broker, owner_key=key, symbol=symbol,
-                                                 expected_state=expected_state) is not False:
+            if not save or writer.save_paper(broker, owner_key=key, symbol=symbol,
+                                             expected_state=expected_state) is not False:
                 return broker, result
         return None, None
 
@@ -229,15 +232,16 @@ class OperationalRuntime:
                                   {"error_type": error_type, "elapsed_ms": elapsed_ms,
                                    "consecutive_failures": failures})
 
-    def _catch_up_positions(self, symbol, slot, key):
+    def _catch_up_positions(self, symbol, slot, key, store=None, observer=None):
         """B2.3B: every committed closed 5m bar after the open position's durable watermark, oldest
         first, through the accepted B2.1 catch-up (guarded save per bar). Never a newest-bar fallback.
         Returns None, or the reason PAPER economics are blocked for this cycle."""
         for _ in range(2):  # A STALE result resumes from the durable watermark once.
             try:
-                result = catch_up_position(self.store, self.evidence, account_id=self.config.account_id,
+                result = catch_up_position(self.store if store is None else store, self.evidence,
+                                           account_id=self.config.account_id,
                                            symbol=symbol, as_of=slot, instrument=self.instruments.get(symbol),
-                                           owner_key=key)
+                                           owner_key=key, **({} if observer is None else {"observer": observer}))
             except CatchUpEvidenceError:
                 return EVIDENCE_UNAVAILABLE
             if result.status != "STALE":
@@ -284,15 +288,17 @@ class OperationalRuntime:
         return {"symbol": bar.symbol, "timestamp": bar.start, "open": bar.open, "high": bar.high,
                 "low": bar.low, "close": bar.close, "is_closed": True}
 
-    def _gate_pending_orders(self, gate, symbol, slot, key):
+    def _gate_pending_orders(self, gate, symbol, slot, key, store=None, observer=None):
         """B2.3C: pending orders progress only through the accepted B2.2 ``gate_pending_orders`` (P1).
         A STALE result is retried once from fresh durable state. Returns None, or the reason PAPER
         economics are blocked for this cycle."""
         for _ in range(2):
             try:
-                result = gate_pending_orders(self.store, self.evidence, account_id=self.config.account_id,
+                result = gate_pending_orders(self.store if store is None else store, self.evidence,
+                                             account_id=self.config.account_id,
                                              symbol=symbol, as_of=slot, gate=gate,
-                                             instrument=self.instruments.get(symbol), owner_key=key)
+                                             instrument=self.instruments.get(symbol), owner_key=key,
+                                             **({} if observer is None else {"observer": observer}))
             except PendingGateEvidenceError:
                 return EVIDENCE_UNAVAILABLE
             if result.status != "STALE":
@@ -336,7 +342,96 @@ class OperationalRuntime:
                 "warnings": [warning], "facts": [f"{symbol}: {state}", "Risk Engine: NOT CALLED"],
                 "interpretation": [], "freshness": state, "agents": [], "prompt_versions": []}
 
+    # -- V2 P3 REX (flag v2_rex, OFF by default): evidence only; every helper is a no-op when ``rex`` is None ------
+    def _new_rex(self, run_id, key, symbol, slot):
+        if not self.config.v2_rex:
+            return None
+        try:
+            from runtime.rex import RexRecorder, code_sha, rule_identity
+            identity = {"rule_identity": rule_identity(
+                            extra_files=("execution/pending_order_gate.py",),
+                            extra_constants={"gate_blocking_final_statuses": sorted(BLOCKING_FINAL_STATUSES)}),
+                        "code_sha": code_sha(), "config_fingerprint": self.config.fingerprint(),
+                        "enabled_symbols": list(self.config.enabled_symbols), "sessions": list(self.config.sessions),
+                        "cadence_minutes": self.config.cadence_minutes, "max_age_seconds": self.config.max_age_seconds,
+                        "v2_position_catch_up": self.config.v2_position_catch_up,
+                        "catch_up_scope": list(self.config.v2_position_catch_up_symbols),
+                        "catch_up_applies": self.config.catch_up_applies(symbol),
+                        "v2_ai_resilience": self.config.v2_ai_resilience, "paper_enabled": self.paper_enabled,
+                        "diagnostic_outside_session": self.diagnostic_outside_session,
+                        "broker_rr_policy": None, "risk_config": dict(self.risk_config or {}),
+                        "instrument": self.instruments.get(symbol), "account_id": self.config.account_id}
+            return RexRecorder(self.store, account_id=self.config.account_id, run_id=run_id, slot_key=key,
+                               symbol=symbol, slot=slot, identity=identity)
+        except Exception as exc:  # noqa: BLE001 - no REX for this run (the chain verifier reports it uncovered)
+            LOG.warning("run_id=%s symbol=%s component=rex event=REX_UNAVAILABLE error_type=%s",
+                        run_id, symbol, type(exc).__name__)
+            return None
+
+    @staticmethod
+    def _rex_note(rex, stage, build):
+        """Record stage evidence built by ``build()``; never raises and never runs when REX is OFF."""
+        if rex is None:
+            return
+        try:
+            rex.stage(stage, build())
+        except Exception as exc:  # noqa: BLE001 - defence in depth: REX never changes the cycle
+            try:
+                rex.fail(f"stage:{stage}", exc)
+            except Exception:  # noqa: BLE001
+                LOG.warning("component=rex event=REX_FAILURE_NOT_RECORDED stage=%s", stage)
+
+    @staticmethod
+    def _rex_context(rex, stage, build):
+        if rex is None:
+            return
+        try:
+            rex.context(stage, build())
+        except Exception as exc:  # noqa: BLE001 - defence in depth: REX never changes the cycle
+            try:
+                rex.fail(f"context:{stage}", exc)
+                rex.context(stage, {"context_build_failed": True})
+            except Exception:  # noqa: BLE001
+                LOG.warning("component=rex event=REX_FAILURE_NOT_RECORDED stage=%s", stage)
+
+    def _rex_floor(self, report, symbol, equity):
+        setup = report.setup_assessment
+        return {"equity": equity, "final_status": report.final_status, "warnings": list(report.warnings),
+                "setup": None if setup is None else {"status": setup.status, "side": setup.side,
+                                                     "warnings": list(setup.warnings)},
+                "trade_plan": report.trade_plan, "risk_decision": report.risk_decision,
+                "target_decision": report.target_decision, "risk_config": dict(self.risk_config or {}),
+                "instrument": self.instruments.get(symbol)}
+
+    @staticmethod
+    def _rex_ai(ai, audit):
+        def identity(response):
+            return None if response is None else {
+                "schema_version": response.schema_version, "run_id": response.run_id, "symbol": response.symbol,
+                "as_of": response.as_of, "agent_name": response.agent_name, "status": response.status,
+                "recommendation": response.recommendation, "bias": response.bias, "confidence": response.confidence,
+                "warnings": list(response.warnings)}
+        return {"responses": {"ai_structure": ai.ai_structure, "ai_liquidity": ai.ai_liquidity, "ai_macro": ai.ai_macro,
+                              "ai_setup_review": ai.ai_setup_review, "ai_trade_review": ai.ai_trade_review},
+                "final_status": ai.final_status, "warnings": list(ai.warnings),
+                "trade_plan_present": ai.trade_plan is not None, "risk_decision": ai.risk_decision,
+                "audit": [{"run_id": e.get("run_id"), "agent": e.get("agent"), "prompt_version": e.get("prompt_version"),
+                           "evidence_ids": list(e.get("evidence_ids") or ()), "validation": e.get("validation"),
+                           "outcome": e.get("outcome"), "evidence_fingerprint": e.get("evidence_fingerprint"),
+                           "called": (e.get("call") or {}).get("called"), "response": identity(e.get("response"))}
+                          for e in audit.entries]}
+
     def run_cycle(self, symbol, scheduled_at):
+        rex_holder = []  # V2 P3: the run's REX recorder, created only after the claim (flag ON)
+        returned = self._run_cycle(symbol, scheduled_at, rex_holder)
+        if rex_holder and rex_holder[0] is not None:
+            try:
+                rex_holder[0].finish(returned)
+            except Exception as exc:  # noqa: BLE001 - REX never changes the cycle result
+                LOG.warning("component=rex event=REX_FINISH_FAILED error_type=%s", type(exc).__name__)
+        return returned
+
+    def _run_cycle(self, symbol, scheduled_at, rex_holder):
         if symbol not in MARKETS:
             raise ValueError("unsupported operational symbol")
         if symbol not in self.config.enabled_symbols:
@@ -346,6 +441,16 @@ class OperationalRuntime:
         run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, key))
         if not self.store.claim_slot(key, symbol, slot, self.clock(), run_id=run_id):
             return "DUPLICATE"
+        rex = self._new_rex(run_id, key, symbol, slot)
+        rex_store = None
+        if rex is not None:
+            try:
+                from runtime.rex import RexStore
+                rex_store = RexStore(self.store, rex)
+            except Exception as exc:  # noqa: BLE001 - no REX for this run (reported uncovered by the verifier)
+                LOG.warning("component=rex event=REX_UNAVAILABLE error_type=%s", type(exc).__name__)
+                rex = None
+        rex_holder.append(rex)
         stage = "startup"
         try:
             account_for_metadata, _, _ = self.store.load_paper(self.config.account_id)
@@ -354,15 +459,21 @@ class OperationalRuntime:
                 raise ValueError("invalid AI_FLOOR_GIT_COMMIT")
             self.store.save_run_metadata(key, self.config.fingerprint(), account_for_metadata.starting_equity,
                                          git_commit=commit)
+            session_clock = None  # V2 P3: the same single clock() call as before, kept for REX evidence
             if (not self.diagnostic_outside_session and
                     (not set(session_names(slot)) & set(self.config.sessions) or
-                     not set(session_names(self.clock())) & set(self.config.sessions))):
+                     not set(session_names((session_clock := self.clock()))) & set(self.config.sessions))):
+                self._rex_note(rex, "EXIT_SESSION", lambda: {
+                    "slot": slot, "session_clock": session_clock, "sessions": list(self.config.sessions),
+                    "slot_sessions": list(session_names(slot)),
+                    "clock_sessions": None if session_clock is None else list(session_names(session_clock))})
                 self.store.event(self.clock(), run_id, symbol, "scheduler", "SESSION_SKIPPED")
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "SESSION_SKIPPED"
             if not set(session_names(slot)) & set(self.config.sessions):
                 self.store.event(self.clock(), run_id, symbol, "scheduler", "DIAGNOSTIC_OUTSIDE_SESSION", "INFO")
             if self.market_provider is None:
+                self._rex_note(rex, "EXIT_NO_PROVIDER", lambda: {"market_provider_configured": False})
                 self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_UNAVAILABLE", "WARNING")
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", "provider_not_configured", run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
@@ -376,6 +487,7 @@ class OperationalRuntime:
                 if not isinstance(provider_error, (MassiveProviderError, TwelveDataProviderError)):
                     raise
                 provider_state = provider_error.kind
+                self._rex_note(rex, "EXIT_PROVIDER_ERROR", lambda: {"provider_state": provider_state})
                 with self.store.transaction():
                     self.store.set_state("market_data_provider", provider_state)
                 self.store.event(self.clock(), run_id, symbol, "market_data", provider_state, "WARNING")
@@ -392,6 +504,9 @@ class OperationalRuntime:
                 if paper_blocked is None and self._last_ingest is not None:
                     # V2 P8.4 R4: REVISION visibility; observability only, never a decision
                     self._audit_safely(lambda: self._record_revisions(symbol, snapshot, run_id), run_id, symbol)
+            self._rex_note(rex, "ST1", lambda: {"v2_position_catch_up": self.config.v2_position_catch_up,
+                                                "catch_up_applies": self.config.catch_up_applies(symbol),
+                                                "paper_blocked": paper_blocked})
             fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, slot, self.config.max_age_seconds)
             if fresh:
                 # The slot bounds evidence; wall time bounds execution freshness.
@@ -400,6 +515,7 @@ class OperationalRuntime:
                 {"XAUUSD": "METAL", "EURUSD": "FOREX", "NAS100": "INDEX"}[symbol]
             ) == "STALE":
                 fresh, data_state = False, "STALE_DATA"
+            self._rex_note(rex, "DATA", lambda: {"fresh": fresh, "data_state": data_state})
             with self.store.transaction():
                 self.store.set_state("market_data_provider", "CURRENT" if fresh else data_state)
             self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_CHECK", "INFO" if fresh else "WARNING", {"state": data_state})
@@ -407,6 +523,7 @@ class OperationalRuntime:
             health_hooks.emit("market_data_observed", symbol=symbol, slot=slot, snapshot=snapshot,
                               data_state=data_state, provider_mode=self.config.market_provider_mode)
             if not fresh:
+                self._rex_note(rex, "EXIT_DATA", lambda: {"data_state": data_state})
                 self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_STALE" if data_state == "STALE_DATA" else "DATA_UNAVAILABLE", "WARNING")
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, data_state, "freshness_gate_blocked", run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", data_state)
@@ -421,25 +538,42 @@ class OperationalRuntime:
 
             def manage_positions(fresh):
                 had_open = bool(fresh.account.open_positions)
+                self._rex_note(rex, "ST2L_INPUT", lambda: {"had_open": had_open, "paper_enabled": self.paper_enabled,
+                                                           "open_positions": list(fresh.account.open_positions)})
                 if self.paper_enabled:
                     TradeManager(fresh.account, fresh).process_bar(bar)
                 return self.paper_enabled and (had_open or bool(fresh.journal)), None
             if not self.config.catch_up_applies(symbol):  # P1-B: legacy newest-bar path outside the scope
-                broker, _ = self._guarded_paper_write(symbol, key, manage_positions)
+                self._rex_context(rex, "ST2L", lambda: {"bar": bar, "paper_enabled": self.paper_enabled})
+                broker, _ = self._guarded_paper_write(symbol, key, manage_positions, rex_store)
                 if broker is None:
                     raise RuntimeError("stale paper state")  # Fail closed: nothing of this cycle written.
             else:  # B2.3B replaces the newest-bar TradeManager step; it never falls back to it.
                 if self.paper_enabled and paper_blocked is None:
-                    paper_blocked = self._catch_up_positions(symbol, slot, key)
+                    paper_blocked = self._catch_up_positions(symbol, slot, key, rex_store,
+                                                             None if rex is None else rex.observer)
                 if paper_blocked is not None:
                     self.store.event(self.clock(), run_id, symbol, "market_evidence", paper_blocked, "ERROR")
                 broker = self._broker(symbol)
             decision_equity = broker.account.equity
+            self._rex_note(rex, "ST3", lambda: {
+                "path": "CATCH_UP" if self.config.catch_up_applies(symbol) else "LEGACY",
+                "paper_blocked": paper_blocked, "decision_equity": decision_equity,
+                "account": {k: getattr(broker.account, k) for k in ("starting_equity", "cash", "equity",
+                                                                    "realized_pnl", "unrealized_pnl")},
+                "open_positions": list(broker.account.open_positions),
+                "pending_on_symbol": [o.order_id for o in broker.orders.values()
+                                      if o.symbol == symbol and o.status == "PENDING"]})
             stage = "deterministic"
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
                                       self.instruments.get(symbol), self.risk_config,
                                       equity=decision_equity, run_id=run_id)
+            self._rex_note(rex, "ST4", lambda: self._rex_floor(deterministic, symbol, decision_equity))
             deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
+            self._rex_note(rex, "F1B", lambda: {
+                "final_status": deterministic.final_status, "risk_decision": deterministic.risk_decision,
+                "warnings": list(deterministic.warnings),
+                "quantity_increment": getattr(self.instruments.get(symbol), "quantity_increment", None)})
             with self.store.transaction():
                 self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
             macro_report = deterministic.macro_news_report
@@ -458,7 +592,14 @@ class OperationalRuntime:
                 from ai.resilience import AICycleGuard, GuardedProvider
                 ai_provider = GuardedProvider(self.ai_provider, AICycleGuard(self.ai_cycle_budget_seconds),
                                               self.ai_health, clock=self.clock)
+            if rex is not None:
+                try:
+                    from runtime.rex import RexProviderProbe
+                    ai_provider = RexProviderProbe(ai_provider, rex)
+                except Exception as exc:  # noqa: BLE001 - the unwrapped provider; REX notes the gap
+                    rex.fail("ai_probe", exc)
             ai = run_ai(deterministic, ai_provider, audit)
+            self._rex_note(rex, "ST5", lambda: self._rex_ai(ai, audit))
             if self.config.v2_ai_resilience:
                 health_events = self.ai_health.drain()
                 self._audit_safely(lambda: self._record_ai_health(health_events, run_id, symbol), run_id, symbol)
@@ -485,7 +626,10 @@ class OperationalRuntime:
             if not session_open:
                 execution_state = "SESSION_SKIPPED"
                 execution_fresh = False
+            self._rex_note(rex, "ST6", lambda: {"execution_at": execution_at, "execution_fresh": execution_fresh,
+                                                "execution_state": execution_state, "session_open": session_open})
             if not execution_fresh:
+                self._rex_note(rex, "EXIT_EXECUTION_GATE", lambda: {"execution_state": execution_state})
                 self.store.event(execution_at, run_id, symbol, "runtime", "EXECUTION_GATE_BLOCKED", "WARNING",
                                  {"state": execution_state})
                 self._record_execution_safely(execution_at, run_id, symbol,
@@ -497,6 +641,7 @@ class OperationalRuntime:
                 return execution_state
             ai_healthy = all(r is not None and r.status in {"OK", "PARTIAL"} for r in
                 (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review))
+            blocked_before_st7 = paper_blocked
             if self.config.catch_up_applies(symbol):  # P1-B: outside the scope, the legacy pending path below
                 # B2.3C: the existing V1 gate values of THIS cycle plus its committed Evidence bar;
                 # B2.2 decides. No snapshot fallback, no approval from another cycle.
@@ -511,7 +656,9 @@ class OperationalRuntime:
                                                 paper_enabled=self.paper_enabled, execution_fresh=execution_fresh,
                                                 session_open=session_open, ai_healthy=ai_healthy,
                                                 ai_final_status=ai.final_status)
-                        paper_blocked = self._gate_pending_orders(gate, symbol, slot, key)
+                        self._rex_note(rex, "ST7_GATE", lambda: {"gate": gate, "gate_passed": gate.passed()})
+                        paper_blocked = self._gate_pending_orders(gate, symbol, slot, key, rex_store,
+                                                                  None if rex is None else rex.observer)
                     if paper_blocked is not None:
                         self.store.event(self.clock(), run_id, symbol, "market_evidence", paper_blocked, "ERROR")
             elif (self.paper_enabled and paper_blocked is None and ai_healthy
@@ -520,14 +667,30 @@ class OperationalRuntime:
                     raise RuntimeError("slot ownership lost")
 
                 def progress_pending(fresh):
+                    self._rex_note(rex, "ST7_ORDERS", lambda: {"order_ids": [
+                        o.order_id for o in fresh.orders.values() if o.symbol == symbol and o.status == "PENDING"],
+                        "current_equity": fresh.account.equity})
                     for order in tuple(fresh.orders.values()):
                         if order.symbol == symbol and order.status == "PENDING" and bar["timestamp"] > order.as_of:
                             fresh.process_next_bar(order, bar)
                     return bool(fresh.journal), None
-                if self._guarded_paper_write(symbol, key, progress_pending)[0] is None:
+                self._rex_context(rex, "ST7", lambda: {"path": "LEGACY", "bar": bar})
+                if self._guarded_paper_write(symbol, key, progress_pending, rex_store)[0] is None:
                     raise RuntimeError("stale paper state")  # Fail closed: no pending-order effect written.
+            self._rex_note(rex, "ST7", lambda: {
+                "path": "CATCH_UP" if self.config.catch_up_applies(symbol) else "LEGACY",
+                "paper_enabled": self.paper_enabled, "paper_blocked_before": blocked_before_st7,
+                "paper_blocked": paper_blocked, "ai_healthy": ai_healthy, "final_status": ai.final_status,
+                "ai_healthy_statuses": [None if r is None else r.status for r in
+                                        (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review)]})
             broker = self._broker(symbol)  # B2.3A: later decisions read durable state, never a stale broker.
             eligible = paper_policy(ai)
+            self._rex_note(rex, "ST8", lambda: {
+                "eligible": eligible, "paper_enabled": self.paper_enabled, "paper_blocked": paper_blocked,
+                "pending_on_symbol": sorted(o.order_id for o in broker.orders.values()
+                                            if o.symbol == symbol and o.status == "PENDING"),
+                "open_on_symbol": None if symbol not in broker.account.open_positions
+                else broker.account.open_positions[symbol].position_id})
             stage = "paper"
             execution_status, execution_reason = "SKIPPED", "POLICY_NOT_READY"
             blocking_position_id = blocking_order_id = submitted_order_id = None
@@ -545,12 +708,19 @@ class OperationalRuntime:
                 def submit(fresh):
                     # The approved Risk decision stays valid only for the state it was sized on:
                     # never resubmit after eligibility or equity changed, and never rerun Risk/AI.
+                    self._rex_note(rex, "ST9_RECHECK", lambda: {
+                        "pending_on_symbol": any(o.symbol == symbol and o.status == "PENDING"
+                                                 for o in fresh.orders.values()),
+                        "open_on_symbol": symbol in fresh.account.open_positions,
+                        "equity": fresh.account.equity, "decision_equity": decision_equity,
+                        "run_order_ids": [o.order_id for o in fresh.orders.values() if o.run_id == run_id]})
                     if (any(o.symbol == symbol and o.status == "PENDING" for o in fresh.orders.values())
                             or symbol in fresh.account.open_positions or fresh.account.equity != decision_equity):
                         return False, STALE_PAPER_STATE
                     order = fresh.submit_plan(deterministic, snapshot, slot)
                     return order is not None, order
-                fresh, order = self._guarded_paper_write(symbol, key, submit)
+                self._rex_context(rex, "ST9", lambda: {"decision_equity": decision_equity, "slot": slot})
+                fresh, order = self._guarded_paper_write(symbol, key, submit, rex_store)
                 if fresh is None or order is STALE_PAPER_STATE:
                     self._audit_safely(lambda: self.store.event(
                         self.clock(), ai.run_id, symbol, "policy", STALE_PAPER_STATE, "WARNING"),
@@ -578,6 +748,10 @@ class OperationalRuntime:
                     execution_reason, blocking_position_id = "EXISTING_POSITION", position.position_id
             else:
                 execution_reason = ai.final_status if ai.final_status != "PLAN_READY" else "POLICY_REVIEW_UNAVAILABLE"
+            self._rex_note(rex, "ST10", lambda: {
+                "execution_status": execution_status, "execution_reason": execution_reason,
+                "blocking_position_id": blocking_position_id, "blocking_order_id": blocking_order_id,
+                "submitted_order_id": submitted_order_id, "final_status": ai.final_status})
             self._record_execution_safely(self.clock(), run_id, symbol,
                                           deterministic.setup_assessment,
                                           status=execution_status, reason=execution_reason,
@@ -594,6 +768,7 @@ class OperationalRuntime:
         except Exception as exc:
             LOG.error("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_FAILED status=ERROR error_type=%s",
                       run_id, symbol, utc(slot), type(exc).__name__)
+            self._rex_note(rex, "EXIT_ERROR", lambda: {"stage": stage, "error_type": type(exc).__name__})
             if stage in {"market_data", "ai"}:
                 with self.store.transaction():
                     self.store.set_state("market_data_provider" if stage == "market_data" else "ai_provider", "ERROR")
