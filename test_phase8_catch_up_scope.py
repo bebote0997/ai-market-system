@@ -15,9 +15,9 @@ LEGACY_FINGERPRINT = "16b257235a26f293cedf46c74fff8f3231f41467f08c504e8c714aff29
 
 
 def env(**values):
-    """Environment with every catch-up key removed, then ``values`` set (an absent key stays absent)."""
-    base = {k: v for k, v in __import__("os").environ.items()
-            if k not in (FLAG, CATCH_UP_SYMBOLS_ENV, "AI_FLOOR_MARKET_EVIDENCE_PATH", "AI_FLOOR_ENABLED_SYMBOLS")}
+    """Environment with EVERY AI_FLOOR_* key removed (the golden fingerprint must not depend on the host or CI
+    environment, e.g. AI_FLOOR_MARKET_PROVIDER), then ``values`` set (an absent key stays absent)."""
+    base = {k: v for k, v in __import__("os").environ.items() if not k.startswith("AI_FLOOR_")}
     base.update(values)
     return patch.dict("os.environ", base, clear=True)
 
