@@ -264,12 +264,22 @@ class RealSignalDuringStartupTests(unittest.TestCase):
 
     def test_signal_during_each_startup_write(self):
         for site, existing in (("recover", False), ("recover", True), ("set_state", True), ("preflight", True),
-                               ("experiment", True), ("notifications", True)):
+                               ("experiment", True)):
             with self.subTest(site=site, existing=existing):
                 out = self.run_child(site, existing)
                 self.assertTrue(out["signal_sent"] and out["halted"])
-                self.assertTrue(out["outcome"].startswith("refused:"), out)
+                self.assertTrue(out["outcome"].startswith("refused:"), out)  # stopped at the next startup site
                 self.assertEqual(out["post_halt_writes"], [])
+
+    def test_signal_during_the_last_startup_write(self):
+        """The notification capture is the last startup site: the constructor completes; afterwards the close path
+        writes only the allowlist (H: HALT_OBSERVED of the process; P: heartbeat, scheduler, runner)."""
+        from test_phase8_rhalt_runtime import allowed_post_halt
+        out = self.run_child("notifications", True)
+        self.assertTrue(out["signal_sent"] and out["halted"])
+        self.assertEqual(out["outcome"], "constructed")
+        for sql in out["post_halt_writes"]:
+            self.assertTrue(allowed_post_halt(sql, residual=False), sql)
 
 
 class RestrictedEvidenceTests(unittest.TestCase):
