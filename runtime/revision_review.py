@@ -56,13 +56,16 @@ def _crosses(side, ohlc, level, kind):
     return (ohlc["low"] <= level or ohlc["open"] <= level) if stop_like else (ohlc["high"] >= level or ohlc["open"] >= level)
 
 
-def classify(symbol, snapshot, ingest_results, committed_bars, positions, anomaly_ids):
+def classify(symbol, snapshot, ingest_results, committed_bars, positions, anomaly_ids, *, in_scope=True):
     """Records for every revision reported by this cycle's ingestion.
 
     ``ingest_results``: {timeframe: IngestResult}; ``committed_bars``: {(timeframe, bar_start): bar with OHLC};
     ``positions``: open positions (PaperPosition) of ``symbol``; ``anomaly_ids``: {(timeframe, bar_start): anomaly_id
     of the REVISION anomaly the evidence database recorded for the presented content}. A revision without an
-    identified anomaly is skipped (never guessed): the gate then reports that anomaly as UNCLASSIFIED."""
+    identified anomaly is skipped (never guessed): the gate then reports that anomaly as UNCLASSIFIED.
+    P1-B (design 1.6): for a symbol OUTSIDE the catch-up scope at recording time, positions are managed from the
+    snapshot (newest bar), never from committed evidence, so the record is non-material with ``managed_by:
+    NEWEST_BAR``; the value is frozen at recording (no re-classification when the symbol later joins the scope)."""
     records = []
     for timeframe, result in sorted((ingest_results or {}).items()):
         for bar_start in getattr(result, "revisions", ()) or ():
@@ -80,7 +83,7 @@ def classify(symbol, snapshot, ingest_results, committed_bars, positions, anomal
             committed = committed_bars.get((timeframe, bar_start))
             committed = None if committed is None else _ohlc(committed)
             affected = []
-            if timeframe == "5m" and presented is not None and committed is not None:
+            if in_scope and timeframe == "5m" and presented is not None and committed is not None:
                 for position in positions:
                     if position.symbol != symbol or position.opened_at >= start:
                         continue
@@ -91,7 +94,8 @@ def classify(symbol, snapshot, ingest_results, committed_bars, positions, anomal
             records.append({"anomaly_id": anomaly_id, "symbol": symbol, "timeframe": timeframe,
                             "bar_start": bar_start, "committed": committed, "presented": presented,
                             "material": bool(affected), "affected": affected,
-                            "rule": "FIRST_COMMITTED_BAR_AUTHORITATIVE (unchanged)", "review_key": anomaly_id})
+                            "rule": "FIRST_COMMITTED_BAR_AUTHORITATIVE (unchanged)", "review_key": anomaly_id,
+                            "managed_by": "CATCH_UP" if in_scope else "NEWEST_BAR"})
     return records
 
 

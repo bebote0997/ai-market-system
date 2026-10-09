@@ -4,6 +4,8 @@ import logging
 import os
 import re
 import json
+import sqlite3
+import time
 import uuid
 
 from ai.orchestrator import run as run_ai
@@ -30,6 +32,13 @@ from ui.adapters import MARKETS, from_ai_report
 LOG = logging.getLogger("ai_floor.runtime")
 STALE_PAPER_STATE = "STALE_PAPER_STATE"  # B2.3A: submission refused, PAPER state changed under it.
 EVIDENCE_UNAVAILABLE = "EVIDENCE_UNAVAILABLE"  # B2.3B: PAPER economics fail closed for this cycle.
+# V2 Phase 8 / P1-B (DEC-8.14, design 1.5): observe-only evidence ingestion for enabled symbols OUTSIDE the catch-up
+# scope. Never blocks or changes the cycle; bounded lock wait; DEGRADED health after K consecutive failures.
+EVIDENCE_OBSERVE_FAILED = "EVIDENCE_OBSERVE_FAILED"
+EVIDENCE_OBSERVE_SKIPPED_BUSY = "EVIDENCE_OBSERVE_SKIPPED_BUSY"
+OBSERVE_BUSY_TIMEOUT_MS = 500
+EVIDENCE_BUSY_TIMEOUT_MS = 10000  # the Evidence Store's own default (restored after every observation)
+OBSERVE_DEGRADED_AFTER = 4
 
 
 class OperationalRuntime:
@@ -147,21 +156,78 @@ class OperationalRuntime:
                 return broker, result
         return None, None
 
+    def _evidence_engine(self):
+        if self.evidence is None:
+            from data.market_evidence import MarketEvidenceEngine
+            from storage.evidence_store import EvidenceStore
+            self.evidence = MarketEvidenceEngine(EvidenceStore(self.config.market_evidence_path),
+                                                 enabled_symbols=self.config.enabled_symbols)
+        return self.evidence
+
     def _ingest_evidence(self, symbol, snapshot, slot):
         """B2.3B: commit this snapshot's closed bars to the separate Evidence Store (closed by the
         slot, the provider's own boundary). Returns None, or the failure reason (fail closed)."""
         try:
-            if self.evidence is None:
-                from data.market_evidence import MarketEvidenceEngine
-                from storage.evidence_store import EvidenceStore
-                self.evidence = MarketEvidenceEngine(EvidenceStore(self.config.market_evidence_path),
-                                                     enabled_symbols=self.config.enabled_symbols)
-            self._last_ingest = self.evidence.ingest_snapshot(symbol, snapshot, as_of=slot)
+            self._last_ingest = self._evidence_engine().ingest_snapshot(symbol, snapshot, as_of=slot)
             return None
         except Exception as exc:  # noqa: BLE001 - any evidence failure blocks PAPER economics
             LOG.warning("symbol=%s component=market_evidence event=%s error_type=%s",
                         symbol, EVIDENCE_UNAVAILABLE, type(exc).__name__)
             return EVIDENCE_UNAVAILABLE
+
+    def _observe_evidence(self, symbol, snapshot, slot, run_id):
+        """P1-B (DEC-8.14): observe-only ingestion for an enabled symbol OUTSIDE the catch-up scope. It never returns a
+        blocking reason and never raises an Exception: the cycle continues on the legacy path with the same inputs as
+        with the flag OFF. The lock wait is bounded (OBSERVE_BUSY_TIMEOUT_MS) and the store's own timeout is always
+        restored; if it cannot be restored, the engine is closed so the next use reopens with the default."""
+        started = time.monotonic()
+        outcome, error_type = "OK", None
+        try:
+            engine = self._evidence_engine()
+            engine.store.db.execute(f"PRAGMA busy_timeout={OBSERVE_BUSY_TIMEOUT_MS}")
+            try:
+                self._last_ingest = engine.ingest_snapshot(symbol, snapshot, as_of=slot)
+            finally:
+                try:
+                    engine.store.db.execute(f"PRAGMA busy_timeout={EVIDENCE_BUSY_TIMEOUT_MS}")
+                except Exception:  # noqa: BLE001 - never keep a shortened timeout for in-scope symbols
+                    self._discard_evidence_engine()
+        except sqlite3.OperationalError as exc:
+            busy = "locked" in str(exc).lower() or "busy" in str(exc).lower()
+            outcome = EVIDENCE_OBSERVE_SKIPPED_BUSY if busy else EVIDENCE_OBSERVE_FAILED
+            error_type = type(exc).__name__
+        except Exception as exc:  # noqa: BLE001 - observe-only: isolate every failure
+            outcome, error_type = EVIDENCE_OBSERVE_FAILED, type(exc).__name__
+        elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+        if outcome != "OK":
+            self._last_ingest = None
+            LOG.warning("symbol=%s component=market_evidence event=%s error_type=%s", symbol, outcome, error_type)
+        self._audit_safely(lambda: self._record_observe(symbol, run_id, outcome, error_type, elapsed_ms), run_id, symbol)
+
+    def _discard_evidence_engine(self):
+        engine, self.evidence = self.evidence, None
+        try:
+            if engine is not None:
+                engine.store.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _record_observe(self, symbol, run_id, outcome, error_type, elapsed_ms):
+        """Non-economic: one WARNING event per failed observation and the per-symbol evidence_observe health state
+        (DEGRADED after OBSERVE_DEGRADED_AFTER consecutive failures; a success resets it). Never changes trading."""
+        with self.store.transaction():
+            raw = self.store.get_state("evidence_observe")
+            state = json.loads(raw) if raw else {}
+            entry = state.get(symbol, {"consecutive_failures": 0, "state": "OK"})
+            failures = 0 if outcome == "OK" else entry.get("consecutive_failures", 0) + 1
+            state[symbol] = {"consecutive_failures": failures,
+                             "state": "DEGRADED" if failures >= OBSERVE_DEGRADED_AFTER else "OK",
+                             "last_outcome": outcome, "last_elapsed_ms": elapsed_ms}
+            self.store.set_state("evidence_observe", json.dumps(state, sort_keys=True))
+            if outcome != "OK":
+                self.store._event(self.clock(), run_id, symbol, "market_evidence", outcome, "WARNING",
+                                  {"error_type": error_type, "elapsed_ms": elapsed_ms,
+                                   "consecutive_failures": failures})
 
     def _catch_up_positions(self, symbol, slot, key):
         """B2.3B: every committed closed 5m bar after the open position's durable watermark, oldest
@@ -200,7 +266,8 @@ class OperationalRuntime:
                             anomaly_ids[(tf, bar.bar_start)] = row[0]
         account, _, _ = self.store.load_paper(self.config.account_id)
         positions = [] if account is None else [p for p in account.open_positions.values() if p.symbol == symbol]
-        records = revision_review.classify(symbol, snapshot, results, committed, positions, anomaly_ids)
+        records = revision_review.classify(symbol, snapshot, results, committed, positions, anomaly_ids,
+                                           in_scope=self.config.catch_up_applies(symbol))
         revision_review.journal(self.store, records, at=self.clock(), run_id=run_id)
 
     def _committed_bar(self, symbol, start):
@@ -315,11 +382,15 @@ class OperationalRuntime:
                 self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", provider_state, run_id))
                 self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
                 return "NO_DATA"
-            paper_blocked = None  # B2.3B: reason PAPER economics are blocked this cycle (flag ON only).
+            paper_blocked = None  # B2.3B: reason PAPER economics are blocked this cycle (in-scope symbols only).
             if self.config.v2_position_catch_up:
                 self._last_ingest = None
-                paper_blocked = self._ingest_evidence(symbol, snapshot, slot)
-                if paper_blocked is None:  # V2 P8.4 R4: REVISION visibility; observability only, never a decision
+                if self.config.catch_up_applies(symbol):
+                    paper_blocked = self._ingest_evidence(symbol, snapshot, slot)
+                else:  # P1-B: outside the scope, evidence is observe-only and never blocks the legacy path
+                    self._observe_evidence(symbol, snapshot, slot, run_id)
+                if paper_blocked is None and self._last_ingest is not None:
+                    # V2 P8.4 R4: REVISION visibility; observability only, never a decision
                     self._audit_safely(lambda: self._record_revisions(symbol, snapshot, run_id), run_id, symbol)
             fresh, data_state, last_bar = fresh_snapshot(snapshot, symbol, slot, self.config.max_age_seconds)
             if fresh:
@@ -353,7 +424,7 @@ class OperationalRuntime:
                 if self.paper_enabled:
                     TradeManager(fresh.account, fresh).process_bar(bar)
                 return self.paper_enabled and (had_open or bool(fresh.journal)), None
-            if not self.config.v2_position_catch_up:
+            if not self.config.catch_up_applies(symbol):  # P1-B: legacy newest-bar path outside the scope
                 broker, _ = self._guarded_paper_write(symbol, key, manage_positions)
                 if broker is None:
                     raise RuntimeError("stale paper state")  # Fail closed: nothing of this cycle written.
@@ -426,7 +497,7 @@ class OperationalRuntime:
                 return execution_state
             ai_healthy = all(r is not None and r.status in {"OK", "PARTIAL"} for r in
                 (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review))
-            if self.config.v2_position_catch_up:
+            if self.config.catch_up_applies(symbol):  # P1-B: outside the scope, the legacy pending path below
                 # B2.3C: the existing V1 gate values of THIS cycle plus its committed Evidence bar;
                 # B2.2 decides. No snapshot fallback, no approval from another cycle.
                 if self.paper_enabled and paper_blocked is None:
