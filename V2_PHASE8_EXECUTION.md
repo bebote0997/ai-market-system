@@ -885,3 +885,24 @@ Review the final SHA of P8.4G:
 - the three superseded expectations;
 - that no economic, strategy or Risk Engine behaviour changed;
 - full suite and CI.
+
+# P8.6 — Design phase result, Owner decisions and implementation handoff (2026-10-08; documentation only)
+
+- **Design:** `V2_PHASE8_P86_DESIGN.md` (revision P8.6F10). Copilot P8.6R11 (as relayed by the Owner): **P8.6 DESIGN
+  COMPLETE — CONDITIONAL**. This is not implementation or operational certification.
+- **Owner decisions:**
+  - DEC-8.17 **APPROVED POLICY** (the G-8.INT measurement policy, original §8.1 definition; an earlier "emergency stop"
+    label was corrected the same day);
+  - DEC-8.17b **APPROVED POLICY** (halt stop policy: Alternative 1 plus the post-halt persistence policy, carrying
+    the emergency-stop principles; the residual of one admitted write after `T_h` is accepted);
+  - DEC-8.20 **APPROVED POLICY** (A2 with conditions; no XAUUSD / EURUSD economic isolation);
+  - DEC-8.21b **PROVISIONAL** (B-STRICT pending operational validation);
+  - the package plan **APPROVED for planning only**;
+  - DEC-8.13 / 8.14 / 8.15 / 8.16 / 8.21 **APPROVED POLICY** (2026-10-08; DEC-8.14 busy ≤ 500 ms and K = 4 subject to
+    tests);
+  - DEC-8.18 / 8.19 PENDING;
+  - DEC-8.22-a…j and OP-1…OP-7 NOT AUTHORIZED.
+- **Handoff:** `V2_PHASE8_P86_HANDOFF.md`: decision register, packages P1–P4 with gates, recommended sequence
+  (P1 → P2a → P3 → P4a → P2b → P4b), the P1 prompt (not executed), blockers B-1…B-6.
+- **Status unchanged:** Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN; G14 / G15 not certified; PAPER only; REAL OFF;
+  NAS100 OFF; no Phase 9.

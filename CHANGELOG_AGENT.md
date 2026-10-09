@@ -1,5 +1,160 @@
 # Agent Changelog
 
+## 2026-10-08 — V2 Phase 8 P8.6 Owner decisions and implementation handoff (documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`.
+- Recorded:
+  - DEC-8.13, 8.14, 8.15, 8.16, 8.17 (G-8.INT measurement policy; an earlier "emergency stop" label corrected),
+    8.17b (halt stop policy, Alternative 1), 8.20 (A2) and 8.21 APPROVED POLICY;
+  - DEC-8.21b PROVISIONAL;
+  - DEC-8.18 / 8.19 PENDING;
+  - DEC-8.22-a…j and OP NOT AUTHORIZED;
+  - the package plan approved for planning only; P1 split into P1-A (LOW-1) and P1-B (catch-up); DEC-8.15 added to
+    the P1 gate; the Libro Maestro deferred by the Owner.
+- New: `V2_PHASE8_P86_HANDOFF.md` (register, packages P1–P4, sequence, P1 prompt not executed, blockers).
+- Appended: a P8.6 section in `V2_PHASE8_EXECUTION.md`; §8.4 in the design.
+- Libro Maestro: latest accessible v1.7 (Phase 5 checkpoint) predates Phases 6–8, so the current version is not
+  verifiable and it was not edited.
+- No code, tests, config or DB changed; not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F10 (closing the P8.6R10 HIGH; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R10 read; findings checked against the
+  code (also: `Store(path)` creates a missing DB).
+- `V2_PHASE8_P86_DESIGN.md`:
+  - start-mode contract: GENESIS_PREPARATION only through a separate tool with an Owner-signed authorization and
+    create-exclusive; SEALED_RUNTIME hard-wired with no creation branch;
+  - the default is refusal;
+  - configuration and DB identity verified before any DB open;
+  - start-mode failure policy;
+  - R-GEN-1a…e requirements;
+  - NG54–NG61.
+- Not committed; no code, DB, config or deploy change. Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F9 (final targeted correction of P8.6R9; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R9 read; findings checked against the
+  code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - sealed-genesis mode (OAR-G by external configuration): no account creation after sealing;
+  - a gate inside the constructor before any economic write;
+  - failure policy before and after `E0`;
+  - `GENESIS_SEAL_CHECK` evidence per process start;
+  - the restoration-detection overclaim withdrawn;
+  - R-HALT terminology unified (Alternative 1 / 2, "second check before invoking `save_paper`").
+- Not committed; no code, DB, config or deploy change. Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F8 (closing P8.6R8 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R8 read; findings checked against the
+  code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - account genesis before the period (G0–G5, OAR-G, `edg_start = edg_genesis`); no account reconstruction after `E0`
+    is certifiable; R-GEN-1 as a future requirement;
+  - the stop policy corrected (Alternative 1 admission contract recommended; the residual may open a transaction after
+    `T_h`; Alternative 2 needs a pinned-module authorization);
+  - chain-head anchors per UTC day, gaps ≤ 26 h, independent of counting;
+  - G14 scoped to deterministic rule replay.
+- DEC-8.17b and DEC-8.21b PENDING; M-5 OPEN. Not committed; no code, DB, config or deploy change.
+
+## 2026-10-08 — V2 Phase 8 P8.6F7 (closing P8.6R7 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R7 read; every finding checked
+  against the code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - EDG complete economic digest (all rows of the five PAPER tables, including closed positions; startup
+    reconciliation covered);
+  - trust root and the INVALID / NOT VERIFIED / VERIFIED classification, with the limitation stated (reverted
+    alterations are not detectable);
+  - halt Policies A / B (recommend B, pre-begin abort at the caller, no change to `storage/database.py`), with no
+    "zero effect" claim;
+  - adapter stage F1b and AI provenance V-P1…V-P3;
+  - post-halt persistence policy by category (allowlist: the HALTED bookkeeping plus `heartbeat`, `scheduler`,
+    `runner`).
+- DEC-8.17b and DEC-8.21b PENDING; M-5 OPEN. Not committed; no code, DB, config or deploy change.
+
+## 2026-10-08 — V2 Phase 8 P8.6F6 (closing P8.6R6 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R6 read; every finding checked
+  against the code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - REX AI / floor reproduction (F1, A1–A4 from recommendations, base status and warnings; P1 / H1; rule versions;
+    missing-value rules) and full pending-order inputs;
+  - B-STRICT evidence-gap rule (any unevidenced economic write invalidates the whole period; day exclusion never
+    applies to writes; no backfill), with B-QUARANTINE assessed;
+  - R-HALT linearization (T_sig / T_h / T_ack; single-read admit point as the write start; per-operation coverage;
+    race tests);
+  - I-R1 replaced by I-R1a–d.
+- M-5 OPEN. Not committed; no code, DB, config or deploy change. Phase 8 BLOCKED; HIGH-8.1 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F5 (closing P8.6R5 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R5 read; every finding checked
+  against the code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - V1 fill gate (`current_equity` and `equity_at_submission` at 1 %) added to the coupling; the "sizing only" claim
+    withdrawn;
+  - REX completed (inputs → decisions → effects → evidence; AI statuses, `ai_healthy`, `paper_policy`, fill-gate and
+    `submit_plan` inputs; not-evaluated paths);
+  - atomicity alternatives A vs B (recommend B, PENDING);
+  - `psh` defined over the `paper_state` tuple, stages ST0–ST10, G15 stage replay;
+  - R-HALT CP1–CP9, bookkeeping, verifier-level recovery, I-R1 restated (M-5 OPEN);
+  - A2 contract (X_P2/Y_P2 baseline, pinned DB path, backup-API archive, OAR-A, inode/nlink/symlink checks, flat
+    proof);
+  - decisions split into policy / implementation / operational levels (acyclic); R3-5 and R-21 corrected.
+- No code, DB, config or deploy change; not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F4 (closing P8.6R4 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R4 read.
+- Grounding correction: the runtime sizes with V1 `riesgo.evaluar_trade_plan` (V2 `reserve_and_submit` is not
+  wired); §1.9 corrected.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - G14/G15 evidence contract (REX, a future observability-only runtime addition), covering not-evaluated runs;
+    oracle and sequence replay;
+  - T14 as a full 8-column row, an id partition with no gaps, explicit transition ids with `seq = MAX` checks;
+  - multi-symbol sequential semantics documented unchanged;
+  - continuity A1 / A2 / B comparison (recommend A2: new DB, fresh 10000 account);
+  - exact post-halt activity, R-HALT-1…5 requirements; M-5 kept OPEN (partial);
+  - M1–M10 table restored (dropped by P8.6F3); DEC-8.13…8.22 all PENDING.
+- Not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.6F3 (design correction after the complete P8.6R3; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. All four audit reports (P8.5R2, P8.6R, P8.6R2,
+  P8.6R3) received and reconciled. `V2_PHASE8_P86_DESIGN.md`:
+  - H-1: closing-event attribution (E1–E7), origin run identity kept, `run_id` uniqueness; review_reports removed from
+    the digest, with a frozen snapshot.
+  - H-2: self-hash exclusion rule and a non-circular DAG; Owner-retained SSH-signed anchors; a digest-stability
+    argument and the encoding invariant I-H6.
+  - Shared equity (new HIGH): A vs B comparison; mixed-path segments TECHNICAL_ONLY; G1/G14.
+  - Halt: control-plane procedure H1–H7.
+  - Decisions DEC-8.13…8.22 all PENDING; traceability, invariants and re-audit readiness added.
+- No code, DB, flag or deployment change; not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.6F2 (targeted design remediation after P8.6R2; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. `V2_PHASE8_P86_DESIGN.md`: H-1 history mapping
+  by journal id (M1–M10, PRE_START quarantine, fail-closed), H-2 deterministic integrity (canonical JSON, SHA-256,
+  membership T1–T13, PREPARE→SIGN→COMMIT→ANCHOR, crash recovery, verification V1–V6, stated limits), M-2 evidence
+  completeness (STRICT/CALENDAR), M-5 operator table, experiment status axes FS/EX/PD/RS, G-8.INT counting rules;
+  invariants and negative tests; items for independent validation. P8.6R2 report not attached. Not committed.
+
+## 2026-10-08 — V2 Phase 8 P8.6F (design correction after P8.6R; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. `V2_PHASE8_P86_DESIGN.md` revised: H-1/H-2
+  (immutable hash-chained segments, per-segment full historical validation, separate opening/closing equity, external
+  anchor, freeze amendments, per-segment 14-day counter), M-1…M-7, read-only experiment-state classification
+  (NOT_STARTED/STARTED/ACTIVE/ENDED/INCONSISTENT), risk matrix, DEC-8.13…8.22 as proposals. The P8.6R report was not
+  attached. No code, DB, flag or deployment change; not committed. Phase 8 BLOCKED; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.6 (design only: per-symbol catch-up, experiment continuity, LOW-1)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Design document `V2_PHASE8_P86_DESIGN.md` only;
+  no code, config, flag, DB or deployment change; not committed (no commit authorization in P8.6).
+- LOW-1 reproduced on temporary copies (unknown review decision -> gate CLEAR); fix proposed, not implemented.
+- Owner decisions DEC-8.13 … DEC-8.22 requested. HIGH-8.1 OPEN for the runtime; Phase 8 BLOCKED; not certified.
+
 ## 2026-10-08 — V2 Phase 8 P8.4G (fixes for the two P8.5R HIGH findings)
 
 - Agent: Claude. Branch `v2/phase8-execution`; baseline `b5a8c3c`; final SHA = the commit that adds this entry.
