@@ -19,6 +19,12 @@ moves, closes or opens anything. Observability only:
     to change a committed bar, so an escalation that concludes the committed bar was wrong keeps the gate BLOCKED
     until a separately authorized procedure exists.
   A later ESCALATED after a final decision re-opens the anomaly (the most conservative reading); earlier rows remain.
+- LOW-1 (V2 P8.6 design section 4, DEC-8.21): a review row counts only if it is VALID: ``source`` is this module,
+  ``decision`` is known, ``review_key == anomaly_id`` of a recorded ``EVIDENCE_REVISION``, ``reviewer`` is non-blank,
+  ``final`` matches the decision and ``previous_decision`` equals the literal decision of the immediately preceding
+  review row for the same anomaly (``null`` for the first). The latest row decides; if it is invalid the anomaly is
+  ``INVALID_DECISION`` and the gate is BLOCKED (``INVALID_REVIEW_RECORD``) with no fallback to an earlier row.
+  Remediation is append-only: a new valid ``record_review`` row. Invalid rows are never rewritten or deleted.
 - ``demo_gate``: READ-ONLY; the evidence database is REQUIRED. CLEAR only with full coverage: every REVISION anomaly
   has a classification by ``anomaly_id``, every classification refers to an existing anomaly, no material one lacks a
   final decision and no anomaly is effectively ESCALATED. Otherwise BLOCKED (also when the evidence database is
@@ -37,6 +43,7 @@ SOURCE = "revision_review"
 FINAL_DECISIONS = ("ACCEPTED_FIRST_COMMITTED",)
 OPEN_DECISIONS = ("ESCALATED",)
 DECISIONS = FINAL_DECISIONS + OPEN_DECISIONS
+INVALID_DECISION = "INVALID_DECISION"
 
 
 def _ohlc(bar):
@@ -88,18 +95,84 @@ def classify(symbol, snapshot, ingest_results, committed_bars, positions, anomal
     return records
 
 
-def _effective_decisions(db):
-    """{review_key: latest decision}, from the append-only review rows in journal order."""
-    effective = {}
-    for (payload,) in db.execute("SELECT payload FROM journal WHERE event_type=? ORDER BY id", (REVIEW_EVENT,)):
-        row = json.loads(payload)
-        effective[row.get("review_key")] = row.get("decision")
-    return effective
+def _review_rows(db):
+    """Every ``EVIDENCE_REVISION_REVIEWED`` journal row (any source), in journal order: (id, source, payload dict or
+    None when the payload is not a JSON object)."""
+    rows = []
+    for journal_id, source, payload in db.execute(
+            "SELECT id, source, payload FROM journal WHERE event_type=? ORDER BY id", (REVIEW_EVENT,)):
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError):
+            data = None
+        rows.append((journal_id, source, data if isinstance(data, dict) else None))
+    return rows
+
+
+def _key(data):
+    key = None if data is None else data.get("review_key")
+    return key if isinstance(key, str) else None
+
+
+def _latest_literal_decisions(db):
+    """{review_key: literal ``decision`` of its latest review row, valid or not} (design 4.1)."""
+    latest = {}
+    for _, _, data in _review_rows(db):
+        latest[_key(data)] = None if data is None else data.get("decision")
+    return latest
+
+
+def _review_states(db):
+    """LOW-1 validation (design 4.2-4.4). Returns (states, historical_invalid, without_record):
+    ``states``: {anomaly_id: latest row state}; ``historical_invalid``: superseded invalid rows (warnings);
+    ``without_record``: review rows whose key is not a recorded EVIDENCE_REVISION."""
+    recorded = set()
+    for (payload,) in db.execute("SELECT payload FROM journal WHERE event_type=?", (EVENT,)):
+        anomaly_id = json.loads(payload).get("anomaly_id")
+        if isinstance(anomaly_id, str):
+            recorded.add(anomaly_id)
+    previous, states, historical_invalid, without_record = {}, {}, [], []
+    for journal_id, source, data in _review_rows(db):
+        key = _key(data)
+        reasons = []
+        if data is None:
+            reasons.append("payload_not_object")
+        else:
+            decision = data.get("decision")
+            if source != SOURCE:
+                reasons.append("wrong_source")
+            if decision not in DECISIONS:
+                reasons.append("unknown_decision")
+            if key is None or data.get("anomaly_id") != key:
+                reasons.append("review_key_mismatch")
+            if not isinstance(data.get("reviewer"), str) or not data["reviewer"].strip():
+                reasons.append("reviewer_missing")
+            if not isinstance(data.get("final"), bool) or data["final"] != (decision in FINAL_DECISIONS):
+                reasons.append("final_inconsistent")
+            if "previous_decision" not in data or data["previous_decision"] != previous.get(key):
+                reasons.append("previous_decision_mismatch")
+        if key not in recorded:
+            reasons.append("review_without_record")
+            without_record.append({"journal_id": journal_id, "review_key": key})
+        literal = None if data is None else data.get("decision")
+        prior = states.get(key)
+        if prior is not None and not prior["valid"]:
+            historical_invalid.append(prior)  # superseded, listed so the Owner sees the tampering point
+        states[key] = {"anomaly_id": key, "journal_id": journal_id, "decision": literal, "valid": not reasons,
+                       "reasons": reasons}
+        previous[key] = literal
+    return states, historical_invalid, without_record
+
+
+def _effective(states):
+    """{anomaly_id: decision of a VALID latest row, else INVALID_DECISION}; never falls back to an earlier row."""
+    return {key: (state["decision"] if state["valid"] else INVALID_DECISION)
+            for key, state in states.items() if key is not None}
 
 
 def _summary(db):
     rows = [json.loads(r[0]) for r in db.execute("SELECT payload FROM journal WHERE event_type=?", (EVENT,))]
-    effective = _effective_decisions(db)
+    effective = _effective(_review_states(db)[0])
     unresolved = [r for r in rows if effective.get(r.get("review_key")) not in FINAL_DECISIONS]
     return {"recorded": len(rows), "unreviewed": len(unresolved),
             "material_unreviewed": sum(1 for r in unresolved if r.get("material")),
@@ -124,7 +197,9 @@ def journal(store, records, *, at, run_id):
 
 def record_review(store, key, *, decision, reviewer, note="", at=None):
     """Owner decision for one recorded anomaly (``key`` = its anomaly_id); never changes evidence or PAPER state.
-    Appends an auditable row (decision, whether it is final, the previous effective decision, reviewer, note)."""
+    Appends an auditable row (decision, whether it is final, ``previous_decision`` = the literal decision of the
+    immediately preceding review row for this anomaly, valid or not (design 4.1), reviewer, note). A new valid row is
+    also the only remediation of an invalid latest row (design 4.4)."""
     if decision not in DECISIONS:
         raise ValueError(f"decision must be one of {DECISIONS}")
     if not isinstance(reviewer, str) or not reviewer.strip():
@@ -135,7 +210,7 @@ def record_review(store, key, *, decision, reviewer, note="", at=None):
                                (EVENT, key)).fetchone()
         if row is None:
             raise ValueError("unknown review_key")
-        previous = _effective_decisions(store.db).get(key)
+        previous = _latest_literal_decisions(store.db).get(key)
         store._event(at, None, row[0], SOURCE, REVIEW_EVENT, "INFO" if decision in FINAL_DECISIONS else "WARNING",
                      {"review_key": key, "anomaly_id": key, "decision": decision,
                       "final": decision in FINAL_DECISIONS, "previous_decision": previous, "reviewer": reviewer,
@@ -148,8 +223,9 @@ def _ro(path):
 
 
 def demo_gate(trading_db, evidence_db):
-    """READ-ONLY pre-DEMO gate. CLEAR only with full anomaly coverage by ``anomaly_id``, a final decision for every
-    material anomaly and no effectively ESCALATED anomaly."""
+    """READ-ONLY pre-DEMO gate. CLEAR only with full anomaly coverage by ``anomaly_id``, a VALID final decision for every
+    material anomaly, no effectively ESCALATED anomaly, no invalid latest review (LOW-1), no review without a recorded
+    anomaly and no classification that mismatches its anomaly."""
     blockers = []
     anomalies = {}
     if evidence_db is None or not Path(evidence_db).is_file():
@@ -169,15 +245,25 @@ def demo_gate(trading_db, evidence_db):
     try:
         rows = [json.loads(r[0]) for r in db.execute("SELECT payload FROM journal WHERE event_type=? ORDER BY id",
                                                      (EVENT,))]
-        effective = _effective_decisions(db)
+        states, historical_invalid, without_record = _review_states(db)
     finally:
         db.close()
+    effective = _effective(states)
     classified = {}
     for row in rows:  # first record per anomaly; legacy rows without anomaly_id never count as coverage
         if row.get("anomaly_id"):
             classified.setdefault(row["anomaly_id"], row)
+    evidence_ok = not blockers
     unclassified = [a for key, a in anomalies.items() if key not in classified]
-    orphans = [] if blockers else [r for key, r in classified.items() if key not in anomalies]
+    orphans = [] if not evidence_ok else [r for key, r in classified.items() if key not in anomalies]
+    # LOW-1 (design 4.5): a classification counts only if it matches its anomaly's symbol / timeframe / bar_start.
+    mismatches = [] if not evidence_ok else [
+        {"anomaly_id": key, "classification": [r.get("symbol"), r.get("timeframe"), r.get("bar_start")],
+         "anomaly": [anomalies[key]["symbol"], anomalies[key]["timeframe"], anomalies[key]["bar_start"]]}
+        for key, r in classified.items() if key in anomalies and
+        (r.get("symbol"), r.get("timeframe"), r.get("bar_start")) !=
+        (anomalies[key]["symbol"], anomalies[key]["timeframe"], anomalies[key]["bar_start"])]
+    invalid_latest = [states[key] for key in classified if key in states and not states[key]["valid"]]
     unreviewed = [r for key, r in classified.items() if key not in effective]
     escalated = [dict(r, decision=effective[key]) for key, r in classified.items()
                  if effective.get(key) in OPEN_DECISIONS]
@@ -190,10 +276,18 @@ def demo_gate(trading_db, evidence_db):
         blockers.append("MATERIAL_UNREVIEWED")
     if escalated:
         blockers.append("ESCALATED_UNRESOLVED")
+    if invalid_latest:
+        blockers.append("INVALID_REVIEW_RECORD")
+    if without_record:
+        blockers.append("REVIEW_WITHOUT_RECORD")
+    if mismatches:
+        blockers.append("CLASSIFICATION_MISMATCH")
     return {"status": "BLOCKED" if blockers else "CLEAR", "blockers": blockers, "anomalies": len(anomalies),
             "classified": len(classified), "material_unreviewed": material, "escalated_unresolved": escalated,
             "unclassified": unclassified, "orphan_classifications": orphans,
             "non_material_unreviewed": [r for r in unreviewed if not r["material"]],
+            "invalid_reviews": invalid_latest, "historical_invalid_reviews": historical_invalid,
+            "reviews_without_record": without_record, "classification_mismatches": mismatches,
             "resolved": sum(1 for key in classified if effective.get(key) in FINAL_DECISIONS),
             "recorded": len(rows), "reviewed": len(effective)}
 
