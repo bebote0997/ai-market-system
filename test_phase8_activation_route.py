@@ -41,10 +41,10 @@ class R1ConfigTests(unittest.TestCase):
     def test_only_the_exact_value_1_with_a_separate_path_enables(self):
         db, evidence = self.dir / "trading_floor.db", self.dir / "market_evidence.db"
         with clean_env(AI_FLOOR_V2_POSITION_CATCH_UP="1", AI_FLOOR_MARKET_EVIDENCE_PATH=str(evidence),
-                       AI_FLOOR_DB_PATH=str(db)):
+                       AI_FLOOR_DB_PATH=str(db), AI_FLOOR_V2_POSITION_CATCH_UP_SYMBOLS="XAUUSD,EURUSD"):
             config = RuntimeConfig.from_env()
         self.assertEqual((config.v2_position_catch_up, config.market_evidence_path), (True, evidence))
-        self.assertNotEqual(config.fingerprint(), replace(config, v2_position_catch_up=False,
+        self.assertNotEqual(config.fingerprint(), replace(config, v2_position_catch_up=False, v2_position_catch_up_symbols=(),
                                                           market_evidence_path=None).fingerprint())
 
     def test_accidental_or_ambiguous_activation_fails_closed(self):
@@ -80,7 +80,8 @@ class R2PreflightTests(unittest.TestCase):
     def config(self, evidence, flag=True):
         return RuntimeConfig(db_path=self.mount / "trading_floor.db", enabled_symbols=("XAUUSD", "EURUSD"),
                              market_provider_mode="twelve_data", ai_provider_mode="openai",
-                             v2_position_catch_up=flag, market_evidence_path=evidence if flag else None)
+                             v2_position_catch_up=flag, market_evidence_path=evidence if flag else None,
+                             v2_position_catch_up_symbols=("XAUUSD", "EURUSD") if flag else ())
 
     def test_off_adds_no_checks(self):
         self.assertEqual(catch_up_storage_checks(self.config(None, flag=False), mount=self.mount), {})
@@ -182,7 +183,7 @@ class NoSilentDegradationTests(Harness):
         self.seed()
         overrides = {("XAUUSD", SLOT.replace(minute=15)): (100.0, 100.5, 94.0, 96.0)}
         with clean_env(AI_FLOOR_V2_POSITION_CATCH_UP="1", AI_FLOOR_MARKET_EVIDENCE_PATH=str(self.ev),
-                       AI_FLOOR_DB_PATH=str(self.db)):
+                       AI_FLOOR_DB_PATH=str(self.db), AI_FLOOR_V2_POSITION_CATCH_UP_SYMBOLS="XAUUSD,EURUSD"):
             config = RuntimeConfig.from_env()
         self.assertTrue(config.v2_position_catch_up)
         from ai.provider import DeterministicAIProvider

@@ -68,6 +68,7 @@ class Bars:
 
 def config(db, evidence, flag=True):
     return RuntimeConfig(db_path=Path(db), enabled_symbols=("XAUUSD", "EURUSD"), v2_position_catch_up=flag,
+                         v2_position_catch_up_symbols=("XAUUSD", "EURUSD") if flag else (),  # P1-B: full scope = prior global
                          market_evidence_path=None if evidence is None else Path(evidence))
 
 
