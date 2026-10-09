@@ -1,4 +1,5 @@
 """One durable PAPER cycle. Explicit dependencies; no network or sample fallback."""
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import logging
 import os
@@ -598,7 +599,15 @@ class OperationalRuntime:
                     ai_provider = RexProviderProbe(ai_provider, rex)
                 except Exception as exc:  # noqa: BLE001 - the unwrapped provider; REX notes the gap
                     rex.fail("ai_probe", exc)
-            ai = run_ai(deterministic, ai_provider, audit)
+            observing = nullcontext()
+            if rex is not None:
+                try:
+                    from ai.runtime import observe_requests
+                    observing = observe_requests(rex.ai_observation)
+                except Exception as exc:  # noqa: BLE001 - no observation; G14 then fails closed for this run
+                    rex.fail("ai_observer", exc)
+            with observing:
+                ai = run_ai(deterministic, ai_provider, audit)
             self._rex_note(rex, "ST5", lambda: self._rex_ai(ai, audit))
             if self.config.v2_ai_resilience:
                 health_events = self.ai_health.drain()

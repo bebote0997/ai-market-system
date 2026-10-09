@@ -61,7 +61,7 @@ class IndependenceTests(unittest.TestCase):
                    for alias in node.names}
         modules |= {node.module.split(".")[0] for node in ast.walk(tree)
                     if isinstance(node, ast.ImportFrom) and node.module}
-        self.assertLessEqual(modules, {"datetime", "decimal", "json", "math"})
+        self.assertLessEqual(modules, {"datetime", "decimal", "hashlib", "json", "math"})
 
     def test_runtime_never_imports_the_replay_package(self):
         for path in (ROOT / "runtime").glob("*.py"):
@@ -292,16 +292,15 @@ class ReproductionTests(unittest.TestCase):
         self.assertLessEqual({"F1", "F1b", "ST4 V1 sizing (float.hex)", "V-P1/V-P2/V-P3", "A1-A4", "H1", "P1",
                               "ST7 legacy fill gate", "ST9 submit", "ST8 admission", "ST2 management"}, checked)
 
-    def test_catch_up_runs_reproduce_and_unobserved_requests_fail_closed(self):
+    def test_catch_up_runs_reproduce_including_legitimate_omissions(self):
         verdicts = {}
         for record, writes in self.runs(self.cu_db):
             verdicts.setdefault(record["symbol"], []).append(check_run(record, writes))
         self.assertTrue(all(v["result"] == "PASS" for v in verdicts["XAUUSD"]), verdicts["XAUUSD"])
-        # EURUSD's macro agent had no evidence: its request never reached a provider, so V-P1's request identity is
-        # not observed -> INCOMPLETE -> FAIL (never approved by inference).
+        # EURUSD's macro agent had no evidence: its observed request was legitimately skipped (verified, not inferred).
         for verdict in verdicts["EURUSD"]:
-            self.assertEqual(verdict["result"], "FAIL")
-            self.assertEqual(verdict["failures"][0]["code"], "REQUEST_IDENTITY_NOT_OBSERVED")
+            self.assertEqual(verdict["result"], "PASS", verdict["failures"])
+            self.assertIn("V-P1 ai_macro: LEGITIMATE_OMISSION", verdict["checked"])
 
     def test_reconstructed_values_are_labelled(self):
         record, writes = next((r, w) for r, w in self.runs(self.plan_db) if any(

@@ -20,6 +20,7 @@ Reconstructed values (sizing intermediates, adapter transition, fill-gate clause
 """
 from datetime import datetime, timezone
 from decimal import ROUND_FLOOR, Context, Decimal, localcontext
+import hashlib
 import json
 import math
 
@@ -42,6 +43,21 @@ RESPONSE_SLOTS = ("ai_structure", "ai_liquidity", "ai_macro", "ai_setup_review",
 RESPONSE_FIELDS = ("schema_version", "run_id", "as_of", "symbol", "agent_name", "status", "bias", "confidence",
                    "recommendation", "warnings")
 STALE_PAPER_STATE = "STALE_PAPER_STATE"
+SKIP_REASON = "skipped_no_data"
+
+
+def evidence_fingerprint(material):
+    """Transcription of ``ai.call_audit.evidence_fingerprint`` over the observed fingerprint material."""
+    canonical = json.dumps({"fingerprint_version": material["fingerprint_version"], "symbol": material["symbol"],
+                            "agent": material["agent"], "role": material["role"],
+                            "evidence": list(material["evidence"])},
+                           sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def has_usable_evidence(evidence):
+    """Transcription of ``ai.runtime.has_usable_evidence``: the provider is called iff a dict item exists."""
+    return any(isinstance(item, dict) for item in evidence)
 
 
 class EvidenceError(Exception):
@@ -651,6 +667,52 @@ def _check_management(r, identity):
             _check_write_transition(r, write, apply, f"ST2C#{write['write_seq']}")
 
 
+def _check_request_observation(r, name, response, entry, requests):
+    """The three V-P1 request paths: EMITTED_OBSERVED, LEGITIMATE_OMISSION, or fail (insufficient/contradictory)."""
+    run_id, symbol, slot, agent = r.run["run_id"], r.run["symbol"], r.run["slot"], response["agent_name"]
+    observed = [o for o in r.run.get("ai_observations") or [] if o.get("agent_name") == agent]
+    if not observed:
+        raise EvidenceError("VP1_REQUEST_NOT_OBSERVED", f"{name}: no observation of the request")
+    if len(observed) > 1:
+        raise EvidenceError("VP1_OBSERVATION_DUPLICATED", name)
+    obs = observed[0]
+    material = obs["fingerprint_material"]
+    if not (obs["run_id"] == run_id and obs["symbol"] == symbol and obs["as_of"] == slot
+            and obs["schema_version"] == AI_SCHEMA_VERSION and obs["prompt_version"] == entry["prompt_version"]
+            and material["symbol"] == obs["symbol"] and material["agent"] == agent
+            and material["role"] == obs["role"]):
+        raise EvidenceError("VP1_IDENTITY_MISMATCH", f"{name}: observed request identity")
+    if evidence_fingerprint(material) != entry.get("evidence_fingerprint"):
+        raise EvidenceError("VP1_FINGERPRINT_MISMATCH", name)  # binds the observed request to the audit entry
+    usable = has_usable_evidence(material["evidence"])
+    if obs["usable_evidence"] is not usable:
+        raise EvidenceError("VP1_OBSERVATION_CONTRADICTION", f"{name}: usable_evidence")
+    ids = [item.get("evidence_id") for item in material["evidence"] if isinstance(item, dict)]
+    if ids != entry["evidence_ids"]:
+        raise EvidenceError("VP1_EVIDENCE_IDS_MISMATCH", name)
+    probed = [q for q in requests if q["agent_name"] == agent]
+    if entry.get("called") is True:
+        if not (obs["kind"] == "EMITTED" and obs["provider_called"] is True and obs["reason"] == "emitted"
+                and usable):
+            raise EvidenceError("VP1_OBSERVATION_CONTRADICTION", f"{name}: emitted path")
+        if len(probed) != 1 or any(probed[0][k] != v for k, v in (
+                ("run_id", run_id), ("symbol", symbol), ("as_of", slot), ("prompt_version", entry["prompt_version"]),
+                ("schema_version", AI_SCHEMA_VERSION))):
+            raise EvidenceError("VP1_IDENTITY_MISMATCH", f"{name}: provider-side request")
+        return "EMITTED_OBSERVED"
+    if entry.get("called") is False:
+        if obs["kind"] != "SKIPPED" or obs["provider_called"] is not False or probed:
+            raise EvidenceError("VP1_OBSERVATION_CONTRADICTION", f"{name}: skipped path")
+        if obs["reason"] != SKIP_REASON or entry.get("validation") != SKIP_REASON:
+            raise EvidenceError("VP1_OMISSION_REASON_MISMATCH", name)
+        if usable:  # independent re-evaluation of the skip rule over the observed evidence
+            raise EvidenceError("VP1_OMISSION_UNJUSTIFIED", f"{name}: usable evidence existed")
+        if response["status"] != "NO_DATA" or response["recommendation"] is not None:
+            raise EvidenceError("VP2_SUBSTITUTION_INCOHERENT", name)
+        return "LEGITIMATE_OMISSION"
+    raise EvidenceError("VP1_EVIDENCE_INSUFFICIENT", f"{name}: provider call not recorded")
+
+
 def _check_provenance(r, st5, identity):
     run_id, symbol, slot = r.run["run_id"], r.run["symbol"], r.run["slot"]
     responses = st5["responses"]
@@ -675,20 +737,14 @@ def _check_provenance(r, st5, identity):
         if len(entries) != 1:
             raise EvidenceError("PROVENANCE_MISSING", f"{name}: {len(entries)} audit entries")
         entry = entries[0]
-        # V-P1: response, audit (request side) and cycle identity bind together
+        # V-P1: response, audit, the OBSERVED request (emitted or skipped) and the cycle identity bind together
         vp1 = (response["run_id"] == run_id and response["symbol"] == symbol and response["as_of"] == slot
                and response["schema_version"] == AI_SCHEMA_VERSION and entry["run_id"] == run_id
                and entry["agent"] == response["agent_name"])
-        if entry.get("called") is True:
-            req = [q for q in requests if q["agent_name"] == response["agent_name"]]
-            vp1 = vp1 and len(req) == 1 and req[0]["run_id"] == run_id and req[0]["symbol"] == symbol \
-                and req[0]["as_of"] == slot and req[0]["prompt_version"] == entry["prompt_version"] \
-                and req[0]["schema_version"] == AI_SCHEMA_VERSION
-        else:
-            raise EvidenceError("REQUEST_IDENTITY_NOT_OBSERVED",
-                                f"{name}: the request was never handed to a provider; its symbol/as_of are not observed")
         if not vp1:
             raise EvidenceError("VP1_IDENTITY_MISMATCH", name)
+        path = _check_request_observation(r, name, response, entry, requests)
+        r.checked.append(f"V-P1 {name}: {path}")
         audited = entry.get("response")
         if audited is None or any(audited.get(k) != response[k] for k in
                                   ("schema_version", "run_id", "symbol", "as_of", "agent_name", "status",

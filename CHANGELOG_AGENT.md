@@ -24,8 +24,13 @@
 - Not changed: `storage/database.py` (hash-pinned), `storage/economic_digest.py`, risk, adapter, broker, AI, floor.
 - Inertness: twin ON/OFF runs byte-identical in the five PAPER tables, runs and non-REX journal, also under injected
   failures at every REX point.
-- Known limit (fail closed): an AI request never handed to a provider (no usable evidence) has no observable request
-  symbol/as_of, so V-P1 fails for that run (REQUEST_IDENTITY_NOT_OBSERVED).
+- AI observability correction (Owner decision 2026-10-09): `ai/runtime.py` gains a passive request observer
+  (`observe_requests`, a ContextVar, OFF by default; observer failures swallowed; no extra provider call, no change to
+  requests, responses, audit or order). Every request `call_agent` handles is observed from the real `AIRequest`
+  object, emitted or skipped, with the exact `evidence_fingerprint` material. The G14 oracle distinguishes
+  EMITTED_OBSERVED, LEGITIMATE_OMISSION (verified independently: fingerprint recomputed, skip rule re-evaluated) and
+  insufficient / contradictory evidence (FAIL); no request is ever synthesized. New test module
+  `test_phase8_rex_ai_observability.py`; EURUSD runs whose macro agent has no news now pass G14 legitimately.
 - Flag OFF; no activation, deploy, PR or merge. B-STRICT not certified; DEC-8.18 PENDING. Phase 8 BLOCKED;
   HIGH-8.1 OPEN; M-5 OPEN.
 

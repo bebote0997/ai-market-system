@@ -165,6 +165,7 @@ class RexRecorder:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.stages = []
         self.ai_requests = []
+        self.ai_observations = []
         self.writes = []
         self.failures = []
         self.write_seq = 0
@@ -229,6 +230,10 @@ class RexRecorder:
                 "as_of": request.as_of, "agent_name": request.agent_name, "role": request.role,
                 "prompt_version": request.prompt_version})))
         self._guard("ai_request", record)
+
+    def ai_observation(self, record):
+        """Observer for ``ai.runtime.observe_requests``: every request ``call_agent`` handled, emitted or skipped."""
+        self._guard("ai_observation", lambda: self.ai_observations.append(_Encoded(rex_encode(dict(record)))))
 
     # -- economic writes ---------------------------------------------------------------------------------------------
     @contextmanager
@@ -361,7 +366,8 @@ class RexRecorder:
         try:
             record = {"rex_version": REX_VERSION, "kind": "RUN", "run_id": self.run_id, "slot_key": self.slot_key,
                       "symbol": self.symbol, "slot": self.slot, "identity": self.identity, "stages": self.stages,
-                      "ai_requests": self.ai_requests, "writes": self.writes, "returned": returned,
+                      "ai_requests": self.ai_requests, "ai_observations": self.ai_observations,
+                      "writes": self.writes, "returned": returned,
                       "failures": list(self.failures)}
             record["complete"] = (not self.failures and all(w["complete"] for w in self.writes)
                                   and all(w["rex_journal_id"] is not None for w in self.writes))
