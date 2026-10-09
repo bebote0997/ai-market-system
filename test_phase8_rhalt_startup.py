@@ -246,8 +246,23 @@ CHILD = textwrap.dedent('''
 ''')
 
 
+class AnnotateFailures:
+    """POSIX-only tests run only in CI, whose logs are not readable here: failures are ALSO emitted as GitHub Actions
+    annotations (workflow commands on stdout)."""
+
+    def run(self, result=None):
+        before = 0 if result is None else len(result.failures) + len(result.errors)
+        outcome = super().run(result)
+        if result is not None:
+            for test, trace in (result.failures + result.errors)[before:]:
+                text = trace[-1800:].replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")
+                sys.__stdout__.write("::error title=" + test.id() + "::" + text + chr(10))
+                sys.__stdout__.flush()
+        return outcome
+
+
 @unittest.skipUnless(POSIX, "real SIGTERM delivery needs POSIX (CI)")
-class RealSignalDuringStartupTests(unittest.TestCase):
+class RealSignalDuringStartupTests(AnnotateFailures, unittest.TestCase):
     """A real SIGTERM sent INSIDE a startup write: the handler is deferred until that write completes, so no write
     follows T_h and the constructor stops at the next site."""
 

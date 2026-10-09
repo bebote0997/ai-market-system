@@ -135,8 +135,23 @@ class Processes(unittest.TestCase):
         return {f["code"] for f in verify(self.db, edg_start=GENESIS)["findings"] if f["severity"] == "INVALID"}
 
 
+class AnnotateFailures:
+    """POSIX-only tests run only in CI, whose logs are not readable here: failures are ALSO emitted as GitHub Actions
+    annotations (workflow commands on stdout)."""
+
+    def run(self, result=None):
+        before = 0 if result is None else len(result.failures) + len(result.errors)
+        outcome = super().run(result)
+        if result is not None:
+            for test, trace in (result.failures + result.errors)[before:]:
+                text = trace[-1800:].replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")
+                sys.__stdout__.write("::error title=" + test.id() + "::" + text + chr(10))
+                sys.__stdout__.flush()
+        return outcome
+
+
 @unittest.skipUnless(POSIX, "real SIGTERM delivery to a Python handler needs POSIX (Windows os.kill terminates)")
-class RealSignalTests(Processes):
+class RealSignalTests(AnnotateFailures, Processes):
     def test_real_sigterm_before_the_submit_admission(self):
         code, out, err = self.child("sigterm_before_submit", 0)
         self.assertEqual((code, out["status"], out["halted"]), (0, "HALTED", True), err)
