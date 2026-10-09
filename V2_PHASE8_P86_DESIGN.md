@@ -1006,8 +1006,9 @@ economic happens.* The design never claims zero economic effect after `T_sig` or
     write.
   - **STARTUP (MEDIUM-1):** every process-start write (schema creation, `recover()`, the startup `system_state` keys,
     the preflight write probe, `EXPERIMENT_STARTED`, notification capture) is a STARTUP site, refused after `T_h`; the
-    constructor stops without writing. On POSIX the halt signals are deferred across each check + write, so a signal
-    never lands between them (its handler, i.e. `T_h`, runs right after the write). A halt during start records no
+    constructor stops without writing. A halt requested while a startup check + write is in progress is recorded
+    by the handler as deferred (one assignment) and `T_h` is set when that section ends, right after the write; so
+    no startup write follows `T_h` (independent of the OS and of threads). A halt during start records no
     `HALT_OBSERVED`; H1 and H5 remain the barrier for that case.
 
 **Recovery (P8.6F8):**

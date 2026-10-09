@@ -22,7 +22,8 @@ Post-halt persistence (I-R1c, I-R14): every persistence site of the cycle, sched
 P (``heartbeat``, ``scheduler``, ``runner`` keys) and R are allowed; D, O, S are suppressed; L (claim, run metadata,
 finish) is refused and ``finish`` is replaced by the bookkeeping. STARTUP writes (schema creation, ``recover()``, the
 startup ``system_state`` keys, the preflight write probe, experiment initialization, notification capture) are refused
-after ``T_h`` by ``startup_write``: the constructor stops without writing (MEDIUM-1).
+after ``T_h`` by ``startup_write``: the constructor stops without writing (MEDIUM-1). A halt requested during a
+startup check + write is deferred to the end of that section (the handler still only assigns).
 
 R (Owner ratification, CONDITIONED; DEC-8.17b condition (b)): after ``T_h`` only REX_WRITE evidence of an admitted
 write of THIS process whose read 2 preceded ``T_h`` (once per admission) and one REX_RUN of the halted run (the run in
@@ -45,9 +46,7 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
-import signal
 import sqlite3
-import threading
 import time
 import uuid
 
@@ -64,7 +63,7 @@ CATEGORIES = {"E": "economic", "D": "decision records", "O": "observability", "L
               "READ": "read only"}
 # R after T_h (Owner ratification, conditioned): only these REX event types, each validated in context.
 R_EVENTS_AFTER_HALT = frozenset({"REX_WRITE", "REX_RUN"})
-HALT_SIGNALS = tuple(s for s in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)) if s is not None)
+
 # I-R14: every Store method reached from the cycle, the scheduler and the close path, with its category.
 PERSISTENCE_SITES = {
     "save_paper": "E", "claim_slot": "L", "save_run_metadata": "L", "finish": "L",
@@ -125,12 +124,17 @@ class HaltGate:
         self.refused = []
         self.recorded_journal_id = None  # HALT_OBSERVED of this process, once committed
         self.active_run = None  # the run in flight (set after its claim, cleared when it returns)
+        self.startup_depth = 0  # > 0 inside a startup check + write section (MEDIUM-1)
+        self.deferred_signal = None  # a halt requested inside such a section, applied when the section ends
         self._evidence_writes, self._evidence_runs = set(), set()
 
     # -- the signal handler: one assignment ---------------------------------------------------------------------------
     def request(self, signum=None, frame=None):  # noqa: ARG002 - signal handler signature
         if self.requested_at is None:
-            self.requested_at = (time.monotonic_ns(), _utc_now(), signum)
+            if self.startup_depth:  # inside a startup check + write: T_h is set when that write has completed
+                self.deferred_signal = 0 if signum is None else signum
+            else:
+                self.requested_at = (time.monotonic_ns(), _utc_now(), signum)
 
     @property
     def halted(self):
@@ -209,33 +213,26 @@ class HaltGate:
                 "refused": list(self.refused)}
 
 
-def _block_halt_signals():
-    if not HALT_SIGNALS or not hasattr(signal, "pthread_sigmask")             or threading.current_thread() is not threading.main_thread():
-        return None
-    return signal.pthread_sigmask(signal.SIG_BLOCK, HALT_SIGNALS)
-
-
-def _restore_signals(previous):
-    if previous is not None:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
-
-
 @contextmanager
 def startup_write(gate, site):
-    """MEDIUM-1: one startup persistence site. Refused after T_h (nothing written, HaltRefused). On POSIX the halt
-    signals are deferred for check + write, so a real signal never lands between them: its handler (T_h) runs right
-    after the write and every later site is refused. Without a gate (flag OFF) it is a plain no-op."""
+    """MEDIUM-1: one startup persistence site. Refused after T_h (nothing written, HaltRefused). A halt requested while
+    the check + write is in progress (the signal handler runs between bytecodes, possibly mid-write) only records a
+    deferred request; T_h is set when the section ends, right after the write, so no startup write ever follows T_h
+    and the next site is refused. Independent of the OS and of threads. Without a gate (flag OFF) a plain no-op."""
     if gate is None:
         yield
         return
-    previous = _block_halt_signals()
+    gate.startup_depth += 1
     try:
         if gate.requested_at is not None:
             gate.refused.append({"kind": "startup", "stage": site})
             raise HaltRefused("startup", site)
         yield
     finally:
-        _restore_signals(previous)
+        gate.startup_depth -= 1
+        if gate.startup_depth == 0 and gate.deferred_signal is not None:
+            signum, gate.deferred_signal = gate.deferred_signal, None
+            gate.request(signum or None)  # T_h: now, after the section's write
 
 
 def halt_bookkeeping(store, gate, *, run_id=None, slot_key=None, symbol=None, refused_kind=None, refused_stage=None):

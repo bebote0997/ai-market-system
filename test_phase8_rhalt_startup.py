@@ -161,6 +161,36 @@ class StartupBarrierTests(Traced):
         finally:
             conn.close()
 
+    def inside(self, owner, name):
+        """Request T_h at the START of ``owner.name``: between the barrier check and the write (what the signal
+        handler does when the signal arrives there)."""
+        real = getattr(owner, name)
+        gate = self.gate
+
+        def wrapper(*args, **kwargs):
+            gate.request(15)
+            return real(*args, **kwargs)
+        return patch.object(owner, name, wrapper)
+
+    def test_halt_between_the_check_and_the_write_of_each_site(self):
+        from runtime import demo_runner
+        cases = (("recover", Store, "recover", False, "account_creation"),
+                 ("set_state", Store, "set_state", True, "startup_state"),  # first set_state: recover()
+                 ("preflight", demo_runner, "preflight", True, "runner_state"),
+                 ("experiment", Store, "start_experiment_if_unstarted", True, "notifications"))
+        for label, owner, name, existing, next_site in cases:
+            with self.subTest(site=label):
+                self.gate = HaltGate()
+                self.seen.clear()
+                if self.db.exists():
+                    self.db.unlink()
+                if existing:
+                    self.existing()
+                with self.assertRaises(HaltRefused):
+                    self.start([self.inside(owner, name)])
+                self.assertTrue(self.gate.halted)
+                self.assert_stopped(next_site)  # the in-flight write completed before T_h; nothing after it
+
     def test_flag_off_constructor_is_unchanged(self):
         runner = DemoRunner(RuntimeConfig(db_path=self.db, enabled_symbols=("XAUUSD", "EURUSD")),
                             market_provider=Data(), ai_provider=DeterministicAIProvider(),

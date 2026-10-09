@@ -6,8 +6,9 @@
 - MEDIUM-1 (reproduced: 23 post-T_h writes on a new DB, 28 on an existing one): `runtime/halt.py` `startup_write`
   guards every startup write in `OperationalRuntime` (`Store` open, `recover`, startup events, account creation,
   startup state, heartbeat), `DemoRunner` (preflight probe, runner state, `EXPERIMENT_STARTED`, notifications) and
-  `cloud_runner` (cloud preflight); after T_h the constructor stops without writing (now 0 post-T_h writes). POSIX:
-  halt signals are deferred across each check + write.
+  `cloud_runner` (cloud preflight); after T_h the constructor stops without writing (now 0 post-T_h writes). A halt
+  requested during a startup check + write is deferred by the handler to the end of that section (CI showed that
+  OS-level signal masking did not defer the handler; replaced by this OS-independent deferral).
 - R restricted (Owner ratification, conditioned): `HaltGate.allow_evidence` validates run, process, event type,
   admitted write and duplicates at REX write time; REX_FAILURE is never written after T_h; REX_RUN carries
   `process_id`; `replay/halt_verifier.py` checks the post-halt REX_RUN (one, halted run, same process).
