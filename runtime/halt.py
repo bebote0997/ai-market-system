@@ -19,9 +19,15 @@ accepted residual, measured and reported, never hidden). Every STALE retry is a 
 
 Post-halt persistence (I-R1c, I-R14): every persistence site of the cycle, scheduler and close path is classified in
 ``PERSISTENCE_SITES`` and guarded by ``gate.allow(category)``. After ``T_h`` only H (the bookkeeping transaction),
-P (``heartbeat``, ``scheduler``, ``runner`` keys) and R (REX evidence rows of admitted writes and of the halted run,
-required by DEC-8.17b condition (b)) are allowed; D, O, S are suppressed; L (claim, run metadata, finish) is refused
-and ``finish`` is replaced by the bookkeeping.
+P (``heartbeat``, ``scheduler``, ``runner`` keys) and R are allowed; D, O, S are suppressed; L (claim, run metadata,
+finish) is refused and ``finish`` is replaced by the bookkeeping. STARTUP writes (schema creation, ``recover()``, the
+startup ``system_state`` keys, the preflight write probe, experiment initialization, notification capture) are refused
+after ``T_h`` by ``startup_write``: the constructor stops without writing (MEDIUM-1).
+
+R (Owner ratification, CONDITIONED; DEC-8.17b condition (b)): after ``T_h`` only REX_WRITE evidence of an admitted
+write of THIS process whose read 2 preceded ``T_h`` (once per admission) and one REX_RUN of the halted run (the run in
+flight at ``T_h``); never REX_FAILURE, another run, another process, a new run or a duplicate
+(``HaltGate.allow_evidence``). R never authorizes an economic write.
 
 D-1 (Owner, 2026-10-09): the H transaction also deletes the ``symbol_locks`` row of the halted run ONLY (matched by
 ``slot_key`` and ``symbol``), in the same transaction; a documented exception to the original I-R1c allowlist.
@@ -33,12 +39,15 @@ Persistent halt and no automatic resume: the committed ``HALT_OBSERVED`` row is 
 ``HALT_OBSERVED`` journal id is not exactly the value of ``AI_FLOOR_V2_RHALT_RESUME``. A resume writes nothing (I-R1d);
 a new halt has a new id, so an old token never resumes it.
 """
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
+import signal
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -50,7 +59,12 @@ HALT_VERSION = "V2_P4A_RHALT/1"
 ALLOWED_AFTER_HALT = frozenset({"H", "P", "R"})
 CATEGORIES = {"E": "economic", "D": "decision records", "O": "observability", "L": "run lifecycle",
               "H": "halt bookkeeping", "P": "process shutdown keys", "S": "summaries and notifications",
-              "R": "REX evidence", "READ": "read only"}
+              "R": "REX evidence of the halted run only (validated by allow_evidence)",
+              "STARTUP": "process start (schema, recover, startup state, preflight, experiment, notifications)",
+              "READ": "read only"}
+# R after T_h (Owner ratification, conditioned): only these REX event types, each validated in context.
+R_EVENTS_AFTER_HALT = frozenset({"REX_WRITE", "REX_RUN"})
+HALT_SIGNALS = tuple(s for s in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)) if s is not None)
 # I-R14: every Store method reached from the cycle, the scheduler and the close path, with its category.
 PERSISTENCE_SITES = {
     "save_paper": "E", "claim_slot": "L", "save_run_metadata": "L", "finish": "L",
@@ -58,6 +72,11 @@ PERSISTENCE_SITES = {
     "event": "O", "_event": "O", "set_state": "O", "save_snapshot": "O", "transaction": "O",
     "capture_notifications": "S", "claim_notification_delivery": "S", "complete_notification_delivery": "S",
     "heartbeat": "P", "close": "P",
+    # MEDIUM-1: every startup write (constructor paths), refused after T_h by ``startup_write``
+    "Store": "STARTUP", "recover": "STARTUP", "start_experiment_if_unstarted": "STARTUP", "preflight": "STARTUP",
+    "cloud_preflight": "STARTUP",
+    # R: REX journal rows, validated by ``HaltGate.allow_evidence`` after T_h
+    "rex_write_row": "R",
     "load_paper": "READ", "paper_state": "READ", "owns_slot": "READ", "get_state": "READ", "run": "READ",
     "review_report": "READ", "journal": "READ", "db": "READ",
 }
@@ -105,6 +124,8 @@ class HaltGate:
         self.current = None
         self.refused = []
         self.recorded_journal_id = None  # HALT_OBSERVED of this process, once committed
+        self.active_run = None  # the run in flight (set after its claim, cleared when it returns)
+        self._evidence_writes, self._evidence_runs = set(), set()
 
     # -- the signal handler: one assignment ---------------------------------------------------------------------------
     def request(self, signum=None, frame=None):  # noqa: ARG002 - signal handler signature
@@ -146,6 +167,27 @@ class HaltGate:
             raise ValueError(f"unclassified persistence category: {category}")
         return self.requested_at is None or category in ALLOWED_AFTER_HALT
 
+    def allow_evidence(self, kind, *, process_id, run_id, admission=None):
+        """Category R after T_h (restricted): REX evidence of the halted run of THIS process only. REX_WRITE only for an
+        admitted write whose read 2 preceded T_h, once per admission; REX_RUN once for the halted run. Anything else
+        (another run or process, a new run, an unadmitted write, a duplicate, REX_FAILURE) is refused."""
+        if self.requested_at is None:
+            return True
+        if kind not in R_EVENTS_AFTER_HALT or process_id != self.process_id:
+            return False
+        if run_id is None or run_id != self.active_run:
+            return False
+        if kind == "REX_WRITE":
+            if (admission is None or admission.process_id != self.process_id or admission.read2_ns is None
+                    or admission.read2_ns >= self.requested_at[0] or admission.seq in self._evidence_writes):
+                return False
+            self._evidence_writes.add(admission.seq)
+            return True
+        if run_id in self._evidence_runs:
+            return False
+        self._evidence_runs.add(run_id)
+        return True
+
     # -- evidence -----------------------------------------------------------------------------------------------------
     def residual(self):
         """Admitted writes whose save returned after T_h (DEC-8.17b residual), with measured deltas."""
@@ -165,6 +207,35 @@ class HaltGate:
                 "admissions_total": len(self.admissions),
                 "last_admitted": None if last is None else last.evidence(), "residual": self.residual(),
                 "refused": list(self.refused)}
+
+
+def _block_halt_signals():
+    if not HALT_SIGNALS or not hasattr(signal, "pthread_sigmask")             or threading.current_thread() is not threading.main_thread():
+        return None
+    return signal.pthread_sigmask(signal.SIG_BLOCK, HALT_SIGNALS)
+
+
+def _restore_signals(previous):
+    if previous is not None:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+@contextmanager
+def startup_write(gate, site):
+    """MEDIUM-1: one startup persistence site. Refused after T_h (nothing written, HaltRefused). On POSIX the halt
+    signals are deferred for check + write, so a real signal never lands between them: its handler (T_h) runs right
+    after the write and every later site is refused. Without a gate (flag OFF) it is a plain no-op."""
+    if gate is None:
+        yield
+        return
+    previous = _block_halt_signals()
+    try:
+        if gate.requested_at is not None:
+            gate.refused.append({"kind": "startup", "stage": site})
+            raise HaltRefused("startup", site)
+        yield
+    finally:
+        _restore_signals(previous)
 
 
 def halt_bookkeeping(store, gate, *, run_id=None, slot_key=None, symbol=None, refused_kind=None, refused_stage=None):
@@ -230,6 +301,6 @@ def decode_payload(text):
     return json.loads(text)
 
 
-__all__ = ["ALLOWED_AFTER_HALT", "Admission", "CATEGORIES", "HALT_EVENT", "HALT_SOURCE", "HaltGate", "HaltPending",
+__all__ = ["ALLOWED_AFTER_HALT", "Admission", "CATEGORIES", "R_EVENTS_AFTER_HALT", "startup_write", "HALT_EVENT", "HALT_SOURCE", "HaltGate", "HaltPending",
            "HaltRefused", "PERSISTENCE_SITES", "RESUME_ENV", "halt_bookkeeping", "latest_halt",
            "startup_halt_check"]

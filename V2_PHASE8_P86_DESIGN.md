@@ -995,6 +995,20 @@ economic happens.* The design never claims zero economic effect after `T_sig` or
   (`event_type = HALT_OBSERVED` only) and `system_state` (`heartbeat`, `scheduler`, `runner`). None of these is an
   economic table (EDG).
 - **Supersession:** this supersedes the P8.6F6 "Halt bookkeeping" list, which omitted `heartbeat` and `scheduler`.
+- **(P4a implementation, Owner decisions 2026-10-09) Post-halt allowlist as implemented: H, P and a RESTRICTED R.**
+  - **D-1:** the H transaction also deletes the `symbol_locks` row of the halted run only (same `slot_key` and
+    symbol), in the same transaction; a documented exception to the original I-R1c list. A failed H transaction
+    commits nothing and the halt is not confirmed (`HALT_UNCONFIRMED`).
+  - **R (conditioned ratification of DEC-8.17b (b)):** after `T_h` only REX evidence of the halted run of this process:
+    one `REX_WRITE` per admitted write whose read 2 preceded `T_h`, and one `REX_RUN` of the run in flight at `T_h`.
+    Never `REX_FAILURE`, another run, another process, a new run or a duplicate (`HaltGate.allow_evidence` at write
+    time; the verifier flags `POST_HALT_WRITE` / `POST_HALT_EVIDENCE_NOT_AUTHORIZED`). R never authorizes an economic
+    write.
+  - **STARTUP (MEDIUM-1):** every process-start write (schema creation, `recover()`, the startup `system_state` keys,
+    the preflight write probe, `EXPERIMENT_STARTED`, notification capture) is a STARTUP site, refused after `T_h`; the
+    constructor stops without writing. On POSIX the halt signals are deferred across each check + write, so a signal
+    never lands between them (its handler, i.e. `T_h`, runs right after the write). A halt during start records no
+    `HALT_OBSERVED`; H1 and H5 remain the barrier for that case.
 
 **Recovery (P8.6F8):**
 - A later authorized start may write only `recover()`'s non-economic rows.

@@ -11,6 +11,7 @@ from runtime.scheduler import Scheduler, slot_at, slot_key
 from runtime.service import OperationalRuntime
 from storage.database import Store
 from storage.daily_summary import build_daily_summary
+from runtime.halt import HaltRefused, startup_write
 
 
 REAL_EXECUTION_ENABLED = False
@@ -83,15 +84,27 @@ class DemoRunner:
         self.store = self.runtime.store
         self.clock = self.runtime.clock
         self.halt_gate = self.runtime.halt_gate  # V2 P4a R-HALT; None = legacy (flag OFF)
-        doctor = preflight(config)
-        with self.store.transaction():
-            self.store.set_state("runner", "RUNNING")
-            self.store.set_state("phase7_readiness", doctor.status)
-            self.store.set_state("phase7_preflight_checks", json.dumps(doctor.checks, sort_keys=True))
+        try:
+            self._start(config, experiment_baseline_sha, experiment_freeze_sha)
+        except HaltRefused:
+            self.store.close()  # V2 P4a MEDIUM-1: no runner state, experiment or notification write after T_h
+            raise
+
+    def _start(self, config, experiment_baseline_sha, experiment_freeze_sha):
+        gate = self.halt_gate
+        with startup_write(gate, "preflight"):  # the preflight write probe opens a transaction on main
+            doctor = preflight(config)
+        with startup_write(gate, "runner_state"):
+            with self.store.transaction():
+                self.store.set_state("runner", "RUNNING")
+                self.store.set_state("phase7_readiness", doctor.status)
+                self.store.set_state("phase7_preflight_checks", json.dumps(doctor.checks, sort_keys=True))
         if experiment_baseline_sha is not None:
-            self.store.start_experiment_if_unstarted(self.clock(), experiment_baseline_sha,
-                                                     experiment_freeze_sha)
-        self._capture_and_deliver()
+            with startup_write(gate, "experiment_start"):  # never start or modify an experiment after T_h
+                self.store.start_experiment_if_unstarted(self.clock(), experiment_baseline_sha,
+                                                         experiment_freeze_sha)
+        with startup_write(gate, "notifications"):
+            self._capture_and_deliver()
 
     def _capture_and_deliver(self, *, run_id=None):
         try:

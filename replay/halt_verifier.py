@@ -18,7 +18,7 @@ by the tests); a process killed before ``T_ack`` leaves no HALT_OBSERVED, so HAL
 import json
 
 HALT_VERIFIER_VERSION = "V2_P4A_HALT_VERIFIER/1"
-ALLOWED_POST_HALT = frozenset({("rex", "REX_RUN"), ("rex", "REX_FAILURE")})
+ALLOWED_POST_HALT = frozenset({("rex", "REX_RUN")})  # R restricted: the halted run's record only
 
 
 def _finding(severity, code, detail, context=None):
@@ -28,9 +28,12 @@ def _finding(severity, code, detail, context=None):
     return item
 
 
-def check(halts, writes, journal_index):
+def check(halts, writes, journal_index, runs=None):
     """``halts``: [(journal_id, payload_text)]; ``writes``: [(journal_id, REX_WRITE record)];
-    ``journal_index``: [(journal_id, source, event_type, run_id)] in id order. Returns (findings, summary)."""
+    ``journal_index``: [(journal_id, source, event_type, run_id)] in id order; ``runs``: {run_id: (journal_id,
+    REX_RUN record)}. Returns (findings, summary)."""
+    runs = runs or {}
+    run_records = {journal_id: record for journal_id, record in runs.values()}
     findings, summary = [], []
     starts = [jid for jid, source, event_type, _ in journal_index
               if source == "runtime" and event_type == "RECOVERY_STARTED"]
@@ -89,13 +92,23 @@ def check(halts, writes, journal_index):
         if recorded != sorted(w["seq"] for w in residual):
             findings.append(_finding("INVALID", "HALT_RECORD_CONTRADICTION", f"halt {halt_id}: residual",
                                      {"halt_journal_id": halt_id, "recorded": recorded}))
+        post_runs = 0
         for journal_id, source, event_type, row_run in journal_index:
             if journal_id <= halt_id or (following is not None and journal_id >= following):
                 continue
-            if (source, event_type) not in ALLOWED_POST_HALT or (run_id is not None and row_run != run_id):
+            context = {"halt_journal_id": halt_id, "journal_id": journal_id, "event_type": event_type,
+                       "source": source}
+            # R after T_h (restricted): one REX_RUN of the halted run, of the halted process; nothing else
+            if (source, event_type) not in ALLOWED_POST_HALT or run_id is None or row_run != run_id:
                 findings.append(_finding("INVALID", "POST_HALT_WRITE", f"journal {journal_id} after HALT_OBSERVED",
-                                         {"halt_journal_id": halt_id, "journal_id": journal_id,
-                                          "event_type": event_type, "source": source}))
+                                         context))
+                continue
+            post_runs += 1
+            record = run_records.get(journal_id) or {}
+            if post_runs > 1 or record.get("process_id") != process_id:
+                findings.append(_finding("INVALID", "POST_HALT_EVIDENCE_NOT_AUTHORIZED",
+                                         f"journal {journal_id}: a duplicate or foreign REX_RUN after HALT_OBSERVED",
+                                         {**context, "process_id": record.get("process_id")}))
         for journal_id, w in writes:
             admission = w.get("admission") or {}
             if journal_id > halt_id and admission.get("process_id") == process_id:

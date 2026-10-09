@@ -70,7 +70,7 @@ RULE_FILES = ("ai/orchestrator.py", "ai/contracts.py", "ai/runtime.py", "runtime
               "runtime/service.py", "floor/orchestrator.py", "riesgo.py", "core/rr_contract.py", "core/timeframes.py",
               "execution/paper_broker.py", "execution/trade_manager.py")
 ROOT = Path(__file__).resolve().parent.parent
-_RULE_IDENTITY = None
+_RULE_IDENTITY = {}  # keyed by the exact arguments (a first call without extras never leaks)
 
 
 class RexError(RuntimeError):
@@ -134,20 +134,20 @@ def rex_payload(record):
 def rule_identity(extra_files=(), extra_constants=None):
     """SHA-256 of each rule source file (bytes as checked out) and the decision constants in force. The runtime adds
     the files and constants of modules only it may reference (``extra_files`` / ``extra_constants``)."""
-    global _RULE_IDENTITY
-    if _RULE_IDENTITY is None:
+    key = (tuple(extra_files), json.dumps(extra_constants or {}, sort_keys=True))
+    if key not in _RULE_IDENTITY:
         from ai.contracts import AI_SCHEMA_VERSION, VALID_AI_STATUSES, VALID_FLOOR_STATUSES, VALID_RECOMMENDATIONS
         files = {}
         for name in (*RULE_FILES, *extra_files):
             path = ROOT / name
             files[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
-        _RULE_IDENTITY = {"ai_rules_version": AI_RULES_VERSION, "files": files,
-                          "ai_schema_version": AI_SCHEMA_VERSION,
-                          "valid_floor_statuses": sorted(VALID_FLOOR_STATUSES),
-                          "valid_ai_statuses": sorted(VALID_AI_STATUSES),
-                          "valid_recommendations": sorted(VALID_RECOMMENDATIONS),
-                          "a3_triggers": ["DISAGREE", "REJECT_RECOMMENDATION"], **(extra_constants or {})}
-    return _RULE_IDENTITY
+        _RULE_IDENTITY[key] = {"ai_rules_version": AI_RULES_VERSION, "files": files,
+                               "ai_schema_version": AI_SCHEMA_VERSION,
+                               "valid_floor_statuses": sorted(VALID_FLOOR_STATUSES),
+                               "valid_ai_statuses": sorted(VALID_AI_STATUSES),
+                               "valid_recommendations": sorted(VALID_RECOMMENDATIONS),
+                               "a3_triggers": ["DISAGREE", "REJECT_RECOMMENDATION"], **(extra_constants or {})}
+    return _RULE_IDENTITY[key]
 
 
 def _error_name(exc):
@@ -191,6 +191,8 @@ class RexRecorder:
             self.failures.append({"where": str(where), "error_type": _error_name(exc)})
             LOG.warning("run_id=%s symbol=%s component=rex event=REX_FAILURE where=%s error_type=%s",
                         self.run_id, self.symbol, where, _error_name(exc))
+            if self.halt_gate is not None and self.halt_gate.halted:
+                return  # V2 P4a: REX_FAILURE is not R evidence; after T_h it is logged only (the run stays incomplete)
             with self.store.transaction():
                 self.store._event(self.clock(), self.run_id, self.symbol, REX_SOURCE, REX_FAILURE, "WARNING",
                                   {"where": str(where), "error_type": _error_name(exc)})
@@ -362,6 +364,15 @@ class RexRecorder:
                             "complete": entry["complete"]})
 
     def _write_row(self, kind, record):
+        gate = self.halt_gate
+        if gate is not None and gate.halted:  # V2 P4a: category R, validated in context (never a bare allow("R"))
+            admission = gate.current if kind == REX_WRITE else None
+            recorded = (record.get("admission") or {}) if kind == REX_WRITE else {}
+            if admission is not None and recorded.get("seq") != admission.seq:
+                admission = None  # the record does not belong to the current admitted write
+            process_id = recorded.get("process_id") if kind == REX_WRITE else record.get("process_id")
+            if not gate.allow_evidence(kind, process_id=process_id, run_id=self.run_id, admission=admission):
+                raise RexError(f"{kind} refused after T_h (not R evidence of the halted run)")
         payload = rex_payload(record)
         with self.store.transaction():
             self.store._event(self.clock(), self.run_id, self.symbol, REX_SOURCE, kind, "INFO", payload)
@@ -377,6 +388,7 @@ class RexRecorder:
             record = {"rex_version": REX_VERSION, "kind": "RUN", "run_id": self.run_id, "slot_key": self.slot_key,
                       "symbol": self.symbol, "slot": self.slot, "identity": self.identity, "stages": self.stages,
                       "ai_requests": self.ai_requests, "ai_observations": self.ai_observations,
+                      "process_id": None if self.halt_gate is None else self.halt_gate.process_id,
                       "writes": self.writes, "returned": returned,
                       "failures": list(self.failures)}
             record["complete"] = (not self.failures and all(w["complete"] for w in self.writes)

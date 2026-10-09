@@ -201,7 +201,7 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
                               "error": str(exc)[:200]})
             chain["edg"] = chain["psh"] = None  # the chain cannot continue across unreadable evidence
 
-    halt_findings, halt_summary = halt_verifier.check(halts, valid_writes, journal_index)
+    halt_findings, halt_summary = halt_verifier.check(halts, valid_writes, journal_index, runs)
     for item in halt_findings:
         findings.add(item["severity"], item["code"], item["detail"], item.get("context"))
 

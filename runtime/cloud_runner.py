@@ -32,7 +32,13 @@ def main():
         gate = HaltGate()
     from dataclasses import replace
     activation_env = dict(os.environ, AI_FLOOR_CLOUD_RUNNER="0", AI_FLOOR_SCHEDULER="0")
-    if not cloud_preflight(replace(config, scheduler_enabled=False), env=activation_env).experiment_ready:
+    from runtime.halt import HaltRefused, startup_write
+    try:
+        with startup_write(gate, "cloud_preflight"):  # V2 P4a MEDIUM-1 (no-op while the flag is OFF)
+            ready = cloud_preflight(replace(config, scheduler_enabled=False), env=activation_env).experiment_ready
+    except HaltRefused:
+        return  # halted before the runner started: nothing written, no restart
+    if not ready:
         raise RuntimeError("experiment activation preflight not ready")
     import fcntl
     lock_path = Path(config.db_path).with_suffix(".runner.lock")
@@ -55,10 +61,13 @@ def main():
         # The exclusive lifetime lock proves no previous authority is alive.
         # Recover even a recent interrupted run; otherwise its symbol lock can
         # survive a quick restart forever.
-        runner = DemoRunner(config, notification_sink=SlackNotificationSink(),
+        try:
+            runner = DemoRunner(config, notification_sink=SlackNotificationSink(),
                     recovery_stale_after_seconds=0, instruments=paper_instruments(),
                     experiment_baseline_sha=EXPERIMENT_BASELINE_SHA,
                     experiment_freeze_sha=freeze_sha, **({} if gate is None else {"halt_gate": gate}))
+        except HaltRefused:
+            return  # MEDIUM-1: a halt during the constructor stops it without writes; no automatic restart
         try:
             while not stop:
                 runner.tick()

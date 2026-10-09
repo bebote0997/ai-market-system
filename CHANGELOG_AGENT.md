@@ -1,5 +1,21 @@
 # Agent Changelog
 
+## 2026-10-09 — V2 Phase 8 P4a R-HALT, correction of Copilot MEDIUM-1 and restricted R
+
+- Agent: Claude. Branch `v2/phase8-p4a`, audited SHA `3b311e3` (REQUEST CHANGES).
+- MEDIUM-1 (reproduced: 23 post-T_h writes on a new DB, 28 on an existing one): `runtime/halt.py` `startup_write`
+  guards every startup write in `OperationalRuntime` (`Store` open, `recover`, startup events, account creation,
+  startup state, heartbeat), `DemoRunner` (preflight probe, runner state, `EXPERIMENT_STARTED`, notifications) and
+  `cloud_runner` (cloud preflight); after T_h the constructor stops without writing (now 0 post-T_h writes). POSIX:
+  halt signals are deferred across each check + write.
+- R restricted (Owner ratification, conditioned): `HaltGate.allow_evidence` validates run, process, event type,
+  admitted write and duplicates at REX write time; REX_FAILURE is never written after T_h; REX_RUN carries
+  `process_id`; `replay/halt_verifier.py` checks the post-halt REX_RUN (one, halted run, same process).
+- Found and fixed while testing: `runtime/rex.py` `rule_identity` cache ignored its arguments (a bare recorder could
+  drop the gate constants from later runtime identities).
+- Design §3.8: P4a implementation note (D-1, restricted R, STARTUP). New tests: `test_phase8_rhalt_startup.py`.
+- Flags OFF; no activation. M-5 OPEN. Phase 8 BLOCKED; HIGH-8.1 OPEN.
+
 ## 2026-10-09 — V2 Phase 8 P4a R-HALT (DEC-8.17b Alternative 1, D-1; implementation only)
 
 - Agent: Claude. Branch `v2/phase8-p4a` from the certified P3 `979e1e6`.

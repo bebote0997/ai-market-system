@@ -24,7 +24,7 @@ from riesgo import crear_configuracion_riesgo_v2
 from runtime.config import RuntimeConfig
 from runtime import health_hooks
 from runtime.gates import fresh_snapshot, paper_policy
-from runtime.halt import HaltGate, HaltRefused, halt_bookkeeping, startup_halt_check
+from runtime.halt import HaltGate, HaltRefused, halt_bookkeeping, startup_halt_check, startup_write
 from runtime.observability import setup_id as audit_setup_id
 from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
@@ -105,23 +105,35 @@ class OperationalRuntime:
         self.ai_cycle_budget_seconds, self.ai_alerts = ai_cycle_budget_seconds, ai_alerts
         self.ai_health = ProviderHealthTracker()
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
-        self.store = Store(self.config.db_path)
+        with startup_write(self.halt_gate, "store_open"):  # V2 P4a MEDIUM-1: opening may create the schema
+            self.store = Store(self.config.db_path)
         self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
-        self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
+        try:
+            self._startup(market_provider, recovery_stale_after_seconds)
+        except HaltRefused:
+            self.store.close()  # V2 P4a MEDIUM-1: the constructor stops at T_h without any further write
+            raise
+
+    def _startup(self, market_provider, recovery_stale_after_seconds):
+        """Process start. With the halt gate every write is a STARTUP site (``startup_write``): refused after T_h,
+        and on POSIX a halt signal is deferred across each check + write. OFF: unchanged."""
+        gate = self.halt_gate
+        with startup_write(gate, "recover"):
+            self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
         account, orders, fills = self.store.load_paper(self.config.account_id)
         if account is None:
             if orders or self.store.db.execute("SELECT 1 FROM paper_positions LIMIT 1").fetchone():
-                self.store.event(self.clock(), None, None, "recovery", "STATE_INCONSISTENCY", "ERROR", {"reason": "paper_account_missing"})
+                with startup_write(gate, "startup_event"):
+                    self.store.event(self.clock(), None, None, "recovery", "STATE_INCONSISTENCY", "ERROR", {"reason": "paper_account_missing"})
                 self.store.close()
                 raise RuntimeError("paper state without account")
             account = PaperAccount("1.0", self.config.account_id, self.config.starting_equity,
                                    self.config.starting_equity, self.config.starting_equity)
             # B2.3A: create only if still absent; a concurrent creator's account is never overwritten.
-            if self.halt_gate is not None and self.halt_gate.halted:  # V2 P4a: no economic write after T_h
-                self.store.close()
-                raise HaltRefused("account_creation", "admission")
-            if self.store.save_paper(PaperBroker(account),
-                                     expected_state=self.store.paper_state(None, orders, fills)) is False:
+            with startup_write(gate, "account_creation"):  # V2 P4a: no account creation after T_h
+                created = self.store.save_paper(PaperBroker(account),
+                                                expected_state=self.store.paper_state(None, orders, fills))
+            if created is False:
                 account, orders, _ = self.store.load_paper(self.config.account_id)
                 if account is None:
                     self.store.close()
@@ -129,18 +141,21 @@ class OperationalRuntime:
         for position in account.open_positions.values():
             origin = orders.get(position.origin_order_id)
             if origin is None or origin.status != "FILLED" or origin.symbol != position.symbol or origin.quantity != position.quantity:
-                self.store.event(self.clock(), position.run_id, position.symbol, "recovery", "STATE_INCONSISTENCY", "ERROR", {"reason": "orphan_position"})
+                with startup_write(gate, "startup_event"):
+                    self.store.event(self.clock(), position.run_id, position.symbol, "recovery", "STATE_INCONSISTENCY", "ERROR", {"reason": "orphan_position"})
                 self.store.close()
                 raise RuntimeError("inconsistent paper position")
-        with self.store.transaction():
-            self.store.set_state("account_id", self.config.account_id)
-            self.store.set_state("enabled_symbols", json.dumps(self.config.enabled_symbols))
-            self.store.set_state("market_provider_mode", self.config.market_provider_mode)
-            self.store.set_state("market_data_provider", "NOT CONFIGURED" if market_provider is None else "CONFIGURED")
-            self.store.set_state("ai_provider", "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")
-            self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
-            self.store.set_state("macro_provider_mode", self.config.macro_provider_mode)
-        self.store.heartbeat(self.clock(), "STOPPED")
+        with startup_write(gate, "startup_state"):
+            with self.store.transaction():
+                self.store.set_state("account_id", self.config.account_id)
+                self.store.set_state("enabled_symbols", json.dumps(self.config.enabled_symbols))
+                self.store.set_state("market_provider_mode", self.config.market_provider_mode)
+                self.store.set_state("market_data_provider", "NOT CONFIGURED" if market_provider is None else "CONFIGURED")
+                self.store.set_state("ai_provider", "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")
+                self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
+                self.store.set_state("macro_provider_mode", self.config.macro_provider_mode)
+        with startup_write(gate, "startup_heartbeat"):
+            self.store.heartbeat(self.clock(), "STOPPED")
 
     def close(self):
         self.store.heartbeat(self.clock(), "STOPPED")
@@ -474,12 +489,16 @@ class OperationalRuntime:
 
     def run_cycle(self, symbol, scheduled_at):
         rex_holder = []  # V2 P3: the run's REX recorder, created only after the claim (flag ON)
-        returned = self._run_cycle(symbol, scheduled_at, rex_holder)
-        if rex_holder and rex_holder[0] is not None:
-            try:
-                rex_holder[0].finish(returned)
-            except Exception as exc:  # noqa: BLE001 - REX never changes the cycle result
-                LOG.warning("component=rex event=REX_FINISH_FAILED error_type=%s", type(exc).__name__)
+        try:
+            returned = self._run_cycle(symbol, scheduled_at, rex_holder)
+            if rex_holder and rex_holder[0] is not None:
+                try:
+                    rex_holder[0].finish(returned)
+                except Exception as exc:  # noqa: BLE001 - REX never changes the cycle result
+                    LOG.warning("component=rex event=REX_FINISH_FAILED error_type=%s", type(exc).__name__)
+        finally:
+            if self.halt_gate is not None:
+                self.halt_gate.active_run = None  # V2 P4a: no run in flight any more (R evidence closes with it)
         return returned
 
     def _run_cycle(self, symbol, scheduled_at, rex_holder):
@@ -494,6 +513,8 @@ class OperationalRuntime:
             return "HALT_REFUSED"  # V2 P4a: no new claim (no run, no write) once T_h happened
         if not self.store.claim_slot(key, symbol, slot, self.clock(), run_id=run_id):
             return "DUPLICATE"
+        if self.halt_gate is not None:
+            self.halt_gate.active_run = run_id  # V2 P4a: the only run whose REX evidence R may record after T_h
         rex = self._new_rex(run_id, key, symbol, slot)
         rex_store = None
         if rex is not None:
