@@ -67,6 +67,8 @@ def preflight(config, *, env=None):
 
 
 class DemoRunner:
+    halt_gate = None  # V2 P4a R-HALT; None = legacy (flag OFF)
+
     def __init__(self, config, *, dry_run=False, diagnostic_outside_session=False,
                  notification_sink=None, experiment_baseline_sha=None, experiment_freeze_sha=None,
                  **runtime_kwargs):
@@ -80,6 +82,7 @@ class DemoRunner:
                                           **runtime_kwargs)
         self.store = self.runtime.store
         self.clock = self.runtime.clock
+        self.halt_gate = self.runtime.halt_gate  # V2 P4a R-HALT; None = legacy (flag OFF)
         doctor = preflight(config)
         with self.store.transaction():
             self.store.set_state("runner", "RUNNING")
@@ -124,13 +127,19 @@ class DemoRunner:
         at = scheduled_at or self.clock()
         slot = slot_at(at, self.config.cadence_minutes)
         status = self.runtime.run_cycle(symbol, slot)
+        if status == "HALT_REFUSED":  # V2 P4a: no claim, no run, nothing persisted
+            return {"schema_version": "1.0", "run_id": None, "symbol": symbol, "status": status,
+                    "durable_status": None, "review_durable": False, "journal_count": 0,
+                    "paper_orders_enabled": not self.dry_run}
         key = slot_key(symbol, slot, self.config.cadence_minutes)
         run = self.store.run(key)
         if run is None:
             raise RuntimeError("cycle has no durable run")
         # A position close belongs to its opening run, even when observed in a
         # later cycle. Capture all newly committed journal rows exactly once.
-        self._capture_and_deliver()
+        gate = getattr(self, "halt_gate", None)
+        if gate is None or gate.allow("S"):
+            self._capture_and_deliver()
         try:
             review = self.store.review_report(run["run_id"])
             journal_count = len(self.store.journal(run_id=run["run_id"]))
@@ -149,6 +158,9 @@ class DemoRunner:
 
     def daily_summary(self, at=None):
         """Persist the previous complete UTC day, then attempt notification once."""
+        gate = getattr(self, "halt_gate", None)  # None on legacy-built runners (flag OFF)
+        if gate is not None and not gate.allow("S"):
+            return False  # V2 P4a: summaries and notifications are suppressed after T_h
         at = at or self.clock()
         with self.store.transaction():
             summary = build_daily_summary(self.store, at)
@@ -164,6 +176,14 @@ class DemoRunner:
         return True
 
     def close(self):
+        gate = getattr(self, "halt_gate", None)
+        if gate is not None and gate.halted and gate.recorded_journal_id is None:
+            # V2 P4a: a halt observed outside any run (between ticks / symbols) is still recorded durably (H).
+            from runtime.halt import halt_bookkeeping
+            try:
+                halt_bookkeeping(self.store, gate)
+            except Exception as exc:  # noqa: BLE001 - rolled back: the halt is NOT confirmed
+                LOG.error("component=halt event=HALT_UNCONFIRMED error_type=%s", type(exc).__name__)
         with self.store.transaction():
             self.store.set_state("runner", "STOPPED")
         self.runtime.close()

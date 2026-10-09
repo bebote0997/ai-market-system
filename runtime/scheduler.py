@@ -37,7 +37,8 @@ class Scheduler:
     def tick(self):
         now = self.clock()
         config = self.runtime.config
-        self.runtime.store.heartbeat(now, "RUNNING" if config.scheduler_enabled else "DISABLED")
+        gate = getattr(self.runtime, "halt_gate", None)  # V2 P4a R-HALT; None = legacy (flag OFF)
+        self.runtime.store.heartbeat(now, "RUNNING" if config.scheduler_enabled else "DISABLED")  # P: allowed
         if not config.scheduler_enabled:
             return []
         slot = slot_at(now, config.cadence_minutes)
@@ -45,10 +46,18 @@ class Scheduler:
         if previous:
             from storage.codec import parse_utc
             missed = int((slot - parse_utc(previous)).total_seconds() // (config.cadence_minutes * 60)) - 1
-            if missed > 0:
+            if missed > 0 and (gate is None or gate.allow("O")):
                 self.runtime.store.event(now, None, None, "scheduler", "SLOTS_MISSED", "WARNING", {"count": missed})
-        with self.runtime.store.transaction():
-            self.runtime.store.set_state("scheduler_slot", utc(slot))
+        if gate is None or gate.allow("O"):
+            with self.runtime.store.transaction():
+                self.runtime.store.set_state("scheduler_slot", utc(slot))
         if not set(session_names(slot)) & set(config.sessions):
             return []
-        return [self.runtime.run_cycle(symbol, slot) for symbol in config.enabled_symbols]
+        if gate is None:
+            return [self.runtime.run_cycle(symbol, slot) for symbol in config.enabled_symbols]
+        results = []
+        for symbol in config.enabled_symbols:
+            if gate.halted:  # design 3.8 row 6: no new claim once T_h happened (non-economic check)
+                break
+            results.append(self.runtime.run_cycle(symbol, slot))
+        return results

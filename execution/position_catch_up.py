@@ -83,6 +83,17 @@ def _load(store, account_id, instrument):
     return broker
 
 
+def _admit(halt_gate, kind):
+    """V2 P4a R-HALT read 1 (L(W)) before an economic attempt loads its state; None gate = legacy."""
+    return None if halt_gate is None else halt_gate.admit(kind)
+
+
+def _pre_save(halt_gate, admission):
+    """V2 P4a R-HALT read 2 immediately before ``save_paper``; raises when halted (no call, no effect)."""
+    if halt_gate is not None:
+        halt_gate.pre_save(admission)
+
+
 def _notify(observer, event, **data):
     """V2 P3 REX observer hook (O-4): evidence only. Never changes a decision or state; failures are ignored."""
     if observer is None:
@@ -94,13 +105,15 @@ def _notify(observer, event, **data):
 
 
 def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=None, owner_key=None,
-                      observer=None):
+                      observer=None, halt_gate=None):
     """Apply every eligible committed closed 5m bar to the open position of ``symbol``.
 
     ``store`` is the trading ``storage.database.Store``; ``evidence`` is a ``MarketEvidenceEngine``.
     ``owner_key`` is passed to ``save_paper`` unchanged (slot ownership when called from a cycle).
     ``observer`` (V2 P3 REX, O-4; None = legacy) receives the exact bar and ``expected_state`` before each
     ``save_paper``; it can change neither a decision nor any state, and its failures are ignored.
+    ``halt_gate`` (V2 P4a R-HALT; None = legacy): admission per bar before its load and a second read before
+    ``save_paper``; a refusal stops at the last committed bar (I-R10) and propagates ``HaltRefused``.
     """
     if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("as_of: timezone-aware datetime required")
@@ -113,6 +126,7 @@ def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=
     applied = []
     stale = False
     for bar in bars:
+        admission = _admit(halt_gate, "catch_up_bar")
         broker = _load(store, account_id, instrument)  # Durable state only, for every bar.
         position = broker.account.open_positions.get(symbol)
         if position is None or bar.start <= _watermark(position):
@@ -121,6 +135,7 @@ def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=
         _notify(observer, "catch_up_bar", bar=_bar(bar), bar_start=bar.bar_start, digest=bar.digest,
                 open_positions=list(broker.account.open_positions), expected_state=expected_state)
         closed = TradeManager(broker.account, broker).process_bar(_bar(bar))
+        _pre_save(halt_gate, admission)
         if store.save_paper(broker, owner_key=owner_key, symbol=symbol, expected_state=expected_state) is False:
             stale = True
             break  # Discard this computed transition; a later call reloads/retries from durable state.

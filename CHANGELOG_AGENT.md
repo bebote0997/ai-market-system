@@ -1,5 +1,33 @@
 # Agent Changelog
 
+## 2026-10-09 — V2 Phase 8 P4a R-HALT (DEC-8.17b Alternative 1, D-1; implementation only)
+
+- Agent: Claude. Branch `v2/phase8-p4a` from the certified P3 `979e1e6`.
+- Pre-correction (separate commit `8c4d249`, CI success): `replay/rex_chain.py` classifies malformed input
+  (economic JSON, missing fields, unexpected types, malformed REX records, non-UTF-8 text, an unprocessable copy,
+  snapshot cleanup) as CERTIFICATION_INVALID with a code and a structured `context`; criteria unchanged.
+- New `runtime/halt.py`: `HaltGate` (`request` = the signal handler's single assignment; `admit` = L(W);
+  `pre_save` = read 2; `allow`), `HaltRefused`, `HaltPending`, `PERSISTENCE_SITES` (I-R14),
+  `halt_bookkeeping` (one H transaction: the halted run's status fields, the release of THAT run's symbol lock —
+  D-1, a documented exception to the original I-R1c allowlist — and one HALT_OBSERVED row; a failure rolls back and
+  the halt is not confirmed), `startup_halt_check` (read-only, before any write; the resume token must equal the
+  latest HALT_OBSERVED journal id; no automatic resume; no resume write).
+- New `replay/halt_verifier.py` (I-R1b, I-R9, I-R13, post-halt allowlist, missing evidence, residual measurement),
+  integrated in G15; never VERIFIED.
+- Changed: `runtime/config.py` (`AI_FLOOR_V2_RHALT`, OFF by default, requires REX ON; legacy fingerprint unchanged),
+  `runtime/service.py` (admission per attempt incl. every STALE retry, read 2 before `save_paper`, every persistence
+  site guarded, HALTED / HALT_REFUSED / HALT_UNCONFIRMED), `execution/position_catch_up.py` and
+  `execution/pending_order_gate.py` (`halt_gate=None`), `runtime/scheduler.py` (no claim after T_h),
+  `runtime/demo_runner.py` (S suppressed; process-level HALT_OBSERVED at close; P keys only),
+  `runtime/cloud_runner.py` (handler sets T_h; startup barrier), `runtime/rex.py` (REX_WRITE `admission`:
+  process id, seq, L(W), read2, T_stop), `replay/rex_oracle.py` (HALTED runs).
+- Post-T_h allowlist: H, P and R (REX evidence of admitted writes and of the halted run, required by DEC-8.17b (b)).
+- Not changed: `storage/database.py`, `storage/economic_digest.py`, risk, adapter, broker, AI models and prompts.
+- Tests: `test_phase8_rex_chain_malformed.py`, `test_phase8_rhalt_gate.py`, `test_phase8_rhalt_runtime.py`,
+  `test_phase8_rhalt_signals.py` (real POSIX SIGTERM in child processes: CI only; crash/restart everywhere).
+- Flags OFF; no activation, deploy, PR or merge. M-5 OPEN (independent review required). Phase 8 BLOCKED;
+  HIGH-8.1 OPEN.
+
 ## 2026-10-09 — V2 Phase 8 P3 REX, G14 oracle and G15 chain verifier (DEC-8.22-d; implementation only)
 
 - Agent: Claude. Branch `v2/phase8-p3` from the certified P2a-lib `f707b32` (`v2/phase8-execution` fast-forwarded

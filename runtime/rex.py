@@ -51,6 +51,7 @@ import math
 import numbers
 import os
 from pathlib import Path
+import time
 
 from storage.economic_digest import H, cj, edg, psh
 
@@ -168,6 +169,7 @@ class RexRecorder:
         self.ai_observations = []
         self.writes = []
         self.failures = []
+        self.halt_gate = None  # V2 P4a: the process HaltGate (admission evidence per write), or None
         self.write_seq = 0
         self._context = {"stage": None}
         self._attempt = 0
@@ -283,6 +285,12 @@ class RexRecorder:
             self.fail("write:pre_snapshot", exc)
         return token
 
+    def save_returned(self, t_stop_ns):
+        """V2 P4a: ``T_stop`` of the current admitted write (its ``save_paper`` returned)."""
+        gate = self.halt_gate
+        if gate is not None and gate.current is not None:
+            gate.saved(gate.current, t_stop_ns)
+
     def after_write(self, token, broker, result, error=None, total_changes_after_save=None):
         """Post-write evidence and the REX_WRITE row (never raises)."""
         if token is None:  # the pre-write evidence could not even be started
@@ -300,7 +308,9 @@ class RexRecorder:
                  "symbol": self.symbol, "write_seq": self.write_seq, "attempt": self._attempt,
                  "context": _Encoded(self._context), "result": outcome, "error_type": None if error is None else error,
                  "save_paper_returned": None if error is not None else ("False" if result is False else repr(result)),
-                 "expected_psh": token["expected_psh"], "failures": []}
+                 "expected_psh": token["expected_psh"], "failures": [],
+                 "admission": None if self.halt_gate is None or self.halt_gate.current is None
+                 else self.halt_gate.current.evidence()}
         pre = token["pre"]
         if token["pre_failed"] is not None:
             entry["failures"].append({"where": "pre", "error_type": token["pre_failed"]})
@@ -392,10 +402,14 @@ class RexStore:
         try:
             result = self._store.save_paper(broker, owner_key=owner_key, symbol=symbol, expected_state=expected_state)
         except BaseException as exc:
+            t_stop = time.monotonic_ns()
+            _isolated(lambda: self._recorder.save_returned(t_stop))
             changes = _total_changes(self._store)
             _isolated(lambda: self._recorder.after_write(token, broker, None, error=_error_name(exc),
                                                          total_changes_after_save=changes))
             raise
+        t_stop = time.monotonic_ns()
+        _isolated(lambda: self._recorder.save_returned(t_stop))
         changes = _total_changes(self._store)
         _isolated(lambda: self._recorder.after_write(token, broker, result, total_changes_after_save=changes))
         return result

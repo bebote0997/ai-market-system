@@ -24,6 +24,7 @@ from riesgo import crear_configuracion_riesgo_v2
 from runtime.config import RuntimeConfig
 from runtime import health_hooks
 from runtime.gates import fresh_snapshot, paper_policy
+from runtime.halt import HaltGate, HaltRefused, halt_bookkeeping, startup_halt_check
 from runtime.observability import setup_id as audit_setup_id
 from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
@@ -44,7 +45,11 @@ OBSERVE_DEGRADED_AFTER = 4
 
 
 class OperationalRuntime:
-    def _audit_safely(self, action, run_id, symbol):
+    halt_gate = None  # V2 P4a R-HALT: the process HaltGate when v2_rhalt is ON; None = legacy
+
+    def _audit_safely(self, action, run_id, symbol, category="O"):
+        if self.halt_gate is not None and not self.halt_gate.allow(category):
+            return  # V2 P4a: decision records / observability are suppressed after T_h (I-R1c)
         try:
             action()
         except Exception as exc:
@@ -54,13 +59,18 @@ class OperationalRuntime:
     def _record_execution_safely(self, at, run_id, symbol, assessment, **outcome):
         """Audit is best effort and must never change a PAPER decision."""
         self._audit_safely(lambda: self.store.record_execution(
-            at, run_id, symbol, setup_id=audit_setup_id(assessment), **outcome), run_id, symbol)
+            at, run_id, symbol, setup_id=audit_setup_id(assessment), **outcome), run_id, symbol, "D")
 
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
                  instruments=None, clock=None, risk_config=None, paper_enabled=True,
                  diagnostic_outside_session=False, recovery_stale_after_seconds=120, ai_pricing=None,
-                 ai_soft_budget=None, ai_cycle_budget_seconds=120.0, ai_alerts=None):
+                 ai_soft_budget=None, ai_cycle_budget_seconds=120.0, ai_alerts=None, halt_gate=None):
         self.config = config or RuntimeConfig.from_env()
+        # V2 P4a R-HALT (flag OFF -> None: every guard below is a no-op and the legacy path is unchanged).
+        self.halt_gate = None
+        if self.config.v2_rhalt:
+            startup_halt_check(self.config, os.environ)  # read-only; before Store(), recover() or any write
+            self.halt_gate = halt_gate if halt_gate is not None else HaltGate()
         self.paper_enabled = bool(paper_enabled)
         self.diagnostic_outside_session = bool(diagnostic_outside_session) and not self.paper_enabled
         if market_provider is None and self.config.market_provider_mode == "massive":
@@ -107,6 +117,9 @@ class OperationalRuntime:
             account = PaperAccount("1.0", self.config.account_id, self.config.starting_equity,
                                    self.config.starting_equity, self.config.starting_equity)
             # B2.3A: create only if still absent; a concurrent creator's account is never overwritten.
+            if self.halt_gate is not None and self.halt_gate.halted:  # V2 P4a: no economic write after T_h
+                self.store.close()
+                raise HaltRefused("account_creation", "admission")
             if self.store.save_paper(PaperBroker(account),
                                      expected_state=self.store.paper_state(None, orders, fills)) is False:
                 account, orders, _ = self.store.load_paper(self.config.account_id)
@@ -135,6 +148,34 @@ class OperationalRuntime:
         if self.evidence is not None:
             self.evidence.store.close()
 
+    def _persist(self, category, action):
+        """V2 P4a I-R14 guard of one persistence site (OFF: always runs). After T_h: D / O / S suppressed, L refused
+        (the run lifecycle is replaced by the halt bookkeeping), H / P / R allowed."""
+        if self.halt_gate is None or self.halt_gate.allow(category):
+            return action()
+        if category == "L":
+            raise HaltRefused("run_lifecycle", "persistence")
+        return None
+
+    def _set_states(self, values):
+        with self.store.transaction():
+            for state_key, value in values:
+                self.store.set_state(state_key, value)
+
+    def _halt_run(self, key, run_id, symbol, halt, rex):
+        """The H transaction for the halted run (D-1: its symbol lock released in the same transaction)."""
+        self._rex_note(rex, "EXIT_HALT", lambda: {"refused_kind": halt.kind, "refused_stage": halt.stage})
+        try:
+            halt_bookkeeping(self.store, self.halt_gate, run_id=run_id, slot_key=key, symbol=symbol,
+                             refused_kind=halt.kind, refused_stage=halt.stage)
+        except Exception as exc:  # noqa: BLE001 - rolled back: the halt is NOT confirmed; nothing else is written
+            LOG.error("run_id=%s symbol=%s component=halt event=HALT_UNCONFIRMED error_type=%s",
+                      run_id, symbol, type(exc).__name__)
+            return "HALT_UNCONFIRMED"
+        LOG.warning("run_id=%s symbol=%s component=halt event=HALT_OBSERVED refused=%s stage=%s",
+                    run_id, symbol, halt.kind, halt.stage)
+        return "HALTED"
+
     def _broker(self, symbol):
         account, orders, fills = self.store.load_paper(self.config.account_id)
         broker = PaperBroker(account, self.instruments.get(symbol))
@@ -142,19 +183,24 @@ class OperationalRuntime:
         broker.fills = fills
         return broker
 
-    def _guarded_paper_write(self, symbol, key, apply, store=None):
+    def _guarded_paper_write(self, symbol, key, apply, store=None, kind="paper_write"):
         """B2.3A: run ``apply(broker)`` on freshly loaded durable PAPER state and persist it only if
         that state is still current (B2.1 ``expected_state``, revalidated under BEGIN IMMEDIATE).
 
         ``apply`` returns (save, result). On STALE the computation is discarded and redone once from
         a fresh load. Returns (broker, result), or (None, None) when both attempts were stale.
         ``store`` (V2 P3) is the run's REX store proxy, or None (legacy: ``self.store``).
+        V2 P4a: with the halt gate, every attempt (each STALE retry included) is admitted at L(W) before its load and
+        read again immediately before ``save_paper``; a refusal raises HaltRefused (no call, no effect).
         """
         writer = self.store if store is None else store
         for _ in range(2):
+            admission = None if self.halt_gate is None else self.halt_gate.admit(kind)
             broker = self._broker(symbol)
             expected_state = self.store.paper_state(broker.account, broker.orders, broker.fills)
             save, result = apply(broker)
+            if save and admission is not None:
+                self.halt_gate.pre_save(admission)
             if not save or writer.save_paper(broker, owner_key=key, symbol=symbol,
                                              expected_state=expected_state) is not False:
                 return broker, result
@@ -242,7 +288,8 @@ class OperationalRuntime:
                 result = catch_up_position(self.store if store is None else store, self.evidence,
                                            account_id=self.config.account_id,
                                            symbol=symbol, as_of=slot, instrument=self.instruments.get(symbol),
-                                           owner_key=key, **({} if observer is None else {"observer": observer}))
+                                           owner_key=key, **({} if observer is None else {"observer": observer}),
+                                           **({} if self.halt_gate is None else {"halt_gate": self.halt_gate}))
             except CatchUpEvidenceError:
                 return EVIDENCE_UNAVAILABLE
             if result.status != "STALE":
@@ -299,7 +346,8 @@ class OperationalRuntime:
                                              account_id=self.config.account_id,
                                              symbol=symbol, as_of=slot, gate=gate,
                                              instrument=self.instruments.get(symbol), owner_key=key,
-                                             **({} if observer is None else {"observer": observer}))
+                                             **({} if observer is None else {"observer": observer}),
+                                             **({} if self.halt_gate is None else {"halt_gate": self.halt_gate}))
             except PendingGateEvidenceError:
                 return EVIDENCE_UNAVAILABLE
             if result.status != "STALE":
@@ -362,8 +410,10 @@ class OperationalRuntime:
                         "diagnostic_outside_session": self.diagnostic_outside_session,
                         "broker_rr_policy": None, "risk_config": dict(self.risk_config or {}),
                         "instrument": self.instruments.get(symbol), "account_id": self.config.account_id}
-            return RexRecorder(self.store, account_id=self.config.account_id, run_id=run_id, slot_key=key,
-                               symbol=symbol, slot=slot, identity=identity)
+            recorder = RexRecorder(self.store, account_id=self.config.account_id, run_id=run_id, slot_key=key,
+                                   symbol=symbol, slot=slot, identity=identity)
+            recorder.halt_gate = self.halt_gate
+            return recorder
         except Exception as exc:  # noqa: BLE001 - no REX for this run (the chain verifier reports it uncovered)
             LOG.warning("run_id=%s symbol=%s component=rex event=REX_UNAVAILABLE error_type=%s",
                         run_id, symbol, type(exc).__name__)
@@ -440,6 +490,8 @@ class OperationalRuntime:
         slot = slot_at(scheduled_at, self.config.cadence_minutes)
         key = slot_key(symbol, slot, self.config.cadence_minutes)
         run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+        if self.halt_gate is not None and self.halt_gate.halted:
+            return "HALT_REFUSED"  # V2 P4a: no new claim (no run, no write) once T_h happened
         if not self.store.claim_slot(key, symbol, slot, self.clock(), run_id=run_id):
             return "DUPLICATE"
         rex = self._new_rex(run_id, key, symbol, slot)
@@ -458,8 +510,8 @@ class OperationalRuntime:
             commit = os.environ.get("AI_FLOOR_GIT_COMMIT")
             if commit is not None and not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
                 raise ValueError("invalid AI_FLOOR_GIT_COMMIT")
-            self.store.save_run_metadata(key, self.config.fingerprint(), account_for_metadata.starting_equity,
-                                         git_commit=commit)
+            self._persist("L", lambda: self.store.save_run_metadata(
+                key, self.config.fingerprint(), account_for_metadata.starting_equity, git_commit=commit))
             session_clock = None  # V2 P3: the same single clock() call as before, kept for REX evidence
             if (not self.diagnostic_outside_session and
                     (not set(session_names(slot)) & set(self.config.sessions) or
@@ -468,16 +520,19 @@ class OperationalRuntime:
                     "slot": slot, "session_clock": session_clock, "sessions": list(self.config.sessions),
                     "slot_sessions": list(session_names(slot)),
                     "clock_sessions": None if session_clock is None else list(session_names(session_clock))})
-                self.store.event(self.clock(), run_id, symbol, "scheduler", "SESSION_SKIPPED")
-                self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
+                self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "scheduler", "SESSION_SKIPPED"))
+                self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA"))
                 return "SESSION_SKIPPED"
             if not set(session_names(slot)) & set(self.config.sessions):
-                self.store.event(self.clock(), run_id, symbol, "scheduler", "DIAGNOSTIC_OUTSIDE_SESSION", "INFO")
+                self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "scheduler",
+                                                            "DIAGNOSTIC_OUTSIDE_SESSION", "INFO"))
             if self.market_provider is None:
                 self._rex_note(rex, "EXIT_NO_PROVIDER", lambda: {"market_provider_configured": False})
-                self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_UNAVAILABLE", "WARNING")
-                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", "provider_not_configured", run_id))
-                self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
+                self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_data",
+                                                            "DATA_UNAVAILABLE", "WARNING"))
+                self._persist("O", lambda: self.store.save_snapshot(symbol, self._status_snapshot(
+                    symbol, slot, "NO_DATA", "provider_not_configured", run_id)))
+                self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA"))
                 return "NO_DATA"
             stage = "market_data"
             try:
@@ -489,19 +544,20 @@ class OperationalRuntime:
                     raise
                 provider_state = provider_error.kind
                 self._rex_note(rex, "EXIT_PROVIDER_ERROR", lambda: {"provider_state": provider_state})
-                with self.store.transaction():
-                    self.store.set_state("market_data_provider", provider_state)
-                self.store.event(self.clock(), run_id, symbol, "market_data", provider_state, "WARNING")
-                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, "NO_DATA", provider_state, run_id))
-                self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA")
+                self._persist("O", lambda: self._set_states((("market_data_provider", provider_state),)))
+                self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_data",
+                                                            provider_state, "WARNING"))
+                self._persist("O", lambda: self.store.save_snapshot(symbol, self._status_snapshot(
+                    symbol, slot, "NO_DATA", provider_state, run_id)))
+                self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA"))
                 return "NO_DATA"
             paper_blocked = None  # B2.3B: reason PAPER economics are blocked this cycle (in-scope symbols only).
             if self.config.v2_position_catch_up:
                 self._last_ingest = None
                 if self.config.catch_up_applies(symbol):
-                    paper_blocked = self._ingest_evidence(symbol, snapshot, slot)
+                    paper_blocked = self._persist("O", lambda: self._ingest_evidence(symbol, snapshot, slot))
                 else:  # P1-B: outside the scope, evidence is observe-only and never blocks the legacy path
-                    self._observe_evidence(symbol, snapshot, slot, run_id)
+                    self._persist("O", lambda: self._observe_evidence(symbol, snapshot, slot, run_id))
                 if paper_blocked is None and self._last_ingest is not None:
                     # V2 P8.4 R4: REVISION visibility; observability only, never a decision
                     self._audit_safely(lambda: self._record_revisions(symbol, snapshot, run_id), run_id, symbol)
@@ -517,17 +573,20 @@ class OperationalRuntime:
             ) == "STALE":
                 fresh, data_state = False, "STALE_DATA"
             self._rex_note(rex, "DATA", lambda: {"fresh": fresh, "data_state": data_state})
-            with self.store.transaction():
-                self.store.set_state("market_data_provider", "CURRENT" if fresh else data_state)
-            self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_CHECK", "INFO" if fresh else "WARNING", {"state": data_state})
+            self._persist("O", lambda: self._set_states((("market_data_provider", "CURRENT" if fresh else data_state),)))
+            self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_CHECK",
+                                                        "INFO" if fresh else "WARNING", {"state": data_state}))
             # Passive SYSTEM HEALTH hook (V2 Phase 1): observes the already-decided verdict; never raises.
             health_hooks.emit("market_data_observed", symbol=symbol, slot=slot, snapshot=snapshot,
                               data_state=data_state, provider_mode=self.config.market_provider_mode)
             if not fresh:
                 self._rex_note(rex, "EXIT_DATA", lambda: {"data_state": data_state})
-                self.store.event(self.clock(), run_id, symbol, "market_data", "DATA_STALE" if data_state == "STALE_DATA" else "DATA_UNAVAILABLE", "WARNING")
-                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, data_state, "freshness_gate_blocked", run_id))
-                self.store.finish(key, self.clock(), "COMPLETED", data_state)
+                self._persist("O", lambda: self.store.event(
+                    self.clock(), run_id, symbol, "market_data",
+                    "DATA_STALE" if data_state == "STALE_DATA" else "DATA_UNAVAILABLE", "WARNING"))
+                self._persist("O", lambda: self.store.save_snapshot(symbol, self._status_snapshot(
+                    symbol, slot, data_state, "freshness_gate_blocked", run_id)))
+                self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", data_state))
                 return data_state
             if not self.store.owns_slot(key, symbol):
                 raise RuntimeError("slot ownership lost")
@@ -546,7 +605,7 @@ class OperationalRuntime:
                 return self.paper_enabled and (had_open or bool(fresh.journal)), None
             if not self.config.catch_up_applies(symbol):  # P1-B: legacy newest-bar path outside the scope
                 self._rex_context(rex, "ST2L", lambda: {"bar": bar, "paper_enabled": self.paper_enabled})
-                broker, _ = self._guarded_paper_write(symbol, key, manage_positions, rex_store)
+                broker, _ = self._guarded_paper_write(symbol, key, manage_positions, rex_store, "management")
                 if broker is None:
                     raise RuntimeError("stale paper state")  # Fail closed: nothing of this cycle written.
             else:  # B2.3B replaces the newest-bar TradeManager step; it never falls back to it.
@@ -554,7 +613,8 @@ class OperationalRuntime:
                     paper_blocked = self._catch_up_positions(symbol, slot, key, rex_store,
                                                              None if rex is None else rex.observer)
                 if paper_blocked is not None:
-                    self.store.event(self.clock(), run_id, symbol, "market_evidence", paper_blocked, "ERROR")
+                    self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_evidence",
+                                                                paper_blocked, "ERROR"))
                 broker = self._broker(symbol)
             decision_equity = broker.account.equity
             self._rex_note(rex, "ST3", lambda: {
@@ -575,17 +635,18 @@ class OperationalRuntime:
                 "final_status": deterministic.final_status, "risk_decision": deterministic.risk_decision,
                 "warnings": list(deterministic.warnings),
                 "quantity_increment": getattr(self.instruments.get(symbol), "quantity_increment", None)})
-            with self.store.transaction():
-                self.store.set_state("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED"))
+            self._persist("O", lambda: self._set_states(
+                (("macro_provider", getattr(self.macro_provider, "health", "NOT CONFIGURED")),)))
             macro_report = deterministic.macro_news_report
             if macro_report and macro_report.status == "ERROR":
-                self.store.event(self.clock(), run_id, symbol, "macro_news", "PROVIDER_FAILURE", "ERROR",
-                                 {"provider": self.config.macro_provider_mode})
+                self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "macro_news",
+                                                            "PROVIDER_FAILURE", "ERROR",
+                                                            {"provider": self.config.macro_provider_mode}))
             if (self.config.macro_provider_mode in {"finnhub", "official_hybrid", "fxmacrodata"} and macro_report and
                     macro_report.status in {"OK", "PARTIAL"} and macro_report.evidence):
                 self._audit_safely(lambda: self.store.record_macro_awareness(
                     self.clock(), run_id, symbol, macro_report.evidence[0].get("macro_events", ())),
-                    run_id, symbol)
+                    run_id, symbol, "D")
             stage = "ai"
             audit = AuditLog()
             ai_provider = self.ai_provider
@@ -614,17 +675,19 @@ class OperationalRuntime:
                 self._audit_safely(lambda: self._record_ai_health(health_events, run_id, symbol), run_id, symbol)
             if not self.store.owns_slot(key, symbol):
                 raise RuntimeError("slot ownership lost")
-            self.store.save_reports(key, deterministic, ai, audit.entries)
+            self._persist("D", lambda: self.store.save_reports(key, deterministic, ai, audit.entries))
             self._audit_safely(lambda: self.store.record_analysis_events(self.clock(), deterministic, ai),
-                               run_id, symbol)
+                               run_id, symbol, "D")
             if self.config.v2_ai_call_audit:  # V2 P7.1: observability only; a failure never changes the cycle.
                 self._audit_safely(lambda: self._record_ai_calls(audit, ai, deterministic, symbol, key),
                                    run_id, symbol)
             provider_failed = any(r is not None and r.status == "ERROR" for r in (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review, ai.ai_trade_review))
-            with self.store.transaction():
-                self.store.set_state("ai_provider", "ERROR" if provider_failed else "DETERMINISTIC" if isinstance(self.ai_provider, DeterministicAIProvider) else "CONFIGURED")
+            self._persist("O", lambda: self._set_states((("ai_provider", "ERROR" if provider_failed else "DETERMINISTIC"
+                                                          if isinstance(self.ai_provider, DeterministicAIProvider)
+                                                          else "CONFIGURED"),)))
             if provider_failed:
-                self.store.event(self.clock(), ai.run_id, symbol, "ai_provider", "PROVIDER_FAILURE", "ERROR")
+                self._persist("O", lambda: self.store.event(self.clock(), ai.run_id, symbol, "ai_provider",
+                                                            "PROVIDER_FAILURE", "ERROR"))
             # Provider/AI latency may cross a freshness or session boundary.
             # Recheck before progressing any pending order or submitting a new one.
             execution_at = self.clock()
@@ -639,14 +702,15 @@ class OperationalRuntime:
                                                 "execution_state": execution_state, "session_open": session_open})
             if not execution_fresh:
                 self._rex_note(rex, "EXIT_EXECUTION_GATE", lambda: {"execution_state": execution_state})
-                self.store.event(execution_at, run_id, symbol, "runtime", "EXECUTION_GATE_BLOCKED", "WARNING",
-                                 {"state": execution_state})
+                self._persist("O", lambda: self.store.event(execution_at, run_id, symbol, "runtime",
+                                                            "EXECUTION_GATE_BLOCKED", "WARNING",
+                                                            {"state": execution_state}))
                 self._record_execution_safely(execution_at, run_id, symbol,
                                               deterministic.setup_assessment,
                                               status="SKIPPED", reason=execution_state)
-                self.store.save_snapshot(symbol, self._status_snapshot(symbol, slot, execution_state,
-                                         "execution_time_gate_blocked", run_id))
-                self.store.finish(key, execution_at, "COMPLETED", execution_state)
+                self._persist("O", lambda: self.store.save_snapshot(symbol, self._status_snapshot(
+                    symbol, slot, execution_state, "execution_time_gate_blocked", run_id)))
+                self._persist("L", lambda: self.store.finish(key, execution_at, "COMPLETED", execution_state))
                 return execution_state
             ai_healthy = all(r is not None and r.status in {"OK", "PARTIAL"} for r in
                 (ai.ai_structure, ai.ai_liquidity, ai.ai_macro, ai.ai_setup_review))
@@ -669,7 +733,8 @@ class OperationalRuntime:
                         paper_blocked = self._gate_pending_orders(gate, symbol, slot, key, rex_store,
                                                                   None if rex is None else rex.observer)
                     if paper_blocked is not None:
-                        self.store.event(self.clock(), run_id, symbol, "market_evidence", paper_blocked, "ERROR")
+                        self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_evidence",
+                                                                    paper_blocked, "ERROR"))
             elif (self.paper_enabled and paper_blocked is None and ai_healthy
                     and ai.final_status not in {"AI_CAUTION", "ERROR", "RISK_REJECTED"}):
                 if not self.store.owns_slot(key, symbol):
@@ -684,7 +749,7 @@ class OperationalRuntime:
                             fresh.process_next_bar(order, bar)
                     return bool(fresh.journal), None
                 self._rex_context(rex, "ST7", lambda: {"path": "LEGACY", "bar": bar})
-                if self._guarded_paper_write(symbol, key, progress_pending, rex_store)[0] is None:
+                if self._guarded_paper_write(symbol, key, progress_pending, rex_store, "pending_fill")[0] is None:
                     raise RuntimeError("stale paper state")  # Fail closed: no pending-order effect written.
             self._rex_note(rex, "ST7", lambda: {
                 "path": "CATCH_UP" if self.config.catch_up_applies(symbol) else "LEGACY",
@@ -729,7 +794,7 @@ class OperationalRuntime:
                     order = fresh.submit_plan(deterministic, snapshot, slot)
                     return order is not None, order
                 self._rex_context(rex, "ST9", lambda: {"decision_equity": decision_equity, "slot": slot})
-                fresh, order = self._guarded_paper_write(symbol, key, submit, rex_store)
+                fresh, order = self._guarded_paper_write(symbol, key, submit, rex_store, "submit")
                 if fresh is None or order is STALE_PAPER_STATE:
                     self._audit_safely(lambda: self.store.event(
                         self.clock(), ai.run_id, symbol, "policy", STALE_PAPER_STATE, "WARNING"),
@@ -769,17 +834,24 @@ class OperationalRuntime:
                                           order_id=submitted_order_id)
             self._audit_safely(lambda: self.store.save_snapshot(
                 symbol, self._snapshot(from_ai_report(ai, now=slot))), run_id, symbol)
-            if not self.store.finish(key, self.clock(), "COMPLETED", ai.final_status):
+            if not self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", ai.final_status)):
                 return "ERROR"
             LOG.info("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_COMPLETED status=%s",
                      ai.run_id, symbol, utc(slot), ai.final_status)
             return ai.final_status
+        except HaltRefused as halt:  # V2 P4a: an admission or the run lifecycle was refused after T_h
+            return self._halt_run(key, run_id, symbol, halt, rex)
         except Exception as exc:
+            if self.halt_gate is not None and self.halt_gate.halted:  # no failure writes after T_h: bookkeeping only
+                return self._halt_run(key, run_id, symbol, HaltRefused("error_after_halt", type(exc).__name__), rex)
             LOG.error("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_FAILED status=ERROR error_type=%s",
                       run_id, symbol, utc(slot), type(exc).__name__)
             self._rex_note(rex, "EXIT_ERROR", lambda: {"stage": stage, "error_type": type(exc).__name__})
-            if stage in {"market_data", "ai"}:
-                with self.store.transaction():
-                    self.store.set_state("market_data_provider" if stage == "market_data" else "ai_provider", "ERROR")
-            self.store.finish(key, self.clock(), "FAILED", "ERROR", type(exc).__name__)
+            try:
+                if stage in {"market_data", "ai"}:
+                    self._persist("O", lambda: self._set_states(
+                        (("market_data_provider" if stage == "market_data" else "ai_provider", "ERROR"),)))
+                self._persist("L", lambda: self.store.finish(key, self.clock(), "FAILED", "ERROR", type(exc).__name__))
+            except HaltRefused as halt:  # T_h arrived while recording the failure: bookkeeping replaces it
+                return self._halt_run(key, run_id, symbol, halt, rex)
             return "ERROR"

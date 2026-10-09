@@ -797,32 +797,49 @@ def _check_run(r):
     returned = run["returned"]
     slot = run["slot"]
 
+    failure = r.one("EXIT_ERROR", required=False)
+    halt = r.one("EXIT_HALT", required=False)  # V2 P4a: refused admission / lifecycle after T_h
+    if failure is not None and halt is not None:
+        raise EvidenceError("EXIT_CONTRADICTION", "both EXIT_ERROR and EXIT_HALT")
+    error = failure or halt
+    terminal = "HALTED" if halt is not None else "ERROR"
+    r.halted = halt is not None
+    if halt is not None:
+        r.require(returned == "HALTED", "HALT_RETURNED_MISMATCH", returned)
+        r.checked.append(f"halt: {halt.get('refused_kind')} refused at {halt.get('refused_stage')}")
+
     session = r.one("EXIT_SESSION", required=False)
     if session is not None:
         sessions = set(session["sessions"])
         slot_out = not set(session["slot_sessions"]) & sessions
         clock_out = session["clock_sessions"] is not None and not set(session["clock_sessions"]) & sessions
         r.require(not identity["diagnostic_outside_session"] and (slot_out or clock_out), "EXIT_SESSION_MISMATCH")
-        r.require(returned == "SESSION_SKIPPED", "RETURNED_MISMATCH")
+        r.require(returned == ("HALTED" if halt else "SESSION_SKIPPED"), "RETURNED_MISMATCH")
         r.require(not r.writes, "WRITE_AFTER_EXIT")
         return
     for name in ("EXIT_NO_PROVIDER", "EXIT_PROVIDER_ERROR"):
         if r.one(name, required=False) is not None:
-            r.require(returned == "NO_DATA", "RETURNED_MISMATCH")
+            r.require(returned == ("HALTED" if halt else "NO_DATA"), "RETURNED_MISMATCH")
             r.require(not r.writes, "WRITE_AFTER_EXIT")
             return
-    st1 = r.one("ST1")
+    st1 = r.one("ST1", required=error is None)
+    if st1 is None:  # stopped before ingestion (e.g. a halt right after the claim)
+        r.require(returned == terminal and not r.writes, "RETURNED_MISMATCH")
+        return
     r.require(st1["catch_up_applies"] == identity["catch_up_applies"], "ST1_SCOPE_MISMATCH")
-    data = r.one("DATA")
+    data = r.one("DATA", required=error is None)
+    if data is None:
+        r.require(returned == terminal and not r.writes, "RETURNED_MISMATCH")
+        return
     if not data["fresh"]:
-        r.require(r.one("EXIT_DATA") is not None and returned == data["data_state"], "EXIT_DATA_MISMATCH")
+        r.require(r.one("EXIT_DATA") is not None and returned == ("HALTED" if halt else data["data_state"]),
+                  "EXIT_DATA_MISMATCH")
         r.require(not r.writes, "WRITE_AFTER_EXIT")
         return
-    error = r.one("EXIT_ERROR", required=False)
     _check_management(r, identity)
     st3 = r.one("ST3", required=error is None)
     if st3 is None:
-        r.require(returned == "ERROR", "RETURNED_MISMATCH")
+        r.require(returned == terminal, "RETURNED_MISMATCH")
         return
     r.require(st3["account"]["equity"] == st3["decision_equity"], "ST3_DECISION_EQUITY")
     committed = [w for w in r.writes if w["result"] == "COMMITTED"]
@@ -832,7 +849,7 @@ def _check_run(r):
 
     st4 = r.one("ST4", required=error is None)
     if st4 is None:
-        r.require(returned == "ERROR", "RETURNED_MISMATCH")
+        r.require(returned == terminal, "RETURNED_MISMATCH")
         return
     # F1 and ST4 sizing
     status, warnings, _ = floor_status(st4)
@@ -861,7 +878,7 @@ def _check_run(r):
                                                      if st4["instrument"] else None)
     r.reconstructed.append({"stage": "F1B", "adapter_outcome": outcome})
     if outcome in ADAPTER_ERRORS:
-        r.require(f1b is None and error is not None and returned == "ERROR", "F1B_ERROR_NOT_REPRODUCED", outcome)
+        r.require(f1b is None and failure is not None and returned == "ERROR", "F1B_ERROR_NOT_REPRODUCED", outcome)
         return
     if f1b is None:
         raise EvidenceError("STAGE_MISSING", "F1B")
@@ -871,7 +888,7 @@ def _check_run(r):
     r.checked.append("F1b")
     st5 = r.one("ST5", required=error is None)
     if st5 is None:
-        r.require(returned == "ERROR", "RETURNED_MISMATCH")
+        r.require(returned == terminal, "RETURNED_MISMATCH")
         return
     valid = _check_provenance(r, st5, identity)
     final = ai_final_status(f1b["final_status"], f1b["warnings"], valid["ai_setup_review"], valid["ai_trade_review"])
@@ -879,7 +896,7 @@ def _check_run(r):
     r.checked.append("A1-A4")
     st6 = r.one("ST6", required=error is None)
     if st6 is None:
-        r.require(returned == "ERROR", "RETURNED_MISMATCH")
+        r.require(returned == terminal, "RETURNED_MISMATCH")
         return
     if not st6["session_open"]:
         r.require(st6["execution_state"] == "SESSION_SKIPPED" and st6["execution_fresh"] is False,
@@ -893,7 +910,7 @@ def _check_run(r):
     healthy = ai_healthy(four)
     st7 = r.one("ST7", required=error is None)
     if st7 is None:
-        r.require(returned == "ERROR", "RETURNED_MISMATCH")
+        r.require(returned == terminal, "RETURNED_MISMATCH")
         return
     r.require(st7["ai_healthy"] == healthy, "H1_MISMATCH")
     r.require(st7["ai_healthy_statuses"] == [None if v is None else v["status"] for v in four], "H1_INPUTS_MISMATCH")
@@ -905,7 +922,7 @@ def _check_run(r):
         _check_gated_pending(r, st7, st6, final, healthy, st3)
     st8 = r.one("ST8", required=error is None)
     if st8 is None:
-        r.require(returned == "ERROR", "RETURNED_MISMATCH")
+        r.require(returned == terminal, "RETURNED_MISMATCH")
         return
     eligible = paper_policy(final, f1b["risk_decision"], st5["trade_plan_present"],
                             [valid[n] for n in RESPONSE_SLOTS])
@@ -1042,6 +1059,10 @@ def _check_admission(r, st8, st4, f1b, final, eligible, identity, error):
         r.checked.append("ST8 admission")
         return
     rechecks = r.stages("ST9_RECHECK", observer=False)
+    halt = r.one("EXIT_HALT", required=False)
+    if not rechecks and not writes and halt is not None and halt.get("refused_kind") == "submit":
+        r.checked.append("ST9 refused at the submit admission (halt): no write")
+        return
     r.require(bool(rechecks), "ST9_RECHECK_MISSING")
     outcome, order_id = None, None
     for index, write in enumerate(writes):
@@ -1095,6 +1116,9 @@ def _check_admission(r, st8, st4, f1b, final, eligible, identity, error):
 
 def _check_unconsumed(r):
     for write in r.writes:
+        if write["write_seq"] not in r.consumed and getattr(r, "halted", False) and write["result"] == "STALE":
+            r.consume(write)  # a halted run: an uncommitted attempt whose retry was refused has no economic effect
+            continue
         if write["write_seq"] not in r.consumed:
             r.fail("UNEXPLAINED_WRITE", f"write {write['write_seq']} ({write['context'].get('stage')})")
 

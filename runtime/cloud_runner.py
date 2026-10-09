@@ -25,6 +25,11 @@ def main():
     freeze_sha = os.environ.get("AI_FLOOR_GIT_COMMIT", "")
     if not SHA_PATTERN.fullmatch(freeze_sha):
         raise RuntimeError("AI_FLOOR_GIT_COMMIT must identify the deployed experiment freeze")
+    gate = None
+    if config.v2_rhalt:  # V2 P4a R-HALT: read-only barrier before any DB write; no automatic resume
+        from runtime.halt import HaltGate, startup_halt_check
+        startup_halt_check(config, os.environ)
+        gate = HaltGate()
     from dataclasses import replace
     activation_env = dict(os.environ, AI_FLOOR_CLOUD_RUNNER="0", AI_FLOOR_SCHEDULER="0")
     if not cloud_preflight(replace(config, scheduler_enabled=False), env=activation_env).experiment_ready:
@@ -34,9 +39,11 @@ def main():
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     stop = False
 
-    def shutdown(*_):
+    def shutdown(signum=None, frame=None):
         nonlocal stop
         stop = True
+        if gate is not None:
+            gate.request(signum)  # T_h: assignments only (no I/O, lock, transaction or exception)
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
@@ -51,7 +58,7 @@ def main():
         runner = DemoRunner(config, notification_sink=SlackNotificationSink(),
                     recovery_stale_after_seconds=0, instruments=paper_instruments(),
                     experiment_baseline_sha=EXPERIMENT_BASELINE_SHA,
-                    experiment_freeze_sha=freeze_sha)
+                    experiment_freeze_sha=freeze_sha, **({} if gate is None else {"halt_gate": gate}))
         try:
             while not stop:
                 runner.tick()

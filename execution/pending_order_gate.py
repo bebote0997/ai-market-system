@@ -134,6 +134,17 @@ def _journal_not_evaluated(store, account_id, symbol, bars, current, owner_key):
     return tuple(keys), written
 
 
+def _admit(halt_gate, kind):
+    """V2 P4a R-HALT read 1 (L(W)) before an economic attempt loads its state; None gate = legacy."""
+    return None if halt_gate is None else halt_gate.admit(kind)
+
+
+def _pre_save(halt_gate, admission):
+    """V2 P4a R-HALT read 2 immediately before ``save_paper``; raises when halted (no call, no effect)."""
+    if halt_gate is not None:
+        halt_gate.pre_save(admission)
+
+
 def _notify(observer, event, **data):
     """V2 P3 REX observer hook (O-4): evidence only. Never changes a decision or state; failures are ignored."""
     if observer is None:
@@ -145,7 +156,7 @@ def _notify(observer, event, **data):
 
 
 def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None, instrument=None,
-                        owner_key=None, observer=None):
+                        owner_key=None, observer=None, halt_gate=None):
     """Apply P1 to the PENDING PAPER orders of ``symbol``.
 
     ``store`` is the trading ``storage.database.Store``; ``evidence`` a ``MarketEvidenceEngine``
@@ -153,6 +164,8 @@ def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None
     cycle failed/crashed or there is no cycle. ``owner_key`` is passed through for slot ownership.
     ``observer`` (V2 P3 REX, O-4; None = legacy) receives the exact gate bar, the pending order iteration order and
     ``expected_state`` before ``save_paper``; it can change neither a decision nor any state; failures are ignored.
+    ``halt_gate`` (V2 P4a R-HALT; None = legacy): admission before the evaluation, observability rows only while
+    allowed, and a second read before ``save_paper``; a refusal propagates ``HaltRefused``.
     """
     if not _aware(as_of):
         raise ValueError("as_of: timezone-aware datetime required")
@@ -161,9 +174,13 @@ def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None
     pending = [] if account is None else _pending(orders, symbol)
     if not pending:
         return PendingGateResult(symbol, "NO_OP", None, (), 0, ())
+    admission = _admit(halt_gate, "pending_gate")
     bars = _committed_bars(evidence, symbol, min(o.as_of for o in pending), as_of)
     current = _current_bar_time(gate, symbol, bars)
-    keys, written = _journal_not_evaluated(store, account_id, symbol, bars, current, owner_key)
+    if halt_gate is None or halt_gate.allow("O"):
+        keys, written = _journal_not_evaluated(store, account_id, symbol, bars, current, owner_key)
+    else:  # after T_h the observability rows are suppressed (I-R1c); nothing economic depends on them
+        keys, written = (), 0
     newest = bars[-1].bar_start if bars else None
     if current is None:
         _notify(observer, "pending_gate_not_evaluated", reason=REASON, newest_committed_bar_start=newest,
@@ -180,6 +197,8 @@ def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None
         if current > order.as_of:  # V1 order temporal rule: never a bar at or before order.as_of.
             broker.process_next_bar(order, gate.bar)
             evaluated.append((order.order_id, order.status))
+    if broker.journal:
+        _pre_save(halt_gate, admission)
     if broker.journal and store.save_paper(broker, owner_key=owner_key, symbol=symbol,
                                            expected_state=expected_state) is False:
         return PendingGateResult(symbol, "STALE", "CURRENT", keys, written, ())

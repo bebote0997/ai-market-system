@@ -39,7 +39,7 @@ import sqlite3
 import sys
 import tempfile
 
-from replay import rex_oracle
+from replay import halt_verifier, rex_oracle
 from storage.economic_digest import H, edg, psh
 
 VERIFIER_VERSION = "V2_P3_G15_CHAIN/1"
@@ -138,12 +138,17 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
     writes, runs, failures_logged = [], {}, []
     economic = {}
     started = {}
+    halts, journal_index = [], []
     for raw in _raw_rows(conn, "SELECT id,timestamp,run_id,symbol,source,event_type,payload FROM journal WHERE id>? "
                                "ORDER BY id", (since_journal_id,)):
         try:
             journal_id, timestamp, run_id, symbol, source, event_type, payload = (_text(v) for v in raw)
         except UnicodeDecodeError:
             findings.invalid("PAYLOAD_NOT_UTF8", f"journal {raw[0]}", {"table": "journal", "journal_id": raw[0]})
+            continue
+        journal_index.append((journal_id, source, event_type, run_id))
+        if source == "halt" and event_type == "HALT_OBSERVED":
+            halts.append((journal_id, payload))
             continue
         if source == "rex":
             if event_type == "REX_FAILURE":
@@ -196,6 +201,10 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
                               "error": str(exc)[:200]})
             chain["edg"] = chain["psh"] = None  # the chain cannot continue across unreadable evidence
 
+    halt_findings, halt_summary = halt_verifier.check(halts, valid_writes, journal_index)
+    for item in halt_findings:
+        findings.add(item["severity"], item["code"], item["detail"], item.get("context"))
+
     for jid, event in economic.items():
         if jid not in referenced:
             findings.invalid("ORPHAN_ECONOMIC_EVENT", f"journal {jid} {event['event_type']}", {"journal_id": jid})
@@ -237,7 +246,7 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
                    counts={"rex_writes": len(writes), "committed_writes": committed_count, "rex_runs": len(runs),
                            "claimed_runs": len(started), "economic_events": len(economic),
                            "rex_failures": len(failures_logged), "nwr_days": sorted(nwr_days)},
-                   current={"edg": current_edg, "psh": current_psh}, g14=g14)
+                   current={"edg": current_edg, "psh": current_psh}, g14=g14, halts=halt_summary)
 
 
 def _check_write(findings, index, journal_id, w, chain, economic, referenced, write_ids):
@@ -340,7 +349,7 @@ def _check_run_record(findings, run_id, by_run, runs, started, nwr_days, identit
             findings.fail("G14_FAIL", f"{run_id}: {verdict['failures'][:3]}")
 
 
-def _report(findings, *, account_id, since_journal_id, edg_start, counts, current, g14):
+def _report(findings, *, account_id, since_journal_id, edg_start, counts, current, g14, halts=()):
     invalid = any(f["severity"] == "INVALID" for f in findings.items)
     failed = any(f["severity"] == "FAIL" for f in findings.items)
     sqlite_result = "CERTIFICATION_INVALID" if invalid else "SQLITE_CHECKS_FAIL" if failed else "SQLITE_CHECKS_PASS"
@@ -348,7 +357,7 @@ def _report(findings, *, account_id, since_journal_id, edg_start, counts, curren
             "edg_start": edg_start, "sqlite_result": sqlite_result,
             "classification": "CERTIFICATION_INVALID" if invalid else "NOT VERIFIED",
             "external_evidence": "NOT EVALUATED", "requires_external": list(REQUIRES_EXTERNAL),
-            "findings": findings.items, "counts": counts, "current": current, "g14": g14}
+            "findings": findings.items, "counts": counts, "current": current, "g14": g14, "halts": list(halts)}
 
 
 def _sha256(path):
