@@ -95,17 +95,58 @@ def classify(symbol, snapshot, ingest_results, committed_bars, positions, anomal
     return records
 
 
+def _parse_object(payload):
+    """A journal payload as a dict, or None when it is not a JSON object (never raises)."""
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _classification_errors(source, data):
+    """Schema errors of one EVIDENCE_REVISION classification row ([] = valid). Mirrors what ``classify`` writes."""
+    if data is None:
+        return ["payload_not_object"]
+    errors = []
+    if source != SOURCE:
+        errors.append("wrong_source")
+    anomaly_id = data.get("anomaly_id")
+    if not isinstance(anomaly_id, str) or not anomaly_id:
+        errors.append("anomaly_id_invalid")
+    if data.get("review_key") != anomaly_id:
+        errors.append("review_key_mismatch")
+    for field in ("symbol", "timeframe", "bar_start"):
+        if not isinstance(data.get(field), str) or not data[field]:
+            errors.append(f"{field}_invalid")
+    if not isinstance(data.get("material"), bool):
+        errors.append("material_invalid")
+    if not isinstance(data.get("affected"), list):
+        errors.append("affected_invalid")
+    return errors
+
+
+def _classification_rows(db):
+    """Every EVIDENCE_REVISION row (any source, any payload), in journal order, validated; nothing is skipped."""
+    rows = []
+    for journal_id, source, payload in db.execute(
+            "SELECT id, source, payload FROM journal WHERE event_type=? ORDER BY id", (EVENT,)):
+        data = _parse_object(payload)
+        rows.append({"journal_id": journal_id, "data": data, "errors": _classification_errors(source, data)})
+    return rows
+
+
+def _valid_classifications(db):
+    return [row["data"] for row in _classification_rows(db) if not row["errors"]]
+
+
 def _review_rows(db):
     """Every ``EVIDENCE_REVISION_REVIEWED`` journal row (any source), in journal order: (id, source, payload dict or
     None when the payload is not a JSON object)."""
     rows = []
     for journal_id, source, payload in db.execute(
             "SELECT id, source, payload FROM journal WHERE event_type=? ORDER BY id", (REVIEW_EVENT,)):
-        try:
-            data = json.loads(payload)
-        except (TypeError, ValueError):
-            data = None
-        rows.append((journal_id, source, data if isinstance(data, dict) else None))
+        rows.append((journal_id, source, _parse_object(payload)))
     return rows
 
 
@@ -126,11 +167,7 @@ def _review_states(db):
     """LOW-1 validation (design 4.2-4.4). Returns (states, historical_invalid, without_record):
     ``states``: {anomaly_id: latest row state}; ``historical_invalid``: superseded invalid rows (warnings);
     ``without_record``: review rows whose key is not a recorded EVIDENCE_REVISION."""
-    recorded = set()
-    for (payload,) in db.execute("SELECT payload FROM journal WHERE event_type=?", (EVENT,)):
-        anomaly_id = json.loads(payload).get("anomaly_id")
-        if isinstance(anomaly_id, str):
-            recorded.add(anomaly_id)
+    recorded = {row["anomaly_id"] for row in _valid_classifications(db)}
     previous, states, historical_invalid, without_record = {}, {}, [], []
     for journal_id, source, data in _review_rows(db):
         key = _key(data)
@@ -171,7 +208,7 @@ def _effective(states):
 
 
 def _summary(db):
-    rows = [json.loads(r[0]) for r in db.execute("SELECT payload FROM journal WHERE event_type=?", (EVENT,))]
+    rows = _valid_classifications(db)
     effective = _effective(_review_states(db)[0])
     unresolved = [r for r in rows if effective.get(r.get("review_key")) not in FINAL_DECISIONS]
     return {"recorded": len(rows), "unreviewed": len(unresolved),
@@ -225,7 +262,8 @@ def _ro(path):
 def demo_gate(trading_db, evidence_db):
     """READ-ONLY pre-DEMO gate. CLEAR only with full anomaly coverage by ``anomaly_id``, a VALID final decision for every
     material anomaly, no effectively ESCALATED anomaly, no invalid latest review (LOW-1), no review without a recorded
-    anomaly, no classification that mismatches its anomaly, and exactly one classification per anomaly."""
+    anomaly, no classification that mismatches its anomaly, exactly one classification per anomaly, and no malformed
+    classification row."""
     blockers = []
     anomalies = {}
     if evidence_db is None or not Path(evidence_db).is_file():
@@ -243,21 +281,32 @@ def demo_gate(trading_db, evidence_db):
             blockers.append("EVIDENCE_DB_UNREADABLE")
     db = _ro(trading_db)
     try:
-        rows = [json.loads(r[0]) for r in db.execute("SELECT payload FROM journal WHERE event_type=? ORDER BY id",
-                                                     (EVENT,))]
+        classification_rows = _classification_rows(db)
         states, historical_invalid, without_record = _review_states(db)
     finally:
         db.close()
     effective = _effective(states)
+    # P1-A hotfix 2: every row is validated before grouping. A malformed row never counts as coverage and is never
+    # skipped silently (CLASSIFICATION_MALFORMED); if it carries a usable anomaly_id it still counts as a duplicate.
+    rows, malformed, ids_per_anomaly = [], [], {}
+    for item in classification_rows:
+        data = item["data"]
+        anomaly_id = data.get("anomaly_id") if data is not None else None
+        if isinstance(anomaly_id, str) and anomaly_id:
+            ids_per_anomaly[anomaly_id] = ids_per_anomaly.get(anomaly_id, 0) + 1
+        if item["errors"]:
+            malformed.append({"journal_id": item["journal_id"],
+                              "anomaly_id": anomaly_id if isinstance(anomaly_id, str) else None,
+                              "errors": item["errors"]})
+        else:
+            rows.append(data)
     classified, all_classifications = {}, {}
-    for row in rows:  # legacy rows without anomaly_id never count as coverage
-        if row.get("anomaly_id"):
-            classified.setdefault(row["anomaly_id"], row)
-            all_classifications.setdefault(row["anomaly_id"], []).append(row)
+    for row in rows:
+        classified.setdefault(row["anomaly_id"], row)
+        all_classifications.setdefault(row["anomaly_id"], []).append(row)
     # P1-A hotfix: journal() writes exactly one classification per anomaly_id, so more than one (even identical) is
     # tampering or a defect and blocks; no row can hide another (fail-closed).
-    conflicts = [{"anomaly_id": key, "count": len(group)} for key, group in all_classifications.items()
-                 if len(group) > 1]
+    conflicts = [{"anomaly_id": key, "count": count} for key, count in ids_per_anomaly.items() if count > 1]
     evidence_ok = not blockers
     unclassified = [a for key, a in anomalies.items() if key not in classified]
     orphans = [] if not evidence_ok else [r for key, r in classified.items() if key not in anomalies]
@@ -290,15 +339,17 @@ def demo_gate(trading_db, evidence_db):
         blockers.append("CLASSIFICATION_MISMATCH")
     if conflicts:
         blockers.append("CLASSIFICATION_CONFLICT")
+    if malformed:
+        blockers.append("CLASSIFICATION_MALFORMED")
     return {"status": "BLOCKED" if blockers else "CLEAR", "blockers": blockers, "anomalies": len(anomalies),
             "classified": len(classified), "material_unreviewed": material, "escalated_unresolved": escalated,
             "unclassified": unclassified, "orphan_classifications": orphans,
             "non_material_unreviewed": [r for r in unreviewed if not r["material"]],
             "invalid_reviews": invalid_latest, "historical_invalid_reviews": historical_invalid,
             "reviews_without_record": without_record, "classification_mismatches": mismatches,
-            "classification_conflicts": conflicts,
+            "classification_conflicts": conflicts, "classification_malformed": malformed,
             "resolved": sum(1 for key in classified if effective.get(key) in FINAL_DECISIONS),
-            "recorded": len(rows), "reviewed": len(effective)}
+            "recorded": len(classification_rows), "reviewed": len(effective)}
 
 
 def main(argv=None):

@@ -294,3 +294,135 @@ class ClassificationConflictTests(Harness):
             store.close()
         gate = self.gate()
         self.assertEqual((gate["status"], gate["blockers"], gate["classification_conflicts"]), ("CLEAR", [], []))
+
+
+class MalformedClassificationTests(Harness):
+    """P1-A hotfix (Copilot on 2a7dcce): malformed EVIDENCE_REVISION rows are never skipped silently, never count as
+    coverage and never crash the gate (CLASSIFICATION_MALFORMED)."""
+
+    def genuine(self, review=True):
+        self.seed()
+        self.cycle(S1, {}, flag=True)
+        self.cycle(S2, MATERIAL, flag=True)
+        store = Store(self.db)
+        try:
+            row = json.loads(store.db.execute("SELECT payload FROM journal WHERE event_type=?",
+                                              (revision_review.EVENT,)).fetchone()[0])
+            if review:
+                record_review(store, row["anomaly_id"], decision="ACCEPTED_FIRST_COMMITTED", reviewer="owner")
+        finally:
+            store.close()
+        return row
+
+    def append(self, payload=None, *, source=SOURCE, raw=None, replace=False):
+        """Simulated tampering on the temporary test DB only."""
+        store = Store(self.db)
+        try:
+            with store.transaction():
+                if replace:
+                    store.db.execute("DELETE FROM journal WHERE event_type=?", (revision_review.EVENT,))
+                if raw is not None:
+                    store.db.execute("INSERT INTO journal(timestamp,run_id,symbol,source,event_type,severity,payload) "
+                                     "VALUES(?,?,?,?,?,?,?)", ("2026-01-15T14:00:00+00:00", None, "XAUUSD", source,
+                                                               revision_review.EVENT, "INFO", raw))
+                else:
+                    store._event(datetime.now(timezone.utc), None, "XAUUSD", source, revision_review.EVENT, "INFO",
+                                 payload)
+        finally:
+            store.close()
+
+    def gate(self):
+        return LowOneReviewValidationTests.gate(self)  # also asserts the journal is unchanged by the gate
+
+    def journal_snapshot(self):
+        return LowOneReviewValidationTests.journal_snapshot(self)
+
+    def assert_malformed_only(self, errors_expected):
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"]), ("BLOCKED", ["CLASSIFICATION_MALFORMED"]))
+        self.assertIn(errors_expected, gate["classification_malformed"][0]["errors"])
+        self.assertIsInstance(gate["classification_malformed"][0]["journal_id"], int)
+
+    # --- extra malformed row next to a valid, reviewed classification (previously a false CLEAR or a crash)
+    def test_extra_row_without_anomaly_id_blocks(self):
+        g = self.genuine()
+        self.append({k: v for k, v in dict(g, material=False).items() if k != "anomaly_id"})
+        self.assert_malformed_only("anomaly_id_invalid")
+
+    def test_extra_row_with_empty_zero_or_null_anomaly_id_blocks(self):
+        for bad in ("", 0, None):
+            with self.subTest(anomaly_id=bad):
+                self.setUp()
+                g = self.genuine()
+                self.append(dict(g, anomaly_id=bad))
+                self.assert_malformed_only("anomaly_id_invalid")
+
+    def test_extra_row_with_list_anomaly_id_blocks_without_crash(self):
+        g = self.genuine()
+        self.append(dict(g, anomaly_id=[g["anomaly_id"]]))
+        self.assert_malformed_only("anomaly_id_invalid")
+
+    def test_non_object_and_non_json_payloads_block_without_crash(self):
+        for raw in ("[1, 2, 3]", "not-json", '"text"'):
+            with self.subTest(raw=raw):
+                self.setUp()
+                self.genuine()
+                self.append(raw=raw)
+                self.assert_malformed_only("payload_not_object")
+
+    # --- the malformed row is the ONLY classification (previously a false CLEAR or a crash)
+    def assert_sole_blocked(self, error):
+        gate = self.gate()
+        self.assertEqual(gate["status"], "BLOCKED")
+        self.assertIn("CLASSIFICATION_MALFORMED", gate["blockers"])
+        self.assertIn("UNCLASSIFIED", gate["blockers"])  # a malformed row never counts as coverage
+        self.assertIn(error, gate["classification_malformed"][0]["errors"])
+
+    def test_sole_row_missing_material_blocks_reviewed_or_not(self):
+        for review in (True, False):
+            with self.subTest(reviewed=review):
+                self.setUp()
+                g = self.genuine(review=review)
+                self.append({k: v for k, v in g.items() if k != "material"}, replace=True)
+                self.assert_sole_blocked("material_invalid")
+
+    def test_sole_row_non_bool_material_blocks(self):
+        g = self.genuine(review=False)
+        self.append(dict(g, material="no"), replace=True)
+        self.assert_sole_blocked("material_invalid")
+
+    def test_sole_row_wrong_source_blocks(self):
+        g = self.genuine()
+        self.append(dict(g), source="manual_sql", replace=True)
+        self.assert_sole_blocked("wrong_source")
+
+    def test_sole_row_review_key_mismatch_blocks(self):
+        g = self.genuine()
+        self.append(dict(g, review_key="x"), replace=True)
+        self.assert_sole_blocked("review_key_mismatch")
+
+    def test_sole_row_missing_or_empty_location_fields_block(self):
+        for field, value in (("symbol", None), ("timeframe", ""), ("bar_start", 5)):
+            with self.subTest(field=field):
+                self.setUp()
+                g = self.genuine()
+                self.append(dict(g, **{field: value}), replace=True)
+                self.assert_sole_blocked(f"{field}_invalid")
+
+    def test_sole_row_affected_not_a_list_blocks(self):
+        g = self.genuine()
+        self.append(dict(g, affected="none"), replace=True)
+        self.assert_sole_blocked("affected_invalid")
+
+    def test_malformed_duplicate_with_valid_id_still_counts_as_conflict(self):
+        g = self.genuine()
+        self.append({k: v for k, v in g.items() if k != "material"})
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"]),
+                         ("BLOCKED", ["CLASSIFICATION_CONFLICT", "CLASSIFICATION_MALFORMED"]))
+
+    def test_single_valid_classification_unchanged(self):
+        self.genuine()
+        gate = self.gate()
+        self.assertEqual((gate["status"], gate["blockers"], gate["classification_malformed"], gate["recorded"]),
+                         ("CLEAR", [], [], 1))
