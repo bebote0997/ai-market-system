@@ -926,3 +926,12 @@ Review the final SHA of P8.4G:
 - X_P2 is not pinned (`runtime.genesis.SEALED_BASELINE_SHA = None`): no sealed start can pass step 1 outside tests
   until the authorized P4b baseline cut.
 - Status: IMPLEMENTED — NOT CERTIFIED (Copilot audit pending).
+
+## P4b preparation (2026-10-09, pending independent audit)
+
+- Branch `v2/phase8-p4b` from the certified P2b `fd29dc7` (Copilot CERTIFY P2b; CI `38010674011`).
+- LOW-1 fixed (non-creating sealed open). LOW-2 resolved by the contract: I-G18 missing check = NOT VERIFIED, FAIL =
+  INVALID (design 5.1.3.2), regression-tested; severities unchanged.
+- X_P2 single pin (`cloud_runner.EXPERIMENT_BASELINE_SHA`) so that `Y_P2` can satisfy I-C6.
+- A2 tools and the G-8.INT matrix implemented and tested on synthetic periods only; checklist in
+  `V2_PHASE8_CERTIFICATION_CHECKLIST.md`. No real A2 / E0. Status: PREPARED — NOT CERTIFIED.

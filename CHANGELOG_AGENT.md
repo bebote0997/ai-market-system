@@ -1,5 +1,21 @@
 # Agent Changelog
 
+## 2026-10-09 — V2 Phase 8 P4b preparation (tools, validators, G-8.INT; no A2 created)
+
+- Agent: Claude. Branch `v2/phase8-p4b` from the certified P2b `fd29dc7`.
+- P2b LOW-1: `runtime/genesis.py` `SealedStore` opens the sealed DB with URI `mode=rw` (never creates it); used by the
+  sealed constructor and the sealed preflights. A file removed after steps 1-4 → refusal, no residual file or account.
+- P2b LOW-2: I-G18 kept as specified (design 5.1.3.2): a start without a PASS seal check → NOT VERIFIED; a FAIL check →
+  INVALID; regression test added.
+- Finding (fixed): the P2b `SEALED_BASELINE_SHA` constant in `runtime/genesis.py` would have forced `Y_P2` to touch a
+  third file (violating I-C6). X_P2 is now read from `runtime.cloud_runner.EXPERIMENT_BASELINE_SHA` (the only pin);
+  while it is still the P1 baseline no sealed start can pass.
+- New read-only tools: `replay/archive_anchor.py` (P1 archive, flat proof, unsigned OAR-A), `replay/a2_readiness.py`
+  (3.11.1 items 2/5, I-C5/I-C7, genesis-only first start), `replay/freeze_amendment.py` (I-C6, NC10),
+  `replay/g8int.py` (G1-G15 + 10 integration points; PASS / FAIL / NOT VERIFIED / BLOCKED; global BLOCKED).
+- Docs: `V2_PHASE8_CERTIFICATION_CHECKLIST.md`. Tests: `test_phase8_p4b.py` (synthetic, ephemeral keys).
+- No A2, E0, Owner signature, deploy, PR or merge. HIGH-8.1 OPEN; M-5 OPEN; B-STRICT PROVISIONAL; Phase 8 BLOCKED.
+
 ## 2026-10-09 — V2 Phase 8 P2b Sealed Genesis (DEC-8.22-i; Owner D-1..D-4; implementation only)
 
 - Agent: Claude. Branch `v2/phase8-p2b` from the P4a closure `ce0ebe1`.

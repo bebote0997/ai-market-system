@@ -77,7 +77,11 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
     sealed_blocked = bool(sealed_checks) and (not sealed_checks["sealed_genesis_context"] or not path.exists())
     if checks["durable_path"] and checks["durable_mount"] and not sealed_blocked:
         try:
-            store = Store(path)
+            if sealed_checks:  # LOW-1: non-creating open (mode=rw)
+                from runtime.genesis import SealedStore
+                store = SealedStore(path)
+            else:
+                store = Store(path)
             try:
                 checks["db_writable_schema"] = store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
                 # P8.4G (DEC-8.11, P8.5R HIGH): a TEMP table proved nothing about the file; probe a persistent write

@@ -10,7 +10,8 @@ Start order in SEALED_RUNTIME (design "Startup order"):
    external configuration (``AI_FLOOR_GENESIS_ANCHOR`` = the OAR-G document, its ``.sig`` next to it, and
    ``AI_FLOOR_GENESIS_ALLOWED_SIGNERS``) is present; the OAR-G signature verifies (``ssh-keygen -Y verify``, namespace
    ``v2-genesis-anchor``, a principal of ``allowed_signers``); the document is canonical (``cj``); ``x_p2`` equals the
-   pinned baseline (``SEALED_BASELINE_SHA``, set at the P4b cut; until then no sealed start passes outside tests) and
+   deployed baseline constant ``runtime.cloud_runner.EXPERIMENT_BASELINE_SHA`` (the ONLY pin, set by the freeze
+   amendment ``Y_P2``, I-C6; while it is still the P1 baseline no sealed start can pass) and
    ``y_p2`` equals ``AI_FLOOR_GIT_COMMIT``; the configured DB path is not a symlink, exists, resolves to
    ``db_realpath`` and has the anchored ``st_dev`` / ``st_ino`` with ``st_nlink == 1``; ``edg_genesis`` equals the
    independently recomputed expected genesis (I-G12). Returns a ``SealedContext``; nothing is written.
@@ -31,8 +32,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 
+from storage.database import Store
 from storage.economic_digest import H, cj, edg, expected_edg_genesis
 
 GENESIS_ANCHOR_ENV = "AI_FLOOR_GENESIS_ANCHOR"
@@ -48,8 +51,9 @@ GENESIS_EQUITY = 10000  # contractual starting equity (DEC-8.20); exact
 GENESIS_SOURCE = "genesis"
 SEAL_EVENT = "GENESIS_SEAL_CHECK"
 PREPARED_EVENT = "GENESIS_PREPARED"
-# X_P2: the code baseline of the sealed period, pinned at the authorized P4b baseline cut. None until then.
-SEALED_BASELINE_SHA = None
+# The P1 experiment baseline: never a sealed baseline. X_P2 is pinned ONLY by runtime.cloud_runner.
+# EXPERIMENT_BASELINE_SHA (changed by the freeze amendment Y_P2, design 3.11.1 / I-C6).
+P1_BASELINE_SHA = "f5032baeb87766ad74905093c1b4195117995092"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 OAR_G_FIELDS = {"kind": str, "period_id_pending": str, "account_id": str, "starting_equity": int,
@@ -63,6 +67,12 @@ SUBPROCESS_TIMEOUT_SECONDS = 30
 
 class GenesisSealError(RuntimeError):
     """A sealed start (or a genesis document) failed a check; nothing economic was written."""
+
+
+def pinned_baseline():
+    """X_P2 = the deployed ``EXPERIMENT_BASELINE_SHA``, or None while it is still the P1 baseline (before the cut)."""
+    from runtime.cloud_runner import EXPERIMENT_BASELINE_SHA
+    return None if EXPERIMENT_BASELINE_SHA == P1_BASELINE_SHA else EXPERIMENT_BASELINE_SHA
 
 
 def _ssh_keygen():
@@ -157,7 +167,7 @@ def verify_startup_context(config, env, *, baseline_sha=None):
     for name in ("edg_genesis", "psh_genesis", "copy_sha256"):
         if not HEX64.match(oar[name]):
             raise GenesisSealError(f"OAR-G {name} is not a SHA-256 hex digest")
-    baseline = SEALED_BASELINE_SHA if baseline_sha is None else baseline_sha
+    baseline = pinned_baseline() if baseline_sha is None else baseline_sha
     if not isinstance(baseline, str) or not SHA_PATTERN.match(baseline) or oar["x_p2"] != baseline:
         raise GenesisSealError("OAR-G x_p2 does not match the pinned baseline (X_P2 is pinned at the P4b cut)")
     if not SHA_PATTERN.match(oar["y_p2"]) or oar["y_p2"] != env.get(GIT_COMMIT_ENV):
@@ -188,6 +198,30 @@ def require_context(context, config):
     if context.account_id != config.account_id or not _same_path(config.db_path, context.db_realpath):
         raise GenesisSealError("SealedContext does not belong to this configuration")
     return context
+
+
+class SealedStore(Store):
+    """LOW-1 (P2b audit): a NON-CREATING open of the sealed trading DB. ``Store`` (hash-pinned, unchanged) opens with
+    ``sqlite3.connect(path)``, which creates a missing file; this subclass opens the existing file with the URI
+    ``mode=rw`` instead, so a file that disappeared after step 4 raises (no residual file, no schema, no account) and
+    then runs the unchanged ``Store`` migration and methods."""
+
+    def __init__(self, path):  # noqa: super().__init__ is NOT called: it would create a missing file
+        self.path = Path(path)
+        self.readonly = False
+        try:
+            self.db = sqlite3.connect(self.path.resolve().as_uri() + "?mode=rw", uri=True, timeout=10,
+                                      isolation_level=None)
+        except sqlite3.OperationalError:
+            raise GenesisSealError("sealed database file missing or not openable (never created)") from None
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA foreign_keys=ON")
+        self.db.execute("PRAGMA busy_timeout=10000")
+        try:
+            self._migrate()
+        except BaseException:
+            self.db.close()
+            raise
 
 
 def identity_unchanged(context, path):
@@ -256,6 +290,6 @@ def sealed_preflight_checks(config, env, *, baseline_sha=None):
 
 __all__ = ["ALLOWED_SIGNERS_ENV", "ANCHOR_NAMESPACE", "AUTHORIZATION_FIELDS", "AUTHORIZATION_KIND",
            "AUTHORIZATION_NAMESPACE", "GENESIS_ANCHOR_ENV", "GENESIS_EQUITY", "GENESIS_SOURCE", "GenesisSealError",
-           "OAR_G_FIELDS", "OAR_G_KIND", "PREPARED_EVENT", "SEALED_BASELINE_SHA", "SEAL_EVENT", "START_MODE_ENV",
-           "SealedContext", "chain_head", "identity_unchanged", "parse_canonical", "require_context", "seal_check",
+           "OAR_G_FIELDS", "OAR_G_KIND", "P1_BASELINE_SHA", "PREPARED_EVENT", "SEAL_EVENT", "START_MODE_ENV",
+           "SealedContext", "SealedStore", "pinned_baseline", "chain_head", "identity_unchanged", "parse_canonical", "require_context", "seal_check",
            "sealed_preflight_checks", "verify_signed_document", "verify_startup_context"]

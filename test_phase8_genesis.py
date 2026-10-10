@@ -66,7 +66,7 @@ class Genesis(unittest.TestCase):
         self.db = self.dir / "trading_floor.db"
         self.owner = Owner(self.dir)
         self.allowed = self.owner.allowed()
-        baseline = patch.object(genesis, "SEALED_BASELINE_SHA", X)  # X_P2 is pinned at the P4b cut; tests pin it
+        baseline = patch("runtime.cloud_runner.EXPERIMENT_BASELINE_SHA", X)  # what Y_P2 deploys (the only pin)
         baseline.start()
         self.addCleanup(baseline.stop)
 
@@ -268,9 +268,10 @@ class StartupContextTests(Genesis):
             for name, bad in cases.items():
                 with self.subTest(case=name), self.assertRaises(GenesisSealError):
                     verify_startup_context(self.config(), bad)
-            with patch.object(genesis, "SEALED_BASELINE_SHA", None), self.assertRaises(GenesisSealError):
-                verify_startup_context(self.config(), env)  # X_P2 not pinned (before the P4b cut)
-            with patch.object(genesis, "SEALED_BASELINE_SHA", "d" * 40), self.assertRaises(GenesisSealError):
+            with patch("runtime.cloud_runner.EXPERIMENT_BASELINE_SHA", genesis.P1_BASELINE_SHA), \
+                    self.assertRaises(GenesisSealError):
+                verify_startup_context(self.config(), env)  # still the P1 baseline: no sealed start before the cut
+            with patch("runtime.cloud_runner.EXPERIMENT_BASELINE_SHA", "d" * 40), self.assertRaises(GenesisSealError):
                 verify_startup_context(self.config(), env)
 
     def test_file_identity_path_inode_and_links(self):

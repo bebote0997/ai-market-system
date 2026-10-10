@@ -57,7 +57,11 @@ def preflight(config, *, env=None):
     try:
         if sealed and (not sealed["sealed_genesis_context"] or not Path(config.db_path).exists()):
             raise FileNotFoundError("sealed preflight: no verified context or no existing file (never created)")
-        store = Store(config.db_path)
+        if sealed:  # LOW-1: non-creating open (mode=rw)
+            from runtime.genesis import SealedStore
+            store = SealedStore(config.db_path)
+        else:
+            store = Store(config.db_path)
         try:
             checks["db_writable_schema"] = store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
             # P8.4G (DEC-8.11, P8.5R HIGH): persistent write probe, always rolled back (see persistent_write_probe).
@@ -66,7 +70,7 @@ def preflight(config, *, env=None):
             checks["experiment_not_started"] = store.get_state("experiment_started") != "1"
         finally:
             store.close()
-    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):  # GenesisSealError is a RuntimeError
         checks["db_writable_schema"] = False
     return PreflightReport("READY" if all(checks.values()) else "NOT_READY", checks,
                            config.market_provider_mode, config.ai_provider_mode,

@@ -113,7 +113,11 @@ class OperationalRuntime:
             from runtime.genesis import require_context
             self.sealed_context = require_context(sealed_context, self.config)
         with startup_write(self.halt_gate, "store_open"):  # V2 P4a MEDIUM-1: opening may create the schema
-            self.store = Store(self.config.db_path)
+            if self.sealed_context is not None:  # V2 P2b LOW-1: never create the sealed file (mode=rw)
+                from runtime.genesis import SealedStore
+                self.store = SealedStore(self.config.db_path)
+            else:
+                self.store = Store(self.config.db_path)
         self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
         try:
             if self.sealed_context is not None:
