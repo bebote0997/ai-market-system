@@ -232,7 +232,7 @@ class A2ToolTests(unittest.TestCase):
             os.symlink(self.dir, link, target_is_directory=True)
         except (OSError, NotImplementedError):
             self.skipTest("symlinks not permitted on this host")
-        report = self.readiness(archive, oar_a, archive=link / archive.name)
+        report = self.readiness(link / archive.name, oar_a)
         self.assertFalse(report["checks"]["archive_no_symlink"])
 
 
