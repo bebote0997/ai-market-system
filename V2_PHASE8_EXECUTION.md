@@ -906,3 +906,14 @@ Review the final SHA of P8.4G:
   (P1 → P2a → P3 → P4a → P2b → P4b), the P1 prompt (not executed), blockers B-1…B-6.
 - **Status unchanged:** Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN; G14 / G15 not certified; PAPER only; REAL OFF;
   NAS100 OFF; no Phase 9.
+
+## P4a R-HALT — component-level closure (2026-10-09)
+
+- Certified SHA `d21ce66796f6827ba5db52d175c80195d0f34630` on `v2/phase8-p4a`; CI run `37998764069` SUCCESS.
+- History on the branch: `8c4d249` (G15 malformed-input pre-correction), `3b311e3` (R-HALT; Copilot REQUEST CHANGES,
+  MEDIUM-1), `f71318b` / `584bcc3` / `caa2c20` (startup barrier and restricted R; CI failures diagnosed through CI
+  annotations: OS-level signal masking did not defer the handler), `d21ce66` (Python-level STARTUP deferral; CI
+  success).
+- Copilot: CERTIFY P4a, subject to LOW-4 (documentary). Owner: DEC-8.17b amendment APPROVED; LOW-1…LOW-3 accepted.
+- Status: **P4a CERTIFIED — COMPONENT LEVEL**. LOW-4 resolved documentarily (handoff 2b, design 3.8).
+- Unchanged: M-5 OPEN, HIGH-8.1 OPEN, B-STRICT PROVISIONAL, Phase 8 BLOCKED; flags OFF; PAPER only.

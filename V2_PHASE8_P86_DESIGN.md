@@ -1008,7 +1008,13 @@ economic happens.* The design never claims zero economic effect after `T_sig` or
     the preflight write probe, `EXPERIMENT_STARTED`, notification capture) is a STARTUP site, refused after `T_h`; the
     constructor stops without writing. A halt requested while a startup check + write is in progress is recorded
     by the handler as deferred (one assignment) and `T_h` is set when that section ends, right after the write; so
-    no startup write follows `T_h` (independent of the OS and of threads). A halt during start records no
+    no startup write follows `T_h` (independent of the OS and of threads). The effective `T_h` is set when the
+    section ends, also when it ends by an exception; this deferral applies to STARTUP only (in the economic cycle
+    `T_h` stays immediate). **The real signal-receipt instant may precede `T_h` and is not kept separately.**
+  - **Accepted residual risks (Owner, 2026-10-09):** LOW-1 multiple signals may overwrite the deferred signal number;
+    LOW-2 the real receipt instant is not recorded during STARTUP; LOW-3 a halt during STARTUP may leave no
+    `HALT_OBSERVED`, so restart protection relies on H1 / H5. P4a is CERTIFIED at component level only; M-5 stays
+    OPEN. A halt during start records no
     `HALT_OBSERVED`; H1 and H5 remain the barrier for that case.
 
 **Recovery (P8.6F8):**

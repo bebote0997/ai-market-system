@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-09 — V2 Phase 8 P4a closure (documentation only)
+
+- Agent: Claude. Branch `v2/phase8-p4a`; certified SHA `d21ce66` (CI `37998764069` SUCCESS; Copilot CERTIFY subject
+  to LOW-4).
+- Recorded: Owner approval of the DEC-8.17b amendment (STARTUP deferral of `T_h`; restricted category R); LOW-4
+  resolved documentarily; LOW-1…LOW-3 accepted as residual risks; P4a CERTIFIED — COMPONENT LEVEL.
+- Files: `V2_PHASE8_P86_HANDOFF.md` (DEC-8.17b row, new section 2b), `V2_PHASE8_P86_DESIGN.md` (3.8 note),
+  `V2_PHASE8_EXECUTION.md` (P4a closure).
+- No functional code changed. Libro Maestro not updated. M-5 OPEN; HIGH-8.1 OPEN; B-STRICT PROVISIONAL; Phase 8
+  BLOCKED.
+
 ## 2026-10-09 — V2 Phase 8 P4a R-HALT, correction of Copilot MEDIUM-1 and restricted R
 
 - Agent: Claude. Branch `v2/phase8-p4a`, audited SHA `3b311e3` (REQUEST CHANGES).

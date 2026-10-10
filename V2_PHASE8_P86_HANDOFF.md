@@ -22,7 +22,7 @@
 | ID | Status | Scope (as approved) | Conditions / risks | Not implied |
 |---|---|---|---|---|
 | DEC-8.17 | **APPROVED POLICY** | **Measurement policy (design §8.1, original definition):** G-8.INT G1–G15 (G14 including the V1 fill gate; G15 stage replay); REX as the evidence source (5.1); multi-symbol semantics certified as-is (1.9.4); halt triggers; acceptance of the post-halt residual while R-HALT does not exist | *Correction 2026-10-08:* an earlier version of this register described DEC-8.17 as the "emergency stop policy". That was wrong. The emergency-stop principles (stop new admissions, preserve evidence, review and authorization before resuming = 3.8 H1–H7) belong to the 3.8 procedure and to **DEC-8.17b** | Not a certification; G14 / G15 not implemented |
-| DEC-8.17b | **APPROVED POLICY** | Halt stop policy (3.8): Alternative 1 (admission contract) plus the post-halt persistence policy; with the 3.8 H1–H7 procedure, this carries the emergency-stop principles (stop new admissions, preserve evidence, review and authorization before resuming). The Owner **accepts** that one operation admitted before `T_h` may begin or commit its transaction after `T_h` | Residual: at most one economic write per process after `T_h`; M-5 stays OPEN until implementation and tests allow its closure to be assessed | No "zero effect after halt" claim; Alternative 2 (pinned-module change) not authorized |
+| DEC-8.17b | **APPROVED POLICY** | Halt stop policy (3.8): Alternative 1 (admission contract) plus the post-halt persistence policy; with the 3.8 H1–H7 procedure, this carries the emergency-stop principles (stop new admissions, preserve evidence, review and authorization before resuming). The Owner **accepts** that one operation admitted before `T_h` may begin or commit its transaction after `T_h` | Residual: at most one economic write per process after `T_h`; M-5 stays OPEN until implementation and tests allow its closure to be assessed. **Amendment 2026-10-09 (Owner APPROVED, P4a):** (i) *STARTUP deferral of `T_h`:* a halt signal arriving inside an admitted startup write section only records a pending request; the effective `T_h` is set when that section ends (also when it ends by an exception); the next persistence section is refused. Limited to STARTUP; in the normal economic cycle `T_h` stays immediate. No new writes, admissions or deliberate section lengthening. The real signal-receipt instant may precede `T_h` and is not kept separately. (ii) *Category R restricted:* after a halt only REX evidence of the halted run of the authorized process: one `REX_WRITE` per previously admitted write whose `read2` precedes `T_h`, and a single `REX_RUN` of the halted run; no generic R, other run or process, duplicates, new admissions or persisted `REX_FAILURE` | No "zero effect after halt" claim; Alternative 2 (pinned-module change) not authorized |
 | DEC-8.20 | **APPROVED POLICY** | A2: a new PAPER account of USD 10,000 for a new stage | Requires a verifiable P1 archive (OAR-A), a new DB, no inherited position or order, an approved baseline and freeze (`X_P2` / `Y_P2`, `EXPERIMENT_FREEZE_P2.md`), and a sealed genesis (OAR-G, SEALED_RUNTIME) | **No economic isolation between XAUUSD and EURUSD** (one shared account; design 1.9). Archive, genesis, transition and operation **NOT AUTHORIZED** |
 | DEC-8.21b | **PROVISIONAL** (pending operational validation) | B-STRICT: REX / EDG / `psh` evidence; external chain-head anchors per UTC day with gaps ≤ 26 h; single-writer attestation; certification invalidated by any economic effect without mandatory evidence | Operational feasibility of OP-6 (daily anchors) and of the attestation is unproven; the stated limits (reverted alterations, consistent rewrite between anchors) remain | Not a certification rule in force until validated |
 | Package plan | **APPROVED (planning only)** | Section 4 of this document | — | **Execution NOT AUTHORIZED** |
@@ -34,6 +34,21 @@
 | DEC-8.18, 8.19 | **PENDING** | Unchanged from design section 8.1 | — | — |
 | DEC-8.22-a…j | **NOT AUTHORIZED** | Implementation authorizations | — | — |
 | OP-1…OP-7 | **NOT AUTHORIZED** | Operational acts | — | — |
+
+## 2b. P4a R-HALT: component-level closure (2026-10-09)
+
+| Field | Value |
+|---|---|
+| Package | P4a R-HALT (design 3.8; DEC-8.17b Alternative 1; D-1) |
+| Branch / certified SHA | `v2/phase8-p4a` / `d21ce66796f6827ba5db52d175c80195d0f34630` (from the certified P3 `979e1e6`) |
+| CI | run `37998764069`: **SUCCESS** (POSIX real-signal tests included) |
+| Independent review | Copilot: **CERTIFY P4a**, subject to the documentary ratification LOW-4 |
+| Owner | **APPROVED** (2026-10-09): DEC-8.17b amendment (STARTUP deferral; restricted R) and acceptance of LOW-1…LOW-3 |
+| Status | **P4a CERTIFIED — COMPONENT LEVEL** |
+| LOW-4 | **RESOLVED (documentary):** the STARTUP deferral of `T_h` and the restricted R are recorded in the DEC-8.17b row above and in design 3.8 |
+| Accepted residual risks | **LOW-1:** multiple signals may overwrite the deferred signal number. **LOW-2:** the real receipt instant is not recorded during STARTUP. **LOW-3:** a halt during STARTUP may produce no `HALT_OBSERVED`; restart protection then relies on H1 / H5 |
+| Not implied | HIGH-8.1, M-5, B-STRICT (DEC-8.21b) and global Phase 8 are **not** closed. M-5 stays **OPEN** until closed under its own independent criteria. Flags stay OFF; no activation, PR, merge or deploy |
+| Libro Maestro | Not updated (consolidated later, as instructed) |
 
 **Consequences of the approvals:**
 - **DEC-8.19** (boundary handling) was blocked on DEC-8.20. With A2 approved, its content reduces to "no inherited
