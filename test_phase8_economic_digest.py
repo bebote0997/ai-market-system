@@ -245,8 +245,9 @@ class VerifierTests(Base):
 
     def test_no_runtime_module_imports_the_library_yet(self):
         users = [p.name for p in (ROOT / "runtime").glob("*.py") if "economic_digest" in p.read_text(encoding="utf-8")]
-        # Superseded by P3 (Owner authorization 2026-10-09): the REX writer is the ONLY runtime user of the library.
-        self.assertEqual(users, ["rex.py"])
+        # Superseded by P3 (Owner authorization 2026-10-09): the REX writer used the library; superseded again by P2b
+        # (Owner D-4, 2026-10-09): the sealed-genesis seal check and the genesis tool use the same certified digests.
+        self.assertEqual(sorted(users), ["genesis.py", "genesis_prepare.py", "rex.py"])
 
     def test_refuses_the_source_wal_and_shm_through_any_equivalent_path(self):
         for suffix in ("", "-wal", "-shm"):

@@ -39,7 +39,7 @@ import sqlite3
 import sys
 import tempfile
 
-from replay import halt_verifier, rex_oracle
+from replay import genesis_verifier, halt_verifier, rex_oracle
 from storage.economic_digest import H, edg, psh
 
 VERIFIER_VERSION = "V2_P3_G15_CHAIN/1"
@@ -131,14 +131,18 @@ def _locate_malformed_economic(conn):
     return {"table": None, "key": None, "check": "not_located"}
 
 
-def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journal_id=0):
+def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journal_id=0, oar_g=None,
+            oar_g_sha256=None, oar_g_error=None, source_identity=None):
     """All checks on an open (copy) connection. ``store`` is a read-only ``Store`` on the same copy. Malformed input
     never raises: it is classified CERTIFICATION_INVALID with a code and a structured context."""
     findings = _Findings()
     writes, runs, failures_logged = [], {}, []
     economic = {}
     started = {}
-    halts, journal_index = [], []
+    halts, journal_index, genesis_rows = [], [], []
+    supplied_edg_start = edg_start
+    if oar_g is not None and edg_start is None:
+        edg_start = oar_g["edg_genesis"]  # GEN-1: the period starts at the anchored genesis
     for raw in _raw_rows(conn, "SELECT id,timestamp,run_id,symbol,source,event_type,payload FROM journal WHERE id>? "
                                "ORDER BY id", (since_journal_id,)):
         try:
@@ -147,6 +151,7 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
             findings.invalid("PAYLOAD_NOT_UTF8", f"journal {raw[0]}", {"table": "journal", "journal_id": raw[0]})
             continue
         journal_index.append((journal_id, source, event_type, run_id))
+        genesis_rows.append((journal_id, source, event_type, run_id, payload))
         if source == "halt" and event_type == "HALT_OBSERVED":
             halts.append((journal_id, payload))
             continue
@@ -202,7 +207,10 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
             chain["edg"] = chain["psh"] = None  # the chain cannot continue across unreadable evidence
 
     halt_findings, halt_summary = halt_verifier.check(halts, valid_writes, journal_index, runs)
-    for item in halt_findings:
+    genesis_findings, genesis_summary = genesis_verifier.check(
+        genesis_rows, oar_g=oar_g, oar_g_sha256=oar_g_sha256, oar_g_error=oar_g_error, edg_start=supplied_edg_start,
+        source_identity=source_identity)
+    for item in halt_findings + genesis_findings:
         findings.add(item["severity"], item["code"], item["detail"], item.get("context"))
 
     for jid, event in economic.items():
@@ -242,11 +250,13 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
         findings.invalid("NWR_DAYS_ABOVE_LIMIT", sorted(nwr_days))
     if edg_start is None:
         findings.add("NOTE", "CHAIN_START_UNANCHORED", "no edg_start supplied: the first edg_before is not bound")
+    report_genesis = genesis_summary
     return _report(findings, account_id=account_id, since_journal_id=since_journal_id, edg_start=edg_start,
                    counts={"rex_writes": len(writes), "committed_writes": committed_count, "rex_runs": len(runs),
                            "claimed_runs": len(started), "economic_events": len(economic),
                            "rex_failures": len(failures_logged), "nwr_days": sorted(nwr_days)},
-                   current={"edg": current_edg, "psh": current_psh}, g14=g14, halts=halt_summary)
+                   current={"edg": current_edg, "psh": current_psh}, g14=g14, halts=halt_summary,
+                   genesis=report_genesis)
 
 
 def _check_write(findings, index, journal_id, w, chain, economic, referenced, write_ids):
@@ -349,7 +359,7 @@ def _check_run_record(findings, run_id, by_run, runs, started, nwr_days, identit
             findings.fail("G14_FAIL", f"{run_id}: {verdict['failures'][:3]}")
 
 
-def _report(findings, *, account_id, since_journal_id, edg_start, counts, current, g14, halts=()):
+def _report(findings, *, account_id, since_journal_id, edg_start, counts, current, g14, halts=(), genesis=None):
     invalid = any(f["severity"] == "INVALID" for f in findings.items)
     failed = any(f["severity"] == "FAIL" for f in findings.items)
     sqlite_result = "CERTIFICATION_INVALID" if invalid else "SQLITE_CHECKS_FAIL" if failed else "SQLITE_CHECKS_PASS"
@@ -357,7 +367,8 @@ def _report(findings, *, account_id, since_journal_id, edg_start, counts, curren
             "edg_start": edg_start, "sqlite_result": sqlite_result,
             "classification": "CERTIFICATION_INVALID" if invalid else "NOT VERIFIED",
             "external_evidence": "NOT EVALUATED", "requires_external": list(REQUIRES_EXTERNAL),
-            "findings": findings.items, "counts": counts, "current": current, "g14": g14, "halts": list(halts)}
+            "findings": findings.items, "counts": counts, "current": current, "g14": g14, "halts": list(halts),
+            "genesis": genesis or {"status": "NOT APPLICABLE"}}
 
 
 def _sha256(path):
@@ -371,13 +382,23 @@ def _fingerprint(path):
     return {suffix or "db": _sha256(str(path) + suffix) for suffix in ("", "-wal", "-shm")}
 
 
-def verify(trading_db, *, account_id="paper-main", edg_start=None, since_journal_id=0):
+def verify(trading_db, *, account_id="paper-main", edg_start=None, since_journal_id=0, oar_g_path=None,
+           allowed_signers=None, expect_original=False):
+    """``oar_g_path`` / ``allowed_signers``: the signed genesis anchor (GEN-1); ``expect_original``: the path is the
+    ORIGINAL anchored file (its identity is compared with OAR-G, NG41), not an Owner copy."""
     from storage.database import Store  # read-only use of the private copy
     source = Path(trading_db)
     if not source.is_file():
         raise FileNotFoundError(f"source database not found: {source}")
     before = _fingerprint(source)
     report = None
+    oar_g = oar_g_sha256 = oar_g_error = source_identity = None
+    if oar_g_path is not None:
+        oar_g, detail = genesis_verifier.load_oar_g(oar_g_path, allowed_signers or "")
+        oar_g_sha256, oar_g_error = (detail, None) if oar_g is not None else (None, detail)
+    if expect_original:
+        stat = os.stat(source)
+        source_identity = (os.path.normcase(os.path.realpath(source)), stat.st_dev, stat.st_ino)
     # Cleanup can never mask the classification (Windows keeps a file open while a failing statement is referenced).
     with tempfile.TemporaryDirectory(prefix="rex-chain-", ignore_cleanup_errors=True) as tmp:
         copy = Path(tmp) / "trading_copy.db"
@@ -395,7 +416,8 @@ def verify(trading_db, *, account_id="paper-main", edg_start=None, since_journal
             conn = sqlite3.connect(copy.resolve().as_uri() + "?mode=ro", uri=True)
             store = Store(copy, readonly=True)
             report = analyze(conn, store, account_id=account_id, edg_start=edg_start,
-                             since_journal_id=since_journal_id)
+                             since_journal_id=since_journal_id, oar_g=oar_g, oar_g_sha256=oar_g_sha256,
+                             oar_g_error=oar_g_error, source_identity=source_identity)
         except Exception as exc:  # noqa: BLE001 - fail closed: unprocessable input is never a pass, never a crash
             findings = _Findings()
             findings.invalid("VERIFIER_INPUT_UNPROCESSABLE", "the copy could not be analysed",
@@ -432,12 +454,16 @@ def main(argv=None):
     parser.add_argument("--account", default="paper-main")
     parser.add_argument("--edg-start")
     parser.add_argument("--since-journal-id", type=int, default=0)
+    parser.add_argument("--oar-g")
+    parser.add_argument("--allowed-signers")
+    parser.add_argument("--expect-original", action="store_true")
     parser.add_argument("--out")
     args = parser.parse_args(argv)
     if args.out and _targets_source(args.out, args.trading_db):
         raise SystemExit("refusing to write the report over the source database or its -wal/-shm files")
     report = verify(args.trading_db, account_id=args.account, edg_start=args.edg_start,
-                    since_journal_id=args.since_journal_id)
+                    since_journal_id=args.since_journal_id, oar_g_path=args.oar_g,
+                    allowed_signers=args.allowed_signers, expect_original=args.expect_original)
     text = json.dumps(report, indent=2, sort_keys=True, default=str)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")

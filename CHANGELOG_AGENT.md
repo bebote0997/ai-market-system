@@ -1,5 +1,23 @@
 # Agent Changelog
 
+## 2026-10-09 — V2 Phase 8 P2b Sealed Genesis (DEC-8.22-i; Owner D-1..D-4; implementation only)
+
+- Agent: Claude. Branch `v2/phase8-p2b` from the P4a closure `ce0ebe1`.
+- New: `runtime/genesis.py` (SEALED_RUNTIME: `verify_startup_context` = steps 1-4 before any SQLite open, signature via
+  `ssh-keygen -Y`, canonical OAR-G, X_P2 pinned at the P4b cut (`SEALED_BASELINE_SHA = None` until then), Y_P2 =
+  `AI_FLOOR_GIT_COMMIT`, file identity; `seal_check` = steps 2-5 with the REX chain head after E0; preflight checks),
+  `runtime/genesis_prepare.py` (the only creator: signed authorization, create-exclusive, account 10000 and
+  `GENESIS_PREPARED` in one transaction), `replay/genesis_anchor.py` (G2 checks and the unsigned OAR-G body; never
+  signs), `replay/genesis_verifier.py` (GEN-1/2, I-G18, NG40/41; integrated in G15 via `replay/rex_chain.py`).
+- Changed: `runtime/config.py` (`AI_FLOOR_V2_SEALED_GENESIS`, OFF, requires REX ON), `runtime/service.py` (sealed
+  context required; identity re-check after open; seal check as a P4a STARTUP site; no creation path when sealed),
+  `runtime/demo_runner.py` / `runtime/cloud.py` (preflights never create the DB when sealed; rolled-back probe kept,
+  D-3), `runtime/cloud_runner.py` (sealed order: lock, steps 1-4, then any DB open).
+- Test compatibility: `test_phase8_economic_digest.py` inventory superseded again (genesis modules use the P2a
+  library). New tests: `test_phase8_genesis.py` (ephemeral keys; no Owner signature).
+- Flags OFF; SEALED_RUNTIME is not the only mode yet (P4b cut). No A2, E0, deploy, PR or merge. Phase 8 BLOCKED;
+  HIGH-8.1 OPEN; M-5 OPEN; B-STRICT PROVISIONAL.
+
 ## 2026-10-09 — V2 Phase 8 P4a closure (documentation only)
 
 - Agent: Claude. Branch `v2/phase8-p4a`; certified SHA `d21ce66` (CI `37998764069` SUCCESS; Copilot CERTIFY subject

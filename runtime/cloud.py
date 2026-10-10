@@ -71,7 +71,11 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "experiment_not_started": False,
         "experiment_resumable": False,
     }
-    if checks["durable_path"] and checks["durable_mount"]:
+    from runtime.genesis import sealed_preflight_checks
+    sealed_checks = sealed_preflight_checks(config, env)  # V2 P2b (R-GEN-1d, D-3): {} while OFF; before any DB open
+    checks.update(sealed_checks)
+    sealed_blocked = bool(sealed_checks) and (not sealed_checks["sealed_genesis_context"] or not path.exists())
+    if checks["durable_path"] and checks["durable_mount"] and not sealed_blocked:
         try:
             store = Store(path)
             try:
@@ -110,7 +114,7 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "paper_only", "enabled_symbols", "market_provider", "ai_provider",
         "macro_provider_valid", "scheduler_single_authority", "scheduler_not_started",
         "durable_path", "durable_mount", "dashboard_auth", "db_writable_schema",
-        "experiment_state_compatible", *catch_up_checks,
+        "experiment_state_compatible", *catch_up_checks, *sealed_checks,
     )
     infra_ready = all(checks[name] for name in infrastructure)
     experiment_ready = infra_ready and all(checks[name] for name in (

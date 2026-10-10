@@ -917,3 +917,12 @@ Review the final SHA of P8.4G:
 - Copilot: CERTIFY P4a, subject to LOW-4 (documentary). Owner: DEC-8.17b amendment APPROVED; LOW-1…LOW-3 accepted.
 - Status: **P4a CERTIFIED — COMPONENT LEVEL**. LOW-4 resolved documentarily (handoff 2b, design 3.8).
 - Unchanged: M-5 OPEN, HIGH-8.1 OPEN, B-STRICT PROVISIONAL, Phase 8 BLOCKED; flags OFF; PAPER only.
+
+## P2b Sealed Genesis — implementation (2026-10-09, pending independent audit)
+
+- Branch `v2/phase8-p2b` from `ce0ebe1`. Owner D-1 (flag `AI_FLOOR_V2_SEALED_GENESIS`, OFF; only-mode switch at the
+  P4b cut), D-2 (`ssh-keygen -Y`, ephemeral test keys), D-3 (non-creating preflights, rolled-back probe kept),
+  D-4 (DEC-8.22-i and the preflight part of DEC-8.22-f; DEC-8.18 not required, FS/EX/PD/RS not classified).
+- X_P2 is not pinned (`runtime.genesis.SEALED_BASELINE_SHA = None`): no sealed start can pass step 1 outside tests
+  until the authorized P4b baseline cut.
+- Status: IMPLEMENTED — NOT CERTIFIED (Copilot audit pending).

@@ -64,7 +64,8 @@ class OperationalRuntime:
     def __init__(self, config=None, *, market_provider=None, ai_provider=None, macro_provider=None,
                  instruments=None, clock=None, risk_config=None, paper_enabled=True,
                  diagnostic_outside_session=False, recovery_stale_after_seconds=120, ai_pricing=None,
-                 ai_soft_budget=None, ai_cycle_budget_seconds=120.0, ai_alerts=None, halt_gate=None):
+                 ai_soft_budget=None, ai_cycle_budget_seconds=120.0, ai_alerts=None, halt_gate=None,
+                 sealed_context=None):
         self.config = config or RuntimeConfig.from_env()
         # V2 P4a R-HALT (flag OFF -> None: every guard below is a no-op and the legacy path is unchanged).
         self.halt_gate = None
@@ -105,13 +106,25 @@ class OperationalRuntime:
         self.ai_cycle_budget_seconds, self.ai_alerts = ai_cycle_budget_seconds, ai_alerts
         self.ai_health = ProviderHealthTracker()
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
+        # V2 P2b (R-GEN-1b): a sealed runtime cannot be built without the verified context of steps 1-4, which were
+        # completed before any SQLite open. OFF: None, and nothing below changes.
+        self.sealed_context = None
+        if self.config.v2_sealed_genesis:
+            from runtime.genesis import require_context
+            self.sealed_context = require_context(sealed_context, self.config)
         with startup_write(self.halt_gate, "store_open"):  # V2 P4a MEDIUM-1: opening may create the schema
             self.store = Store(self.config.db_path)
         self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
         try:
+            if self.sealed_context is not None:
+                from runtime.genesis import GenesisSealError, identity_unchanged
+                if not identity_unchanged(self.sealed_context, self.config.db_path):  # no swap since step 4
+                    raise GenesisSealError("database file identity changed after the sealed context was verified")
             self._startup(market_provider, recovery_stale_after_seconds)
-        except HaltRefused:
-            self.store.close()  # V2 P4a MEDIUM-1: the constructor stops at T_h without any further write
+        except Exception as exc:
+            from runtime.genesis import GenesisSealError
+            if isinstance(exc, (HaltRefused, GenesisSealError)):
+                self.store.close()  # V2 P4a / P2b: the constructor stops without any further write
             raise
 
     def _startup(self, market_provider, recovery_stale_after_seconds):
@@ -120,7 +133,15 @@ class OperationalRuntime:
         gate = self.halt_gate
         with startup_write(gate, "recover"):
             self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
+        if self.sealed_context is not None:  # V2 P2b gate steps 2-5, before any economic write
+            from runtime.genesis import seal_check
+            with startup_write(gate, "genesis_seal_check"):
+                seal_check(self.store, self.sealed_context, at=self.clock(),
+                           process_id=None if gate is None else gate.process_id)
         account, orders, fills = self.store.load_paper(self.config.account_id)
+        if account is None and self.sealed_context is not None:  # I-G17: no creation path in SEALED_RUNTIME
+            from runtime.genesis import GenesisSealError
+            raise GenesisSealError("genesis_sealed_account_missing")
         if account is None:
             if orders or self.store.db.execute("SELECT 1 FROM paper_positions LIMIT 1").fetchone():
                 with startup_write(gate, "startup_event"):

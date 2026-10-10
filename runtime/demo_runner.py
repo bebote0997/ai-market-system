@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
 import sqlite3
 
 from runtime.notifications import NullNotificationSink
@@ -50,7 +51,12 @@ def preflight(config, *, env=None):
     from runtime.config import catch_up_scope_checks, catch_up_storage_checks, persistent_write_probe
     checks.update(catch_up_storage_checks(config, mount=None, disk_mounted=True))  # V2 P8.4 R2; {} while OFF
     checks.update(catch_up_scope_checks(config))  # V2 P1-B: scope and STRICT evidence; {} while OFF
+    from runtime.genesis import sealed_preflight_checks
+    sealed = sealed_preflight_checks(config, env)  # V2 P2b (R-GEN-1d, D-3): {} while OFF; before any DB open
+    checks.update(sealed)
     try:
+        if sealed and (not sealed["sealed_genesis_context"] or not Path(config.db_path).exists()):
+            raise FileNotFoundError("sealed preflight: no verified context or no existing file (never created)")
         store = Store(config.db_path)
         try:
             checks["db_writable_schema"] = store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"

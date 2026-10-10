@@ -12,6 +12,7 @@ DEFAULT_ENABLED_SYMBOLS = ("XAUUSD", "EURUSD")
 # V2 Phase 8 / P1-B (DEC-8.13, DEC-8.16): per-symbol catch-up scope.
 CATCH_UP_SYMBOLS_ENV = "AI_FLOOR_V2_POSITION_CATCH_UP_SYMBOLS"
 REX_ENV = "AI_FLOOR_V2_REX"  # V2 Phase 8 / P3: REX evidence flag (OFF by default)
+SEALED_GENESIS_ENV = "AI_FLOOR_V2_SEALED_GENESIS"  # V2 Phase 8 / P2b: sealed genesis (OFF; ON requires REX ON)
 RHALT_ENV = "AI_FLOOR_V2_RHALT"  # V2 Phase 8 / P4a: R-HALT admission gate (OFF by default; ON requires REX ON)
 CATCH_UP_EXCLUDED_SYMBOLS = ("NAS100",)  # never in the catch-up scope, even if a future config enables it
 _SCOPE_TOKEN = re.compile(r"[A-Z0-9]+")
@@ -71,6 +72,10 @@ class RuntimeConfig:
     # V2 Phase 8 / P4a (DEC-8.17b Alternative 1): R-HALT admission gate and post-halt persistence policy. OFF by
     # default; ON requires v2_rex (the admission evidence lives in REX). Implementation is not activation.
     v2_rhalt: bool = False
+    # V2 Phase 8 / P2b (DEC-8.22-i; Owner D-1): SEALED_RUNTIME under test (no account-creation path; sealed context
+    # required). OFF by default; ON requires v2_rex (the chain head after E0 is the REX edg_after). The transition to
+    # the only mode happens at the authorized P4b baseline cut, not here.
+    v2_sealed_genesis: bool = False
 
     def __post_init__(self):
         if (self.cadence_minutes <= 0 or 60 % self.cadence_minutes or
@@ -93,6 +98,10 @@ class RuntimeConfig:
             raise ValueError("v2_rex must be a bool")
         if not isinstance(self.v2_rhalt, bool):
             raise ValueError("v2_rhalt must be a bool")
+        if not isinstance(self.v2_sealed_genesis, bool):
+            raise ValueError("v2_sealed_genesis must be a bool")
+        if self.v2_sealed_genesis and not self.v2_rex:
+            raise ValueError("v2_sealed_genesis requires v2_rex (the chain head after E0 is read from REX)")
         if self.v2_rhalt and not self.v2_rex:
             raise ValueError("v2_rhalt requires v2_rex (the admission evidence is recorded in REX)")
         if self.v2_position_catch_up and (
@@ -126,6 +135,8 @@ class RuntimeConfig:
             content["v2_rex"] = True
         if self.v2_rhalt:  # P4a: OFF keeps the fingerprint byte-identical.
             content["v2_rhalt"] = True
+        if self.v2_sealed_genesis:  # P2b: OFF keeps the fingerprint byte-identical.
+            content["v2_sealed_genesis"] = True
         return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
     def catch_up_applies(self, symbol):
@@ -159,6 +170,9 @@ class RuntimeConfig:
         rex = os.environ.get(REX_ENV, "")
         if rex not in ("", "0", "1"):
             raise ValueError(f"{REX_ENV} must be unset, '0' or '1'")  # never a truthy guess
+        sealed = os.environ.get(SEALED_GENESIS_ENV, "")
+        if sealed not in ("", "0", "1"):
+            raise ValueError(f"{SEALED_GENESIS_ENV} must be unset, '0' or '1'")
         rhalt = os.environ.get(RHALT_ENV, "")
         if rhalt not in ("", "0", "1"):
             raise ValueError(f"{RHALT_ENV} must be unset, '0' or '1'")
@@ -167,6 +181,7 @@ class RuntimeConfig:
                    v2_position_catch_up_symbols=scope,
                    v2_rex=rex == "1",
                    v2_rhalt=rhalt == "1",
+                   v2_sealed_genesis=sealed == "1",
                    market_evidence_path=None if evidence_path is None else Path(evidence_path),
                    enabled_symbols=enabled,
                    scheduler_enabled=os.environ.get("AI_FLOOR_SCHEDULER", "0") == "1",
