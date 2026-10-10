@@ -27,6 +27,30 @@ from test_phase8_genesis import SSH, Genesis, Owner, X
 ROOT = Path(__file__).resolve().parent
 
 
+def _annotate_ci_failures():
+    """CI only (GITHUB_ACTIONS=true): every test failure or error of the run is ALSO emitted as a GitHub Actions
+    annotation, so POSIX-only results can be read without the job log. No effect outside CI."""
+    import sys
+    import traceback
+    if os.environ.get("GITHUB_ACTIONS") != "true" or getattr(unittest.TestResult, "_v2_annotated", False):
+        return
+
+    def wrap(original):
+        def method(self, test, err):
+            text = "".join(traceback.format_exception(*err))[-1800:]
+            text = text.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")
+            sys.__stdout__.write("::error title=" + test.id() + "::" + text + chr(10))
+            sys.__stdout__.flush()
+            return original(self, test, err)
+        return method
+    unittest.TestResult.addFailure = wrap(unittest.TestResult.addFailure)
+    unittest.TestResult.addError = wrap(unittest.TestResult.addError)
+    unittest.TestResult._v2_annotated = True
+
+
+_annotate_ci_failures()
+
+
 def legacy_runtime(db, minutes=0, close=100., **extra):
     return OperationalRuntime(RuntimeConfig(db_path=Path(db), enabled_symbols=("XAUUSD", "EURUSD"), **extra),
                               market_provider=Data(close=close), ai_provider=DeterministicAIProvider(),
