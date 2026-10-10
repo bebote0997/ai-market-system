@@ -47,7 +47,7 @@ class RuntimeExistingExposureTests(unittest.TestCase):
 
     def cycle(self, minutes, side, *extra):
         """One real runtime cycle in a fresh process-like runner (new connection); returns (result, store)."""
-        runner = DemoRunner(self.config, market_provider=Data(), ai_provider=DeterministicAIProvider(),
+        runner = DemoRunner(self.config, market_provider=Data(age=5), ai_provider=DeterministicAIProvider(),
                             macro_provider=macro_fixture(), instruments={"XAUUSD": instrument()},
                             clock=lambda: T + timedelta(minutes=minutes))
         try:

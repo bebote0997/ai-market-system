@@ -1,7 +1,7 @@
 """V2 Phase 8 / P1-B (DEC-8.14, DEC-8.15): per-symbol runtime paths, observe-only evidence outside the scope.
 
-Twin temporary databases: A = catch-up scope XAUUSD only; B = flag OFF (legacy). EURUSD (outside the scope) must keep
-the legacy newest-bar economics byte-for-byte; XAUUSD (inside) uses catch-up. Test scenarios only: nothing operational.
+Twin temporary databases compare explicit ON scopes with the corrected OFF route, or with the same scope without
+observation. EURUSD outside an explicit scope keeps DEC-8.14 behavior. Test scenarios only: nothing operational.
 """
 import json
 from pathlib import Path
@@ -67,10 +67,15 @@ class Twins(unittest.TestCase):
         d = Path(self.tmp.name)
         self.a_db, self.a_ev, self.b_db = d / "a_trading.db", d / "a_evidence.db", d / "b_trading.db"
 
-    def run_both(self, overrides, slots=(SLOT,), symbols=("XAUUSD", "EURUSD"), scope=("XAUUSD",)):
-        for db, ev, sc in ((self.a_db, self.a_ev, scope), (self.b_db, None, ())):
+    def run_both(self, overrides, slots=(SLOT,), symbols=("XAUUSD", "EURUSD"), scope=("XAUUSD",),
+                 baseline_scope=()):
+        baseline_ev = self.b_db.with_name("b_evidence.db") if baseline_scope else None
+        for db, ev, sc in ((self.a_db, self.a_ev, scope), (self.b_db, baseline_ev, baseline_scope)):
             for slot in slots:
                 runtime = make(db, ev, slot, sc, overrides)
+                if db == self.b_db and baseline_scope:
+                    # Same explicit scope, without the observation under test. OFF is now a different policy.
+                    runtime._observe_evidence = lambda *args: None
                 try:
                     for symbol in symbols:  # scheduler order
                         runtime.run_cycle(symbol, slot)
@@ -79,17 +84,19 @@ class Twins(unittest.TestCase):
 
 
 class RuntimeScopeTests(Twins):
-    def test_r1_xau_catches_up_and_eur_economics_identical_to_flag_off(self):
+    def test_r1_partial_scope_remains_legacy_but_default_off_catches_both_symbols(self):
         for db in (self.a_db, self.b_db):
             seed(db, positions=("XAUUSD", "EURUSD"))
         self.run_both({**XAU_STOP_T3, **EUR_STOP_T2})
         xau_a, xau_b = economics(self.a_db, "XAUUSD"), economics(self.b_db, "XAUUSD")
         self.assertIsNone(xau_a["position"])  # catch-up applied the intermediate T3 touch
         self.assertEqual([(t.exit_price, t.reason, t.exited_at) for t in xau_a["closed"]], [(95.0, "stop", T3)])
-        self.assertIsNotNone(xau_b["position"])  # legacy newest-bar path missed it (HIGH-8.1, unchanged)
+        self.assertIsNone(xau_b["position"])
+        self.assertEqual([(t.exit_price, t.reason, t.exited_at) for t in xau_b["closed"]], [(95.0, "stop", T3)])
         eur_a, eur_b = economics(self.a_db, "EURUSD"), economics(self.b_db, "EURUSD")
-        self.assertEqual(eur_a, eur_b)  # EURUSD outside the scope: legacy economics byte-for-byte
-        self.assertIsNotNone(eur_a["position"])  # the legacy path still misses EUR's intermediate touch
+        self.assertIsNotNone(eur_a["position"])  # DEC-8.14 explicit scope exclusion is unchanged.
+        self.assertIsNone(eur_b["position"])  # Owner HIGH-8.1 amendment applies to the default OFF route.
+        self.assertEqual(eur_b["closed"][0].exited_at, T2)
 
     def test_pending_orders_follow_their_symbol_path(self):
         for db in (self.a_db, self.b_db):
@@ -140,7 +147,7 @@ class ObserveOnlyTests(Twins):
             return original(engine, symbol, snapshot, as_of=as_of)
 
         with patch.object(MarketEvidenceEngine, "ingest_snapshot", failing):
-            self.run_both(EUR_STOP_T2)
+            self.run_both(EUR_STOP_T2, baseline_scope=("XAUUSD",))
         self.assertEqual(economics(self.a_db, "EURUSD"), economics(self.b_db, "EURUSD"))
         state, events = self.observe_state()
         self.assertEqual((state["EURUSD"]["consecutive_failures"], state["EURUSD"]["state"], events),
@@ -191,7 +198,7 @@ class ObserveOnlyTests(Twins):
 
     def test_corrupt_evidence_store_xau_fails_closed_eur_unchanged(self):
         self.a_ev.write_bytes(b"not a sqlite database" * 200)
-        self.run_both({**XAU_STOP_T3, **EUR_STOP_T2})
+        self.run_both({**XAU_STOP_T3, **EUR_STOP_T2}, baseline_scope=("XAUUSD",))
         store = Store(self.a_db)
         try:
             blocked = [r["event_type"] for r in store.db.execute(

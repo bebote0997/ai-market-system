@@ -1,5 +1,73 @@
 # Agent Changelog
 
+## 2026-10-10 — FreezeAmendmentTests / git init environment diagnosis
+
+- Preserved all pre-existing changes on `v2/phase8-p4b`, HEAD `720f4b4`. No test or production-code edits.
+- Minimal sandbox probe reproduced Git exit 128: `fatal: cannot change to '.../git-init-probe-llpwl2a6':
+  Permission denied`. The identical Git command on that SAME directory outside the sandbox returned 0;
+  the probe was then removed. Sandbox tempfile access also raised WinError 5 before test setup reached Git.
+- All five FreezeAmendmentTests pass outside the sandbox. After full-suite discovery/imports, the affected module
+  runs 26 tests: 25 PASS, 1 skip (symlink privilege). Discovery leaves the Git environment unchanged.
+- This is demonstrated executor/temporary-directory permission failure locally, not evidence for a code patch.
+  Copilot's precise stderr and eight skipped-test IDs were not supplied; their exact environment cannot be inferred.
+  Use a test executor authorized to create/access temporary repositories; do not suppress failures or add skips.
+- Single full run (standard unittest discovery, diagnostic result logger): 1376 total, 1370 PASS, 0 errors/failures,
+  6 skipped, 188.550s. Git environment delta was empty before each of the five affected tests in full-suite order.
+  Skips: `A2ToolTests.test_nc5_symlink_component` (symlink privilege), all 3 `RealSignalTests` in
+  `test_phase8_rhalt_signals`, both `RealSignalDuringStartupTests` in `test_phase8_rhalt_startup` (POSIX required).
+  Copilot's 1376/5 errors/8 skips implies 1363 PASS, not a different suite size; its 2 additional skips remain
+  unattributed without their IDs/reasons. `git diff --check` PASS; no commit, push, merge, deploy or activation.
+
+## 2026-10-10 — HIGH-8.1 local correction (Owner amendment to DEC-8.1)
+
+- Owner authorization received after the preflight below. Exact scope and economic comparability are recorded in
+  `HIGH81_OWNER_DECISION.md`; historical DEC-8.1 and `EXPERIMENT_FREEZE.md` remain intact.
+- `runtime/service.py` feeds the OFF route's normalized 5m snapshot for EURUSD/XAUUSD into the existing
+  `execution/position_catch_up.py`. The core accepts observed bars without adding data/provider dependencies,
+  preserving its per-bar durable watermark, CAS, slot ownership, halt checks and stop/target precedence.
+- ON Evidence Store semantics and explicit partial scopes remain unchanged. OFF creates no market sidecar.
+  Pending fills remain on the current gated bar. No strategy, sizing, Risk Engine, Paper Broker or TradeManager edits.
+- `replay/rex_oracle.py` recognizes the explicit snapshot-management identity, with historical record compatibility.
+- Six new runtime test methods cover both symbols and LONG/SHORT, intermediate SL/TP, gaps/priority, ordering,
+  no lookahead, malformed bars, restart before/after commit, duplicate cycles and pending-fill idempotence.
+  Existing expectations for the old omission were updated. Historical missed-touch tests now seed the old durable
+  watermark directly. REX/demo/halt fixtures use actually closed bars; halt injection targets per-bar admission.
+- Focused regression: 201 tests PASS; historical preview/simulation after the shared fixture adjustment: 12 PASS
+  (6 overlap the focused group). Earlier focused failures exposed obsolete expectations and test fixtures;
+  the core isolation test also caught a data-layer import, which was removed rather than weakening the test.
+- First full run: 1376 tests, 4 failures / 1 error / 6 skips. All five concerned additional legacy runtime fixtures
+  (bars starting at the current slot) or the former ERROR outcome rather than the catch-up's explicit
+  STALE_PAPER_STATE event. Corrected fixtures/expectations in `test_phase1_isolation.py`,
+  `test_phase6_conflict_characterization.py`, `test_stale_safe_writers.py`; their 33 tests PASS, preserving
+  concurrency, bounded retry, zero lost updates and zero stale management writes. These concrete failures justify
+  a second full run; no further executable-code changes were needed.
+- Final full regression: `python -m unittest discover -q` — 1376 tests, OK (6 skipped), 192.520s:
+  1370 passed, 6 skipped. `git diff --check` PASS. Existing CI command verified locally; remote CI not triggered.
+  HIGH-8.1 fixed locally for the authorized default OFF EURUSD/XAUUSD route; READY FOR COPILOT REVIEW.
+- Economic effect: first observed intermediate touch may change exits/PnL/equity and downstream decisions.
+  No historical repair; no mixing with the frozen baseline. Missing provider history is not reconstructed.
+- A2/G-8.INT remain separate and inactive. PAPER ONLY / REAL OFF / NAS100 OFF. No operational DB, deployed flag,
+  Libro Maestro or freeze changes. No git add, commit, push, merge or deploy. Not Phase 8 certification.
+
+## 2026-10-10 — HIGH-8.1 focused preflight (Owner decision required)
+
+- Baseline inspected: `v2/phase8-p4b`, `720f4b4d410e19c723dcaaefaad34aab337f3fe5`.
+  Pre-existing untracked `V2_PHASE8_OWNER_READINESS_PACKAGE.md` preserved.
+- Reproduced the default/OFF intermediate SL/TP omission using the existing runtime tests. The ON path already
+  calls `catch_up_position` over committed chronological evidence, with durable per-bar saves and recovery.
+  No additional catch-up implementation is missing from `runtime/service.py` for an in-scope symbol.
+- DEC-8.1 in `V2_PHASE8_EXECUTION.md` explicitly preserves the OFF runtime; changing that path changes realized
+  exits/PnL versus the frozen baseline. Requested the exact Owner decision to replace the default path locally
+  and record supersession of DEC-8.1. No approval inferred for operational activation or a new baseline.
+- Focused baseline: 68 tests PASS (`test_runtime_catch_up`, `test_position_catch_up`,
+  `test_position_catch_up_concurrency`, `test_phase8_catch_up_certification`, `test_phase8_catch_up_scope`).
+  Initial sandbox run hit Windows temporary-directory access errors; rerun outside the sandbox passed.
+- Full baseline executed once: `python -m unittest discover -q`, 1370 tests, OK (6 skipped), 188.423s.
+  `git diff --check` PASS. CI workflow exists but remote CI was not run. These are baseline results, not fix evidence.
+- A2 and G-8.INT remain separate operational follow-ups, neither activated nor prerequisites for running local
+  tests. This entry does not close HIGH-8.1 or certify Phase 8. No executable code, flags, operational databases,
+  freeze or Libro Maestro changed; PAPER only, REAL OFF, NAS100 OFF. No commit, merge or deploy.
+
 ## 2026-10-10 — V2 Phase 8 P4b audit fix (Copilot REQUEST CHANGES on 7c82cf3)
 
 - MEDIUM-1 (reproduced on 7c82cf3: `--out` equal to the source destroyed the P1 DB; equal to `--archive` overwrote

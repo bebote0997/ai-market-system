@@ -108,6 +108,18 @@ class Harness(unittest.TestCase):
         finally:
             store.close()
 
+    def seed_historical_watermark(self, at):
+        """Pre-fix durable state for non-retroactivity tests; never execute the old bug to create it."""
+        store = Store(self.db)
+        try:
+            account, orders, fills = store.load_paper(ACCOUNT)
+            account.open_positions["XAUUSD"].last_processed_at = at
+            broker = PaperBroker(account)
+            broker.orders, broker.fills = orders, fills
+            store.save_paper(broker)
+        finally:
+            store.close()
+
     @staticmethod
     def bars(overrides, until=SLOT, start=B1):
         out, stamp = [], start
@@ -177,17 +189,15 @@ class IntermediateTouchTests(Harness):
                     self.assertEqual((trade.exited_at, trade.exit_price, trade.reason), expected)
                 self.tmp.cleanup()
 
-    def test_flag_off_default_runtime_misses_intermediate_touches(self):
-        """HIGH-8.1 path B (default runtime): the same data leaves the position open (newest bar only)."""
+    def test_flag_off_default_runtime_catches_intermediate_touches(self):
+        """Owner HIGH-8.1 amendment: OFF also uses chronological position management."""
         for name in ("1_long_sl_mid", "2_long_tp_mid", "3_short_sl_mid", "4_short_tp_mid"):
             with self.subTest(case=name):
                 self.setUp()
                 side, entry, stop, target, overrides = self.CASES[name]
                 self.seed(side, entry, stop, target)
                 self.cycle(overrides=overrides, flag=False)
-                account = self.paper()[0]
-                self.assertIn("XAUUSD", account.open_positions)  # touch in B2/B3 never seen
-                self.assertEqual(account.closed_trades, [])
+                self.assert_matches_oracle(overrides, label=name)
                 self.tmp.cleanup()
 
 

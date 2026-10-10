@@ -101,7 +101,7 @@ class TradingScenarioTests(IsolationCase):
         # Same as test_demo_runner: patched LONG scouts open and fill; the close cycle uses real scouts.
         for minutes, close, patched in ((0, 100., True), (15, 100., True), (30, 131., False)):
             at = T + timedelta(minutes=minutes)
-            runner = DemoRunner(config, market_provider=Data(close=close), ai_provider=_deterministic(),
+            runner = DemoRunner(config, market_provider=Data(close=close, age=5), ai_provider=_deterministic(),
                                 macro_provider=macro_fixture(), instruments={"XAUUSD": instrument()},
                                 clock=lambda at=at: at)
             try:
@@ -162,10 +162,10 @@ class TradingScenarioTests(IsolationCase):
         self.assertEqual(set(bars), {"market_data:XAUUSD:1h", "market_data:XAUUSD:15m", "market_data:XAUUSD:5m"})
         five = bars["market_data:XAUUSD:5m"]
         self.assertEqual((five["status"], five["provider"]), ("HEALTHY", "twelve_data"))
-        self.assertEqual(five["details"]["latest_bar_timestamp"], (T + timedelta(minutes=30)).isoformat())
+        self.assertEqual(five["details"]["latest_bar_timestamp"], (T + timedelta(minutes=25)).isoformat())
         self.assertEqual(five["details"]["data_state"], "CURRENT")
         self.assertEqual((five["progress_stage"], five["progress_at"]),
-                         ("bar_received", (T + timedelta(minutes=30)).isoformat()))
+                         ("bar_received", (T + timedelta(minutes=25)).isoformat()))
 
 
 def _nullcontext():

@@ -51,7 +51,7 @@ def plan_scenario(db, *, rex_on=True, steps=PLAN_STEPS, extra=None):
         for patcher in extra or ():
             stack.enter_context(patcher)
         for minutes, close in steps:
-            runtime = OperationalRuntime(config, market_provider=Data(close=close),
+            runtime = OperationalRuntime(config, market_provider=Data(close=close, age=5),
                                          ai_provider=DeterministicAIProvider(), macro_provider=macro_fixture(),
                                          instruments={"XAUUSD": instrument()},
                                          clock=lambda m=minutes: T + timedelta(minutes=m))
@@ -154,7 +154,7 @@ class RuntimeRecordingTests(Temp):
         stages = [w["context"]["stage"] for _, _, _, w, _ in writes]
         self.assertIn("ST9", stages)
         self.assertIn("ST7", stages)
-        self.assertIn("ST2L", stages)
+        self.assertIn("ST2C", stages)  # HIGH-8.1: OFF now records chronological management too.
         events = [e["event_type"] for _, _, _, w, _ in writes for e in w["journal_events"]]
         self.assertEqual(sorted(set(events)), ["ORDER_FILLED", "ORDER_SUBMITTED", "POSITION_CLOSED",
                                                "POSITION_OPENED", "STOP_HIT"])

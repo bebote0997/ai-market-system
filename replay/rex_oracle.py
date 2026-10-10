@@ -624,7 +624,7 @@ def _check_write_transition(r, write, apply, where):
 
 def _check_management(r, identity):
     r.checked.append("ST2 management")
-    if not identity["catch_up_applies"]:
+    if not (identity["catch_up_applies"] or identity.get("snapshot_catch_up_applies", False)):
         inputs = r.stages("ST2L_INPUT", observer=False)
         writes = r.writes_in("ST2L")
         if not inputs:

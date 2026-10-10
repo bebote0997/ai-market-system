@@ -13,6 +13,7 @@ from ai.orchestrator import run as run_ai
 from ai.provider import DeterministicAIProvider
 from ai.runtime import AuditLog
 from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
+from data.market_evidence import EvidenceError, bars_from_frame
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
 from execution.pending_order_gate import (BLOCKING_FINAL_STATUSES, CurrentCycleGate, PendingGateEvidenceError,
@@ -319,18 +320,26 @@ class OperationalRuntime:
                                   {"error_type": error_type, "elapsed_ms": elapsed_ms,
                                    "consecutive_failures": failures})
 
-    def _catch_up_positions(self, symbol, slot, key, store=None, observer=None):
+    def _snapshot_catch_up_applies(self, symbol):
+        # Owner F08/HIGH-8.1: replace only the OFF route for the two PAPER symbols.
+        # Explicit ON scopes (DEC-8.14) and their Evidence Store policy remain unchanged.
+        return not self.config.v2_position_catch_up and symbol in ("XAUUSD", "EURUSD")
+
+    def _catch_up_positions(self, symbol, slot, key, store=None, observer=None, frame=None):
         """B2.3B: every committed closed 5m bar after the open position's durable watermark, oldest
         first, through the accepted B2.1 catch-up (guarded save per bar). Never a newest-bar fallback.
         Returns None, or the reason PAPER economics are blocked for this cycle."""
         for _ in range(2):  # A STALE result resumes from the durable watermark once.
             try:
-                result = catch_up_position(self.store if store is None else store, self.evidence,
+                result = catch_up_position(self.store if store is None else store,
+                                           self.evidence if frame is None else None,
                                            account_id=self.config.account_id,
                                            symbol=symbol, as_of=slot, instrument=self.instruments.get(symbol),
                                            owner_key=key, **({} if observer is None else {"observer": observer}),
+                                           **({} if frame is None else {"observed_bars": bars_from_frame(
+                                               frame, symbol=symbol, timeframe="5m")}),
                                            **({} if self.halt_gate is None else {"halt_gate": self.halt_gate}))
-            except CatchUpEvidenceError:
+            except (CatchUpEvidenceError, EvidenceError):
                 return EVIDENCE_UNAVAILABLE
             if result.status != "STALE":
                 return None
@@ -446,6 +455,7 @@ class OperationalRuntime:
                         "v2_position_catch_up": self.config.v2_position_catch_up,
                         "catch_up_scope": list(self.config.v2_position_catch_up_symbols),
                         "catch_up_applies": self.config.catch_up_applies(symbol),
+                        "snapshot_catch_up_applies": self._snapshot_catch_up_applies(symbol),
                         "v2_ai_resilience": self.config.v2_ai_resilience, "paper_enabled": self.paper_enabled,
                         "diagnostic_outside_session": self.diagnostic_outside_session,
                         "broker_rr_policy": None, "risk_config": dict(self.risk_config or {}),
@@ -649,7 +659,15 @@ class OperationalRuntime:
                 if self.paper_enabled:
                     TradeManager(fresh.account, fresh).process_bar(bar)
                 return self.paper_enabled and (had_open or bool(fresh.journal)), None
-            if not self.config.catch_up_applies(symbol):  # P1-B: legacy newest-bar path outside the scope
+            if self._snapshot_catch_up_applies(symbol):
+                if self.paper_enabled:
+                    paper_blocked = self._catch_up_positions(
+                        symbol, slot, key, rex_store, None if rex is None else rex.observer, snapshot["5m"])
+                if paper_blocked is not None:
+                    self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_data",
+                                                                paper_blocked, "ERROR"))
+                broker = self._broker(symbol)
+            elif not self.config.catch_up_applies(symbol):  # P1-B: explicit ON scope exclusions stay legacy
                 self._rex_context(rex, "ST2L", lambda: {"bar": bar, "paper_enabled": self.paper_enabled})
                 broker, _ = self._guarded_paper_write(symbol, key, manage_positions, rex_store, "management")
                 if broker is None:
@@ -664,7 +682,8 @@ class OperationalRuntime:
                 broker = self._broker(symbol)
             decision_equity = broker.account.equity
             self._rex_note(rex, "ST3", lambda: {
-                "path": "CATCH_UP" if self.config.catch_up_applies(symbol) else "LEGACY",
+                "path": ("SNAPSHOT_CATCH_UP" if self._snapshot_catch_up_applies(symbol) else
+                         "CATCH_UP" if self.config.catch_up_applies(symbol) else "LEGACY"),
                 "paper_blocked": paper_blocked, "decision_equity": decision_equity,
                 "account": {k: getattr(broker.account, k) for k in ("starting_equity", "cash", "equity",
                                                                     "realized_pnl", "unrealized_pnl")},

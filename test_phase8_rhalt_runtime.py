@@ -73,7 +73,7 @@ class Harness(unittest.TestCase):
 
     def cycle(self, minutes, close=100., gate=None, patches=(), config=None):
         gate = gate or HaltGate()
-        runtime = OperationalRuntime(config or rhalt_config(self.db), market_provider=Data(close=close),
+        runtime = OperationalRuntime(config or rhalt_config(self.db), market_provider=Data(close=close, age=5),
                                      ai_provider=DeterministicAIProvider(), macro_provider=macro_fixture(),
                                      instruments={"XAUUSD": instrument()},
                                      clock=lambda: T + timedelta(minutes=minutes), halt_gate=gate)
@@ -231,7 +231,7 @@ class InjectionTests(Harness):
         self.seed_pending()
         self.cycle(15)  # fill: an open position now exists
         before = self.sql("SELECT payload FROM paper_positions")
-        status, gate, spy = self.cycle(30, close=101., patches=[on_admit("management")])
+        status, gate, spy = self.cycle(30, close=101., patches=[on_admit("catch_up_bar")])
         self.assert_halted(status, gate, spy, residual=0)
         self.assertEqual(self.sql("SELECT payload FROM paper_positions"), before)  # no management write
 

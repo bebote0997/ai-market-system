@@ -1,6 +1,6 @@
 """V2 Phase 8 / P8.3: isolated simulation of the FIRST activation of ``v2_position_catch_up`` (temporary databases
-only; nothing is activated anywhere). Each test runs real runtime cycles with the flag OFF (as the operational runtime
-does today) and then the first cycle(s) with the flag ON, and reconciles the result with the independent oracle.
+only; nothing is activated anywhere). OFF now includes the Owner HIGH-8.1 correction. Pre-fix durable state is
+seeded explicitly when needed; current OFF/ON cycles reconcile with the independent oracle.
 """
 import json
 from datetime import timedelta
@@ -42,7 +42,9 @@ class ActivationSimulationTests(Harness):
         full-history oracle exposes the divergence (the position should already be closed at 95)."""
         self.seed()
         history = {("XAUUSD", bar(2)): (100.0, 100.5, 94.0, 96.0)}
-        self.cycle(S1, history, flag=False)
+        # Historical pre-fix state: the old runtime had already advanced past the missed touch.
+        # Seed that watermark explicitly; the corrected OFF runtime no longer produces this defect.
+        self.seed_historical_watermark(bar(4))
         watermark = self.paper()[0].open_positions["XAUUSD"].last_processed_at
         self.assertEqual(watermark, bar(4))
         self.cycle(S2, history, flag=True)  # FIRST activation cycle
@@ -63,12 +65,12 @@ class ActivationSimulationTests(Harness):
         trade = self.assert_matches_oracle(history, until=S2)
         self.assertEqual((trade.exited_at, trade.exit_price), (bar(6), 95.0))  # retroactive to the activation slot
 
-    def test_b2_same_data_with_flag_off_would_miss_it(self):
+    def test_b2_same_data_with_flag_off_also_closes_it(self):
         self.seed()
         history = {("XAUUSD", bar(6)): (100.0, 100.4, 94.5, 95.5)}
         self.cycle(S1, history, flag=False)
-        self.cycle(S2, history, flag=False)  # newest bar of S2 is 13:40 (flat)
-        self.assertIn("XAUUSD", self.paper()[0].open_positions)
+        self.cycle(S2, history, flag=False)
+        self.assert_matches_oracle(history, until=S2)
 
     def test_c_pending_order_across_activation(self):
         pending = PaperOrder("1.0", "pend", "run-pend", "XAUUSD", "LONG", 1.0, 100.0, 95.0, 130.0, 1.0, 10000.0, 0.0,
@@ -96,16 +98,16 @@ class ActivationSimulationTests(Harness):
         self.cycle(S2, history, flag=True)  # activation: nothing to close yet
         self.assertIn("XAUUSD", self.paper()[0].open_positions)
         before_rollback = self.paper()[0].open_positions["XAUUSD"].last_processed_at
-        self.cycle(S3, history, flag=False)  # ROLLBACK: flag OFF again; newest bar 13:55 is flat -> TP missed
+        self.cycle(S3, history, flag=False)  # OFF now preserves chronological management.
         account = self.paper()[0]
-        self.assertIn("XAUUSD", account.open_positions)
-        self.assertGreater(account.open_positions["XAUUSD"].last_processed_at, before_rollback)
+        self.assertNotIn("XAUUSD", account.open_positions)
+        self.assertGreater(account.closed_trades[0].exited_at, before_rollback)
         store = Store(self.db)
         try:
             closes = store.db.execute("SELECT COUNT(*) FROM journal WHERE event_type='POSITION_CLOSED'").fetchone()[0]
         finally:
             store.close()
-        self.assertEqual(closes, 0)
+        self.assertEqual(closes, 1)
         evidence = EvidenceStore(self.ev, readonly=True)  # the Evidence Store is left intact after rollback
         try:
             self.assertGreater(evidence.db.execute("SELECT COUNT(*) FROM market_evidence").fetchone()[0], 0)

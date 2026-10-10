@@ -61,7 +61,7 @@ class PreviewTests(Harness):
     def test_historic_missed_touch_is_reported_never_applied(self):
         self.seed()
         history = {("XAUUSD", bar(2)): (100.0, 100.5, 94.0, 96.0)}
-        self.cycle(S1, history, flag=False)
+        self.seed_historical_watermark(bar(4))  # preserved pre-fix state, not the corrected OFF runtime
         report = preview(self.db, as_of=S2, bars_json=bars_json(Path(self.tmp.name) / "b.json", history, S2))
         position = report["positions"][0]
         self.assertEqual((position["historic_missed"]["bar_start"], Decimal(position["historic_missed"]["net_pnl"])),
