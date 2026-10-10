@@ -17,6 +17,7 @@ import sys
 
 ALLOWED = ("EXPERIMENT_FREEZE_P2.md", "runtime/cloud_runner.py")
 BASELINE_LINE = re.compile(r'^EXPERIMENT_BASELINE_SHA = "([0-9a-f]{40})"$')
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 WINDOWS_GIT = r"C:\Program Files\Git\cmd\git.exe"
 
 
@@ -35,7 +36,15 @@ def _run(repo, *args):
 
 
 def check(repo, x_p2, y_p2):
-    findings = {}
+    """LOW-2 (P4b audit): both arguments must be FULL 40-hex SHAs (no ``HEAD``, ``HEAD~1``, branch or abbreviated
+    names), and each must resolve to exactly that commit."""
+    findings = {"x_p2_full_sha": isinstance(x_p2, str) and bool(FULL_SHA.match(x_p2)),
+                "y_p2_full_sha": isinstance(y_p2, str) and bool(FULL_SHA.match(y_p2))}
+    if not all(findings.values()):
+        return {"result": "INVALID", "checks": findings, "changed_files": [], "commit_signature": "NOT VERIFIED"}
+    for name, sha in (("x_p2", x_p2), ("y_p2", y_p2)):
+        code, resolved = _run(repo, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+        findings[f"{name}_resolves_to_itself"] = code == 0 and resolved.strip() == sha
     code, parent = _run(repo, "rev-parse", f"{y_p2}^")
     findings["parent_is_x_p2"] = code == 0 and parent.strip() == x_p2
     code, names = _run(repo, "diff", "--name-only", x_p2, y_p2)

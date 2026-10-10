@@ -45,7 +45,23 @@ def _annotate_ci_failures():
         return method
     unittest.TestResult.addFailure = wrap(unittest.TestResult.addFailure)
     unittest.TestResult.addError = wrap(unittest.TestResult.addError)
+    original_skip = unittest.TestResult.addSkip
+
+    def add_skip(self, test, reason):  # LOW-4: every skipped test is listed in CI, never presented as executed
+        sys.__stdout__.write("::notice title=SKIPPED " + test.id() + "::" + str(reason).replace(chr(10), " ") + chr(10))
+        sys.__stdout__.flush()
+        return original_skip(self, test, reason)
+    unittest.TestResult.addSkip = add_skip
     unittest.TestResult._v2_annotated = True
+
+
+def ci_notice(title, message):
+    """A nominal line proving a POSIX-only branch EXECUTED in CI (LOW-4)."""
+    import sys
+    print(f"{title}: {message}")
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        sys.__stdout__.write(f"::notice title={title}::{message}" + chr(10))
+        sys.__stdout__.flush()
 
 
 _annotate_ci_failures()
@@ -168,6 +184,62 @@ class A2ToolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             archive_anchor.build(self.p1, self.dir / "x.db", h5_attestation=None)  # H5 required
 
+    def cli(self, out, archive=None):
+        return archive_anchor.main(["--trading-db", str(self.p1), "--archive", str(archive or self.dir / "a.db"),
+                                    "--h5-attestation", str(self.h5), "--out", str(out)])
+
+    def test_medium1_out_never_touches_the_source_sidecars_archive_or_existing_files(self):
+        self.flatten()
+        source = self.p1.read_bytes()
+        existing_archive = self.dir / "existing_archive.db"
+        existing_archive.write_bytes(b"older archive")
+        existing = self.dir / "precious.txt"
+        existing.write_text("precious", encoding="utf-8")
+        hardlink = self.dir / "hardlink_to_source.db"
+        os.link(self.p1, hardlink)
+        targets = {"source": self.p1, "source_wal": Path(str(self.p1) + "-wal"),
+                   "source_shm": Path(str(self.p1) + "-shm"), "archive_new": self.dir / "a.db",
+                   "existing_file": existing, "hardlink_to_source": hardlink,
+                   "source_via_dotdot": self.dir / "sub" / ".." / self.p1.name}
+        for name, out in targets.items():
+            with self.subTest(target=name), self.assertRaises(SystemExit):
+                self.cli(out)
+            self.assertEqual(self.p1.read_bytes(), source)
+            self.assertFalse((self.dir / "a.db").exists())  # rejected before any work: no archive created
+        with self.assertRaises(SystemExit):
+            self.cli(existing_archive, archive=existing_archive)
+        self.assertEqual(existing_archive.read_bytes(), b"older archive")
+        self.assertEqual(existing.read_text(encoding="utf-8"), "precious")
+        for suffix in ("-wal", "-shm"):
+            self.assertFalse(Path(str(self.p1) + suffix).exists())  # sidecars never created or modified
+        link = self.dir / "symlink_to_source.db"
+        try:
+            os.symlink(self.p1, link)
+        except (OSError, NotImplementedError):
+            link = None
+        if link is not None:
+            with self.assertRaises(SystemExit):
+                self.cli(link)
+            self.assertEqual(self.p1.read_bytes(), source)
+            dangling = self.dir / "dangling.json"
+            os.symlink(self.dir / "nowhere.json", dangling)
+            with self.assertRaises(SystemExit):
+                self.cli(dangling)
+            self.assertFalse((self.dir / "nowhere.json").exists())
+
+    def test_medium1_exclusive_creation_and_normal_output(self):
+        self.flatten()
+        out = self.dir / "oar_a_body.json"
+        self.assertEqual(self.cli(out), 0)
+        body = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(body["kind"], "TRADING_DB_ARCHIVE")
+        race = self.dir / "race.json"
+        archive_anchor.check_output_target(race, trading_db=self.p1, archive=self.dir / "b.db")  # passes the check
+        race.write_text("written by someone else after the check", encoding="utf-8")
+        with self.assertRaises(archive_anchor.OutputRefused):
+            archive_anchor.write_exclusive(race, "{}")
+        self.assertEqual(race.read_text(encoding="utf-8"), "written by someone else after the check")
+
     def test_nc12_open_position_or_pending_order_refuses_the_archive(self):
         archive = self.dir / "refused.db"
         report, body = archive_anchor.build(self.p1, archive, h5_attestation=self.h5)  # a PENDING order remains
@@ -175,14 +247,25 @@ class A2ToolTests(unittest.TestCase):
         self.assertFalse(report["checks"]["flat_no_pending_orders"])
         self.assertFalse(archive.exists())  # our own refused copy is removed
 
+    def p2_genesis(self):
+        from datetime import datetime, timezone
+        from runtime.genesis_prepare import prepare
+        from storage.economic_digest import cj
+        p2 = self.dir / "trading_floor_p2.db"
+        auth = self.dir / "p2_authorization.json"
+        auth.write_text(cj({"kind": "V2_GENESIS_AUTHORIZATION/1", "period_id": "P2-test",
+                            "db_realpath": os.path.realpath(p2), "x_p2": X, "y_p2": "b" * 40,
+                            "starting_equity": 10000, "account_id": "paper-main",
+                            "not_after_utc": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}),
+                        encoding="utf-8")
+        self.owner.sign(auth, "v2-genesis-authorization")
+        prepare(auth, self.allowed, p2)  # a REAL genesis-only P2 database
+        return p2
+
     def readiness(self, archive, oar_a, **overrides):
         p2 = self.dir / "trading_floor_p2.db"
         if not p2.exists():
-            conn = sqlite3.connect(p2)  # a genesis-only P2 stand-in: one GENESIS_PREPARED, no runs, no E0
-            conn.executescript("CREATE TABLE journal(id INTEGER PRIMARY KEY, event_type TEXT);"
-                               "CREATE TABLE runs(slot_key TEXT);"
-                               "INSERT INTO journal(event_type) VALUES('GENESIS_PREPARED');")
-            conn.close()
+            self.p2_genesis()
         args = dict(p2_db=p2, pinned_p2_db=p2, p1_path=self.p1, evidence_db=self.dir / "market_evidence_p2.db",
                     archive=archive, oar_a=oar_a, allowed_signers=self.allowed)
         args.update(overrides)
@@ -200,13 +283,46 @@ class A2ToolTests(unittest.TestCase):
         self.sql(archive, "CREATE TABLE tamper(x)")  # NC7: the archive changed after OAR-A
         self.assertFalse(self.readiness(archive, oar_a)["checks"]["archive_matches_oar_a"])
 
-    def test_nc8_p2_with_more_than_genesis_and_nc9_inode_alias(self):
+    def test_nc8_low1_genesis_only_rejects_any_economic_evidence(self):
         archive, oar_a, _ = self.archive()
-        report = self.readiness(archive, oar_a)
+        self.assertEqual(self.readiness(archive, oar_a)["result"], "READY")
         p2 = self.dir / "trading_floor_p2.db"
-        self.sql(p2, "INSERT INTO journal(event_type) VALUES('EXPERIMENT_STARTED')")
-        self.assertEqual(report["result"], "READY")
-        self.assertFalse(self.readiness(archive, oar_a)["checks"]["p2_db_genesis_only"])
+        pristine = p2.read_bytes()
+        journal = "INSERT INTO journal(timestamp,run_id,symbol,source,event_type,severity,payload) VALUES"
+        cases = {
+            "order": ("INSERT INTO paper_orders VALUES('o','{}')", "paper_orders_rows"),
+            "fill": ("INSERT INTO paper_fills VALUES('f','{}')", "paper_fills_rows"),
+            "position": ("INSERT INTO paper_positions VALUES('p','{}')", "paper_positions_rows"),
+            "close": ("INSERT INTO closed_trades VALUES('t','{}')", "closed_trades_rows"),
+            "account_changed": ("UPDATE paper_accounts SET payload=payload||' '",
+                                "economic_state_is_not_the_expected_genesis"),
+            "economic_event": (journal + "('t','r','XAUUSD','x','ORDER_FILLED','INFO','{}')",
+                               "economic_event_before_e0"),
+            "experiment_started": (journal + "('t',NULL,NULL,'experiment','EXPERIMENT_STARTED','INFO','{}')",
+                                   "experiment_started"),
+            "run": ("INSERT INTO runs(slot_key,run_id,symbol,as_of,started_at,status) VALUES"
+                    "('k','r','XAUUSD','t','t','COMPLETED')", "runs"),
+            "failed_seal": (journal + "('t',NULL,NULL,'genesis','GENESIS_SEAL_CHECK','ERROR','{\"result\":\"FAIL\"}')",
+                            "failed_seal_check"),
+            "second_genesis": (journal + "('t',NULL,NULL,'genesis','GENESIS_PREPARED','INFO','{}')",
+                               "genesis_prepared_count"),
+        }
+        for name, (statement, reason) in cases.items():
+            with self.subTest(case=name):
+                p2.write_bytes(pristine)
+                self.sql(p2, statement)
+                report = self.readiness(archive, oar_a)
+                self.assertFalse(report["checks"]["p2_db_genesis_only"])
+                self.assertIn(reason, report["genesis_only_findings"])
+        p2.write_bytes(pristine)  # the legitimate non-economic rows of a sealed start stopped before E0
+        for statement in (journal + "('t',NULL,NULL,'runtime','RECOVERY_STARTED','INFO','{}')",
+                          journal + "('t',NULL,NULL,'runtime','RECOVERY_COMPLETED','INFO','{}')",
+                          journal + "('t',NULL,NULL,'genesis','GENESIS_SEAL_CHECK','INFO','{\"result\":\"PASS\"}')"):
+            self.sql(p2, statement)
+        self.assertTrue(self.readiness(archive, oar_a)["checks"]["p2_db_genesis_only"])
+
+    def test_nc9_inode_alias(self):
+        archive, oar_a, _ = self.archive()
         alias = self.dir / "evidence_alias.db"
         os.link(self.p1, alias)  # the Evidence Store path aliases the P1 trading DB by inode
         self.assertFalse(self.readiness(archive, oar_a, evidence_db=alias)["checks"]["evidence_not_a_trading_db"])
@@ -234,6 +350,7 @@ class A2ToolTests(unittest.TestCase):
             self.skipTest("symlinks not permitted on this host")
         report = self.readiness(link / archive.name, oar_a)
         self.assertFalse(report["checks"]["archive_no_symlink"])
+        ci_notice("NC5_SYMLINK_EXECUTED", f"symlink component refused (archive_no_symlink=False) on {os.name}")
 
 
 class FreezeAmendmentTests(unittest.TestCase):
@@ -284,6 +401,20 @@ class FreezeAmendmentTests(unittest.TestCase):
     def test_other_cloud_runner_change_or_wrong_pin_or_parent(self):
         self.assertEqual(freeze_amendment.check(self.repo, self.x, self.amendment(other_line=True))["result"],
                          "INVALID")
+
+    def test_low2_symbolic_or_abbreviated_references_are_refused(self):
+        y = self.amendment()
+        self.assertEqual(freeze_amendment.check(self.repo, self.x, y)["result"], "VALID")
+        branch = self.git("rev-parse", "--abbrev-ref", "HEAD")
+        for ref in ("HEAD", "HEAD~0", branch, y[:12], y.upper()):
+            with self.subTest(ref=ref):
+                report = freeze_amendment.check(self.repo, self.x, ref)
+                self.assertEqual(report["result"], "INVALID")
+                self.assertFalse(report["checks"]["y_p2_full_sha"])
+        self.assertEqual(freeze_amendment.check(self.repo, "HEAD~1", y)["result"], "INVALID")
+        unknown = "0" * 40
+        report = freeze_amendment.check(self.repo, self.x, unknown)
+        self.assertFalse(report["checks"]["y_p2_resolves_to_itself"])
 
     def test_pin_must_be_x_p2_and_parent_must_be_x_p2(self):
         y = self.amendment(baseline="c" * 40)
@@ -389,6 +520,71 @@ class SealedIntegrationTests(Genesis):
             runtime.close()
         after = verify(self.db, oar_g_path=str(oar_g), allowed_signers=str(self.allowed))
         self.assertEqual(after["genesis"]["status"], "NOT VERIFIED")  # a start without the seal check (I-G18)
+
+
+class ThresholdTests(unittest.TestCase):
+    """LOW-3: G2, G3 and G4 reach PASS exactly when the evidence meets the threshold, never otherwise."""
+
+    def test_g2_rehearsal_record(self):
+        good = {"kind": g8int.SIMULATION_KIND, "result": "PASS", "code_sha": "y" * 40, "stop_conditions": [],
+                "input_sha256": {"trading_copy": "0" * 64}}
+        self.assertEqual(g8int.classify_g2(None, "y" * 40)["status"], "BLOCKED")
+        self.assertEqual(g8int.classify_g2(good, "y" * 40)["status"], "PASS")
+        self.assertEqual(g8int.classify_g2(good, "z" * 40)["status"], "NOT VERIFIED")
+        self.assertEqual(g8int.classify_g2(good, None)["status"], "NOT VERIFIED")
+        self.assertEqual(g8int.classify_g2({**good, "stop_conditions": ["oracle mismatch"]}, "y" * 40)["status"],
+                         "FAIL")
+        self.assertEqual(g8int.classify_g2({**good, "result": "FAIL"}, "y" * 40)["status"], "FAIL")
+        self.assertEqual(g8int.classify_g2({**good, "input_sha256": {}}, "y" * 40)["status"], "NOT VERIFIED")
+
+    def scheduled(self, day):
+        from datetime import datetime, timezone
+        from runtime.scheduler import session_names
+        start = datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
+        return [t for t in (start + timedelta(minutes=15 * i) for i in range(96))
+                if set(session_names(t)) & {"LONDON", "NEW_YORK"}]
+
+    def runs_for(self, day, symbol, completed, error=0):
+        slots = self.scheduled(day)
+        rows = []
+        for index, slot in enumerate(slots[:completed + error]):
+            final = "ERROR" if index >= completed else "NO_SETUP"
+            rows.append((f"{symbol}-{slot.isoformat()}", f"r-{symbol}-{index}-{day}", symbol, slot.isoformat(),
+                         "COMPLETED", final))
+        return rows
+
+    def test_g3_counted_days_and_threshold(self):
+        day = "2026-01-15"  # a Thursday
+        need = len(self.scheduled(day))
+        import math
+        enough = math.ceil(0.95 * need)
+        scope = {f"r-XAUUSD-{i}-{day}": ("XAUUSD", "EURUSD") for i in range(need + 1)}
+        counted = g8int._counted_days(None, self.runs_for(day, "XAUUSD", enough), scope, set(), ["LONDON", "NEW_YORK"])
+        self.assertEqual(counted["XAUUSD"], [day])
+        short = g8int._counted_days(None, self.runs_for(day, "XAUUSD", enough - 1), scope, set(),
+                                    ["LONDON", "NEW_YORK"])
+        self.assertEqual(short.get("XAUUSD", []), [])
+        errors = g8int._counted_days(None, self.runs_for(day, "XAUUSD", enough, error=1), scope, set(),
+                                     ["LONDON", "NEW_YORK"])
+        self.assertEqual(errors.get("XAUUSD", []), [])  # any ERROR run disqualifies the day
+        halted = g8int._counted_days(None, self.runs_for(day, "XAUUSD", enough), scope, {day},
+                                     ["LONDON", "NEW_YORK"])
+        self.assertEqual(halted.get("XAUUSD", []), [])
+        enabled = ["EURUSD", "XAUUSD"]
+        self.assertEqual(g8int.classify_g3({"EURUSD": 10, "XAUUSD": 10}, enabled, True)["status"], "PASS")
+        self.assertEqual(g8int.classify_g3({"EURUSD": 10, "XAUUSD": 9}, enabled, True)["status"], "NOT VERIFIED")
+        self.assertEqual(g8int.classify_g3({"EURUSD": 10, "XAUUSD": 10}, [], True)["status"], "NOT VERIFIED")
+        self.assertEqual(g8int.classify_g3({}, enabled, False)["status"], "BLOCKED")
+
+    def test_g4_cycles_and_catch_up_exposure(self):
+        enabled = ["EURUSD", "XAUUSD"]
+        managed = {"EURUSD": True, "XAUUSD": True}
+        self.assertEqual(g8int.classify_g4({"EURUSD": 200, "XAUUSD": 200}, managed, enabled, True)["status"], "PASS")
+        self.assertEqual(g8int.classify_g4({"EURUSD": 200, "XAUUSD": 199}, managed, enabled, True)["status"],
+                         "NOT VERIFIED")
+        self.assertEqual(g8int.classify_g4({"EURUSD": 500, "XAUUSD": 500}, {"EURUSD": True, "XAUUSD": False},
+                                           enabled, True)["status"], "NOT VERIFIED")
+        self.assertEqual(g8int.classify_g4({}, managed, enabled, False)["status"], "BLOCKED")
 
 
 class CompatibilityTests(unittest.TestCase):

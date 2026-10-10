@@ -90,6 +90,38 @@ def build(trading_db, archive, *, h5_attestation, archive_time=None):
     return report, cj(body)
 
 
+class OutputRefused(ValueError):
+    """``--out`` would touch the source, its sidecars, the archive or an existing file: nothing was done."""
+
+
+def _canonical(path):
+    return os.path.normcase(os.path.realpath(path))
+
+
+def check_output_target(out, *, trading_db, archive):
+    """MEDIUM-1 (P4b audit): ``--out`` must be a NEW file that is none of the source DB, its ``-wal`` / ``-shm``, the
+    archive (or its sidecars): compared by canonical realpath (symlink aliases resolved); any existing path, including
+    a hardlink to one of them or a dangling symlink, is refused. Called BEFORE any work."""
+    out = Path(out)
+    protected = {_canonical(str(path) + suffix) for path in (trading_db, archive) for suffix in ("", "-wal", "-shm")}
+    if _canonical(out) in protected:
+        raise OutputRefused("--out resolves to the source database, its -wal/-shm files or the archive")
+    if os.path.lexists(out):
+        raise OutputRefused("--out already exists (no overwrite; hardlinks and symlinks included)")
+
+
+def write_exclusive(out, text):
+    """Create ``out`` exclusively (O_CREAT | O_EXCL, no symlink following): a file appearing after the check is never
+    overwritten."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(out, flags, 0o644)
+    except FileExistsError:
+        raise OutputRefused("--out appeared after the check; nothing was overwritten") from None
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(text.encode("utf-8"))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Archive the P1 trading DB and build the unsigned OAR-A body.")
     parser.add_argument("--trading-db", required=True)
@@ -97,11 +129,18 @@ def main(argv=None):
     parser.add_argument("--h5-attestation", required=True)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
+    try:
+        check_output_target(args.out, trading_db=args.trading_db, archive=args.archive)
+    except OutputRefused as exc:
+        raise SystemExit(f"refused: {exc}") from None
     report, body = build(args.trading_db, args.archive, h5_attestation=args.h5_attestation)
     print(json.dumps(report, indent=2, sort_keys=True))
     if body is None:
         return 2
-    Path(args.out).write_text(body, encoding="utf-8")
+    try:
+        write_exclusive(args.out, body)
+    except OutputRefused as exc:
+        raise SystemExit(f"refused: {exc}") from None
     print(f"unsigned OAR-A body written to {args.out}; the Owner signs it (ssh-keygen -Y sign -n {ARCHIVE_NAMESPACE})")
     return 0
 

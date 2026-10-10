@@ -71,7 +71,44 @@ def _counted_days(db, runs, scope_by_run, halt_days, sessions):
     return counted
 
 
-def measure(trading_db, *, evidence_db=None, oar_g_path=None, allowed_signers=None, expected_commit=None):
+SIMULATION_KIND = "V2_SECTION6_SIMULATION/1"
+
+
+def classify_g2(record, expected_commit):
+    """G2 from a section 6.7 rehearsal record (Owner copies): PASS only for result PASS, zero STOP conditions, input
+    hashes present and the record bound to the deployed commit; no record -> BLOCKED."""
+    if record is None:
+        return _item(BLOCKED, note="section 6 rehearsal on Owner copies; no record supplied")
+    if not isinstance(record, dict) or record.get("kind") != SIMULATION_KIND or not isinstance(
+            record.get("input_sha256"), dict) or not record["input_sha256"] or not isinstance(
+            record.get("stop_conditions"), list) or record.get("result") not in ("PASS", "FAIL"):
+        return _item(NOT_VERIFIED, note="malformed rehearsal record")
+    measured = {"result": record["result"], "stop_conditions": record["stop_conditions"],
+                "code_sha": record.get("code_sha")}
+    if record["result"] != "PASS" or record["stop_conditions"]:
+        return _item(FAIL, measured)
+    if expected_commit is None or record.get("code_sha") != expected_commit:
+        return _item(NOT_VERIFIED, measured, "the record is not bound to the deployed commit")
+    return _item(PASS, measured)
+
+
+def classify_g3(days, enabled, period):
+    """>= 10 counted session days for EVERY enabled symbol; otherwise NOT VERIFIED (window open) or BLOCKED."""
+    if enabled and all(days.get(s, 0) >= 10 for s in enabled):
+        return _item(PASS, days, "threshold 10 per symbol in one segment")
+    return _item(NOT_VERIFIED if period else BLOCKED, days, "threshold 10 per symbol in one segment")
+
+
+def classify_g4(cycles, managed, enabled, period):
+    """>= 200 cycles inside counted days AND >= 1 open position under catch-up, for every enabled symbol."""
+    measured = {"cycles": dict(cycles), "open_position_under_catch_up": managed}
+    if enabled and all(cycles.get(s, 0) >= 200 and managed.get(s) for s in enabled):
+        return _item(PASS, measured)
+    return _item(NOT_VERIFIED if period else BLOCKED, measured)
+
+
+def measure(trading_db, *, evidence_db=None, oar_g_path=None, allowed_signers=None, expected_commit=None,
+            simulation_record=None):
     chain = verify(trading_db, oar_g_path=oar_g_path, allowed_signers=allowed_signers)
     runs_rex = _rex_records(trading_db, "REX_RUN")
     writes = _rex_records(trading_db, "REX_WRITE")
@@ -89,18 +126,14 @@ def measure(trading_db, *, evidence_db=None, oar_g_path=None, allowed_signers=No
     full = bool(runs_rex) and all(set(scope_by_run.get(r["run_id"], ())) == set(enabled) for r in runs_rex)
     items["G1_scope"] = _item(PASS if full else (FAIL if runs_rex else NOT_VERIFIED),
                               {"enabled": enabled, "runs": len(runs_rex)})
-    items["G2_simulation_on_copies"] = _item(BLOCKED, note="section 6 rehearsal on Owner copies; tests are not it")
+    items["G2_simulation_on_copies"] = classify_g2(simulation_record, expected_commit)
     counted = _counted_days(trading_db, runs, scope_by_run, halt_days, sessions)
     days = {s: len(counted.get(s, [])) for s in enabled}
-    items["G3_counted_session_days"] = _item(
-        PASS if enabled and all(n >= 10 for n in days.values()) else (BLOCKED if not period else NOT_VERIFIED), days,
-        "threshold 10 per symbol in one segment")
+    items["G3_counted_session_days"] = classify_g3(days, enabled, period)
     cycles = Counter(symbol for _, _, symbol, as_of, _, _ in runs if as_of[:10] in set(counted.get(symbol, [])))
     managed = {s: any(w.get("symbol") == s and (w.get("context") or {}).get("stage") == "ST2C" for w in writes)
                for s in enabled}
-    items["G4_managed_exposure"] = _item(
-        PASS if enabled and all(cycles[s] >= 200 and managed[s] for s in enabled) else
-        (BLOCKED if not period else NOT_VERIFIED), {"cycles": dict(cycles), "open_position_under_catch_up": managed})
+    items["G4_managed_exposure"] = classify_g4(cycles, managed, enabled, period)
     closes = _close_reconciliation(trading_db, evidence_db, writes, g14, enabled)
     if evidence_db is None:
         g5 = _item(NOT_VERIFIED, closes, "committed evidence not supplied: closes are not reconciled")
@@ -257,10 +290,15 @@ def main(argv=None):
     parser.add_argument("--oar-g")
     parser.add_argument("--allowed-signers")
     parser.add_argument("--expected-commit")
+    parser.add_argument("--simulation-record")
     parser.add_argument("--out")
     args = parser.parse_args(argv)
+    record = None
+    if args.simulation_record:
+        record = json.loads(Path(args.simulation_record).read_text(encoding="utf-8"))
     report = measure(args.trading_db, evidence_db=args.evidence_db, oar_g_path=args.oar_g,
-                     allowed_signers=args.allowed_signers, expected_commit=args.expected_commit)
+                     allowed_signers=args.allowed_signers, expected_commit=args.expected_commit,
+                     simulation_record=record)
     text = json.dumps(report, indent=2, sort_keys=True, default=str)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")

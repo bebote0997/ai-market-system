@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-10-10 — V2 Phase 8 P4b audit fix (Copilot REQUEST CHANGES on 7c82cf3)
+
+- MEDIUM-1 (reproduced on 7c82cf3: `--out` equal to the source destroyed the P1 DB; equal to `--archive` overwrote
+  the archive with JSON; an existing file was overwritten): `replay/archive_anchor.py` validates `--out` BEFORE any
+  work (canonical realpath vs the source, its `-wal`/`-shm`, the archive and its sidecars; any existing path refused,
+  hardlinks and symlinks included) and writes it with `O_CREAT | O_EXCL` (+ `O_NOFOLLOW` where available).
+- LOW-1: `replay/a2_readiness.py` genesis-only = EDG equal to the expected genesis (no order, fill, position, closed
+  trade or account change), one GENESIS_PREPARED, no economic event, run or E0; only the non-economic rows of a sealed
+  start stopped before E0 are allowed. Findings listed.
+- LOW-2: `replay/freeze_amendment.py` requires full 40-hex SHAs and checks each resolves to itself.
+- LOW-3: `replay/g8int.py` G2 from a section 6.7 rehearsal record (PASS only bound to the deployed commit, no STOP);
+  G3 / G4 classifiers tested at their exact thresholds. LOW-4: CI annotations list every skipped test; NC5 emits a
+  nominal notice when it executes.
+- No A2, E0, Owner signature, deploy, PR or merge. Phase 8 BLOCKED.
+
 ## 2026-10-09 — V2 Phase 8 P4b preparation (tools, validators, G-8.INT; no A2 created)
 
 - Agent: Claude. Branch `v2/phase8-p4b` from the certified P2b `fd29dc7`.

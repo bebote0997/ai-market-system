@@ -13,7 +13,7 @@
 | # | Criterion | Evidence source | Tool / check | Needs beyond the code |
 |---|---|---|---|---|
 | G1 | Scope A (all enabled symbols in scope) | REX run identity | `g8int` G1 | the A2 configuration |
-| G2 | Simulation on copies (section 6) | Owner copies, export, frozen clock | rehearsal record | **BLOCKED:** Owner copies (OP-1) |
+| G2 | Simulation on copies (section 6) | Owner copies, export, frozen clock | `g8int --simulation-record` (`V2_SECTION6_SIMULATION/1`: PASS, no STOP, input hashes, bound to the deployed commit) | **BLOCKED** until the Owner's rehearsal record exists (OP-1) |
 | G3 | ≥ 10 counted session days per symbol | `runs`, scheduler sessions, halts | `g8int` G3 | **BLOCKED:** a live A2 period |
 | G4 | ≥ 200 cycles per symbol, ≥ 1 position under catch-up | `runs`, REX ST2C writes | `g8int` G4 | live A2 period |
 | G5 | ≥ 5 reconciled closes per symbol (20-day extension) | REX ST2C + G14 + Evidence Store digests | `g8int` G5 | live A2 period |

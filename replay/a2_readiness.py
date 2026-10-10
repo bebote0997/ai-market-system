@@ -32,7 +32,8 @@ def _no_symlink_component(path):
     return _real(path) == os.path.normcase(os.path.abspath(path))
 
 
-def check(*, p2_db, pinned_p2_db, p1_path, evidence_db, archive, oar_a, allowed_signers, first_start=True):
+def check(*, p2_db, pinned_p2_db, p1_path, evidence_db, archive, oar_a, allowed_signers, first_start=True,
+          account_id="paper-main"):
     from replay.archive_anchor import ARCHIVE_KIND, ARCHIVE_NAMESPACE
     from runtime.genesis import GenesisSealError, verify_signed_document
     paths = {"p2_db": p2_db, "evidence_db": evidence_db, "archive": archive}
@@ -59,24 +60,61 @@ def check(*, p2_db, pinned_p2_db, p1_path, evidence_db, archive, oar_a, allowed_
     checks["archive_wal_shm_absent_or_empty"] = all(
         not Path(str(archive) + suffix).exists() or Path(str(archive) + suffix).stat().st_size == 0
         for suffix in ("-wal", "-shm"))
+    findings = []
     if first_start:
-        checks["p2_db_genesis_only"] = _genesis_only(p2_db)
-    return {"result": "READY" if all(checks.values()) else "NOT_READY", "checks": checks}
+        findings = genesis_only_findings(p2_db, account_id)
+        checks["p2_db_genesis_only"] = not findings
+    return {"result": "READY" if all(checks.values()) else "NOT_READY", "checks": checks,
+            "genesis_only_findings": findings}
+
+
+GENESIS_ONLY_ROWS = {("genesis", "GENESIS_PREPARED"), ("genesis", "GENESIS_SEAL_CHECK"),
+                     ("runtime", "RECOVERY_STARTED"), ("runtime", "RECOVERY_COMPLETED")}
+ECONOMIC_EVENTS = frozenset({"ORDER_SUBMITTED", "ORDER_FILLED", "ORDER_REJECTED", "ORDER_CANCELLED",
+                             "POSITION_OPENED", "STOP_HIT", "TARGET_HIT", "POSITION_CLOSED"})
+
+
+def genesis_only_findings(p2_db, account_id="paper-main"):
+    """LOW-1 (P4b audit): the reasons why ``p2_db`` is NOT a genesis-only database ([] = genesis only). Genesis only =
+    EDG exactly the expected genesis (one account at 10000 and NO order, fill, position or closed trade), exactly one
+    GENESIS_PREPARED, no economic event, no run, no EXPERIMENT_STARTED; the only other rows allowed are the
+    non-economic rows of a sealed start that stopped before E0 (RECOVERY_*, a PASS GENESIS_SEAL_CHECK)."""
+    from runtime.genesis import GENESIS_EQUITY
+    from storage.economic_digest import edg, expected_edg_genesis
+    if not Path(p2_db).is_file():
+        return ["p2_db_missing"]  # with sealed genesis the P2 file exists (created by the genesis tool) before E0
+    conn = sqlite3.connect(Path(p2_db).resolve().as_uri() + "?mode=ro", uri=True)
+    reasons = []
+    try:
+        economic = edg(conn)
+        if economic["edg"] != expected_edg_genesis(account_id, float(GENESIS_EQUITY))["edg"]:
+            reasons.append("economic_state_is_not_the_expected_genesis")
+            reasons += [f"{name}_rows" for name, table in economic["tables"].items()
+                        if name != "paper_accounts" and table["count"]]
+        rows = conn.execute("SELECT source, event_type, payload FROM journal ORDER BY id").fetchall()
+        if sum(1 for source, kind, _ in rows if (source, kind) == ("genesis", "GENESIS_PREPARED")) != 1:
+            reasons.append("genesis_prepared_count")
+        if any(kind in ECONOMIC_EVENTS for _, kind, _ in rows):
+            reasons.append("economic_event_before_e0")
+        if any(kind == "EXPERIMENT_STARTED" for _, kind, _ in rows):
+            reasons.append("experiment_started")
+        unexpected = sorted({kind for source, kind, _ in rows if (source, kind) not in GENESIS_ONLY_ROWS})
+        if unexpected:
+            reasons.append("unexpected_rows:" + ",".join(unexpected))
+        for source, kind, payload in rows:
+            if kind == "GENESIS_SEAL_CHECK" and (json.loads(payload) or {}).get("result") != "PASS":
+                reasons.append("failed_seal_check")
+        if conn.execute("SELECT count(*) FROM runs").fetchone()[0]:
+            reasons.append("runs")
+    except (sqlite3.Error, ValueError, TypeError, KeyError):
+        reasons.append("unreadable")
+    finally:
+        conn.close()
+    return reasons
 
 
 def _genesis_only(p2_db):
-    if not Path(p2_db).is_file():
-        return False  # with sealed genesis the P2 file exists (created by the genesis tool) before the first start
-    conn = sqlite3.connect(Path(p2_db).resolve().as_uri() + "?mode=ro", uri=True)
-    try:
-        prepared = conn.execute("SELECT count(*) FROM journal WHERE event_type='GENESIS_PREPARED'").fetchone()[0]
-        started = conn.execute("SELECT count(*) FROM journal WHERE event_type='EXPERIMENT_STARTED'").fetchone()[0]
-        runs = conn.execute("SELECT count(*) FROM runs").fetchone()[0]
-        return (prepared, started, runs) == (1, 0, 0)
-    except sqlite3.Error:
-        return False
-    finally:
-        conn.close()
+    return not genesis_only_findings(p2_db)
 
 
 __all__ = ["check"]
