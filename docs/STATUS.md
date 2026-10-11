@@ -17,7 +17,8 @@ _Última actualización: 2026-10-10 (America/New_York). Esta es la única fuente
 | 6 | Multi-Setup / Conflict | CERTIFIED | #11 | `405df6a8` |
 | 7 | AI Agent Floor | CERTIFIED | #12 | `2753130d` |
 | 8 | Execution / Fill / Trade Manager | **CERTIFIED** (2026-10-10, control delegado; revisión cruzada Codex/Claude) | [#13](https://github.com/bebote0997/ai-market-system/pull/13) | `4974408e` |
-| 9–13 | Email, Command Center, Chaos, E2E, demo PAPER 30 días | NOT STARTED | — | — |
+| 9 | Email + Slack alerts (solo mocks, OFF por defecto) | IN PROGRESS (issue #20) | — | — |
+| 10–13 | Command Center, Chaos, E2E, demo PAPER 30 días | NOT STARTED | — | — |
 
 Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 
@@ -38,7 +39,7 @@ Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 
 ## Próximos pasos hacia el demo PAPER de 30 días
 1. Fase 8 CERTIFIED y mergeada (PR #13).
-2. Siguiente: Fase 9 (email + Slack, solo mocks) — NOT STARTED hasta que se abra su issue/PR.
+2. Fase 9 (email + Slack, solo mocks) IN PROGRESS: issue #20, rama `v2/phase9-alerts`.
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
 

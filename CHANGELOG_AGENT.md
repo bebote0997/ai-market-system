@@ -1,5 +1,49 @@
 # Agent Changelog
 
+## 2026-10-11 — Phase 9 Codex review fixes (PR #21, M1–M3) + T12 chart + post-cycle wiring — IN PROGRESS
+
+- Baseline suite run first (exit 0). Branch `v2/phase9-alerts`.
+- M1 `runtime/alert_channels.py`: SMTP cleanup separated from delivery; a QUIT/close failure after a successful
+  `send_message` is logged (`SMTP_CLEANUP_FAILED`) and the delivery stays DELIVERED with 1 attempt (no retry, no
+  duplicate email). A send error always wins over a cleanup error.
+- M2: `classify_smtp_error`: 4xx replies → `TEMPORARY_FAILURE` (retryable); 5xx → `REJECTED` (`AUTH_ERROR` for
+  5xx auth); recipients refused only with 4xx → temporary; no reply code → `CONNECTION_ERROR` (retryable).
+- M3 `runtime/alert_dispatch.py`: stale `SENDING` claims are reclaimed after `stale_after` (default 300 s, min 60 s)
+  via compare-and-swap on `claimed_at`; the row records `recovery='AMBIGUOUS_RETRY'` (+ `reclaims` count) and a
+  warning is logged; completions only apply to the current claim. Ledger schema gains `recovery`, `reclaims`
+  (ledger is new in this unmerged PR; no migration).
+- F09-T12 `runtime/alert_chart.py`: inline SVG sparkline from caller bar closes (`AlertEvent.closes`, finite floats
+  only); PNG attachment via plotly+kaleido only if kaleido is installed (it is not); no bars → `NO_DATA`. No new deps.
+- Wiring `runtime/alert_hook.py`: `DemoRunner._capture_and_deliver` passes the just-persisted `NotificationEvent`s
+  to the hook after the cycle, inside a log-only try/except. OFF unless `AI_FLOOR_ALERTS_ENABLED=1` (nothing built,
+  mapped or sent). Optional `AI_FLOOR_ALERTS_LEDGER_PATH`. `runtime/service.py` untouched.
+- CLI `python -m runtime.alert_test --slack|--email`: one labelled TEST alert through the new path; not run in tests.
+- `test_phase9_alerts.py`: 42 tests (mocks only), incl. M1/M2/M3, chart, hook disabled = no calls, and a real
+  DemoRunner cycle proving a failing/hostile hook leaves the PAPER result/state identical.
+- Full suite: 1468 tests OK (1 expected failure). `ruff check .` clean. `git diff --check` clean. No commit, push,
+  merge, deploy or activation.
+
+## 2026-10-10 — Phase 9 Email + Slack alert engine (issue #20) — IN PROGRESS
+
+- Branch `v2/phase9-alerts` from `4974408`. Baseline suite run first (exit 0).
+- New small modules: `runtime/alert_catalog.py` (10 events + priority, trade alert content verbatim with
+  `NO_DATA` for absent values, mapping from the durable `NotificationEvent`), `runtime/alert_render.py` (one
+  responsive HTML template + plain text, escaped, no remote images), `runtime/alert_channels.py` (Gmail
+  `SMTP_SSL` smtp.gmail.com:465 with `GMAIL_APP_PASSWORD`, sender/recipient `AI_FLOOR_ALERT_EMAIL_FROM`/`_TO`
+  defaulting to yefersontejeda@gmail.com; Slack via `SLACK_WEBHOOK_URL`), `runtime/alert_dispatch.py`
+  (dedup by `event_id`, durable per-channel delivery status in a SQLite ledger, bounded exponential backoff,
+  per-channel failure detection; never raises).
+- `runtime/notifications.py`: Slack send/error mapping extracted into `send_slack()` and reused; behaviour unchanged.
+- OFF by default: delivery only when `AI_FLOOR_ALERTS_ENABLED` is exactly `1`. Not wired into any runtime/order
+  path (structural test). `.env.example` gains the names `GMAIL_APP_PASSWORD=` and `AI_FLOOR_ALERTS_ENABLED=0`.
+  No strategy/risk/broker, flag default or Render changes.
+- `test_phase9_alerts.py`: 28 tests, mocks only (`smtplib.SMTP_SSL`, `urlopen` patched; `socket.create_connection`
+  guarded). Includes proof that failing channels leave PAPER account/orders/fills/journal unchanged.
+- `docs/` was brought in from `docs/single-source-of-truth` (HEAD is its ancestor) so that `docs/STATUS.md` and
+  `docs/phases/phase-09.md` could be updated (status IN PROGRESS, F09-T01…T19 → tests; T12 and T18 PARTIAL).
+- Full suite: 1454 tests OK (1 expected failure, ISSUE-012). `ruff check .` clean. `git diff --check` clean.
+  No commit, push, merge, deploy or activation.
+
 ## 2026-10-10 — FreezeAmendmentTests / git init environment diagnosis
 
 - Preserved all pre-existing changes on `v2/phase8-p4b`, HEAD `720f4b4`. No test or production-code edits.

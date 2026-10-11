@@ -102,9 +102,14 @@ class SlackNotificationSink:
                 "order_id": outcome.get("order_id"),
                 "risk_status": event.risk_decision.get("status") if event.risk_decision else None,
             }, sort_keys=True)}
-        try:
-            self.transport(self.webhook_url, payload, self.timeout)
-        except HTTPError as exc:
-            raise SlackNotificationError("RATE_LIMITED" if exc.code == 429 else "PROVIDER_FAILURE") from None
-        except (URLError, TimeoutError, ConnectionError):
-            raise SlackNotificationError("CONNECTION_ERROR") from None
+        send_slack(self.transport, self.webhook_url, payload, self.timeout)
+
+
+def send_slack(transport, url, payload, timeout):
+    """Post one Slack payload; failures surface only as typed SlackNotificationError codes."""
+    try:
+        transport(url, payload, timeout)
+    except HTTPError as exc:
+        raise SlackNotificationError("RATE_LIMITED" if exc.code == 429 else "PROVIDER_FAILURE") from None
+    except (URLError, TimeoutError, ConnectionError):
+        raise SlackNotificationError("CONNECTION_ERROR") from None
