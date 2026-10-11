@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import hashlib
 import json
+import logging
 import os
 import re
 
@@ -77,8 +78,14 @@ class RuntimeConfig:
     # required). OFF by default; ON requires v2_rex (the chain head after E0 is the REX edg_after). The transition to
     # the only mode happens at the authorized P4b baseline cut, not here.
     v2_sealed_genesis: bool = False
+    # DEC-14.2: independent of the opposite-setup policy; operational default remains V1.
+    v2_planner_policy: str = "V1"
 
     def __post_init__(self):
+        if self.v2_planner_policy not in ("V1", "V2_F3"):
+            logging.getLogger("ai_floor.runtime").warning(
+                "V2_PLANNER_POLICY=%r unknown; fail closed to V1", self.v2_planner_policy)
+            object.__setattr__(self, "v2_planner_policy", "V1")
         if (self.cadence_minutes <= 0 or 60 % self.cadence_minutes or
                 not self.enabled_symbols or len(set(self.enabled_symbols)) != len(self.enabled_symbols) or
                 not set(self.enabled_symbols) <= set(SUPPORTED_SYMBOLS)):
@@ -127,6 +134,8 @@ class RuntimeConfig:
                    "market_provider_mode": self.market_provider_mode,
                    "ai_provider_mode": self.ai_provider_mode,
                    "macro_provider_mode": self.macro_provider_mode}
+        if self.v2_planner_policy != "V1":  # Default keeps the fingerprint byte-identical.
+            content["v2_planner_policy"] = self.v2_planner_policy
         if self.v2_position_catch_up:  # OFF keeps the V1 fingerprint byte-identical.
             content["v2_position_catch_up"] = True
             content["v2_position_catch_up_symbols"] = list(self.v2_position_catch_up_symbols)  # P1-B: exact scope
@@ -182,6 +191,7 @@ class RuntimeConfig:
         return cls(db_path=Path(os.environ.get("AI_FLOOR_DB_PATH", "data/runtime/trading_floor.db")),
                    v2_position_catch_up=catch_up == "1",  # __post_init__ rejects ON without a separate evidence path
                    v2_position_catch_up_symbols=scope,
+                   v2_planner_policy=os.environ.get("V2_PLANNER_POLICY", "V1"),
                    v2_rex=rex == "1",
                    v2_rhalt=rhalt == "1",
                    v2_sealed_genesis=sealed == "1",

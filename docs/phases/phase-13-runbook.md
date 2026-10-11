@@ -20,6 +20,7 @@
 ## 2. Flags (env) para el demo, y por qué
 | Variable | Valor demo | Motivo |
 |---|---|---|
+| `V2_PLANNER_POLICY` | `V2_F3` | DEC-14.2 (owner Jeferson Tejeda, 2026-10-11 11:33 ET): plan 3.00R, fill PAPER ≥ 2.50R por spread, latencia y movimiento del precio. Default V1 hasta el demo; independiente de `V2_OPPOSITE_SETUP_POLICY`. |
 | `AI_FLOOR_ENABLED_SYMBOLS` | `XAUUSD,EURUSD` | Mercados del experimento. NAS100 está bloqueado en código. |
 | `AI_FLOOR_MARKET_PROVIDER` | `twelve_data` | Datos reales; los proveedores descartan las velas sin cerrar (ver ISSUE-012). |
 | `AI_FLOOR_AI_PROVIDER` | `openai` | Usa la IA real; si falla, la política de revisión deja la ejecución en estado no disponible (fail-closed). |
@@ -69,3 +70,5 @@
 - Integridad: resultado del verifier, cadena REX y halts.
 - Alertas: entregadas, fallidas y ambiguas.
 - Recomendación de GO / NO-GO para la siguiente etapa. REAL sigue **prohibido** salvo una fase nueva con su propia aprobación.
+
+DEC-14.2: el oráculo REX actual verifica V1 únicamente. F3 registra la política efectiva y el verifier rechaza `UNSUPPORTED_RR_POLICY`; no interpretar esa ejecución como verificada por ese oráculo.

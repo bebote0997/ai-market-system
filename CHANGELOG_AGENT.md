@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-11 — DEC-14.2: planner policy runtime flag
+
+- Owner Jeferson Tejeda approved 2026-10-11 11:33 ET; local feature branch only, no activation/Render/push/merge.
+- Added `V2_PLANNER_POLICY=V1|V2_F3` (default V1; unknown → V1 + warning). V1 fingerprint and floor call/broker behavior preserved.
+- F3 selects the existing fixed-3R planner, matching Risk geometry policy (preserving custom risk limits), and broker fill floor 2.50R in legacy and catch-up pending-order paths; SL/TP unchanged. Policy D remains forbidden in runtime.
+- REX records effective broker policy; its V1-only oracle explicitly rejects F3 as unsupported.
+- Added durable runtime cycle tests: 3R plans; 2.6R fills accepted and 2.4R rejected under F3, V1 rejects below 3R; both fill paths. Config/env/warning/fingerprint tests and minimal Phase 4 static gate updates.
+- Baseline: 1517 unittest tests OK (1 expected failure), 196.961 s. Final: ruff PASS; diff-check PASS; full unittest 1520 tests OK (1 expected failure), 165.530 s.
+- Requested full pytest: 1514 passed, 1 xfailed, 1100 subtests passed; 5 pre-existing failures in Phase 8 signal/startup AnnotateFailures.run (pytest passes TestCaseFunction, which has no failures/errors). Those two test files are unchanged; scope extension requested for a minimal harness compatibility fix. No local commit while pytest remains failing (AGENTS.md).
+
 ## 2026-10-11 — Phase 12 End-to-End (issue #30) — IN PROGRESS
 
 - Owner-authorized offline work on existing `v2/phase12-e2e`; baseline before edits:
