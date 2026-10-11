@@ -10,7 +10,7 @@ def remote_dashboard_enabled(env=None):
 
 def require_dashboard_access(st, env=None):
     env = os.environ if env is None else env
-    if not remote_dashboard_enabled(env):
+    if not remote_dashboard_enabled(env) and not env.get("AI_FLOOR_DASHBOARD_PASSWORD"):
         return True
     password = env.get("AI_FLOOR_DASHBOARD_PASSWORD")
     if not password:

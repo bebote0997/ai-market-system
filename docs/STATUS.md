@@ -18,7 +18,7 @@ _Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente
 | 7 | AI Agent Floor | CERTIFIED | #12 | `2753130d` |
 | 8 | Execution / Fill / Trade Manager | **CERTIFIED** (2026-10-10, control delegado; revisión cruzada Codex/Claude) | [#13](https://github.com/bebote0997/ai-market-system/pull/13) | `4974408e` |
 | 9 | Email + Slack alerts (OFF por defecto) | IMPLEMENTED, merge en main (PR #21, 4452350); no certificada: falta F09-T18 (envío real en Render); #24/#25 cerrados (PR de worker aislado) | — | — |
-| 10 | Command Center / Display V2 | IN PROGRESS (issue #22, PR #23, sin revisión independiente todavía) | — | — |
+| 10 | Command Center / Display V2 | IMPLEMENTED, merge en main (PR #23; autor Codex, revisión independiente Grok Bot); no certificada: faltan capturas móviles/revisión visual del owner | — | — |
 | 11–13 | Chaos, E2E, demo PAPER 30 días | NOT STARTED | — | — |
 
 Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
@@ -40,7 +40,7 @@ Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 
 ## Próximos pasos hacia el demo PAPER de 30 días
 1. Fase 8 CERTIFIED y mergeada (PR #13).
-2. Fase 9 en main (PR #21). #24 (recuperación al reinicio) y #25 (worker aislado) cerrados por la PR de `v2/phase9-alert-worker`. Pendiente: prueba real F09-T18 en Render. Fase 10: PR #23 abierta, a la espera de la revisión de Claude Code (límite semanal hasta el 12 de octubre a las 15:00 ET).
+2. Fase 9 en main (PR #21). #24 (recuperación al reinicio) y #25 (worker aislado) cerrados por la PR de `v2/phase9-alert-worker`. Pendiente: prueba real F09-T18 en Render. Fase 10 en main (PR #23). Siguiente: Fase 11 (17 escenarios de fallo como tests).
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
 
