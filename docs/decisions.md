@@ -20,6 +20,6 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 | DEC-8.20 | 2026-10-08 | APPROVED POLICY | A2: nueva cuenta PAPER USD 10 000, DB nueva, sin posiciones heredadas, sealed genesis |
 | DEC-8.21b | 2026-10-08 | PROVISIONAL | B-STRICT pendiente de validación operativa |
 | HIGH-8.1 owner decision | 2026-10-10 | RECORDED | Ruta OFF EURUSD/XAUUSD → catch-up cronológico; PnL no comparable con baseline congelado (`HIGH81_OWNER_DECISION.md`) |
-| **DEC-8.18** | — | **PENDING** | Status-verification procedure (axes, H5) |
-| **DEC-8.19** | — | **PENDING** | Boundary handling; bajo A2: precondición flat |
+| **DEC-8.18** | 2026-10-10 | **APPROVED** (owner Jeferson Tejeda / bebote0997) | Status-verification procedure (axes, H5), aprobado tal cual |
+| **DEC-8.19** | 2026-10-10 | **APPROVED** (owner Jeferson Tejeda / bebote0997) | Boundary handling = opción (a): precondición flat bajo A2 (sin posiciones ni órdenes heredadas) |
 | DEC-8.22-a…j, OP-1…7 | — | NOT AUTHORIZED | Autorizaciones de implementación/operación |

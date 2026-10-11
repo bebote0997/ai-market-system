@@ -27,14 +27,14 @@ Progreso certificado: 8/14 (57.14 %). Detalle: `docs/phases/`.
 - Carry-forwards: H04 restante, H15, trazabilidad deploy/build/config/run, Email Fase 9, stash@{0}, CF-P5-OPENRISK, rollback/compatibility gate Fase 6.
 
 ## Decisiones pendientes del owner (ver `docs/decisions.md`)
-- [ ] DEC-8.18 — procedimiento de verificación de estado (ejes FS/EX…, atestación H5).
-- [ ] DEC-8.19 — boundary handling (bajo A2: precondición flat).
+- [x] DEC-8.18 — APPROVED 2026-10-10 (owner): procedimiento de verificación de estado tal cual (ejes, H5).
+- [x] DEC-8.19 — APPROVED 2026-10-10 (owner): opción (a), precondición flat bajo A2.
 - [ ] Nuevo baseline económico/freeze tras HIGH-8.1 (A2: cuenta PAPER nueva USD 10 000, DB nueva, sealed genesis — DEC-8.20 aprobado como política).
 - [ ] DEC-8.22-a…j / OP-1…OP-7 (NOT AUTHORIZED).
 - [ ] Autorizar `AI_FLOOR_CLOUD_RUNNER` / `AI_FLOOR_SCHEDULER` en Render (hoy `0`).
 
 ## Próximos pasos hacia el demo PAPER de 30 días
-1. Owner: DEC-8.18 + copia de DB + atestación H5; DEC-8.19.
+1. Owner: ejecutar DEC-8.18 (copia de DB + atestación H5). DEC-8.18/8.19 ya aprobadas.
 2. Revisión independiente y certificación de Fase 8 sobre PR #13; luego merge autorizado.
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Arranque PAPER autorizado. Nota: el Libro define Fase 13 como 60 días con auditoría Day 30; un demo de 30 días equivale a la primera mitad salvo nueva decisión.
