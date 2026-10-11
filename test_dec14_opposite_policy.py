@@ -18,7 +18,6 @@ from execution.paper_broker import PaperBroker
 from execution.risk_reservation import prepare_reservation
 from runtime.config import RuntimeConfig
 from runtime.demo_runner import DemoRunner
-from runtime.notifications import FakeNotificationSink
 from runtime.alert_catalog import from_notification
 from runtime.scheduler import slot_key
 from runtime.service import OperationalRuntime
