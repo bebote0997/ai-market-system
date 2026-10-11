@@ -2,17 +2,21 @@
 
 A channel either returns normally or raises ``AlertChannelError`` carrying only a typed code; the code never
 includes the app password, webhook URL, recipient list or provider response body. ``retryable`` tells the
-dispatcher whether a bounded retry can help (configuration and authentication failures cannot).
+dispatcher whether a bounded retry can help (configuration, authentication and permanent 5xx failures cannot;
+temporary 4xx SMTP replies can).
 """
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
+import logging
 import os
 import smtplib
 import ssl
 
+from runtime.alert_chart import chart_png
 from runtime.alert_render import render_html, render_text, subject
 from runtime.notifications import SlackNotificationError, _slack_post, send_slack
 
+LOG = logging.getLogger(__name__)
 DEFAULT_ALERT_EMAIL = "yefersontejeda@gmail.com"
 GMAIL_HOST = "smtp.gmail.com"
 GMAIL_PORT = 465
@@ -54,6 +58,9 @@ class GmailEmailChannel:
         msg["X-AI-Floor-Event-ID"] = event.event_id
         msg.set_content(render_text(event))
         msg.add_alternative(render_html(event), subtype="html")
+        png = chart_png(event.closes) if event.kind.trade else None  # only when plotly+kaleido are installed
+        if png:
+            msg.add_attachment(png, maintype="image", subtype="png", filename="chart.png")
         return msg
 
     def send(self, event):
@@ -62,16 +69,42 @@ class GmailEmailChannel:
         msg = self.message(event)
         factory = self.smtp_factory or smtplib.SMTP_SSL
         try:
-            with factory(GMAIL_HOST, GMAIL_PORT, timeout=self.timeout,
-                         context=ssl.create_default_context()) as smtp:
-                smtp.login(self.sender, self.password.replace(" ", ""))
-                smtp.send_message(msg)
-        except smtplib.SMTPAuthenticationError:
-            raise AlertChannelError("AUTH_ERROR") from None
-        except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError):
-            raise AlertChannelError("REJECTED") from None
-        except (smtplib.SMTPException, OSError):  # includes timeouts and connection errors
-            raise AlertChannelError("CONNECTION_ERROR") from None
+            smtp = factory(GMAIL_HOST, GMAIL_PORT, timeout=self.timeout, context=ssl.create_default_context())
+        except (smtplib.SMTPException, OSError) as exc:
+            raise AlertChannelError(classify_smtp_error(exc)) from None
+        try:
+            smtp.login(self.sender, self.password.replace(" ", ""))
+            smtp.send_message(msg)
+        except (smtplib.SMTPException, OSError) as exc:
+            raise AlertChannelError(classify_smtp_error(exc)) from None
+        finally:
+            # Cleanup is separate from delivery: once send_message returned the message is accepted (SENT), so a
+            # failing QUIT/close is only logged and never turns the send into a retry (duplicate email).
+            _close_quietly(smtp)
+
+
+def classify_smtp_error(exc):
+    """Typed code for an SMTP failure: 4xx is temporary (retryable), 5xx permanent (REJECTED / AUTH_ERROR)."""
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        codes = [code for code, _ in exc.recipients.values()]
+        return "TEMPORARY_FAILURE" if codes and all(400 <= code < 500 for code in codes) else "REJECTED"
+    code = getattr(exc, "smtp_code", None) if isinstance(exc, smtplib.SMTPResponseException) else None
+    if isinstance(code, int) and 400 <= code < 500:
+        return "TEMPORARY_FAILURE"
+    if isinstance(code, int) and 500 <= code < 600:
+        return "AUTH_ERROR" if isinstance(exc, smtplib.SMTPAuthenticationError) else "REJECTED"
+    return "CONNECTION_ERROR"  # disconnects, timeouts, DNS and responses without a 4xx/5xx code
+
+
+def _close_quietly(smtp):
+    try:
+        smtp.quit()
+    except Exception as exc:  # noqa: BLE001 - cleanup only; the delivery outcome is already decided
+        LOG.warning("component=alerts event=SMTP_CLEANUP_FAILED error_type=%s", type(exc).__name__)
+        try:
+            smtp.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class SlackAlertChannel:
@@ -99,4 +132,5 @@ class SlackAlertChannel:
             raise AlertChannelError(str(exc)) from None
 
 
-__all__ = ["AlertChannelError", "DEFAULT_ALERT_EMAIL", "GmailEmailChannel", "SlackAlertChannel"]
+__all__ = ["AlertChannelError", "DEFAULT_ALERT_EMAIL", "GmailEmailChannel", "SlackAlertChannel",
+           "classify_smtp_error"]

@@ -12,12 +12,13 @@ import unittest
 from unittest import mock
 from urllib.error import HTTPError, URLError
 
-from runtime import alert_channels, alert_dispatch
+from runtime import alert_channels, alert_chart, alert_dispatch
 from runtime.alert_catalog import (CATALOG, NO_DATA, TRADE_FIELDS, alert_event, alert_event_id,
                                    from_notification, make_test_alert)
 from runtime.alert_channels import AlertChannelError, GmailEmailChannel, SlackAlertChannel
-from runtime.alert_dispatch import (AlertDeliveryLedger, AlertDispatcher, AlertNotificationSink,
+from runtime.alert_dispatch import (AMBIGUOUS_RETRY, AlertDeliveryLedger, AlertDispatcher, AlertNotificationSink,
                                     alerts_enabled, dispatcher_from_env)
+from runtime.alert_hook import AlertHook
 from runtime.alert_render import render_html, render_text, subject
 from runtime.notifications import NotificationEvent
 
@@ -172,7 +173,7 @@ class TestEmailChannel(NoNetwork):
         args, kwargs = smtp_ssl.call_args
         self.assertEqual(args, ("smtp.gmail.com", 465))
         self.assertIn("context", kwargs)
-        smtp = smtp_ssl.return_value.__enter__.return_value
+        smtp = smtp_ssl.return_value
         smtp.login.assert_called_once_with("yefersontejeda@gmail.com", "abcdefghijklmnop")
         message = smtp.send_message.call_args[0][0]
         self.assertEqual(message["To"], "yefersontejeda@gmail.com")
@@ -197,7 +198,7 @@ class TestEmailChannel(NoNetwork):
             with self.subTest(code=code, error=type(error).__name__):
                 with mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl, \
                         self.assertRaises(AlertChannelError) as ctx:
-                    smtp_ssl.return_value.__enter__.return_value.login.side_effect = error
+                    smtp_ssl.return_value.login.side_effect = error
                     self.channel().send(trade_event())
                 self.assertEqual((ctx.exception.code, ctx.exception.retryable), (code, retryable))
                 self.assertNotIn("abcd", str(ctx.exception))
@@ -277,7 +278,7 @@ class TestDispatcher(NoNetwork):
             self.assertEqual(dispatcher(channel, ledger=ledger).dispatch(trade_event()), {"rec": "DUPLICATE"})
             self.assertEqual(channel.sent, ["evt-1"])
             self.assertEqual(ledger.status("evt-1"),
-                             {"rec": {"status": "DELIVERED", "attempts": 1, "error_type": None}})
+                             {"rec": {"status": "DELIVERED", "attempts": 1, "error_type": None, "recovery": None}})
             ledger.close()
             first.ledger.close()
 
@@ -419,8 +420,8 @@ class TestTradingIsolation(NoNetwork):
     def test_alert_modules_import_no_trading_code(self):
         trading = ("execution", "riesgo", "floor", "storage", "core", "runtime.service", "runtime.demo_runner",
                    "runtime.cloud_runner", "runtime.scheduler")
-        for module in (alert_dispatch, alert_channels, Path(ROOT / "runtime/alert_catalog.py"),
-                       Path(ROOT / "runtime/alert_render.py")):
+        for module in (alert_dispatch, alert_channels, *(ROOT / f"runtime/alert_{name}.py"
+                                                         for name in ("catalog", "render", "chart", "hook", "test"))):
             path = module if isinstance(module, Path) else Path(module.__file__)
             tree = ast.parse(path.read_text(encoding="utf-8"))
             names = [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
@@ -429,12 +430,288 @@ class TestTradingIsolation(NoNetwork):
                 self.assertFalse(any(name == t or name.startswith(t + ".") for t in trading), (path.name, name))
 
     def test_not_wired_into_trading_paths(self):
+        """The only wiring is runtime.alert_hook, called by the runner after the cycle (never by the service)."""
         for path in [*ROOT.glob("runtime/*.py"), *ROOT.glob("execution/*.py"), *ROOT.glob("floor/*.py"),
                      ROOT / "app.py", ROOT / "main.py"]:
             if path.name.startswith("alert_"):
                 continue
-            self.assertNotIn("alert_dispatch", path.read_text(encoding="utf-8"), path.name)
-            self.assertNotIn("alert_channels", path.read_text(encoding="utf-8"), path.name)
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("alert_dispatch", text, path.name)
+            self.assertNotIn("alert_channels", text, path.name)
+            if path.name != "demo_runner.py":
+                self.assertNotIn("alert_hook", text, path.name)
+
+
+class TestSmtpCleanupAndClassification(NoNetwork):
+    """Codex M1 (QUIT/close after a successful send never retries) and M2 (4xx temporary, 5xx permanent)."""
+
+    def channel(self):
+        return GmailEmailChannel(password="pw", environ={})
+
+    def test_m1_quit_failure_after_send_is_delivered_once_without_retry(self):
+        for cleanup_error in (smtplib.SMTPServerDisconnected("gone"), TimeoutError(), OSError("reset")):
+            with self.subTest(error=type(cleanup_error).__name__), \
+                    mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl:
+                smtp = smtp_ssl.return_value
+                smtp.quit.side_effect = cleanup_error
+                smtp.close.side_effect = OSError("close")
+                alerts = dispatcher(self.channel())
+                with self.assertLogs("runtime.alert_channels", "WARNING") as logs:
+                    self.assertEqual(alerts.dispatch(trade_event()), {"email": "DELIVERED"})
+                self.assertEqual((smtp_ssl.call_count, smtp.send_message.call_count), (1, 1))
+                smtp.close.assert_called_once()
+                self.assertIn("SMTP_CLEANUP_FAILED", logs.output[0])
+                self.assertEqual(alerts.ledger.status("evt-1")["email"]["attempts"], 1)
+
+    def test_m1_send_error_wins_over_cleanup_error(self):
+        with mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl, self.assertRaises(AlertChannelError) as ctx:
+            smtp_ssl.return_value.send_message.side_effect = smtplib.SMTPDataError(554, b"spam")
+            smtp_ssl.return_value.quit.side_effect = smtplib.SMTPServerDisconnected("gone")
+            self.channel().send(trade_event())
+        self.assertEqual(ctx.exception.code, "REJECTED")
+        smtp_ssl.return_value.quit.assert_called_once()
+
+    def test_m2_reply_codes_classified(self):
+        cases = ((smtplib.SMTPDataError(451, b"try later"), "TEMPORARY_FAILURE", True),
+                 (smtplib.SMTPDataError(554, b"rejected"), "REJECTED", False),
+                 (smtplib.SMTPSenderRefused(421, b"busy", "a@x"), "TEMPORARY_FAILURE", True),
+                 (smtplib.SMTPSenderRefused(553, b"no", "a@x"), "REJECTED", False),
+                 (smtplib.SMTPRecipientsRefused({"b@x": (450, b"greylist")}), "TEMPORARY_FAILURE", True),
+                 (smtplib.SMTPRecipientsRefused({"b@x": (550, b"unknown")}), "REJECTED", False),
+                 (smtplib.SMTPRecipientsRefused({"b@x": (450, b""), "c@x": (550, b"")}), "REJECTED", False),
+                 (smtplib.SMTPAuthenticationError(454, b"temp auth"), "TEMPORARY_FAILURE", True),
+                 (smtplib.SMTPAuthenticationError(535, b"bad"), "AUTH_ERROR", False),
+                 (smtplib.SMTPConnectError(421, b"too many"), "TEMPORARY_FAILURE", True),
+                 (smtplib.SMTPResponseException(-1, b"?"), "CONNECTION_ERROR", True),
+                 (smtplib.SMTPServerDisconnected("x"), "CONNECTION_ERROR", True))
+        for error, code, retryable in cases:
+            with self.subTest(error=type(error).__name__, code=code):
+                self.assertEqual(alert_channels.classify_smtp_error(error), code)
+                with mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl, \
+                        self.assertRaises(AlertChannelError) as ctx:
+                    smtp_ssl.return_value.send_message.side_effect = error
+                    self.channel().send(trade_event())
+                self.assertEqual((ctx.exception.code, ctx.exception.retryable), (code, retryable))
+                self.assertIsNone(ctx.exception.__cause__)
+        with mock.patch.object(smtplib, "SMTP_SSL", side_effect=smtplib.SMTPConnectError(421, b"x")), \
+                self.assertRaises(AlertChannelError) as ctx:
+            self.channel().send(trade_event())
+        self.assertEqual(ctx.exception.code, "TEMPORARY_FAILURE")
+
+    def test_m2_dispatcher_retries_4xx_and_stops_on_5xx(self):
+        with mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl:
+            smtp_ssl.return_value.send_message.side_effect = [smtplib.SMTPDataError(451, b"later"), {}]
+            alerts = dispatcher(self.channel())
+            self.assertEqual(alerts.dispatch(trade_event()), {"email": "DELIVERED"})
+            self.assertEqual(alerts.ledger.status("evt-1")["email"]["attempts"], 2)
+        with mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl:
+            smtp_ssl.return_value.send_message.side_effect = smtplib.SMTPDataError(554, b"no")
+            alerts = dispatcher(self.channel())
+            self.assertEqual(alerts.dispatch(trade_event()), {"email": "FAILED"})
+            self.assertEqual(smtp_ssl.return_value.send_message.call_count, 1)
+            self.assertEqual(alerts.ledger.status("evt-1")["email"]["error_type"], "REJECTED")
+
+
+class Clock:
+    def __init__(self, seconds=0):
+        self.seconds = seconds
+
+    def __call__(self):
+        return f"2026-10-10T14:{self.seconds // 60:02d}:{self.seconds % 60:02d}Z"
+
+
+class TestStaleClaimRecovery(NoNetwork):
+    """Codex M3: a SENDING claim left by a crashed process is reclaimed after ``stale_after`` (AMBIGUOUS_RETRY)."""
+
+    def test_m3_stale_sending_claim_is_reclaimed_once_and_marked_ambiguous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "alerts.sqlite")
+            crashed = AlertDeliveryLedger(path)
+            self.assertEqual(crashed.claim(trade_event(), "rec", Clock(0)()), "CLAIMED")  # then the process dies
+            clock, channel = Clock(100), RecordingChannel()
+            ledger = AlertDeliveryLedger(path)
+            alerts = dispatcher(channel, ledger=ledger, clock=clock, stale_after=300)
+            self.assertEqual(alerts.dispatch(trade_event()), {"rec": "DUPLICATE"})  # not stale yet
+            self.assertEqual(channel.sent, [])
+            clock.seconds = 300
+            with self.assertLogs("runtime.alert_dispatch", "WARNING") as logs:
+                self.assertEqual(alerts.dispatch(trade_event()), {"rec": "DELIVERED"})
+            self.assertIn("event=AMBIGUOUS_RETRY", logs.output[0])
+            self.assertEqual(channel.sent, ["evt-1"])
+            self.assertEqual(ledger.status("evt-1"), {"rec": {"status": "DELIVERED", "attempts": 1,
+                                                              "error_type": None, "recovery": AMBIGUOUS_RETRY}})
+            clock.seconds = 3000
+            self.assertEqual(alerts.dispatch(trade_event()), {"rec": "DUPLICATE"})  # completed rows never reclaim
+            # The slow original sender finishing late cannot overwrite the recovering claim's outcome.
+            crashed.complete("evt-1", "rec", Clock(3001)(), 3, "CONNECTION_ERROR", claimed_at=Clock(0)())
+            self.assertEqual(ledger.status("evt-1")["rec"]["status"], "DELIVERED")
+            self.assertEqual(channel.sent, ["evt-1"])
+            crashed.close()
+            ledger.close()
+
+    def test_m3_only_one_process_takes_over_a_stale_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "alerts.sqlite")
+            first, second = AlertDeliveryLedger(path), AlertDeliveryLedger(path)
+            first.claim(trade_event(), "rec", Clock(0)())
+            self.assertEqual(first.claim(trade_event(), "rec", Clock(400)(), 300), "RECLAIMED")
+            self.assertIsNone(second.claim(trade_event(), "rec", Clock(400)(), 300))
+            self.assertIsNone(second.claim(trade_event(), "rec", Clock(401)()))  # no stale_after: plain dedup
+            first.close()
+            second.close()
+
+    def test_m3_stale_after_bounds(self):
+        for bad in (0, 59.9, -1):
+            with self.subTest(stale_after=bad), self.assertRaises(ValueError):
+                dispatcher(RecordingChannel(), stale_after=bad)
+        self.assertEqual(dispatcher(RecordingChannel()).stale_after, 300.0)
+
+
+class TestChart(NoNetwork):
+    """F09-T12: inline SVG sparkline from caller bar closes; PNG only if plotly+kaleido exist; NO_DATA otherwise."""
+
+    def test_f09_t12_sparkline_from_closes(self):
+        self.assertIsNone(alert_chart.sparkline_svg(()))
+        self.assertIsNone(alert_chart.sparkline_svg(None))
+        svg = alert_chart.sparkline_svg((1.0, 3.0, 2.0))
+        self.assertTrue(svg.startswith("<svg") and svg.endswith("</svg>"))
+        points = svg.split('points="')[1].split('"')[0].split()
+        self.assertEqual(points, ["3.0,45.0", "120.0,3.0", "237.0,24.0"])  # min at bottom, max at top
+        self.assertEqual(alert_chart.sparkline_svg((5.0, 5.0)).split('points="')[1].split('"')[0], "3.0,24.0 237.0,24.0")
+        self.assertIn("points=\"3.0,24.0 237.0,24.0\"", alert_chart.sparkline_svg((5.0,)))
+
+    def test_f09_t12_rendered_inline_or_no_data(self):
+        event = alert_event("evt-c", "POSITION_OPENED", AT, trade={"symbol": "XAUUSD"}, closes=[2400, 2401.5, 2399])
+        html = render_html(event)
+        self.assertIn("<svg", html)
+        self.assertNotIn("<img", html)
+        self.assertEqual(dict(event.trade_rows())["Chart"], "SPARKLINE (3 closes)")
+        self.assertEqual(event.closes, (2400.0, 2401.5, 2399.0))
+        bare = render_html(trade_event())
+        self.assertNotIn("<svg", bare)
+        self.assertEqual(dict(trade_event().trade_rows())["Chart"], NO_DATA)
+        caller_ref = alert_event("evt-d", "POSITION_OPENED", AT, trade={"chart_ref": "chart-7"}, closes=[1, 2])
+        self.assertEqual(dict(caller_ref.trade_rows())["Chart"], "chart-7")
+        self.assertNotIn("<svg", render_html(alert_event("evt-e", "RECOVERY", AT, closes=[1, 2])))  # non-trade
+        for bad in ([float("nan")], [float("inf")], ["x"]):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                alert_event("evt-f", "POSITION_OPENED", AT, closes=bad)
+
+    def test_f09_t12_png_only_when_kaleido_installed(self):
+        real_find_spec = alert_chart.importlib.util.find_spec
+        with mock.patch.object(alert_chart.importlib.util, "find_spec",
+                               side_effect=lambda name: None if name == "kaleido" else real_find_spec(name)):
+            self.assertFalse(alert_chart.kaleido_available())
+            self.assertIsNone(alert_chart.chart_png((1.0, 2.0)))
+        self.assertIsNone(alert_chart.chart_png(()))
+        event = alert_event("evt-g", "POSITION_OPENED", AT, closes=[1, 2])
+        channel = GmailEmailChannel(password="pw", environ={})
+        with mock.patch.object(alert_channels, "chart_png", return_value=b"\x89PNG fake") as png:
+            message = channel.message(event)
+        png.assert_called_once_with((1.0, 2.0))
+        attachments = [part for part in message.iter_attachments()]
+        self.assertEqual([(a.get_content_type(), a.get_filename()) for a in attachments], [("image/png", "chart.png")])
+        with mock.patch.object(alert_channels, "chart_png", return_value=None):
+            self.assertEqual(list(channel.message(event).iter_attachments()), [])
+
+
+class TestAlertHook(NoNetwork):
+    """Wiring: the runner hands already-persisted notification events to the hook after the cycle."""
+
+    def note(self, kind="POSITION_OPENED", event_id="n-1"):
+        return NotificationEvent("1.0", event_id, "run-1", AT, "INFO", kind, "XAUUSD", ("LONDON",), (), None,
+                                 ("ord-1",), (), ())
+
+    def test_disabled_makes_no_calls(self):
+        for env in ({}, {"AI_FLOOR_ALERTS_ENABLED": "0"}, {"AI_FLOOR_ALERTS_ENABLED": "true"}):
+            factory = mock.Mock()
+            with self.subTest(env=env), mock.patch("runtime.alert_hook.from_notification") as mapping, \
+                    mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl, \
+                    mock.patch("runtime.notifications.urlopen") as urlopen:
+                self.assertIsNone(AlertHook(environ=env, dispatcher_factory=factory)([self.note()]))
+            factory.assert_not_called()
+            mapping.assert_not_called()
+            smtp_ssl.assert_not_called()
+            urlopen.assert_not_called()
+
+    def test_enabled_dispatches_mapped_events_once(self):
+        channel = RecordingChannel()
+        built = []
+
+        def factory(**kwargs):
+            built.append(kwargs)
+            return dispatcher(channel)
+        env = {"AI_FLOOR_ALERTS_ENABLED": "1", "AI_FLOOR_ALERTS_LEDGER_PATH": ":memory:"}
+        hook = AlertHook(environ=env, dispatcher_factory=factory)
+        result = hook([self.note(), self.note("DAILY_SUMMARY", "n-2"), self.note("STATE_INCONSISTENCY", "n-3")])
+        self.assertEqual(result, {"n-3": {"rec": "DELIVERED"}, "n-1": {"rec": "DELIVERED"}})
+        self.assertEqual(channel.sent, ["n-3", "n-1"])  # SYSTEM_CRITICAL first; DAILY_SUMMARY is not an alert
+        self.assertEqual(hook([self.note()]), {"n-1": {"rec": "DUPLICATE"}})
+        self.assertEqual(len(built), 1)
+        self.assertEqual(built[0]["ledger_path"], ":memory:")
+        self.assertEqual(hook([]), {})
+
+    def test_hook_never_raises(self):
+        env = {"AI_FLOOR_ALERTS_ENABLED": "1"}
+        with self.assertLogs("runtime.alert_hook", "WARNING"):
+            self.assertIsNone(AlertHook(environ=env, dispatcher_factory=mock.Mock(side_effect=OSError("x")))(
+                [self.note()]))
+        self.assertIsNone(AlertHook(environ=env)(None))
+        with self.assertLogs("runtime.alert_hook", "WARNING"):
+            self.assertEqual(AlertHook(environ=env, dispatcher_factory=lambda **_: dispatcher(RecordingChannel()))(
+                [object()]), {})
+
+
+class TestRunnerWiring(NoNetwork):
+    """The DemoRunner calls the hook after the cycle; a failing/disabled hook never changes PAPER results."""
+
+    def run_cycle(self, hook):
+        from test_demo_runner import T, Data, DeterministicAIProvider, instrument, macro_fixture, patched_scouts
+        from runtime.config import RuntimeConfig
+        from runtime.demo_runner import DemoRunner
+        with tempfile.TemporaryDirectory() as tmp:
+            config = RuntimeConfig(db_path=Path(tmp) / "floor.db", enabled_symbols=("XAUUSD", "EURUSD"),
+                                   market_provider_mode="twelve_data", ai_provider_mode="openai")
+            runner = DemoRunner(config, market_provider=Data(), ai_provider=DeterministicAIProvider(),
+                                macro_provider=macro_fixture(), instruments={"XAUUSD": instrument()},
+                                clock=lambda: T, alert_hook=hook)
+            try:
+                with patched_scouts("LONG"):
+                    result = runner.run_once("XAUUSD", T)
+                account, orders, fills = runner.store.load_paper("paper-main")
+                persisted = runner.store.notification_events()
+                return ((result["status"], result["durable_status"], result["journal_count"], len(orders),
+                         len(fills), account.cash, account.equity, sorted(account.open_positions)), persisted)
+            finally:
+                runner.close()
+
+    def test_disabled_hook_makes_no_calls_and_failures_never_change_paper_state(self):
+        factory = mock.Mock()
+        baseline, persisted = self.run_cycle(AlertHook(environ={}, dispatcher_factory=factory))
+        factory.assert_not_called()
+        self.assertEqual(baseline[0], "PLAN_READY")
+        self.assertTrue(persisted)
+
+        calls = []
+
+        def exploding(events):
+            calls.append([event.event_id for event in events])
+            raise RuntimeError("hook exploded")
+        with self.assertLogs("ai_floor.observability", "WARNING") as logs:
+            self.assertEqual(self.run_cycle(exploding)[0], baseline)
+        self.assertTrue(any("HOOK_FAILED" in line for line in logs.output))
+        self.assertTrue(calls[-1])  # called with the events persisted after the cycle
+
+        class Hostile:
+            name, configured = "hostile", True
+
+            def send(self, alert):
+                raise RuntimeError("smtp exploded")
+        hostile = AlertHook(environ={"AI_FLOOR_ALERTS_ENABLED": "1"},
+                            dispatcher_factory=lambda **_: dispatcher(Hostile()))
+        state, _ = self.run_cycle(hostile)
+        self.assertEqual(state, baseline)
+        self.assertGreater(hostile.dispatcher.health()["hostile"]["consecutive_failures"], 0)
 
 
 if __name__ == "__main__":

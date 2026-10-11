@@ -10,6 +10,12 @@ a claim row is inserted before the first attempt, so an event_id is attempted at
 (deduplication, F09-T14) even across processes sharing the ledger file. Transient failures are retried with
 bounded exponential backoff (F09-T17); the final DELIVERED/FAILED outcome and attempt count are stored
 (F09-T15) and consecutive failures per channel are tracked for failure detection (F09-T16).
+
+Stale claims: a claim left in SENDING (the process died mid-delivery) would otherwise suppress the alert forever.
+A SENDING claim older than ``stale_after`` seconds is taken over atomically (compare-and-swap on ``claimed_at``) and
+delivered again; because the earlier attempt may or may not have reached the recipient, the row records
+``recovery='AMBIGUOUS_RETRY'`` (at-least-once for that case, possibly a duplicate message). A completion only
+applies to the claim it belongs to, so a slow original sender cannot overwrite the recovering one.
 """
 from datetime import datetime, timezone
 import logging
@@ -25,11 +31,15 @@ ENABLED_ENV = "AI_FLOOR_ALERTS_ENABLED"
 MAX_ATTEMPTS_LIMIT = 5
 MAX_DELAY_LIMIT = 30.0
 FAILING_THRESHOLD = 3
+MIN_STALE_AFTER = 60.0  # floor; the default 300s exceeds one bounded delivery (attempts x (timeout + backoff))
+AMBIGUOUS_RETRY = "AMBIGUOUS_RETRY"
+CLAIMED, RECLAIMED = "CLAIMED", "RECLAIMED"
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS alert_deliveries(
 event_id TEXT NOT NULL, channel TEXT NOT NULL, event_type TEXT NOT NULL, priority TEXT NOT NULL,
 status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error_type TEXT,
-claimed_at TEXT NOT NULL, completed_at TEXT, PRIMARY KEY(event_id, channel))"""
+claimed_at TEXT NOT NULL, completed_at TEXT, recovery TEXT, reclaims INTEGER NOT NULL DEFAULT 0,
+PRIMARY KEY(event_id, channel))"""
 
 
 def alerts_enabled(environ=None):
@@ -39,6 +49,12 @@ def alerts_enabled(environ=None):
 
 def _utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _age_seconds(claimed_at, at):
+    def parse(value):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (parse(at) - parse(claimed_at)).total_seconds()
 
 
 class AlertDeliveryLedger:
@@ -55,26 +71,41 @@ class AlertDeliveryLedger:
         if db is not None:
             db.close()
 
-    def claim(self, event, channel, at):
+    def claim(self, event, channel, at, stale_after=None):
+        """CLAIMED (new), RECLAIMED (stale SENDING claim taken over: AMBIGUOUS_RETRY) or None (duplicate)."""
         with self._lock:
-            return self.db.execute(
-                "INSERT OR IGNORE INTO alert_deliveries(event_id,channel,event_type,priority,status,claimed_at) "
-                "VALUES(?,?,?,?,'SENDING',?)",
-                (event.event_id, channel, event.event_type, event.priority, at)).rowcount == 1
+            if self.db.execute(
+                    "INSERT OR IGNORE INTO alert_deliveries(event_id,channel,event_type,priority,status,claimed_at) "
+                    "VALUES(?,?,?,?,'SENDING',?)",
+                    (event.event_id, channel, event.event_type, event.priority, at)).rowcount == 1:
+                return CLAIMED
+            if stale_after is None:
+                return None
+            row = self.db.execute("SELECT status,claimed_at FROM alert_deliveries WHERE event_id=? AND channel=?",
+                                  (event.event_id, channel)).fetchone()
+            if row is None or row[0] != "SENDING" or _age_seconds(row[1], at) < stale_after:
+                return None
+            taken = self.db.execute(
+                "UPDATE alert_deliveries SET claimed_at=?,recovery=?,reclaims=reclaims+1 "
+                "WHERE event_id=? AND channel=? AND status='SENDING' AND claimed_at=?",
+                (at, AMBIGUOUS_RETRY, event.event_id, channel, row[1])).rowcount == 1
+            return RECLAIMED if taken else None
 
-    def complete(self, event_id, channel, at, attempts, error_type=None):
+    def complete(self, event_id, channel, at, attempts, error_type=None, claimed_at=None):
+        """Record the outcome; with ``claimed_at`` only if this is still the current claim."""
         with self._lock:
             self.db.execute(
                 "UPDATE alert_deliveries SET status=?,attempts=?,error_type=?,completed_at=? "
-                "WHERE event_id=? AND channel=? AND status='SENDING'",
-                ("FAILED" if error_type else "DELIVERED", attempts, error_type, at, event_id, channel))
+                "WHERE event_id=? AND channel=? AND status='SENDING' AND (? IS NULL OR claimed_at=?)",
+                ("FAILED" if error_type else "DELIVERED", attempts, error_type, at, event_id, channel,
+                 claimed_at, claimed_at))
 
     def status(self, event_id):
         with self._lock:
-            rows = self.db.execute("SELECT channel,status,attempts,error_type FROM alert_deliveries "
+            rows = self.db.execute("SELECT channel,status,attempts,error_type,recovery FROM alert_deliveries "
                                    "WHERE event_id=? ORDER BY channel", (event_id,)).fetchall()
-        return {channel: {"status": status, "attempts": attempts, "error_type": error}
-                for channel, status, attempts, error in rows}
+        return {channel: {"status": status, "attempts": attempts, "error_type": error, "recovery": recovery}
+                for channel, status, attempts, error, recovery in rows}
 
     def failures(self):
         with self._lock:
@@ -86,17 +117,20 @@ class AlertDeliveryLedger:
 
 class AlertDispatcher:
     def __init__(self, channels, *, enabled=None, ledger=None, sleep=time.sleep, clock=_utc_now,
-                 max_attempts=3, base_delay=1.0, max_delay=8.0, environ=None):
+                 max_attempts=3, base_delay=1.0, max_delay=8.0, stale_after=300.0, environ=None):
         if not 1 <= int(max_attempts) <= MAX_ATTEMPTS_LIMIT:
             raise ValueError("max_attempts out of bounds")
         if not 0 <= float(base_delay) <= float(max_delay) <= MAX_DELAY_LIMIT:
             raise ValueError("backoff out of bounds")
+        if not float(stale_after) >= MIN_STALE_AFTER:
+            raise ValueError("stale_after out of bounds")
         # Only an explicit True (or env value exactly "1") enables delivery.
         self.enabled = alerts_enabled(environ) if enabled is None else enabled is True
         self.channels = tuple(channels)
         self.ledger = ledger if ledger is not None else AlertDeliveryLedger()
         self.sleep, self.clock = sleep, clock
         self.max_attempts, self.base_delay, self.max_delay = int(max_attempts), float(base_delay), float(max_delay)
+        self.stale_after = float(stale_after)
         self._consecutive_failures = {channel.name: 0 for channel in self.channels}
         self._last_error = {channel.name: None for channel in self.channels}
 
@@ -129,8 +163,13 @@ class AlertDispatcher:
         try:
             if not getattr(channel, "configured", True):
                 return "NOT_CONFIGURED"  # nothing claimed: configuring the channel later can still deliver
-            if not self.ledger.claim(event, channel.name, self.clock()):
+            claimed_at = self.clock()
+            claim = self.ledger.claim(event, channel.name, claimed_at, self.stale_after)
+            if not claim:
                 return "DUPLICATE"
+            if claim == RECLAIMED:
+                LOG.warning("component=alerts event=%s channel=%s event_type=%s",
+                            AMBIGUOUS_RETRY, channel.name, event.event_type)
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=alerts event=LEDGER_FAILED channel=%s error_type=%s",
                         channel.name, type(exc).__name__)
@@ -150,7 +189,7 @@ class AlertDispatcher:
                     break
         self._record(channel.name, error)
         try:
-            self.ledger.complete(event.event_id, channel.name, self.clock(), attempts, error)
+            self.ledger.complete(event.event_id, channel.name, self.clock(), attempts, error, claimed_at)
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=alerts event=LEDGER_FAILED channel=%s error_type=%s",
                         channel.name, type(exc).__name__)
@@ -213,5 +252,5 @@ def dispatcher_from_env(*, ledger_path=":memory:", environ=None):
                            ledger=AlertDeliveryLedger(ledger_path), environ=environ)
 
 
-__all__ = ["AlertDeliveryLedger", "AlertDispatcher", "AlertNotificationSink", "ENABLED_ENV", "alerts_enabled",
+__all__ = ["AMBIGUOUS_RETRY", "AlertDeliveryLedger", "AlertDispatcher", "AlertNotificationSink", "ENABLED_ENV", "alerts_enabled",
            "dispatcher_from_env"]

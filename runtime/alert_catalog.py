@@ -5,6 +5,7 @@ values supplied by the caller: nothing is computed, rounded or invented, and eve
 as the explicit ``NO_DATA`` state (F09-T11).
 """
 from dataclasses import dataclass
+import math
 from types import MappingProxyType
 import uuid
 
@@ -66,6 +67,7 @@ class AlertEvent:
     session: tuple = ()
     summary: str | None = None
     trade: tuple = ()  # ((key, text), ...) frozen snapshot; never a live reference to trading state
+    closes: tuple = ()  # bar closes supplied by the caller for the chart (F09-T12); empty = NO_DATA
 
     def __post_init__(self):
         if not isinstance(self.event_id, str) or not self.event_id.strip():
@@ -90,20 +92,25 @@ class AlertEvent:
         if not self.kind.trade:
             return ()
         values = dict(self.trade)
-        fallback = {"symbol": display(self.symbol), "run_id": display(self.run_id), "session": display(self.session)}
+        fallback = {"symbol": display(self.symbol), "run_id": display(self.run_id), "session": display(self.session),
+                    "chart_ref": f"SPARKLINE ({len(self.closes)} closes)" if self.closes else NO_DATA}
         return tuple((label, values.get(key, fallback.get(key, NO_DATA))) for key, label in TRADE_FIELDS)
 
 
 def alert_event(event_id, event_type, occurred_at_utc, *, run_id=None, symbol=None, session=(),
-                summary=None, trade=None):
-    """Build an AlertEvent, snapshotting ``trade`` into text so later mutation cannot leak in or out."""
+                summary=None, trade=None, closes=None):
+    """Build an AlertEvent, snapshotting ``trade`` into text (and ``closes`` into a tuple) so later mutation
+    cannot leak in or out."""
     trade = dict(trade or {})
     unknown = set(trade) - TRADE_KEYS
     if unknown:
         raise ValueError("unknown trade fields: " + ",".join(sorted(unknown)))
     session = tuple(session) if isinstance(session, (tuple, list)) else ((session,) if session else ())
+    closes = tuple(float(close) for close in (closes or ()))
+    if not all(math.isfinite(close) for close in closes):
+        raise ValueError("closes must be finite")
     return AlertEvent(event_id, event_type, occurred_at_utc, run_id, symbol, session, summary,
-                      tuple((key, display(trade.get(key))) for key, _ in TRADE_FIELDS if key in trade))
+                      tuple((key, display(trade.get(key))) for key, _ in TRADE_FIELDS if key in trade), closes)
 
 
 def alert_event_id(event_type, *parts):
