@@ -20,7 +20,8 @@ _Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente
 | 9 | Email + Slack alerts (OFF por defecto) | IMPLEMENTED, merge en main (PR #21, 4452350); no certificada: falta F09-T18 (envío real en Render); #24/#25 cerrados (PR de worker aislado) | — | — |
 | 10 | Command Center / Display V2 | IMPLEMENTED, merge en main (PR #23; autor Codex, revisión independiente Grok Bot); no certificada: faltan capturas móviles/revisión visual del owner | — | — |
 | 11 | Chaos / Failure Testing | IMPLEMENTED, merge en main (PR #29; 17 tests `test_chaos_F11_*`; autor Codex, revisión Grok Bot); no certificada | — | — |
-| 12–13 | E2E, demo PAPER 30 días | NOT STARTED | — | — |
+| 12 | E2E replay determinista | IMPLEMENTED, merge en main (PR de `v2/phase12-e2e`; 5 tests E2E; autor Codex, revisión Grok Bot); no certificada | — | — |
+| 13 | Demo PAPER 30 días | NOT STARTED (requiere decisión del owner; nada en vivo hasta entonces) | — | — |
 
 Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 
