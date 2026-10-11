@@ -1,5 +1,26 @@
 # Agent Changelog
 
+## 2026-10-10 — Phase 9 Email + Slack alert engine (issue #20) — IN PROGRESS
+
+- Branch `v2/phase9-alerts` from `4974408`. Baseline suite run first (exit 0).
+- New small modules: `runtime/alert_catalog.py` (10 events + priority, trade alert content verbatim with
+  `NO_DATA` for absent values, mapping from the durable `NotificationEvent`), `runtime/alert_render.py` (one
+  responsive HTML template + plain text, escaped, no remote images), `runtime/alert_channels.py` (Gmail
+  `SMTP_SSL` smtp.gmail.com:465 with `GMAIL_APP_PASSWORD`, sender/recipient `AI_FLOOR_ALERT_EMAIL_FROM`/`_TO`
+  defaulting to yefersontejeda@gmail.com; Slack via `SLACK_WEBHOOK_URL`), `runtime/alert_dispatch.py`
+  (dedup by `event_id`, durable per-channel delivery status in a SQLite ledger, bounded exponential backoff,
+  per-channel failure detection; never raises).
+- `runtime/notifications.py`: Slack send/error mapping extracted into `send_slack()` and reused; behaviour unchanged.
+- OFF by default: delivery only when `AI_FLOOR_ALERTS_ENABLED` is exactly `1`. Not wired into any runtime/order
+  path (structural test). `.env.example` gains the names `GMAIL_APP_PASSWORD=` and `AI_FLOOR_ALERTS_ENABLED=0`.
+  No strategy/risk/broker, flag default or Render changes.
+- `test_phase9_alerts.py`: 28 tests, mocks only (`smtplib.SMTP_SSL`, `urlopen` patched; `socket.create_connection`
+  guarded). Includes proof that failing channels leave PAPER account/orders/fills/journal unchanged.
+- `docs/` was brought in from `docs/single-source-of-truth` (HEAD is its ancestor) so that `docs/STATUS.md` and
+  `docs/phases/phase-09.md` could be updated (status IN PROGRESS, F09-T01…T19 → tests; T12 and T18 PARTIAL).
+- Full suite: 1454 tests OK (1 expected failure, ISSUE-012). `ruff check .` clean. `git diff --check` clean.
+  No commit, push, merge, deploy or activation.
+
 ## 2026-10-10 — FreezeAmendmentTests / git init environment diagnosis
 
 - Preserved all pre-existing changes on `v2/phase8-p4b`, HEAD `720f4b4`. No test or production-code edits.
