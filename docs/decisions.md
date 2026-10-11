@@ -10,6 +10,7 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 | DEC-015 | 2026-10-05 | APPROVED | B2.3 runtime activation BLOCKED pendiente autorización + certificación |
 | DEC-019 | 2026-10-05 | APPROVED | Carry-forward items OPEN where applicable |
 | DEC-4.6 | 2026-10-06 | APPROVED | Planned R:R fijo 3.00R |
+| DEC-14.2 | 2026-10-11 11:33 ET | **APPROVED** (owner Jeferson Tejeda) | Runtime opt-in via `V2_PLANNER_POLICY=V2_F3`: planned 3.00R, PAPER fill floor 2.50R (DEC-4.7), SL/TP inmutables. Spread, latencia y movimiento del precio entre planificación y ejecución requieren esa tolerancia. Default `V1` hasta habilitar el flag en el demo; valores desconocidos → V1 + warning. Independiente de `V2_OPPOSITE_SETUP_POLICY`; Policy D sigue prohibida en runtime. |
 | DEC-4.7 | 2026-10-06 | APPROVED | Piso de fill PAPER 2.50R; SL/TP inmutables |
 | DEC-5.5 | 2026-10-06 | APPROVED | Equity ≤ 95 % del inicial → BLOCK NEW RISK |
 | DEC-5.7 | 2026-10-06 | APPROVED | Fill-money risk ≤ riesgo monetario planificado × 8/7 (política registrada) |

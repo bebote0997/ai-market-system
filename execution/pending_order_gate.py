@@ -155,8 +155,10 @@ def _notify(observer, event, **data):
 
 
 def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None, instrument=None,
-                        owner_key=None, observer=None, halt_gate=None):
+                        owner_key=None, observer=None, halt_gate=None, rr_policy=None):
     """Apply P1 to the PENDING PAPER orders of ``symbol``.
+
+    ``rr_policy`` selects the existing broker fill gate (DEC-14.2); None preserves V1.
 
     ``store`` is the trading ``storage.database.Store``; ``evidence`` a ``MarketEvidenceEngine``
     (read only). ``gate`` is the ``CurrentCycleGate`` of the calling cycle, or None when that
@@ -187,6 +189,8 @@ def gate_pending_orders(store, evidence, *, account_id, symbol, as_of, gate=None
         return PendingGateResult(symbol, "NOT_EVALUATED", REASON, keys, written, ())
     account, orders, fills = store.load_paper(account_id)  # Durable state only.
     broker = PaperBroker(account, instrument)
+    if rr_policy is not None:
+        broker.rr_policy = rr_policy
     broker.orders, broker.fills = orders, fills
     expected_state = store.paper_state(broker.account, broker.orders, broker.fills)
     _notify(observer, "pending_gate", bar=dict(gate.bar), current=current, newest_committed_bar_start=newest,

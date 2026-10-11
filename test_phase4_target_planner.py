@@ -299,7 +299,12 @@ class FlagOffTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             floor.run({}, AT, "XAUUSD", None, None, V1, equity=1.0, planner_policy="V3")
         runtime_src = (ROOT / "runtime" / "service.py").read_text(encoding="utf-8")
-        self.assertNotIn("planner_policy", runtime_src)  # No runtime path can select Policy D.
+        self.assertIn('if self.config.v2_planner_policy == "V2_F3"', runtime_src)
+        self.assertRegex(runtime_src, r'\{"planner_policy": POLICY_V2_F3\}\s+'
+                         r'if self.config.v2_planner_policy == "V2_F3" else \{\}')
+        self.assertEqual(runtime_src.count('"planner_policy":'), 1)
+        from runtime.config import RuntimeConfig
+        self.assertEqual(RuntimeConfig().v2_planner_policy, "V1")
         self.assertNotIn("POLICY_V2_D", runtime_src)
 
 
