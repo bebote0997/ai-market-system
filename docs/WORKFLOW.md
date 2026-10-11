@@ -4,6 +4,14 @@
 1. Leer `AGENTS.md` y `docs/STATUS.md`. Leer solo el `docs/phases/phase-XX.md` y los archivos citados en el issue.
 2. No pedir ni pegar contexto largo en el chat: todo está en el repo.
 
+## 1b. Pasos obligatorios (espejo de `AGENTS.md` 5–10)
+5. Ejecutar la suite baseline antes de cambiar nada.
+6. Inspeccionar el código existente antes de crear duplicados.
+7. Implementar solo la tarea autorizada (issue asignado por el owner o por Grok Bot).
+8. Ejecutar la suite completa al terminar; no commitear con tests fallando.
+9. Actualizar `CHANGELOG_AGENT.md`, `docs/STATUS.md` y el archivo de fase afectado.
+10. Sin autorización del owner no hay `git add`/commit/push. Con tarea asignada: rama de feature + PR; nunca push directo a `main`.
+
 ## 2. Una tarea = un GitHub issue
 - Título corto: `[F08] <tarea>`; cuerpo: objetivo, criterios de aceptación, archivos relevantes (rutas), decisión/ID que lo autoriza.
 - El issue referencia archivos; no copia su contenido.

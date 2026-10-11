@@ -10,6 +10,15 @@ El estado oficial del proyecto vive en el repositorio, no en documentos externos
 4. `docs/phases/phase-XX.md`, `docs/decisions.md`, `docs/issues.md`: detalle por fase, decisiones y hallazgos.
 
 El Libro Maestro en Word (v1.9, 2026-10-07) es **histórico/archivado**; no se actualiza más.
+Pasos obligatorios para todo agente, en orden:
+
+5. Ejecutar la suite baseline antes de cambiar nada (comando en `docs/WORKFLOW.md`).
+6. Inspeccionar el código existente antes de crear duplicados.
+7. Implementar únicamente la fase o tarea autorizada (issue asignado por el owner o por Grok Bot).
+8. Ejecutar la suite completa al terminar; no commitear con tests fallando.
+9. Actualizar `CHANGELOG_AGENT.md` (además de `docs/STATUS.md` y el archivo de fase si cambia el estado).
+10. No hacer `git add`, commit ni push sin autorización del owner. Solo cuando el owner o Grok Bot asignó la tarea, el agente trabaja en una rama de feature y entrega mediante PR; **nunca push directo a `main`**.
+
 Los documentos técnicos de cada fase (`V2_PHASE*.md`, `AUDIT_*.md`, `CHANGELOG_AGENT.md`) siguen siendo evidencia.
 El freeze PAPER del 2026-09-19 (`EXPERIMENT_FREEZE.md`) es histórico; el baseline económico vigente lo decide el owner (ver `docs/STATUS.md`).
 
