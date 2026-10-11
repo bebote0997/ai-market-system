@@ -22,7 +22,7 @@ from runtime.config import RuntimeConfig
 from runtime.rex import REX_VERSION, RexRecorder
 from runtime.service import OperationalRuntime
 from storage.economic_digest import H, expected_edg_genesis
-from test_demo_runner import Data, T, instrument, macro_fixture, patched_scouts
+from test_demo_runner import Data, T, instrument, macro_fixture
 from test_phase8_rex_writer import catch_up_scenario, plan_scenario, rex_rows
 
 GENESIS = expected_edg_genesis("paper-main", 10000.0)["edg"]

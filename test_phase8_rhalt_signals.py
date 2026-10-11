@@ -4,7 +4,6 @@ processes. Every scenario runs in an isolated child process; the test runner its
 import json
 import os
 from pathlib import Path
-import signal
 import sqlite3
 import subprocess
 import sys

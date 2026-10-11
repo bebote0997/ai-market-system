@@ -8,9 +8,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from agents.macro_news_agent import analizar_macro_news
-from core.contracts import MacroEvent
 from data.finnhub_macro_provider import FinnhubMacroDataProvider, FinnhubMacroError
-from data.macro_news import InMemoryMacroNewsProvider
 from data.macro_news import NoMacroDataProvider
 from runtime.cloud import cloud_preflight
 from runtime.config import RuntimeConfig

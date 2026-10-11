@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 import uuid
 
 from agents.liquidity_agent import analizar_liquidez
@@ -6,7 +5,7 @@ from agents.macro_news_agent import analizar_macro_news
 from agents.setup_validator import evaluar_setup
 from agents.structure_agent import analizar_estructura
 from agents.trade_planner import crear_trade_plan
-from core.contracts import FloorRunReport, RiskDecision
+from core.contracts import FloorRunReport
 from riesgo import evaluar_trade_plan
 from core.rr_contract import POLICY_V1, POLICY_V2_D, POLICY_V2_F3
 
@@ -19,7 +18,6 @@ def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, eq
         raise ValueError("unknown planner policy")
     run_id = run_id or str(uuid.uuid4())
     if not isinstance(equity, (int, float)) or isinstance(equity, bool) or equity <= 0:
-        from datetime import datetime, timezone
         from core.contracts import SetupAssessment
         setup = SetupAssessment("1.0", run_id, as_of, symbol, "NO_SETUP", None, ("1h", "15m", "5m"), warnings=("equity_invalid",))
         return FloorRunReport("1.0", run_id, as_of, symbol, {}, {}, None, setup, None, None, "NO_SETUP", setup.warnings)

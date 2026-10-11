@@ -1,7 +1,5 @@
 import math
-from datetime import datetime, timezone
 
-import pandas as pd
 
 from core.contracts import SetupAssessment, TradePlan
 from core.timeframes import mask_hasta_as_of
