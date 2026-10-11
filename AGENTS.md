@@ -1,32 +1,34 @@
 # AI Market System — Agent Protocol
 
-## Freeze oficial PAPER — 2026-09-19
+## Fuente de verdad (desde 2026-10-10)
 
-`EXPERIMENT_FREEZE.md` fija el baseline oficial de código y economía para los 14
-días. Leerlo antes de cualquier cambio en este experimento. Desde el freeze solo
-se permiten fixes técnicos de defectos que invaliden el experimento o su
-integridad, con reproducción, tests y evaluación de comparabilidad. No optimizar
-ni cambiar estrategia/riesgo/prompts/providers/economía durante el período. El
-freeze no autoriza activar runner/scheduler ni iniciar el contador. La política
-detallada del freeze prevalece sobre fases históricas de este documento.
+El estado oficial del proyecto vive en el repositorio, no en documentos externos:
 
-## Fuente de verdad
+1. `AGENTS.md` (este archivo): reglas e invariantes.
+2. `docs/STATUS.md`: estado actual, fase activa, decisiones pendientes.
+3. `docs/WORKFLOW.md`: cómo trabaja cualquier agente (issues, ramas, PRs, certificación).
+4. `docs/phases/phase-XX.md`, `docs/decisions.md`, `docs/issues.md`: detalle por fase, decisiones y hallazgos.
 
-Antes de modificar código, todo agente debe leer, en este orden:
+El Libro Maestro en Word (v1.9, 2026-10-07) es **histórico/archivado**; no se actualiza más.
+Pasos obligatorios para todo agente, en orden:
 
-1. `AGENTS.md`
-2. `TRADING_FLOOR_SPEC.md`
-3. `ARCHITECTURE.md`
-4. `ROADMAP.md`
-
-Después debe:
-
-5. Ejecutar la suite baseline.
+5. Ejecutar la suite baseline antes de cambiar nada (comando en `docs/WORKFLOW.md`).
 6. Inspeccionar el código existente antes de crear duplicados.
-7. Implementar únicamente la fase o tarea autorizada.
-8. Ejecutar la suite completa al terminar.
-9. Actualizar `CHANGELOG_AGENT.md`.
-10. No hacer `git add`, commit ni push salvo autorización explícita.
+7. Implementar únicamente la fase o tarea autorizada (issue asignado por el owner o por Grok Bot).
+8. Ejecutar la suite completa al terminar; no commitear con tests fallando.
+9. Actualizar `CHANGELOG_AGENT.md` (además de `docs/STATUS.md` y el archivo de fase si cambia el estado).
+10. No hacer `git add`, commit ni push sin autorización del owner. Solo cuando el owner o Grok Bot asignó la tarea, el agente trabaja en una rama de feature y entrega mediante PR; **nunca push directo a `main`**.
+
+Los documentos técnicos de cada fase (`V2_PHASE*.md`, `AUDIT_*.md`, `CHANGELOG_AGENT.md`) siguen siendo evidencia.
+El freeze PAPER del 2026-09-19 (`EXPERIMENT_FREEZE.md`) es histórico; el baseline económico vigente lo decide el owner (ver `docs/STATUS.md`).
+
+## Invariantes de seguridad (no negociables)
+
+- PAPER / DEMO únicamente. `REAL_EXECUTION_ENABLED = False` (`runtime/demo_runner.py`). Ningún broker real ni dinero real.
+- NAS100 OFF (símbolos habilitados por defecto: XAUUSD, EURUSD). No habilitarlo sin decisión registrada del owner.
+- Flags V2 de runtime OFF salvo autorización explícita. Sin deploy ni cambios en Render sin autorización.
+- Ningún agente hace merge, deploy, activación runtime ni cambia estrategia/riesgo/economía sin aprobación explícita del owner.
+- Nunca commitear secretos; usar `.env` local (ignorado) y `.env.example` solo con nombres.
 
 ## Reglas de trabajo
 
@@ -42,7 +44,7 @@ Después debe:
 AI Market System evolucionará hacia un AI Trading Floor personal especializado inicialmente en:
 
 - `XAUUSD`
-- `NAS100` / `US100`
+- `NAS100` / `US100` (OFF; fuera de alcance hasta decisión del owner)
 - `EURUSD`
 
 Timeframes:
@@ -81,7 +83,7 @@ Nunca inventar precios, noticias, timestamps, especificaciones contractuales, va
 
 ## Fases
 
-El trabajo debe seguir `ROADMAP.md`. La Fase 0 está completada y la Fase 1 es la siguiente autorizada. No adelantar fases sin autorización explícita.
+La fase activa y lo autorizado están en `docs/STATUS.md`. No adelantar fases sin autorización explícita del owner.
 
 ## Git en entorno local Windows
 
