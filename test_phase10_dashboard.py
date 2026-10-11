@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 from streamlit.testing.v1 import AppTest
@@ -19,7 +20,8 @@ from ui.state import dashboard_database, enabled_market_symbols
 from runtime.config import DEFAULT_ENABLED_SYMBOLS
 
 APP = Path(__file__).parent / "ui" / "app.py"
-T = "2026-10-11T12:00:00+00:00"
+# Relative to the real clock so the fixture never ages into STALE_DATA (fixed timestamp broke on 2026-10-11).
+T = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(microsecond=0).isoformat()
 
 
 class Phase10DashboardTests(unittest.TestCase):
