@@ -1365,3 +1365,62 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
   Capture and delivery errors log only the exception type, never credentials.
 - The operational restart repair is separately proposed in PR #3. Revalidate
   the combined tree before either merge; keep the original freeze identity.
+
+## 2026-10-10 — M-5 R-HALT race certification (design 3.8 "Race tests", checklist I5; no commit)
+
+- New `test_phase8_rhalt_races.py`: one injector fires the halt at every 3.8 point, both in process (the handler
+  body) and with a REAL `os.kill(os.getpid(), SIGTERM)` (plus one `SIGINT`) in isolated child processes using the
+  production handler `HaltGate.request`. The points: (a) just before L(W), (b) after L(W) before the load,
+  (c) between the load and BEGIN (the computation; c2 is the read2 -> BEGIN residual), (d) inside the save
+  transaction at its first economic statement, (e) after the commit before the next admission, (f) between
+  catch-up bars (f2: a computed bar refused at read2), (g) between symbols.
+- Randomized property test (in process, plus a real-SIGTERM sample): one draw per injection-event type plus uniform
+  draws over the 4-cycle period. For every draw it checks: `L(W) < T_h` and `read2 < T_h`; at most one residual;
+  every `save_paper` call admitted; the post-T_h allowlist (H / P / R plus the single in-flight save); the halted
+  economic state equals the reference state after some committed write (prefix property); a clean verifier and G14.
+- Verifier boundary tests: `L(W) == T_h` -> `ADMITTED_AFTER_HALT`, `read2 == T_h` -> `READ2_AFTER_HALT`,
+  `T_ACK_BEFORE_T_STOP`, `HALT_RECORD_CONTRADICTION`, and missing read2 / T_stop.
+- Defect found and fixed (coarse clock): halt instants came from raw `time.monotonic_ns()`. With ~15.6 ms
+  resolution (Windows), `read2 == T_h` refused the residual write's REX_WRITE, which left orphan economic events and
+  a `FINAL_EDG_MISMATCH`. `T_stop == T_h` also hid the residual. Fix: `HaltGate.now_ns()` is a strictly increasing
+  gate clock (assignments only, so the handler may call it). It is used for L(W), read2, T_h and T_ack
+  (`runtime/halt.py`) and for T_stop (`runtime/rex.py` `RexStore._t_stop_ns`, raw clock when there is no gate).
+  On Linux, ns resolution makes the values effectively identical.
+- Defect found and fixed (oracle false positive): a catch-up bar refused at read2 is observed (ST2C) before its
+  computation and never saved, so G14 reported `CATCH_UP_BAR_COVERAGE`. `replay/rex_oracle.py` now accepts exactly
+  one unwritten observed bar, and only when the run's `EXIT_HALT` is `catch_up_bar` refused at `read2`.
+- `test_phase8_rhalt_gate.py`: the handler-minimality test now allows `now_ns` and asserts it calls only
+  `monotonic_ns`.
+- Not changed: strategy, risk, sizing, SL/TP, broker, flag defaults (`AI_FLOOR_V2_RHALT` stays OFF),
+  `storage/database.py`, Render / deploy. Flag OFF path unchanged.
+- Tests: baseline 1376 OK; after 1389 OK (13 new). M-5 closure still needs the independent certification (I5).
+
+### 2026-10-10 — M-5 follow-up: Codex review fixes (HIGH clock reentrancy, MEDIUM G14 ordering; no commit)
+
+- HIGH, fixed (`runtime/halt.py`): `HaltGate.now_ns()` was not reentrant with respect to the signal handler. The
+  handler called `now_ns()` between an interrupted call's compute and its store of `_last_ns`. That store then
+  rewound the clock below T_h. On a frozen clock this gave T_stop < T_h (residual hidden) or a later instant equal to
+  T_h (old code, 5 bytecode positions: `T_ack == T_h == 1002`). Fix:
+  - The handler no longer writes the clock. It reads it once: `T_h = max(monotonic_ns(), _last_ns + 1)`, still a
+    single assignment.
+  - `now_ns()` stores its value BEFORE reading `requested_at` and moves the value above T_h if T_h is set.
+  - Result: T_h is above every instant already returned, every instant is != T_h, and every later instant is > T_h.
+  - An instant that overlaps T_h is ordered after it. A T_stop overlapping T_h is reported as a residual
+    (over-reported, never hidden). An admission or read2 overlapping T_h is refused, because it checks
+    `requested_at` after its clock read.
+- MEDIUM, fixed (`replay/rex_oracle.py`): the G14 catch-up read2 exception only checked cardinality. It now does
+  ordered observation -> write matching: write i's context must equal observed bar i (new code
+  `CATCH_UP_BAR_ORDER`). This proves the single unmatched observation is the final, refused bar.
+- New tests in `test_phase8_rhalt_races.py`:
+  - `ClockReentrancyTests` fires the handler at EVERY bytecode of an interrupted `now_ns` (`sys.settrace` opcode
+    events, frozen clock) for T_stop, admission and read2. It also covers the handler running during the clock
+    read, checks that `request` stores only `requested_at` / `deferred_signal`, and sends a REAL SIGTERM from inside
+    `now_ns` in an isolated child (POSIX).
+  - `CatchUpOracleOrderTests`: a real halted catch-up has 3 observed bars and 2 writes, and the third bar is refused
+    at read2; it passes. A doctored record with an earlier write missing (cardinality still balances) fails with
+    `CATCH_UP_BAR_ORDER` and no `CATCH_UP_BAR_COVERAGE`. Reordered writes also fail.
+  - Mutation check: against the previous `halt.py` / `rex_oracle.py`, the new clock test fails at the store-window
+    bytecodes and the negative oracle tests fail.
+- `test_phase8_rhalt_gate.py`: the handler-minimality allowlist is now `{max, monotonic_ns, _utc_now}`.
+- No trading semantics changed. The flag OFF path is unchanged.
+- Tests: full suite 1397 OK (8 new).
