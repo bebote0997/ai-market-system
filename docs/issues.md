@@ -7,8 +7,10 @@ Cada issue nuevo debe abrirse también como GitHub issue y enlazarse aquí.
 |---|---|---|---|
 | ISSUE-008 | Activation blocker #1 | OPEN | Latencia/bloqueo de persistencia SQLite síncrona del health sink; evaluar/mitigar o aceptar antes de activar SYSTEM HEALTH |
 | ISSUE-009 | Activation blocker #2 | OPEN | Observación AI-provider inconsistente (TIMEOUT vs CONNECTION_ERROR vs UNKNOWN_PROVIDER_FAILURE); una sola ruta autoritativa |
-| HIGH-8.1 | HIGH | CORREGIDO en rama (983d2d2), pendiente revisión independiente | Catch-up de snapshot 5m saltaba SL/TP intermedios en ruta OFF |
-| M-5 | — | OPEN | Ver `V2_PHASE8_EXECUTION.md` (rama v2/phase8-p4b, PR #13) |
+| HIGH-8.1 | HIGH | **CLOSED** (983d2d2; revisión Codex PASS WITH NOTES) | Catch-up de snapshot 5m saltaba SL/TP intermedios en ruta OFF |
+| M-5 | MEDIUM | **CLOSED** 2026-10-10 | R-HALT halt/recovery: PR #16; revisión Codex PASS (ronda 2) |
+| ISSUE-012 | LOW | OPEN | `progress_pending` (`runtime/service.py`) no filtra una vela 5m no cerrada; los adaptadores reales sí (`data/twelve_data_provider.py`, `data/massive_provider.py`). Test `expectedFailure` en `test_high81_runtime.py` (PR #19) |
+| ISSUE-013 | MEDIUM | OPEN | Notas de revisión de `replay/status_verifier.py` (PR #18): guard `--out` sin sidecars -wal/-shm, alternativa S1 genesis no implementada, tests M8/E5/E6 faltantes |
 
 ## Carry-forward
 - H04 restante (clasificación de ciclos lentos).
