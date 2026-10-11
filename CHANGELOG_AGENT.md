@@ -9,6 +9,31 @@
 - Dashboard OPEN/PENDING/failed-run/error-severity SQL filters precede LIMIT; add mock SQL/render coverage and T10 DB-read-error → DASHBOARD_ERROR.
 - Baseline: 1488 tests OK (1 expected failure), 167.408 s. Final requested suite: 1495 tests OK (1 expected failure), 176.371 s; Ruff and git diff --check PASS. No commit, push, deploy, activation or risk/economic changes.
 
+## 2026-10-11 — Phase 11 Chaos / Failure Testing (issue #28) — IN PROGRESS
+
+- Owner-authorized offline implementation on `v2/phase11-chaos`; baseline before edits: 1475 tests OK
+  (1 pre-existing expected failure).
+- Added `test_phase11_chaos.py`: exactly 17 `test_chaos_F11_T01_...` through T17 methods, in the exact F11
+  checklist order from `/workspace/libro.txt`. Reuses existing DemoRunner/OperationalRuntime fakes and
+  conflict/Risk V2 fixtures; mutable deterministic clock, temporary SQLite, socket connections forbidden.
+- Covers AI quota/unavailability/invalid contract, unavailable/stale market and macro, SMTP failure,
+  actual SQLite trigger abort, repeated transactional ENOSPC, UI read failure, scheduler/process restarts,
+  existing/multiple positions, deterministically interleaved concurrent candidates, opposite setup and drawdown.
+- Asserts authoritative execution/journal/ledger outcomes and durable economic state; recovery, replay
+  idempotence, rollback, unchanged position geometry, normal TP closure and single fill/cost accounting.
+  SMTP failure during a real cycle preserves the sole policy-authorized order. SQLite failure that also
+  prevents failure bookkeeping keeps the lock until durable recovery; no fabricated journal is expected.
+- IA total failure retains analytical PLAN_READY but execution is POLICY_REVIEW_UNAVAILABLE (no order);
+  macro failure is NO_SETUP. Tests characterize these existing policies; no production fixes, new issues,
+  new expected failures, trading-semantics changes or dependencies.
+- Updated `docs/STATUS.md` and `docs/phases/phase-11.md`: IN PROGRESS, full scenario mapping and limitations.
+  Certification still needs predecessor gate, independent review and owner approval.
+- Targeted suite: 17 tests PASS. Full required unittest discovery: 1492 tests OK in 155.521 s
+  (1 pre-existing expected failure); PYTHONDONTWRITEBYTECODE=1, market=none, AI=deterministic.
+  `/workspace/repo/.venv/bin/ruff check .` PASS; `git diff --check` PASS.
+- No network, commit, staging, push, merge, deploy, Render changes or runtime activation.
+
+## 2026-10-11 — Phase 9 Codex review fixes (PR #21, M1–M3) + T12 chart + post-cycle wiring — IN PROGRESS
 ## 2026-10-11 — Phase 10 / issue #22 — Command Center read-only
 
 - Owner-authorized local extension of the existing `ui/` package on `v2/phase10-command-center`.
