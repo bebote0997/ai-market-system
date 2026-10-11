@@ -25,48 +25,26 @@
 - No network, commit, staging, push, merge, deploy, Render changes or runtime activation.
 
 ## 2026-10-11 — Phase 9 Codex review fixes (PR #21, M1–M3) + T12 chart + post-cycle wiring — IN PROGRESS
+## 2026-10-11 — Phase 10 / issue #22 — Command Center read-only
 
-- Baseline suite run first (exit 0). Branch `v2/phase9-alerts`.
-- M1 `runtime/alert_channels.py`: SMTP cleanup separated from delivery; a QUIT/close failure after a successful
-  `send_message` is logged (`SMTP_CLEANUP_FAILED`) and the delivery stays DELIVERED with 1 attempt (no retry, no
-  duplicate email). A send error always wins over a cleanup error.
-- M2: `classify_smtp_error`: 4xx replies → `TEMPORARY_FAILURE` (retryable); 5xx → `REJECTED` (`AUTH_ERROR` for
-  5xx auth); recipients refused only with 4xx → temporary; no reply code → `CONNECTION_ERROR` (retryable).
-- M3 `runtime/alert_dispatch.py`: stale `SENDING` claims are reclaimed after `stale_after` (default 300 s, min 60 s)
-  via compare-and-swap on `claimed_at`; the row records `recovery='AMBIGUOUS_RETRY'` (+ `reclaims` count) and a
-  warning is logged; completions only apply to the current claim. Ledger schema gains `recovery`, `reclaims`
-  (ledger is new in this unmerged PR; no migration).
-- F09-T12 `runtime/alert_chart.py`: inline SVG sparkline from caller bar closes (`AlertEvent.closes`, finite floats
-  only); PNG attachment via plotly+kaleido only if kaleido is installed (it is not); no bars → `NO_DATA`. No new deps.
-- Wiring `runtime/alert_hook.py`: `DemoRunner._capture_and_deliver` passes the just-persisted `NotificationEvent`s
-  to the hook after the cycle, inside a log-only try/except. OFF unless `AI_FLOOR_ALERTS_ENABLED=1` (nothing built,
-  mapped or sent). Optional `AI_FLOOR_ALERTS_LEDGER_PATH`. `runtime/service.py` untouched.
-- CLI `python -m runtime.alert_test --slack|--email`: one labelled TEST alert through the new path; not run in tests.
-- `test_phase9_alerts.py`: 42 tests (mocks only), incl. M1/M2/M3, chart, hook disabled = no calls, and a real
-  DemoRunner cycle proving a failing/hostile hook leaves the PAPER result/state identical.
-- Full suite: 1468 tests OK (1 expected failure). `ruff check .` clean. `git diff --check` clean. No commit, push,
-  merge, deploy or activation.
-
-## 2026-10-10 — Phase 9 Email + Slack alert engine (issue #20) — IN PROGRESS
-
-- Branch `v2/phase9-alerts` from `4974408`. Baseline suite run first (exit 0).
-- New small modules: `runtime/alert_catalog.py` (10 events + priority, trade alert content verbatim with
-  `NO_DATA` for absent values, mapping from the durable `NotificationEvent`), `runtime/alert_render.py` (one
-  responsive HTML template + plain text, escaped, no remote images), `runtime/alert_channels.py` (Gmail
-  `SMTP_SSL` smtp.gmail.com:465 with `GMAIL_APP_PASSWORD`, sender/recipient `AI_FLOOR_ALERT_EMAIL_FROM`/`_TO`
-  defaulting to yefersontejeda@gmail.com; Slack via `SLACK_WEBHOOK_URL`), `runtime/alert_dispatch.py`
-  (dedup by `event_id`, durable per-channel delivery status in a SQLite ledger, bounded exponential backoff,
-  per-channel failure detection; never raises).
-- `runtime/notifications.py`: Slack send/error mapping extracted into `send_slack()` and reused; behaviour unchanged.
-- OFF by default: delivery only when `AI_FLOOR_ALERTS_ENABLED` is exactly `1`. Not wired into any runtime/order
-  path (structural test). `.env.example` gains the names `GMAIL_APP_PASSWORD=` and `AI_FLOOR_ALERTS_ENABLED=0`.
-  No strategy/risk/broker, flag default or Render changes.
-- `test_phase9_alerts.py`: 28 tests, mocks only (`smtplib.SMTP_SSL`, `urlopen` patched; `socket.create_connection`
-  guarded). Includes proof that failing channels leave PAPER account/orders/fills/journal unchanged.
-- `docs/` was brought in from `docs/single-source-of-truth` (HEAD is its ancestor) so that `docs/STATUS.md` and
-  `docs/phases/phase-09.md` could be updated (status IN PROGRESS, F09-T01…T19 → tests; T12 and T18 PARTIAL).
-- Full suite: 1454 tests OK (1 expected failure, ISSUE-012). `ruff check .` clean. `git diff --check` clean.
-  No commit, push, merge, deploy or activation.
+- Owner-authorized local extension of the existing `ui/` package on `v2/phase10-command-center`.
+  Added persisted Overview (equity/realized/unrealized PnL), all-symbol positions/pending orders,
+  latest setups, AI/risk decisions, System Health sidecar + provider/API/scheduler observations,
+  notification delivery alerts, exact run/setup history search, and errors. Existing snapshot pages remain.
+- SQLite URI `mode=ro` only, no migrations or missing-DB creation. Missing delivery tables/rows yield
+  `NO_DATA`. IDs come from persisted fields/payloads; account values are not recomputed.
+- Reused `ui/auth.py` password gate; configured local passwords now also gate access. Mobile CSS stacks
+  columns at ≤640px. No dependencies, trading/risk/broker changes, runtime activation or deploy.
+- Added `test_phase10_dashboard.py`: real AppTest navigation on populated/empty fixture DBs, exact values,
+  run/setup searches and AND/no-match behavior, missing delivery table/DB, authentication before SQLite,
+  write rejection, and unchanged trading/health DB hashes. Responsive rule checked; physical-device visual
+  review remains pending. Updated STATUS and phase document to IN PROGRESS with F10-T01…T22 test map.
+- Baseline: 1426 tests PASS, 1 expected failure (170.858s). Focused Phase 10: 7 tests PASS (2.373s).
+  Final required unittest discovery: 1433 tests PASS, 1 expected failure (169.791s), with
+  `PYTHONDONTWRITEBYTECODE=1 AI_FLOOR_MARKET_PROVIDER=none AI_FLOOR_AI_PROVIDER=deterministic`
+  and `/workspace/repo/.venv/bin/python`. `/workspace/repo/.venv/bin/ruff check .` PASS;
+  `git diff --check` PASS.
+- No git add, commit, push, merge, deploy or activation.
 
 ## 2026-10-10 — FreezeAmendmentTests / git init environment diagnosis
 
@@ -1563,6 +1541,14 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 
 - Checklist §0 updated: DEC-8.18a amendment, M-5 CLOSED (PR #16), offline G-8.INT results (PR #18), ISSUE-012/013.
 
+## 2026-10-11 — PR #23 MEDIUM/LOW review fixes (Phase 10, uncommitted)
+
+- Preserved main's Phase 9 STATUS; updated only Phase 10 row/next steps after Grok Bot REQUEST_CHANGES.
+- ALERTS reads the optional Phase 9 alert_deliveries ledger directly with SQLite mode=ro, plus V1 deliveries; missing/empty sources show NO_DATA without creating files or importing dispatcher at runtime.
+- Bounded dashboard queries (200, deterministic ORDER BY); SQL exact identity filters before LIMIT and per-table history pagination. No invented IDs; parent runs remain resolvable outside the recent page.
+- Missing system_state falls back to DEFAULT; removed unused legacy positions page. Six regression tests cover these fixes, immutable ledger, missing data, nested IDs, old matches and pagination.
+- Baseline requested suite exited 0; focused Phase 10: 13 tests PASS. Full requested suite: 1481 tests OK, 1 expected failure (183.177s). `/workspace/repo/.venv/bin/ruff check .` and `git diff --check`: PASS.
+- PAPER only; flags, execution, risk, economy and Render unchanged. No staging/commit/push.
 ## 2026-10-11 — Phase 9 issues #24 / #25 (local, no commit)
 
 - `AlertHook` only admits events via a bounded queue (default 1000); full queues drop and log. A single daemon worker owns mapping, persistence, sends and retry/backoff. Added bounded `flush(timeout)` / `close(timeout)`; runner shutdown signals the hook without waiting for delivery. Alerts remain OFF unless `AI_FLOOR_ALERTS_ENABLED=1`.
