@@ -8,6 +8,8 @@ from pathlib import Path
 import smtplib
 import socket
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 from urllib.error import HTTPError, URLError
@@ -643,23 +645,199 @@ class TestAlertHook(NoNetwork):
             return dispatcher(channel)
         env = {"AI_FLOOR_ALERTS_ENABLED": "1", "AI_FLOOR_ALERTS_LEDGER_PATH": ":memory:"}
         hook = AlertHook(environ=env, dispatcher_factory=factory)
+        self.addCleanup(hook.close)
         result = hook([self.note(), self.note("DAILY_SUMMARY", "n-2"), self.note("STATE_INCONSISTENCY", "n-3")])
-        self.assertEqual(result, {"n-3": {"rec": "DELIVERED"}, "n-1": {"rec": "DELIVERED"}})
-        self.assertEqual(channel.sent, ["n-3", "n-1"])  # SYSTEM_CRITICAL first; DAILY_SUMMARY is not an alert
-        self.assertEqual(hook([self.note()]), {"n-1": {"rec": "DUPLICATE"}})
+        self.assertEqual(result, {"queued": 3, "dropped": 0})
+        self.assertTrue(hook.flush(2))
+        self.assertEqual(channel.sent, ["n-1", "n-3"])  # FIFO admission; DAILY_SUMMARY is not an alert
+        self.assertEqual(hook([self.note()]), {"queued": 1, "dropped": 0})
+        self.assertTrue(hook.flush(2))
+        self.assertEqual(channel.sent, ["n-1", "n-3"])
         self.assertEqual(len(built), 1)
         self.assertEqual(built[0]["ledger_path"], ":memory:")
-        self.assertEqual(hook([]), {})
+        self.assertEqual(hook([]), {"queued": 0, "dropped": 0})
 
     def test_hook_never_raises(self):
         env = {"AI_FLOOR_ALERTS_ENABLED": "1"}
         with self.assertLogs("runtime.alert_hook", "WARNING"):
             self.assertIsNone(AlertHook(environ=env, dispatcher_factory=mock.Mock(side_effect=OSError("x")))(
                 [self.note()]))
-        self.assertIsNone(AlertHook(environ=env)(None))
+        hook = AlertHook(environ=env, dispatcher_factory=lambda **_: dispatcher(RecordingChannel()))
+        self.addCleanup(hook.close)
+        self.assertIsNone(hook(None))
         with self.assertLogs("runtime.alert_hook", "WARNING"):
-            self.assertEqual(AlertHook(environ=env, dispatcher_factory=lambda **_: dispatcher(RecordingChannel()))(
-                [object()]), {})
+            self.assertEqual(hook([object()]), {"queued": 1, "dropped": 0})
+            self.assertTrue(hook.flush(2))
+
+
+class TestAsyncAlertHook(NoNetwork):
+    note = TestAlertHook.note
+
+    def build_hook(self, channel, **kwargs):
+        hook = AlertHook(environ={"AI_FLOOR_ALERTS_ENABLED": "1"},
+                         dispatcher_factory=lambda **_: dispatcher(channel), **kwargs)
+        self.addCleanup(hook.close)
+        return hook
+
+    def test_five_second_channel_does_not_delay_hook(self):
+        started = threading.Event()
+        threads = []
+
+        class Slow(RecordingChannel):
+            def send(self, event):
+                threads.append(threading.current_thread())
+                started.set()
+                time.sleep(5)
+                super().send(event)
+
+        channel = Slow()
+        hook = self.build_hook(channel)
+        before = time.perf_counter()
+        self.assertEqual(hook([self.note()]), {"queued": 1, "dropped": 0})
+        self.assertLess(time.perf_counter() - before, 0.05)
+        self.assertTrue(started.wait(1))
+        self.assertFalse(hook.flush(0.01))
+        before = time.perf_counter()
+        self.assertFalse(hook.close(0.01))
+        self.assertLess(time.perf_counter() - before, 0.05)
+        self.assertIsNone(hook([self.note()]))
+        self.assertTrue(hook.flush(6))
+        self.assertTrue(hook.close(1))
+        self.assertTrue(hook.close(0))
+        self.assertEqual(channel.sent, ["n-1"])
+        self.assertEqual(threads, [hook._worker])
+        self.assertTrue(threads[0].daemon)
+
+    def test_bounded_queue_drops_and_logs_without_blocking(self):
+        started, release = threading.Event(), threading.Event()
+
+        class Blocked(RecordingChannel):
+            def send(self, event):
+                started.set()
+                if not release.wait(2):
+                    raise TimeoutError()
+                super().send(event)
+
+        channel = Blocked()
+        hook = self.build_hook(channel, maxsize=1)
+        self.addCleanup(release.set)
+        hook([self.note()])
+        self.assertTrue(started.wait(1))
+        with self.assertLogs("runtime.alert_hook", "WARNING") as logs:
+            result = hook([self.note(event_id="n-2"), self.note(event_id="n-3")])
+        self.assertEqual(result, {"queued": 1, "dropped": 1})
+        self.assertIn("event=QUEUE_FULL dropped=1", logs.output[0])
+        release.set()
+        self.assertTrue(hook.flush(2))
+        self.assertEqual(channel.sent, ["n-1", "n-2"])
+
+    def test_retry_and_backoff_run_only_on_single_worker(self):
+        threads = []
+
+        class Retry(RecordingChannel):
+            def send(self, event):
+                threads.append(threading.current_thread())
+                super().send(event)
+
+        channel = Retry(failures=[TimeoutError(), TimeoutError()])
+        hook = AlertHook(environ={"AI_FLOOR_ALERTS_ENABLED": "1"},
+                         dispatcher_factory=lambda **_: dispatcher(
+                             channel, sleep=lambda _: threads.append(threading.current_thread())))
+        self.addCleanup(hook.close)
+        hook([self.note()])
+        self.assertTrue(hook.flush(2))
+        self.assertEqual(len(threads), 5)
+        self.assertTrue(all(thread is hook._worker for thread in threads))
+        self.assertEqual(hook.dispatcher.ledger.status("n-1")["rec"]["attempts"], 3)
+
+    def test_timeout_bounds_for_both_transports(self):
+        for channel_type in (GmailEmailChannel, SlackAlertChannel):
+            self.assertEqual(channel_type(environ={}).timeout, 10)
+            for timeout in (0, -1, 10.01, float("inf"), float("nan")):
+                with self.subTest(channel=channel_type, timeout=timeout), self.assertRaises(ValueError):
+                    channel_type(environ={}, timeout=timeout)
+
+    def test_restart_replays_stale_and_unclaimed_snapshots_without_new_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "alerts.sqlite")
+            crashed = AlertDeliveryLedger(path)
+            stale = trade_event(event_id="stale")
+            pending = trade_event(event_id="pending")
+            fresh = trade_event(event_id="fresh")
+            delivered = trade_event(event_id="delivered")
+            failed = trade_event(event_id="failed")
+            crashed.claim(stale, "rec", Clock(0)())
+            crashed.save(pending)  # crash before the first channel claim
+            crashed.claim(fresh, "rec", Clock(399)())
+            crashed.claim(delivered, "rec", Clock(0)())
+            crashed.complete("delivered", "rec", Clock(1)(), 1)
+            crashed.claim(failed, "rec", Clock(0)())
+            crashed.complete("failed", "rec", Clock(1)(), 3, "AUTH_ERROR")
+            crashed.close()
+            seen = []
+
+            class SnapshotChannel(RecordingChannel):
+                def send(self, event):
+                    seen.append(event)
+                    super().send(event)
+
+            channel = SnapshotChannel()
+            env = {"AI_FLOOR_ALERTS_ENABLED": "1", "AI_FLOOR_ALERTS_LEDGER_PATH": path}
+
+            def factory(**kwargs):
+                return dispatcher(channel, ledger=AlertDeliveryLedger(kwargs["ledger_path"]), clock=Clock(400))
+
+            hook = AlertHook(environ=env, dispatcher_factory=factory)
+            try:
+                self.assertTrue(hook.flush(2))  # init alone recovers; no hook call or new notification
+                self.assertCountEqual(seen, [pending, stale])
+                self.assertEqual(hook.dispatcher.ledger.status("stale")["rec"]["recovery"], AMBIGUOUS_RETRY)
+                self.assertEqual(hook.dispatcher.ledger.status("fresh")["rec"]["status"], "SENDING")
+            finally:
+                self.assertTrue(hook.close(2))
+            second = AlertHook(environ=env, dispatcher_factory=factory)
+            try:
+                self.assertTrue(second.flush(2))
+                self.assertCountEqual(channel.sent, ["pending", "stale"])  # terminal rows never resend
+            finally:
+                self.assertTrue(second.close(2))
+
+    def test_fresh_claim_at_startup_is_recovered_when_it_becomes_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "alerts.sqlite")
+            ledger = AlertDeliveryLedger(path)
+            ledger.claim(trade_event(), "rec", Clock(0)())
+            ledger.close()
+            clock, channel, sent = Clock(100), RecordingChannel(), threading.Event()
+
+            class Signalling(RecordingChannel):
+                def send(self, event):
+                    channel.send(event)
+                    sent.set()
+
+            hook = AlertHook(environ={"AI_FLOOR_ALERTS_ENABLED": "1", "AI_FLOOR_ALERTS_LEDGER_PATH": path},
+                             dispatcher_factory=lambda **kw: dispatcher(
+                                 Signalling(), ledger=AlertDeliveryLedger(kw["ledger_path"]), clock=clock))
+            try:
+                self.assertTrue(hook.flush(2))
+                self.assertEqual(channel.sent, [])
+                clock.seconds = 400
+                self.assertTrue(sent.wait(3))  # idle worker revisits claims that were fresh on startup
+            finally:
+                self.assertTrue(hook.close(2))
+            self.assertEqual(channel.sent, ["evt-1"])
+
+    def test_legacy_ledger_without_snapshot_reports_no_data(self):
+        ledger = AlertDeliveryLedger()
+        self.addCleanup(ledger.close)
+        ledger.claim(trade_event(), "rec", Clock(0)())
+        ledger.db.execute("DROP TABLE alert_events")
+        ledger.db.execute("CREATE TABLE alert_events (event_id TEXT PRIMARY KEY, snapshot TEXT NOT NULL)")
+        channel = RecordingChannel()
+        with self.assertLogs("runtime.alert_dispatch", "WARNING") as logs:
+            dispatcher(channel, ledger=ledger, clock=Clock(400)).recover_pending()
+        self.assertIn("event=RECOVERY_NO_DATA claims=1", logs.output[0])
+        self.assertEqual(channel.sent, [])
 
 
 class TestRunnerWiring(NoNetwork):
@@ -709,7 +887,9 @@ class TestRunnerWiring(NoNetwork):
                 raise RuntimeError("smtp exploded")
         hostile = AlertHook(environ={"AI_FLOOR_ALERTS_ENABLED": "1"},
                             dispatcher_factory=lambda **_: dispatcher(Hostile()))
+        self.addCleanup(hostile.close)
         state, _ = self.run_cycle(hostile)
+        self.assertTrue(hostile.flush(2))
         self.assertEqual(state, baseline)
         self.assertGreater(hostile.dispatcher.health()["hostile"]["consecutive_failures"], 0)
 

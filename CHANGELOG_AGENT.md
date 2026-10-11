@@ -1538,3 +1538,11 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 ## 2026-10-10 — M-5 CLOSED, DEC-8.18a, offline G-8.INT summary (docs only)
 
 - Checklist §0 updated: DEC-8.18a amendment, M-5 CLOSED (PR #16), offline G-8.INT results (PR #18), ISSUE-012/013.
+
+## 2026-10-11 — Phase 9 issues #24 / #25 (local, no commit)
+
+- `AlertHook` only admits events via a bounded queue (default 1000); full queues drop and log. A single daemon worker owns mapping, persistence, sends and retry/backoff. Added bounded `flush(timeout)` / `close(timeout)`; runner shutdown signals the hook without waiting for delivery. Alerts remain OFF unless `AI_FLOOR_ALERTS_ENABLED=1`.
+- Durable ledger now stores complete immutable alert snapshots before channel delivery. Enabled hook startup replays unclaimed events and stale SENDING claims using existing atomic CAS / `AMBIGUOUS_RETRY`; terminal outcomes do not resend. Idle/active worker revisits fresh claims once per second so they recover after expiry. Legacy claims without snapshots explicitly log `RECOVERY_NO_DATA`.
+- Gmail SMTP default timeout reduced from 15 s to 10 s; SMTP/Slack reject timeouts outside `(0, 10]`. Added mock-only tests covering 5-second sends with hook latency <50 ms, overflow, bounded shutdown, worker-only retries, timeout bounds, durable restart and delayed stale recovery. Queue admission is not durable until the worker persists it; overflow / pre-persistence crashes can lose alerts.
+- Updated phase 9 and status documentation; no strategy, risk, economics, Render, activation, dependency, staging, commit or push changes. Baseline: 1468 tests OK (one expected failure). Final validation recorded below.
+- Final validation: requested offline full-suite command **1475 tests OK (one expected failure)**; focused alert suite **49 tests OK**. `/workspace/repo/.venv/bin/ruff check .` PASS; `git diff --check` PASS. Seven new regression tests, mocks only.

@@ -215,4 +215,6 @@ class DemoRunner:
                 LOG.error("component=halt event=HALT_UNCONFIRMED error_type=%s", type(exc).__name__)
         with self.store.transaction():
             self.store.set_state("runner", "STOPPED")
+        if isinstance(self.alert_hook, AlertHook):
+            self.alert_hook.close(timeout=0)  # daemon drains independently; shutdown never waits on delivery
         self.runtime.close()

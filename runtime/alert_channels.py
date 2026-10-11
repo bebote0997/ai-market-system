@@ -33,7 +33,7 @@ class AlertChannelError(RuntimeError):
 class GmailEmailChannel:
     name = "email"
 
-    def __init__(self, *, password=None, sender=None, recipient=None, smtp_factory=None, timeout=15,
+    def __init__(self, *, password=None, sender=None, recipient=None, smtp_factory=None, timeout=10,
                  environ=None):
         env = os.environ if environ is None else environ
         self.password = password if password is not None else env.get("GMAIL_APP_PASSWORD")
@@ -41,7 +41,7 @@ class GmailEmailChannel:
         self.recipient = recipient or env.get("AI_FLOOR_ALERT_EMAIL_TO") or DEFAULT_ALERT_EMAIL
         self.smtp_factory = smtp_factory  # resolved at send time so tests can patch smtplib.SMTP_SSL
         self.timeout = float(timeout)
-        if self.timeout <= 0:
+        if not 0 < self.timeout <= 10:
             raise ValueError("invalid SMTP timeout")
 
     @property
@@ -116,7 +116,7 @@ class SlackAlertChannel:
         self.webhook_url = webhook_url if webhook_url is not None else env.get("SLACK_WEBHOOK_URL")
         self.transport = transport or _slack_post
         self.timeout = float(timeout)
-        if self.timeout <= 0:
+        if not 0 < self.timeout <= 10:
             raise ValueError("invalid Slack timeout")
 
     @property
