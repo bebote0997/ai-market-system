@@ -18,7 +18,7 @@ TABLES = frozenset({"runs", "setups", "agent_decisions", "risk_decisions",
 ROW_LIMIT = 200
 
 
-def records(db, table, *, run_id="", setup_id="", offset=0):
+def records(db, table, *, run_id="", setup_id="", offset=0, statuses=(), failed=False):
     """Filter in SQL before returning a bounded page, newest published rows first."""
     if table not in TABLES:
         raise ValueError("unsupported dashboard table")
@@ -43,6 +43,13 @@ def records(db, table, *, run_id="", setup_id="", offset=0):
             matches.append('EXISTS (SELECT 1 FROM runs r WHERE r.slot_key=t.slot_key AND r.run_id=?)')
             params.append(value)
         predicates.append("(" + " OR ".join(matches or ["0"]) + ")")
+    if statuses:
+        key = "severity" if table == "journal" else "status"
+        field = f't."{key}"' if key in columns else f"json_extract(t.payload, '$.{key}')"
+        predicates.append(field + " IN (" + ",".join("?" for _ in statuses) + ")")
+        params.extend(statuses)
+    if failed:
+        predicates.append("(t.status='FAILED' OR COALESCE(t.error, '') <> '')")
     where = " WHERE " + " AND ".join(predicates) if predicates else ""
     timestamp = next((name for name in ("attempted_at", "claimed_at", "as_of", "timestamp")
                       if name in columns), None)
@@ -53,8 +60,8 @@ def records(db, table, *, run_id="", setup_id="", offset=0):
         (*params, ROW_LIMIT, offset))]
 
 
-def payloads(db, table):
-    return [{**row, **json.loads(row["payload"])} for row in records(db, table)]
+def payloads(db, table, **filters):
+    return [{**row, **json.loads(row["payload"])} for row in records(db, table, **filters)]
 
 
 def identities(value, key):
@@ -128,9 +135,9 @@ def render(st, page):
                     st.info("NO_DATA")
             elif page == "POSITIONS":
                 st.subheader("Open positions · all symbols")
-                table(st, [row for row in payloads(db, "paper_positions") if row["status"] == "OPEN"])
+                table(st, payloads(db, "paper_positions", statuses=("OPEN",)))
                 st.subheader("Pending orders · all symbols")
-                table(st, [row for row in payloads(db, "paper_orders") if row["status"] == "PENDING"])
+                table(st, payloads(db, "paper_orders", statuses=("PENDING",)))
             elif page == "SETUPS":
                 st.subheader("Latest setup per symbol")
                 runs = {row["slot_key"]: row for row in records(db, "runs")}
@@ -186,8 +193,8 @@ def render(st, page):
                 table(st, history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT))
             elif page == "ERRORS":
                 st.subheader("Failed runs")
-                table(st, [row for row in records(db, "runs") if row.get("error") or row["status"] == "FAILED"])
+                table(st, records(db, "runs", failed=True))
                 st.subheader("Error journal")
-                table(st, [row for row in records(db, "journal") if row["severity"] in {"ERROR", "CRITICAL"}])
+                table(st, records(db, "journal", statuses=("ERROR", "CRITICAL")))
     except (sqlite3.DatabaseError, ValueError, TypeError, KeyError) as exc:
         st.error(f"DASHBOARD_ERROR — {type(exc).__name__}: persisted evidence could not be read")

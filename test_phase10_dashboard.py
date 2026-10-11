@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -287,3 +287,48 @@ class Phase10DashboardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDashboardSqlFilters(unittest.TestCase):
+    def test_status_and_error_filters_precede_limit(self):
+        for name, columns, filters, expected, parameters in (
+                ("paper_positions", ("position_id", "payload"), {"statuses": ("OPEN",)},
+                 "json_extract(t.payload, '$.status') IN (?)", ("OPEN",)),
+                ("paper_orders", ("order_id", "payload"), {"statuses": ("PENDING",)},
+                 "json_extract(t.payload, '$.status') IN (?)", ("PENDING",)),
+                ("journal", ("timestamp", "severity"), {"statuses": ("ERROR", "CRITICAL")},
+                 't."severity" IN (?,?)', ("ERROR", "CRITICAL")),
+                ("runs", ("status", "error"), {"failed": True},
+                 "(t.status='FAILED' OR COALESCE(t.error, '') <> '')", ())):
+            with self.subTest(table=name):
+                db = Mock()
+                db.execute.side_effect = [Mock(fetchone=lambda: (1,)),
+                                          [(n, column) for n, column in enumerate(columns)], []]
+                self.assertEqual(records(db, name, **filters), [])
+                sql, params = db.execute.call_args.args
+                self.assertIn(" WHERE " + expected, sql)
+                self.assertLess(sql.index(expected), sql.index("LIMIT"))
+                self.assertEqual(params, (*parameters, ROW_LIMIT, 0))
+
+    def test_t10_render_catches_database_read_error(self):
+        from ui.pages import dashboard
+        st = Mock()
+        with patch.object(dashboard, "dashboard_database") as database:
+            database.return_value.__enter__.return_value.execute.side_effect = sqlite3.OperationalError("read")
+            dashboard.render(st, "POSITIONS")
+        st.error.assert_called_once_with(
+            "DASHBOARD_ERROR — OperationalError: persisted evidence could not be read")
+
+    def test_positions_and_errors_request_sql_filters(self):
+        from ui.pages import dashboard
+        st = Mock()
+        with patch.object(dashboard, "dashboard_database"), patch.object(
+                dashboard, "payloads", return_value=[]) as payloads:
+            dashboard.render(st, "POSITIONS")
+        self.assertEqual([call.kwargs for call in payloads.call_args_list],
+                         [{"statuses": ("OPEN",)}, {"statuses": ("PENDING",)}])
+        with patch.object(dashboard, "dashboard_database"), patch.object(
+                dashboard, "records", return_value=[]) as query:
+            dashboard.render(st, "ERRORS")
+        self.assertEqual([call.kwargs for call in query.call_args_list],
+                         [{"failed": True}, {"statuses": ("ERROR", "CRITICAL")}])

@@ -173,6 +173,7 @@ class AlertDispatcher:
             raise ValueError("stale_after out of bounds")
         # Only an explicit True (or env value exactly "1") enables delivery.
         self.enabled = alerts_enabled(environ) if enabled is None else enabled is True
+        self.prepare_event = None
         self.channels = tuple(channels)
         self.ledger = ledger if ledger is not None else AlertDeliveryLedger()
         self.sleep, self.clock = sleep, clock
@@ -192,6 +193,8 @@ class AlertDispatcher:
                 return {"_": "DISABLED"}
             if not isinstance(event, AlertEvent):
                 return {"_": "INVALID_EVENT"}
+            if self.prepare_event is not None:
+                event = self.prepare_event(event)
             return {channel.name: self._deliver(channel, event) for channel in self.channels}
         except Exception as exc:  # noqa: BLE001 - alerting never controls anything
             LOG.warning("component=alerts event=DISPATCH_FAILED error_type=%s", type(exc).__name__)
