@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-10 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
+_Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 
 **Entorno:** PAPER / DEMO únicamente · `REAL_EXECUTION_ENABLED = False` · NAS100 OFF · runtime V2 y SYSTEM HEALTH INACTIVE · sin deploy V2.
 **main:** `4974408e443908ceb5723aed13c1eb15a81f3c51` (merge PR #13, Fase 8).
@@ -17,7 +17,9 @@ _Última actualización: 2026-10-10 (America/New_York). Esta es la única fuente
 | 6 | Multi-Setup / Conflict | CERTIFIED | #11 | `405df6a8` |
 | 7 | AI Agent Floor | CERTIFIED | #12 | `2753130d` |
 | 8 | Execution / Fill / Trade Manager | **CERTIFIED** (2026-10-10, control delegado; revisión cruzada Codex/Claude) | [#13](https://github.com/bebote0997/ai-market-system/pull/13) | `4974408e` |
-| 9–13 | Email, Command Center, Chaos, E2E, demo PAPER 30 días | NOT STARTED | — | — |
+| 9 | Email | NOT STARTED | — | — |
+| 10 | Command Center / Display V2 | **IN PROGRESS** — implementación local autorizada por owner, issue #22; sin certificación | — | — |
+| 11–13 | Chaos, E2E, demo PAPER 30 días | NOT STARTED | — | — |
 
 Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 
@@ -41,6 +43,7 @@ Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 2. Siguiente: Fase 9 (email + Slack, solo mocks) — NOT STARTED hasta que se abra su issue/PR.
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
+5. Fase 10: extensión local read-only de `ui/` autorizada por el owner (issue #22), con smoke AppTest, búsqueda run/setup y hashes SQLite. Detalle y mapa F10-T01…T22 en `docs/phases/phase-10.md`. Revisión visual e independiente y certificación pendientes; no modifica el estado certificado de Fase 9.
 
 ## Historia
 El Libro Maestro en Word (versión 1.9, 2026-10-07) queda **archivado/histórico**; no se versiona aquí ni se actualiza más.

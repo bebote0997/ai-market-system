@@ -17,4 +17,9 @@ def apply(st):
     .critical {background:#492625;border:1px solid #dc7777;padding:12px;border-radius:7px;font-weight:700}
     code,.mono {font-variant-numeric:tabular-nums}
     @media(max-width:1100px){.floor-card{padding:8px}}
+    @media(max-width:640px){
+      div[data-testid="stHorizontalBlock"]{flex-wrap:wrap}
+      div[data-testid="stColumn"]{min-width:100%!important;flex:1 1 100%!important}
+      .block-container{padding:1rem}
+    }
     </style>""", unsafe_allow_html=True)

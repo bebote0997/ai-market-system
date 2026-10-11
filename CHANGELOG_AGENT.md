@@ -1,5 +1,26 @@
 # Agent Changelog
 
+## 2026-10-11 — Phase 10 / issue #22 — Command Center read-only
+
+- Owner-authorized local extension of the existing `ui/` package on `v2/phase10-command-center`.
+  Added persisted Overview (equity/realized/unrealized PnL), all-symbol positions/pending orders,
+  latest setups, AI/risk decisions, System Health sidecar + provider/API/scheduler observations,
+  notification delivery alerts, exact run/setup history search, and errors. Existing snapshot pages remain.
+- SQLite URI `mode=ro` only, no migrations or missing-DB creation. Missing delivery tables/rows yield
+  `NO_DATA`. IDs come from persisted fields/payloads; account values are not recomputed.
+- Reused `ui/auth.py` password gate; configured local passwords now also gate access. Mobile CSS stacks
+  columns at ≤640px. No dependencies, trading/risk/broker changes, runtime activation or deploy.
+- Added `test_phase10_dashboard.py`: real AppTest navigation on populated/empty fixture DBs, exact values,
+  run/setup searches and AND/no-match behavior, missing delivery table/DB, authentication before SQLite,
+  write rejection, and unchanged trading/health DB hashes. Responsive rule checked; physical-device visual
+  review remains pending. Updated STATUS and phase document to IN PROGRESS with F10-T01…T22 test map.
+- Baseline: 1426 tests PASS, 1 expected failure (170.858s). Focused Phase 10: 7 tests PASS (2.373s).
+  Final required unittest discovery: 1433 tests PASS, 1 expected failure (169.791s), with
+  `PYTHONDONTWRITEBYTECODE=1 AI_FLOOR_MARKET_PROVIDER=none AI_FLOOR_AI_PROVIDER=deterministic`
+  and `/workspace/repo/.venv/bin/python`. `/workspace/repo/.venv/bin/ruff check .` PASS;
+  `git diff --check` PASS.
+- No git add, commit, push, merge, deploy or activation.
+
 ## 2026-10-10 — FreezeAmendmentTests / git init environment diagnosis
 
 - Preserved all pre-existing changes on `v2/phase8-p4b`, HEAD `720f4b4`. No test or production-code edits.
