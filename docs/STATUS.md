@@ -31,7 +31,7 @@ Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 - [x] DEC-8.19 — APPROVED 2026-10-10 (owner): opción (a), precondición flat bajo A2.
 - [ ] Nuevo baseline económico/freeze tras HIGH-8.1 (A2: cuenta PAPER nueva USD 10 000, DB nueva, sealed genesis — DEC-8.20 aprobado como política).
 - [x] DEC-8.23 — APPROVED 2026-10-10: gates en vivo de Fase 8 → evidencia offline/replay; nada en vivo antes de la Fase 13; la validación en vivo diferida (G2–G5, G8, G11, G15) se hace durante el demo de 30 días de la Fase 13, tras certificar las Fases 8–12 y con aprobación operativa explícita.
-- [ ] DEC-8.24 — confirmar (owner): G8/G15 diferidos a Fase 13 en la certificación de Fase 8.
+- [x] DEC-8.24 — APPROVED 2026-10-10 (Grok Bot, control total delegado): G8/G15 diferidos a Fase 13 (se informa al owner).
 - [x] DEC-8.18a — 2026-10-10 (Grok Bot, control delegado): sin firma H5; Q1–Q8 automatizadas (`replay/status_verifier.py`).
 - [ ] DEC-8.22-a…j / OP-1…OP-7 (NOT AUTHORIZED).
 - [ ] Autorizar `AI_FLOOR_CLOUD_RUNNER` / `AI_FLOOR_SCHEDULER` en Render (hoy `0`).

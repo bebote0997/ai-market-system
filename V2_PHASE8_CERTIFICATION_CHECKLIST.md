@@ -9,7 +9,7 @@
 
 ## 0. Scope decision
 
-**DEC-8.23 — APPROVED 2026-10-10 (Owner Jeferson Tejeda / bebote0997).** The G-8.INT gates that require live sessions (G2 simulation on copies tied to a deployed commit, G3 session days, G4 cycles, G5 reconciled closes, G7 EVIDENCE_UNAVAILABLE rate, and G11 external chain-head anchors over a live period) are **re-scoped for Phase 8 certification to offline / replay evidence**: `replay.g8int` on deterministic fixtures and replay data, the existing test suite, and CI on the exact certified SHA. Live validation of these criteria moves to the 30-day PAPER demo that starts only after Phases 8-13 are certified. No A2 live period, deploy, Render change, flag or scheduler activation is authorized by this decision.
+**DEC-8.23 — APPROVED 2026-10-10 (Owner Jeferson Tejeda / bebote0997).** The G-8.INT gates that require live sessions (G2 simulation on copies tied to a deployed commit, G3 session days, G4 cycles, G5 reconciled closes, G7 EVIDENCE_UNAVAILABLE rate, and G11 external chain-head anchors over a live period) are **re-scoped for Phase 8 certification to offline / replay evidence**: `replay.g8int` on deterministic fixtures and replay data, the existing test suite, and CI on the exact certified SHA. Live validation of these criteria moves to the 30-day PAPER demo (= Phase 13), which starts only after Phases 8-12 are certified. No A2 live period, deploy, Render change, flag or scheduler activation is authorized by this decision.
 
 **DEC-8.18a — Grok Bot under Owner-delegated control, 2026-10-10.** Amendment of DEC-8.18: the H5 SSH signature is dropped; Q1–Q8 run as `python -m replay.status_verifier` (PR #18) on fixtures/DB copies; EX is reported `EX_UNATTESTED`; live verification moves to Phase 13.
 
