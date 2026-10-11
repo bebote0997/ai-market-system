@@ -1365,3 +1365,23 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
   Capture and delivery errors log only the exception type, never credentials.
 - The operational restart repair is separately proposed in PR #3. Revalidate
   the combined tree before either merge; keep the original freeze identity.
+
+## 2026-10-10 — Process safety: ruff (F) lint and safety invariants (v2/process-safety, not committed)
+
+- Added `pyproject.toml` with `[tool.ruff.lint] select = ["F"]` only, pinned `ruff==0.17.0` in the new
+  `requirements-dev.txt`, and a `lint` job in `.github/workflows/ci.yml` running `ruff check .`. No reformatting.
+- Fixed the pyflakes findings (86): 74 unused imports removed; unused variables removed in `replay/rex_oracle.py`,
+  `replay/risk_audit.py` and three test files. F821: lambdas inside `except ... as exc` in `runtime/service.py` and
+  `runtime/rex.py` now bind `exc` as a default argument (same value, called synchronously; no behaviour change).
+  `ejecutar_estrategia.py` (legacy V1) had a real bug: `detalle` was always `None` because the exception name is
+  unbound after the `except` block; it now carries `str(error)`. `execution/risk_engine_v2.py` (frozen Risk Engine)
+  is left byte-identical via a per-file `F841` ignore for its dead `stop` binding.
+- NAS100 hard block: `runtime.config.BLOCKED_SYMBOLS = ("NAS100",)`; `RuntimeConfig` rejects it in
+  `enabled_symbols`, including via `AI_FLOOR_ENABLED_SYMBOLS`; `python -m runtime --once` no longer offers NAS100.
+  NAS100 data/instrument/UI definitions are untouched; no existing test needed adjustment.
+- New `test_safety_invariants.py` (13 tests): REAL_EXECUTION_ENABLED is a single literal `False` with no env read;
+  no source imports a real broker SDK (AST); NAS100 block in config/env/CLI; `PaperOrder` is built only in
+  `PaperBroker.submit_plan`, whose callers are an explicit allowlist, and `submit_plan` is never reached without an
+  APPROVED Risk decision (unit, Risk V2 reservation and full runtime cycle with a spy). Mutation-checked.
+- Comparability: strategy, signals, risk, R:R, sizing, fills, prompts, providers and economics unchanged. The NAS100
+  block matches the frozen config (NAS100 not enabled). Tests: 1389 OK; `ruff check .` passes.

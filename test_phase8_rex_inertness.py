@@ -3,7 +3,6 @@
 Twin temporary databases; deterministic uuid4 in both twins (REX never draws one). Compared: the five PAPER tables
 byte-for-byte, the runs table, and every non-REX journal row; also under injected REX failures at every point.
 """
-from contextlib import contextmanager
 import os
 from pathlib import Path
 import sqlite3

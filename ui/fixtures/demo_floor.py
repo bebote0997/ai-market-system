@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 from ai.contracts import AIFloorReport, AIResponse
-from core.contracts import MarketBar, RiskDecision, SetupAssessment, TradePlan
+from core.contracts import MarketBar, SetupAssessment
 from ui.adapters import MARKETS, from_ai_report
 
 SAMPLE_LABEL = "SAMPLE / DEMO — NOT CURRENT PRICES"

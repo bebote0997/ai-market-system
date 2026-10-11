@@ -6,7 +6,7 @@ import sys
 import time
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -20,7 +20,7 @@ from runtime.service import EVIDENCE_UNAVAILABLE, STALE_PAPER_STATE
 from storage.database import Store
 from storage.evidence_store import EvidenceStore
 from test_demo_runner import patched_scouts
-from test_runtime_catch_up import (ACCOUNT, BASE, EUR_STOP, FIVE, ROOT, SLOT, T0, T1, T2, T3, T4, Bars,
+from test_runtime_catch_up import (ACCOUNT, EUR_STOP, FIVE, ROOT, SLOT, T0, T1, T2, T3, T4, Bars,
                                    CatchUpCase, make_runtime)
 
 T7 = T0 + 7 * FIVE  # Current bar of the 13:45 cycle.
@@ -333,7 +333,7 @@ def _child(argv):
                     os._exit(9)
                 if when == "during":
                     store._event = lambda *a, **k: os._exit(9)  # Inside BEGIN IMMEDIATE, before COMMIT.
-                result = original(store, broker, **kwargs)
+                original(store, broker, **kwargs)
                 os._exit(9)
             return original(store, broker, **kwargs)
         with patched_scouts("LONG"), patch.object(Store, "save_paper", crashing):

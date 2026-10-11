@@ -417,7 +417,7 @@ class RexStore:
             t_stop = time.monotonic_ns()
             _isolated(lambda: self._recorder.save_returned(t_stop))
             changes = _total_changes(self._store)
-            _isolated(lambda: self._recorder.after_write(token, broker, None, error=_error_name(exc),
+            _isolated(lambda exc=exc: self._recorder.after_write(token, broker, None, error=_error_name(exc),
                                                          total_changes_after_save=changes))
             raise
         t_stop = time.monotonic_ns()

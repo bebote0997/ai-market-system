@@ -19,7 +19,7 @@ from runtime.revision_review import demo_gate
 from storage.database import Store
 from storage.evidence_store import EvidenceStore
 from test_phase8_observe_only import EUR_STOP_T2, XAU_STOP_T3, economics, make
-from test_runtime_catch_up import ACCOUNT, BASE, FIVE, SLOT, T0, Bars, seed
+from test_runtime_catch_up import ACCOUNT, BASE, FIVE, SLOT, Bars, seed
 
 AS_OF = datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)  # newest closed 5m bar: 13:55
 NEWEST = AS_OF - FIVE

@@ -1,8 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from core.contracts import InstrumentSpec, MarketBar, RiskDecision, TradePlan
-from core.timeframes import AUTHORIZED_TIMEFRAMES, validar_timeframe
+from core.contracts import MarketBar, RiskDecision, TradePlan
 
 
 class TestCoreContracts(unittest.TestCase):

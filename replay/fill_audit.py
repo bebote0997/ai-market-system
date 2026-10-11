@@ -17,7 +17,6 @@ import sys
 from collections import Counter
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
-from statistics import median
 
 import numpy as np
 import pandas as pd

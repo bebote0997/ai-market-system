@@ -1,5 +1,4 @@
 """V2 Phase 4 / DEC-4.6: fixed 3R from the certified structural invalidation; SL/TP immutable; truthful fill."""
-import json
 import unittest
 from dataclasses import replace
 from datetime import timedelta
@@ -11,7 +10,7 @@ from agents.target_planner import plan_fixed_3r
 from ai.agents import trade_reviewer_ai
 from ai.provider import DeterministicAIProvider
 from core.contracts import FloorRunReport, TradePlan
-from core.rr_contract import POLICY_V1, POLICY_V2_F3, geometry
+from core.rr_contract import POLICY_V2_F3, geometry
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
 from riesgo import crear_configuracion_riesgo_fixed_3r, crear_configuracion_riesgo_v2, evaluar_trade_plan

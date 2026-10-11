@@ -14,6 +14,7 @@ CATCH_UP_SYMBOLS_ENV = "AI_FLOOR_V2_POSITION_CATCH_UP_SYMBOLS"
 REX_ENV = "AI_FLOOR_V2_REX"  # V2 Phase 8 / P3: REX evidence flag (OFF by default)
 SEALED_GENESIS_ENV = "AI_FLOOR_V2_SEALED_GENESIS"  # V2 Phase 8 / P2b: sealed genesis (OFF; ON requires REX ON)
 RHALT_ENV = "AI_FLOOR_V2_RHALT"  # V2 Phase 8 / P4a: R-HALT admission gate (OFF by default; ON requires REX ON)
+BLOCKED_SYMBOLS = ("NAS100",)  # hard-blocked: never an enabled runtime symbol, whatever AI_FLOOR_ENABLED_SYMBOLS says
 CATCH_UP_EXCLUDED_SYMBOLS = ("NAS100",)  # never in the catch-up scope, even if a future config enables it
 _SCOPE_TOKEN = re.compile(r"[A-Z0-9]+")
 
@@ -82,6 +83,8 @@ class RuntimeConfig:
                 not self.enabled_symbols or len(set(self.enabled_symbols)) != len(self.enabled_symbols) or
                 not set(self.enabled_symbols) <= set(SUPPORTED_SYMBOLS)):
             raise ValueError("invalid cadence or enabled_symbols")
+        if set(self.enabled_symbols) & set(BLOCKED_SYMBOLS):
+            raise ValueError(f"enabled_symbols must not include hard-blocked symbols {BLOCKED_SYMBOLS}")
         if not set(self.sessions) <= {"LONDON", "NEW_YORK"} or self.starting_equity <= 0:
             raise ValueError("invalid sessions or equity")
         if self.market_provider_mode not in {"none", "massive", "twelve_data"} or self.ai_provider_mode not in {"deterministic", "openai"}:

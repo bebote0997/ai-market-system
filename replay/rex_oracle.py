@@ -795,7 +795,6 @@ def _check_run(r):
         if write.get("complete") is not True:
             raise EvidenceError("WRITE_INCOMPLETE", write["write_seq"])
     returned = run["returned"]
-    slot = run["slot"]
 
     failure = r.one("EXIT_ERROR", required=False)
     halt = r.one("EXIT_HALT", required=False)  # V2 P4a: refused admission / lifecycle after T_h

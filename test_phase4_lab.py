@@ -1,7 +1,6 @@
 """V2 Phase 4 / P4.1A: offline target-policy lab — lookahead and invariants (synthetic fixtures)."""
 import ast
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 

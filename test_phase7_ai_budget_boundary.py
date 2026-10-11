@@ -1,6 +1,5 @@
 """P7.1F permanent regression for the P7.2 HIGH: a response that completes after the global AI cycle budget must not
 keep or create execution eligibility. Fake clocks/providers only; no network."""
-import io
 import unittest
 from urllib.error import HTTPError
 

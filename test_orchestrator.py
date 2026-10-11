@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from core.contracts import InstrumentSpec, MacroEvent
+from core.contracts import InstrumentSpec
 from data.macro_news import InMemoryMacroNewsProvider
 from floor.orchestrator import run
 from riesgo import crear_configuracion_riesgo_v2

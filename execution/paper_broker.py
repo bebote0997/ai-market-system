@@ -2,10 +2,9 @@ import math
 import uuid
 from datetime import datetime
 
-import pandas as pd
 
 from core.rr_contract import POLICY_V2_F3
-from execution.contracts import PaperAccount, PaperFill, PaperOrder, PaperPosition
+from execution.contracts import PaperFill, PaperOrder, PaperPosition
 
 
 ORDER_STATUSES = {"PENDING", "FILLED", "CANCELLED", "REJECTED"}
@@ -83,7 +82,7 @@ class PaperBroker:
         """V2 policies: recompute the actual fill geometry (actual fill + frozen SL + frozen TP) with the single R:R
         contract and the policy's execution tolerance. Returns (rejection reason or None, telemetry). SL/TP are never
         moved, re-anchored or normalized to rescue or 'correct' a fill."""
-        from core.rr_contract import FILL_LIMITS, LIMITS, WITHIN_POLICY, classify, geometry, to_decimal
+        from core.rr_contract import FILL_LIMITS, WITHIN_POLICY, classify, geometry, to_decimal
         policy = policy or self.rr_policy
         planned, _ = geometry(order.side, order.planned_entry, order.stop, order.target)
         actual, why = geometry(order.side, fill_price, order.stop, order.target)

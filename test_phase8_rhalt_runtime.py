@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 import random
 import re
-import shutil
 import sqlite3
 import tempfile
 import unittest

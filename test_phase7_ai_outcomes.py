@@ -6,7 +6,6 @@ from pathlib import Path
 
 import ai.orchestrator as ai_orchestrator
 from ai import outcomes
-from ai.contracts import AIResponse
 from ai.openai_provider import OpenAIProvider, OpenAIProviderError
 from ai.provider import DeterministicAIProvider, FakeAIProvider
 from ai.runtime import AuditLog, call_agent
@@ -14,7 +13,7 @@ from agents.macro_news_agent import analizar_macro_news
 from data.macro_news import NoMacroDataProvider
 from runtime.gates import paper_policy
 from runtime.review import build_review
-from test_phase7_ai_characterization import (NOW, T, completed, full_floor_report, http, provider, request)
+from test_phase7_ai_characterization import (T, completed, full_floor_report, http, provider, request)
 
 ROOT = Path(__file__).resolve().parent
 

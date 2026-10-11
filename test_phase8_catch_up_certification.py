@@ -5,7 +5,6 @@ The oracle below is written independently of ``execution.trade_manager``: Decima
 documented precedence (per bar, in time order: open beyond SL -> exit at open; open beyond TP -> exit at open; low/high
 touches SL -> exit at SL; touches TP -> exit at TP; SL before TP when both are touched in the same bar).
 """
-import contextlib
 import json
 import random
 import subprocess
@@ -26,7 +25,7 @@ from execution.trade_manager import TradeManager
 from runtime.config import RuntimeConfig
 from storage.database import Store
 from test_demo_runner import patched_scouts
-from test_runtime_catch_up import BASE, Bars, make_runtime
+from test_runtime_catch_up import make_runtime
 
 ROOT = Path(__file__).resolve().parent
 ACCOUNT = "paper-main"
