@@ -599,22 +599,102 @@ class TestChart(NoNetwork):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 alert_event("evt-f", "POSITION_OPENED", AT, closes=bad)
 
-    def test_f09_t12_png_only_when_kaleido_installed(self):
-        real_find_spec = alert_chart.importlib.util.find_spec
-        with mock.patch.object(alert_chart.importlib.util, "find_spec",
-                               side_effect=lambda name: None if name == "kaleido" else real_find_spec(name)):
-            self.assertFalse(alert_chart.kaleido_available())
-            self.assertIsNone(alert_chart.chart_png((1.0, 2.0)))
-        self.assertIsNone(alert_chart.chart_png(()))
+    def test_f09_t12_png_inline_cid_and_svg_fallback(self):
         event = alert_event("evt-g", "POSITION_OPENED", AT, closes=[1, 2])
         channel = GmailEmailChannel(password="pw", environ={})
         with mock.patch.object(alert_channels, "chart_png", return_value=b"\x89PNG fake") as png:
             message = channel.message(event)
         png.assert_called_once_with((1.0, 2.0))
-        attachments = [part for part in message.iter_attachments()]
-        self.assertEqual([(a.get_content_type(), a.get_filename()) for a in attachments], [("image/png", "chart.png")])
+        image = next(part for part in message.walk() if part.get_content_type() == "image/png")
+        self.assertEqual(image.get_content_disposition(), "inline")
+        self.assertEqual(image.get_filename(), "chart.png")
+        html = message.get_body(preferencelist=("html",)).get_content()
+        self.assertIn("cid:" + image["Content-ID"][1:-1], html)
+        self.assertNotIn("<svg", html)
         with mock.patch.object(alert_channels, "chart_png", return_value=None):
-            self.assertEqual(list(channel.message(event).iter_attachments()), [])
+            fallback = channel.message(event)
+        self.assertIn("<svg", fallback.get_body(preferencelist=("html",)).get_content())
+        self.assertFalse(any(part.get_content_type() == "image/png" for part in fallback.walk()))
+
+    def test_png_agg_success_import_and_render_failures(self):
+        import sys
+        figure, canvas = mock.Mock(), mock.Mock()
+        canvas.print_png.side_effect = lambda output: output.write(b"png")
+        modules = {"matplotlib": mock.Mock(), "matplotlib.backends": mock.Mock(),
+                   "matplotlib.backends.backend_agg": mock.Mock(FigureCanvasAgg=mock.Mock(return_value=canvas)),
+                   "matplotlib.figure": mock.Mock(Figure=mock.Mock(return_value=figure))}
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(
+                alert_chart.threading, "current_thread", return_value=mock.Mock(name="worker")) as thread:
+            thread.return_value.name = "alert-delivery"
+            self.assertEqual(alert_chart.chart_png((1, 2)), b"png")
+            figure.add_axes.return_value.plot.assert_called_once_with((1, 2), color=alert_chart.STROKE, linewidth=2)
+            canvas.print_png.side_effect = RuntimeError("render")
+            self.assertIsNone(alert_chart.chart_png((1, 2)))
+        with mock.patch.dict(sys.modules, {"matplotlib": None}), mock.patch.object(
+                alert_chart.threading, "current_thread") as thread:
+            thread.return_value.name = "alert-delivery"
+            self.assertIsNone(alert_chart.chart_png((1, 2)))
+        with mock.patch.dict(sys.modules, modules):
+            self.assertIsNone(alert_chart.chart_png((1, 2)))  # main thread never renders
+        self.assertIsNone(alert_chart.chart_png(()))
+
+    def test_evidence_closes_readonly_symbol_cutoff_limit_and_chronology(self):
+        from data.market_evidence import MarketBar, parse_utc
+        bars = [MarketBar("XAUUSD", "5m", parse_utc(stamp), price, price, price, price, is_closed=True)
+                for stamp, price in (("2026-10-10T14:25:00Z", 2), ("2026-10-10T14:20:00Z", 1))]
+        db = mock.Mock()
+        db.execute.return_value.fetchall.return_value = [(bar.payload(),) for bar in bars]
+        with mock.patch.object(alert_chart.sqlite3, "connect", return_value=db) as connect:
+            self.assertEqual(alert_chart.evidence_closes("/tmp/price #?.db", "XAUUSD", AT, limit=2), (1, 2))
+        self.assertEqual(connect.call_args.args, ("file:///tmp/price%20%23%3F.db?mode=ro",))
+        self.assertTrue(connect.call_args.kwargs["uri"])
+        sql, params = db.execute.call_args.args
+        self.assertIn("symbol=? AND timeframe='5m'", sql)
+        self.assertIn("bar_start<=?", sql)
+        self.assertIn("json_extract(payload, '$.is_closed')=1", sql)
+        self.assertIn("ORDER BY bar_start DESC LIMIT ?", sql)
+        self.assertEqual(params, ("XAUUSD", "2026-10-10T14:25:00+00:00", 2))
+        db.close.assert_called_once()
+        db.execute.return_value.fetchall.return_value = []
+        with mock.patch.object(alert_chart.sqlite3, "connect", return_value=db):
+            self.assertEqual(alert_chart.evidence_closes("/tmp/bars", "XAUUSD", AT), ())
+        with mock.patch.object(alert_chart.sqlite3, "connect", side_effect=OSError):
+            self.assertEqual(alert_chart.evidence_closes("/tmp/missing", "XAUUSD", AT), ())
+        self.assertEqual(alert_chart.evidence_closes(None, "XAUUSD", AT), ())
+
+    def test_hook_prepares_new_and_recovered_alerts_only_in_worker(self):
+        from runtime import alert_hook
+        seen, read_threads = [], []
+        channel = RecordingChannel()
+        channel.send = lambda event: seen.append(event)
+        alerts = dispatcher(channel)
+        alerts.ledger.save(trade_event(event_id="recovered"))
+        def read(*args):
+            read_threads.append(threading.current_thread().name)
+            return (1.0, 2.0)
+        with mock.patch.object(alert_hook, "evidence_closes", side_effect=read) as source:
+            hook = AlertHook(environ={"AI_FLOOR_ALERTS_ENABLED": "1",
+                                     "AI_FLOOR_MARKET_EVIDENCE_PATH": "/tmp/evidence"},
+                             dispatcher_factory=lambda **kw: alerts)
+            try:
+                hook([NotificationEvent("1.0", "new", "run-1", AT, "INFO", "POSITION_OPENED",
+                                        "XAUUSD", (), (), None, (), (), ())])
+                self.assertTrue(hook.flush(2))
+            finally:
+                self.assertTrue(hook.close(2))
+        self.assertEqual({event.event_id for event in seen}, {"new", "recovered"})
+        self.assertTrue(all(event.closes == (1.0, 2.0) for event in seen))
+        self.assertEqual(read_threads, ["alert-delivery", "alert-delivery"])
+        source.assert_called_with("/tmp/evidence", "XAUUSD", AT)
+
+    def test_recovery_interval_default_and_validation(self):
+        from runtime.alert_hook import RECOVERY_INTERVAL_SECONDS
+        self.assertEqual(RECOVERY_INTERVAL_SECONDS, 60)
+        hook = AlertHook(environ={})
+        self.assertEqual(hook.recovery_interval, 60)
+        for interval in (0, -1, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                AlertHook(environ={}, recovery_interval=interval)
 
 
 class TestAlertHook(NoNetwork):
@@ -817,7 +897,8 @@ class TestAsyncAlertHook(NoNetwork):
 
             hook = AlertHook(environ={"AI_FLOOR_ALERTS_ENABLED": "1", "AI_FLOOR_ALERTS_LEDGER_PATH": path},
                              dispatcher_factory=lambda **kw: dispatcher(
-                                 Signalling(), ledger=AlertDeliveryLedger(kw["ledger_path"]), clock=clock))
+                                 Signalling(), ledger=AlertDeliveryLedger(kw["ledger_path"]), clock=clock),
+                             recovery_interval=0.05)
             try:
                 self.assertTrue(hook.flush(2))
                 self.assertEqual(channel.sent, [])

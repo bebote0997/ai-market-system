@@ -38,7 +38,7 @@ Nota T12: los cierres de barras deben venir del llamador; el mapeo desde `Notifi
 
 PARTIAL: T18 (`make_test_alert` produce un TEST etiquetado y se valida con mocks; un envío real de prueba requiere `GMAIL_APP_PASSWORD` y autorización explícita del owner).
 
-**Pendiente para certificar:** re-revisión independiente (M1–M3 + cableado), decisión del owner sobre la fuente de barras para T12 y sobre kaleido, envío real de prueba T18 (`python -m runtime.alert_test --slack`) con autorización del owner, aprobación del owner. Activación (`AI_FLOOR_ALERTS_ENABLED=1`) sigue fuera de alcance.
+**Pendiente para certificar:** re-revisión independiente (M1–M3 + cableado), envío real de prueba T18 (`python -m runtime.alert_test --slack`) con autorización del owner, aprobación del owner. Activación (`AI_FLOOR_ALERTS_ENABLED=1`) sigue fuera de alcance.
 
 ## Correcciones #24 / #25 — 2026-10-11
 
@@ -48,3 +48,15 @@ PARTIAL: T18 (`make_test_alert` produce un TEST etiquetado y se valida con mocks
 - El hook devuelve conteos `queued`/`dropped`, no estados de entrega síncronos; los estados finales se consultan en el ledger antes de cerrar el worker. El orden del hook es FIFO; la prioridad del dispatcher sigue disponible en `dispatch_many`.
 - PAPER/DEMO, flags OFF, sin red real, dependencias nuevas, activación ni deploy. Pendiente revisión independiente y aprobación del owner; F09-T18 sigue PARTIAL.
 - Validación: suite completa solicitada **1475 tests OK (1 expected failure)**; suite de alertas **49 tests OK**; `ruff check .` y `git diff --check` PASS. Sin commit.
+
+
+## Small fixes autorizados — 2026-10-11
+
+- T12 usa el almacén existente `market_evidence` (sidecar de SQLite, no tabla en `trading_floor.db`), mediante `AI_FLOOR_MARKET_EVIDENCE_PATH` y URI `mode=ro`. Últimas 48 velas cerradas de 5m del símbolo, cronológicas, con cierre ≤ timestamp del evento; sin proveedor ni datos inventados. Ausencia/error de lectura → `NO_DATA` con error tipado en log.
+- Preparación de eventos nuevos y recuperados en el worker `alert-delivery`. PNG mediante matplotlib Agg, imagen relacionada inline con CID en HTML; import/render fallido → SVG. Sin velas → `NO_DATA`. Se sustituye plotly/kaleido para esta ruta.
+- Recuperación periódica de SENDING: constante de 60 s, parámetro `recovery_interval` para tests; recuperación inicial inmediata conservada.
+- Dependencia autorizada `matplotlib==3.10.7` en `requirements.txt`, incluido por `requirements-ci.txt`. Intento de pip en `/workspace/repo/.venv` bloqueado por resolución DNS del índice: instalación real NO VERIFICADA; rutas de Agg/import/render verificadas con mocks.
+- Tests offline con mocks: consulta read-only/cutoff/símbolo/límite/orden, worker y replay, CID/fallback, Agg/import/render fallido, intervalo y validación. Lector solo stdlib; sin importar engine ni storage. Allowlist del test de consumidores de evidencia incluye este lector autorizado; aislamiento de imports de alertas conservado.
+- Sin certificación, activación, envío real, deploy ni commit.
+
+Validación final: suite completa solicitada, 1495 tests OK (1 expected failure), 176.371 s; Ruff y git diff --check PASS.

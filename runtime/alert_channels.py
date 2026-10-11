@@ -57,10 +57,12 @@ class GmailEmailChannel:
         msg["Message-ID"] = make_msgid(idstring=event.event_id, domain="ai-trading-floor.local")
         msg["X-AI-Floor-Event-ID"] = event.event_id
         msg.set_content(render_text(event))
-        msg.add_alternative(render_html(event), subtype="html")
-        png = chart_png(event.closes) if event.kind.trade else None  # only when plotly+kaleido are installed
+        png = chart_png(event.closes) if event.kind.trade else None
+        cid = make_msgid(domain="ai-trading-floor.local") if png else None
+        msg.add_alternative(render_html(event, chart_cid=cid[1:-1] if cid else None), subtype="html")
         if png:
-            msg.add_attachment(png, maintype="image", subtype="png", filename="chart.png")
+            msg.get_payload()[-1].add_related(png, maintype="image", subtype="png", cid=cid,
+                                             disposition="inline", filename="chart.png")
         return msg
 
     def send(self, event):

@@ -58,3 +58,12 @@ Hallazgos MEDIUM/LOW atendidos localmente, pendientes de re-revisión independie
 - Regresiones: 13 tests Phase 10 PASS (6 nuevos). Suite completa solicitada: 1481 tests OK, 1 expected failure (183.177s); Ruff y git diff --check PASS. Evidencia registrada también en CHANGELOG_AGENT.md.
 
 No certificación, activación, merge, deploy ni commit.
+
+
+## Small fixes autorizados — 2026-10-11
+
+- POSITIONS filtra `OPEN` y órdenes `PENDING` mediante `json_extract(payload, '$.status')` en SQL antes de LIMIT. ERRORS filtra runs `FAILED` o error no vacío y journal `ERROR`/`CRITICAL` en SQL antes de LIMIT; registros antiguos elegibles ya no se pierden por filas recientes no elegibles.
+- Tests con mocks comprueban predicados y parámetros antes del LIMIT, cableado de render y T10: `sqlite3.OperationalError` durante lectura se muestra como `DASHBOARD_ERROR`.
+- Sin cambio de estado de certificación, activación, deploy ni commit.
+
+Validación final: suite completa solicitada, 1495 tests OK (1 expected failure), 176.371 s; Ruff y git diff --check PASS.

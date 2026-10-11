@@ -868,8 +868,9 @@ class SafetyTests(unittest.TestCase):
                 users.append(path.relative_to(ROOT).as_posix())
         # B2.3B: the runtime is the only user, behind v2_position_catch_up (OFF by default). Phase 4 (DEC-4.3):
         # the offline replay package reuses the evidence format in a separate Replay Store; no runtime imports it.
+        # Owner-authorized Phase 9 chart reads the table through sqlite mode=ro only; it imports no engine/store.
         self.assertEqual(sorted(u for u in users if not u.startswith("replay/")),
-                         ["runtime/config.py", "runtime/service.py"])
+                         ["runtime/alert_chart.py", "runtime/config.py", "runtime/service.py"])
         runtime_sources = [p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "runtime").glob("*.py")]
         self.assertFalse(any("import replay" in text or "from replay" in text for text in runtime_sources))
 

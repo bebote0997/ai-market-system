@@ -4,6 +4,8 @@ OFF unless AI_FLOOR_ALERTS_ENABLED is exactly 1. Durable snapshots are written b
 sending, and pending snapshots are replayed at startup. Queue admission itself is not durable: a
 process crash before the worker persists an event, or queue overflow, can lose that alert.
 """
+from dataclasses import replace
+import math
 import logging
 import os
 import queue
@@ -11,16 +13,23 @@ import threading
 import time
 
 from runtime.alert_catalog import from_notification
+from runtime.alert_chart import evidence_closes
 from runtime.alert_dispatch import alerts_enabled, dispatcher_from_env
 
 LOG = logging.getLogger(__name__)
+RECOVERY_INTERVAL_SECONDS = 60.0
+
 LEDGER_ENV = "AI_FLOOR_ALERTS_LEDGER_PATH"
 
 
 class AlertHook:
-    def __init__(self, *, environ=None, dispatcher_factory=None, maxsize=1000):
+    def __init__(self, *, environ=None, dispatcher_factory=None, maxsize=1000,
+                 recovery_interval=RECOVERY_INTERVAL_SECONDS):
         if not isinstance(maxsize, int) or maxsize <= 0:
             raise ValueError("alert queue maxsize must be positive")
+        if not math.isfinite(recovery_interval) or recovery_interval <= 0:
+            raise ValueError("recovery interval must be positive and finite")
+        self.recovery_interval = float(recovery_interval)
         self.environ = dict(os.environ if environ is None else environ)
         self.dispatcher = None
         self._queue = queue.Queue(maxsize=maxsize)
@@ -35,6 +44,7 @@ class AlertHook:
             factory = dispatcher_factory or dispatcher_from_env
             self.dispatcher = factory(ledger_path=self.environ.get(LEDGER_ENV) or ":memory:",
                                       environ=self.environ)
+            self.dispatcher.prepare_event = self._prepare_alert
             self._worker = threading.Thread(target=self._run, name="alert-delivery", daemon=True)
             self._worker.start()
         except Exception as exc:  # noqa: BLE001 - alerting never controls anything
@@ -63,6 +73,13 @@ class AlertHook:
             LOG.warning("component=alerts event=HOOK_FAILED error_type=%s", type(exc).__name__)
             return None
 
+    def _prepare_alert(self, event):
+        if not event.kind.trade:
+            return event
+        closes = evidence_closes(self.environ.get("AI_FLOOR_MARKET_EVIDENCE_PATH"),
+                                 event.symbol, event.occurred_at_utc)
+        return replace(event, closes=closes)
+
     def _run(self):
         try:
             try:
@@ -71,14 +88,14 @@ class AlertHook:
                 LOG.warning("component=alerts event=RECOVERY_FAILED error_type=%s", type(exc).__name__)
             finally:
                 self._ready.set()
-            recovery_at = time.monotonic() + 1.0
+            recovery_at = time.monotonic() + self.recovery_interval
             while not self._closed.is_set() or not self._queue.empty():
                 if not self._closed.is_set() and time.monotonic() >= recovery_at:
                     try:
                         self.dispatcher.recover_pending()
                     except Exception as exc:  # noqa: BLE001
                         LOG.warning("component=alerts event=RECOVERY_FAILED error_type=%s", type(exc).__name__)
-                    recovery_at = time.monotonic() + 1.0
+                    recovery_at = time.monotonic() + self.recovery_interval
                 try:
                     event = self._queue.get(timeout=0.05)
                 except queue.Empty:

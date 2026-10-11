@@ -1,0 +1,2 @@
+# Static alert charts (Agg backend; no browser renderer).
+matplotlib==3.10.7

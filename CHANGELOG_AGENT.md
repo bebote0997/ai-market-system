@@ -32,6 +32,14 @@
   1 pre-existing expected failure; `PYTHONDONTWRITEBYTECODE=1 AI_FLOOR_MARKET_PROVIDER=none
   AI_FLOOR_AI_PROVIDER=deterministic /workspace/repo/.venv/bin/python -m unittest discover -q`.
   `/workspace/repo/.venv/bin/ruff check .` PASS; `git diff --check` PASS.
+## 2026-10-11 — Owner-authorized Phase 9/10 small fixes (local, no commit)
+
+- Read existing closed 5m evidence sidecar via mode=ro; last 48 symbol closes whose bar end is at or before the alert event. Worker prepares new and recovered events. Missing evidence yields NO_DATA.
+- Replace plotly/kaleido chart PNG with matplotlib Agg; inline related PNG/CID email, SVG fallback on import/render failure. Pin matplotlib==3.10.7 in requirements.txt, included by requirements-ci.txt. Pip installation in /workspace/repo/.venv failed due to package-index DNS/network unavailability; real installation not verified.
+- Periodic stale-SENDING recovery: 60 s constant, test-configurable interval.
+- Chart reader uses only standard-library SQLite/JSON/datetime; no engine or trading/storage imports. Updated the existing evidence-consumer safety allowlist for this authorized read-only chart, retaining alert import isolation tests.
+- Dashboard OPEN/PENDING/failed-run/error-severity SQL filters precede LIMIT; add mock SQL/render coverage and T10 DB-read-error → DASHBOARD_ERROR.
+- Baseline: 1488 tests OK (1 expected failure), 167.408 s. Final requested suite: 1495 tests OK (1 expected failure), 176.371 s; Ruff and git diff --check PASS. No commit, push, deploy, activation or risk/economic changes.
 
 ## 2026-10-11 — Phase 11 Chaos / Failure Testing (issue #28) — IN PROGRESS
 
