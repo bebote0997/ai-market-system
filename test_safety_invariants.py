@@ -133,12 +133,16 @@ class RiskApprovalBeforeBrokerTests(unittest.TestCase):
             rel = path.relative_to(ROOT).as_posix()
             if rel.startswith("test_"):
                 continue
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for node in ast.walk(fn):
+                    if isinstance(node, ast.Call) and ast.unparse(node.func) == "PaperOrder":
+                        builders.add((rel, fn.name))
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and ast.unparse(node.func) == "PaperOrder":
-                    builders.add(rel)
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "submit_plan":
                     callers.add(rel)
-        self.assertEqual(builders, {"execution/paper_broker.py"})
+        self.assertEqual(builders, {("execution/paper_broker.py", "submit_plan")})
         self.assertEqual(callers, SUBMIT_PLAN_CALLERS)
 
     def test_submit_plan_refuses_without_approved_decision(self):

@@ -8,3 +8,6 @@ select = ["F"]
 [tool.ruff.lint.per-file-ignores]
 # Risk Engine file is frozen (EXPERIMENT_FREEZE.md); keep it byte-identical. `stop` at the sizing step is dead.
 "execution/risk_engine_v2.py" = ["F841"]
+# Frozen since P3 (test_phase8_p4b compatibility check): keep byte-identical.
+"execution/paper_broker.py" = ["F401"]
+"core/rr_contract.py" = ["F401"]
