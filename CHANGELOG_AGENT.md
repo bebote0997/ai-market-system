@@ -1,5 +1,54 @@
 # Agent Changelog
 
+## 2026-10-11 — DEC-14.1 review fixes (PR #34, local only)
+
+- Owner-authorized review fixes on `v2/opposite-setup-policy`; commit requested locally only.
+  No push, merge, Render/render.yaml, activation, dependency or economic-policy change.
+- Removed POLICY_V2_F3 switch and planner_options entirely from runtime/service.py;
+  run_floor call byte-identical to origin/main. Restored both Phase 4 test files exactly with
+  `git checkout origin/main -- test_phase4_fixed_3r.py test_phase4_target_planner.py`.
+- STRUCTURE_CHANGE execute only for an OPEN same-symbol position with no same-symbol pending;
+  flat uses the existing certified submit unchanged, including PAPER_ORDER_SUBMITTED. Tests compare
+  full journals, durable account/orders/fills and execution records against BLOCK (fixed UUID only),
+  plus pending gates both flat and with an open position. No alternate planner authorization inferred:
+  legacy runtime V1 plans fail closed as not_a_fixed_3r_plan before closing; candidate/Risk untouched.
+- Same setup requires same direction and entry difference <= 0.25 * original entry-stop distance.
+  Original stop is read from the originating order, never substituted by current position SL;
+  absent origin returns NO_DATA for similarity. Tests cover both inclusive boundaries, just inside/
+  outside, moved SL, missing origin and opposite direction with matching setup_id.
+- Phase 8 historical compatibility gate now admits only the exact already-authorized close_market
+  addition, while comparing every other broker byte to P3 (979e1e6); other historical gates retained.
+- Replay tooling/fixtures/builders and historical instructions investigated: historical source DB,
+  lab PKL and raw OHLC exports absent. Original git-ignored replay_twelve_data_12m.db was acquired
+  from Twelve Data Basic (no payment), 2025-10-06 through 2026-10-06. lab_run can rebuild PKL from
+  that DB, but acquisition needs network/API key. Synthetic fixtures cannot restore the corpus.
+  Ran `.venv/bin/python -m replay.opposite_policy_impact`; saved NO_DATA and exact provenance/reason
+  in docs/replay/dec14_impact.txt. No invented impact counts.
+- Baseline WORKFLOW unittest: 1540 tests, 6 failures (5 dashboard subtests + historical broker gate),
+  1 expected ISSUE-012 failure. Focused review/Phase 4/storage/Phase 8: 115 passed,
+  135 subtests passed. `ruff check .`: PASS. Full `.venv/bin/python -m pytest -q`: 1541 passed,
+  5 failed (the same dashboard fixture failures), 1 xfailed (ISSUE-012), 1100 subtests passed
+  in 175.10 s. No remaining non-dashboard failure. Local commit follows the owner’s explicit
+  instruction allowing the separately fixed dashboard failures; no dashboard changes in this task.
+
+Excepción del fingerprint de `storage/database.py` en `test_system_health.py`: además de
+las exclusiones B2.1 existentes, se normaliza únicamente el fragmento
+`"POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED", "DAILY_SUMMARY",` a
+`"POSITION_CLOSED", "DAILY_SUMMARY",` y se eliminan exactamente estas cuatro líneas:
+
+```python
+                if row["event_type"] == "STRUCTURE_REVERSE_SUBMITTED":
+                    execution = json.loads(row["payload"])
+                elif row["event_type"] == "POSITION_CLOSED" and json.loads(row["payload"]).get("exit_reason"):
+                    execution = json.loads(row["payload"])
+```
+
+Cada fragmento debe aparecer exactamente una vez. Permite seleccionar la alerta reverse y
+entregar geometría/exit_reason al mapper Phase 9, sin cambiar schema ni escrituras económicas.
+Todo otro byte LF-normalizado sigue fijado al SHA256 frozen V1
+`80f8c9ae037bb27dbcd45403ea33655b07dfed3983f3cb6637d8704e5ef4ebde`.
+
+
 ## 2026-10-11 — DEC-14.1 opposite setup policy (local, owner approved 10:00 ET)
 
 - Branch `v2/opposite-setup-policy`; PAPER only, NAS100 OFF, no Render/render.yaml/push/activation.

@@ -2,7 +2,7 @@
 
 Close + DEC14_CLOSE commit together. Open is a separate fresh Risk V2 reservation.
 An incomplete close is abandoned on restart; historical evidence never authorizes a resumed reverse.
-Similarity is conservatively one instrument price increment around the actual entry.
+Similarity is same direction within one quarter of the original entry-to-stop distance.
 """
 import json
 from dataclasses import dataclass
@@ -64,16 +64,19 @@ def _confirmed_bos(signal, frame, timeframe, side, position, at, max_age):
     return close < Decimal(str(position.stop)) if side == "SHORT" else close > Decimal(str(position.stop))
 
 
-def assess(report, position, snapshot, instrument, at, limits):
+def assess(report, position, snapshot, instrument, at, limits, *, original_stop=None):
     """Pure classification using validator evidence and the actual closed BOS bar; no AI input."""
     setup_id, invalid = candidate(report)
     if invalid:
         return invalid
     plan = report.trade_plan
-    near = abs(Decimal(str(plan.entry)) - Decimal(str(position.entry_price))) <= Decimal(str(instrument.price_increment))
-    if (plan.side == position.side or setup_id == position.setup_id) and near:
-        return "SAME_SETUP_IGNORED"
-    if plan.side == position.side or setup_id == position.setup_id:
+    if plan.side == position.side:
+        if original_stop is None:
+            return "NO_DATA"
+        entry = Decimal(str(position.entry_price))
+        near = abs(Decimal(str(plan.entry)) - entry) <= Decimal("0.25") * abs(entry - Decimal(str(original_stop)))
+        if near:
+            return "SAME_SETUP_IGNORED"
         return "SAME_DIRECTION"
     structure = report.setup_assessment.evidence[0]
     if not _confirmed_bos(structure["15m"], snapshot["15m"], "15min", plan.side, position, at,
@@ -154,7 +157,9 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None):
             reason = "PENDING_ORDER"
         position = broker.account.open_positions.get(symbol)
         if reason is None and position is not None:
-            reason = assess(report, position, snapshot, instrument, runtime.clock(), runtime.config.max_age_seconds)
+            origin = broker.orders.get(position.origin_order_id)
+            reason = assess(report, position, snapshot, instrument, runtime.clock(), runtime.config.max_age_seconds,
+                            original_stop=None if origin is None else origin.stop)
         if reason in {"WOULD_CLOSE_PROFIT", "WOULD_CLOSE_LOSS"}:
             broker.close_market(symbol, float(snapshot["5m"].iloc[-1]["Close"]), at,
                                 exit_reason="EXIT_STRUCTURE_CHANGE", decision_run_id=run_id)

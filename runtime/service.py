@@ -699,13 +699,9 @@ class OperationalRuntime:
                 "pending_on_symbol": [o.order_id for o in broker.orders.values()
                                       if o.symbol == symbol and o.status == "PENDING"]})
             stage = "deterministic"
-            planner_options = {}
-            if self.config.v2_opposite_setup_policy == "STRUCTURE_CHANGE":
-                from core.rr_contract import POLICY_V2_F3
-                planner_options["planner_policy"] = POLICY_V2_F3
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
                                       self.instruments.get(symbol), self.risk_config,
-                                      equity=decision_equity, run_id=run_id, **planner_options)
+                                      equity=decision_equity, run_id=run_id)
             self._rex_note(rex, "ST4", lambda: self._rex_floor(deterministic, symbol, decision_equity))
             deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
             self._rex_note(rex, "F1B", lambda: {
@@ -854,7 +850,10 @@ class OperationalRuntime:
                 execution_reason = paper_blocked  # B2.3B: no submission over unreconciled positions.
             elif (self.config.v2_opposite_setup_policy == "STRUCTURE_CHANGE"
                   and deterministic.final_status == "PLAN_READY" and self.paper_enabled
-                  and paper_blocked is None):
+                  and paper_blocked is None
+                  and symbol in broker.account.open_positions
+                  and broker.account.open_positions[symbol].status == "OPEN"
+                  and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values())):
                 from execution.opposite_policy import execute
                 outcome = execute(self, deterministic, snapshot, key=key, at=execution_at,
                                   ai_allowed=eligible and ai_healthy, writer=rex_store)

@@ -93,7 +93,9 @@ def policy_pass(cohort, frames, policy):
             if report.final_status != "PLAN_READY":
                 counts["no_data_or_invalid_setup"] += 1
                 continue
-            reason = assess(report, position, snap, INS[symbol], slot.to_pydatetime(), MAX_AGE)
+            # Cohort SL/TP are frozen: the filled position still carries its original stop.
+            reason = assess(report, position, snap, INS[symbol], slot.to_pydatetime(), MAX_AGE,
+                            original_stop=position.stop)
             counts[{"SAME_SETUP_IGNORED": "duplicates", "OPPOSITE_NO_STRUCTURE_CHANGE": "blocked_no_BOS",
                     "OPPOSITE_DISCARDED_STRUCTURE_INTACT": "would_keep", "WOULD_CLOSE_PROFIT": "would_close_profit",
                     "WOULD_CLOSE_LOSS": "would_close_loss"}.get(reason, "other_blocked")] += 1

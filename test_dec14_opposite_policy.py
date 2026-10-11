@@ -152,8 +152,32 @@ class OppositePolicyTests(unittest.TestCase):
         self.assertEqual(len(self.paper()[1]), 1)
 
     def test_same_direction_distinct_blocked(self):
-        self.assertEqual(self.execute(reports(side="LONG", entry=2660., stop=2600.)).reason, "SAME_DIRECTION")
+        self.assertEqual(self.execute(reports(side="LONG", entry=2662.51, stop=2600.)).reason, "SAME_DIRECTION")
         self.assertEqual(self.paper()[0].closed_trades, [])
+
+    def test_similarity_boundary_uses_original_stop_after_stop_moves(self):
+        broker = self.rt._broker("XAUUSD")
+        broker.account.open_positions["XAUUSD"].stop = 2649.
+        self.rt.store.save_paper(broker)
+        held = self.paper()[0].open_positions["XAUUSD"]
+        for entry, expected in ((2637.49, "SAME_DIRECTION"), (2637.5, "SAME_SETUP_IGNORED"),
+                                (2637.51, "SAME_SETUP_IGNORED"), (2662.49, "SAME_SETUP_IGNORED"),
+                                (2662.5, "SAME_SETUP_IGNORED"), (2662.51, "SAME_DIRECTION")):
+            with self.subTest(entry=entry):
+                self.assertEqual(opposite_policy.assess(reports(side="LONG", entry=entry, stop=2600.),
+                    held, snapshot(), INS["XAUUSD"], T, self.config.max_age_seconds, original_stop=2600.), expected)
+        self.assertEqual(self.execute(reports(side="LONG", entry=2662.5, stop=2600.)).reason, "SAME_SETUP_IGNORED")
+
+    def test_opposite_direction_never_same_even_with_matching_setup_id(self):
+        report = reports(entry=2650., bos=False)
+        held = replace(self.paper()[0].open_positions["XAUUSD"],
+                       setup_id=report.setup_assessment.explanation["setup_id"])
+        self.assertEqual(opposite_policy.assess(report, held, snapshot(), INS["XAUUSD"], T,
+                         self.config.max_age_seconds, original_stop=2600.), "OPPOSITE_NO_STRUCTURE_CHANGE")
+
+    def test_missing_original_order_does_not_invent_similarity(self):
+        self.rt.store.db.execute("DELETE FROM paper_orders")
+        self.assertEqual(self.execute(reports(side="LONG", entry=2650., stop=2600.)).reason, "NO_DATA")
 
     def test_opposite_without_bos_is_blocked(self):
         self.assertEqual(self.execute(reports(bos=False)).reason, "OPPOSITE_NO_STRUCTURE_CHANGE")
@@ -206,7 +230,7 @@ class OppositePolicyTests(unittest.TestCase):
         self.assertEqual(len(self.rows(opposite_policy.DECISION)), 1)
         self.assertEqual(self.execute(reports(entry=2670.)).reason, "RUN_ID_CANDIDATE_MISMATCH")
 
-    def test_live_runtime_wires_validator_planner_ai_close_and_risk(self):
+    def test_live_runtime_preserves_planner_and_rejects_non_fixed_3r_contract(self):
         # Remove only the harness claim so production run_cycle acquires its own lock/run identity.
         self.rt.store.db.execute("DELETE FROM symbol_locks")
         self.rt.store.db.execute("DELETE FROM runs")
@@ -222,14 +246,14 @@ class OppositePolicyTests(unittest.TestCase):
                 patch("floor.orchestrator.analizar_liquidez", scout("liquidity")):
             self.assertEqual(self.rt.run_cycle("XAUUSD", T), "PLAN_READY")
             self.assertEqual(self.rt.run_cycle("XAUUSD", T), "DUPLICATE")
-        self.assertEqual(len(self.paper()[0].closed_trades), 1)
-        self.assertEqual(self.paper()[0].open_positions, {})
-        self.assertEqual(len(self.paper()[1]), 2)
-        self.assertEqual(len(self.rows("RISK_V2_DECISION")), 1)
-        self.assertEqual(self.rows("EXECUTION_DECISION")[0]["execution_reason"], "STRUCTURE_REVERSE_SUBMITTED")
+        self.assertEqual(self.paper()[0].closed_trades, [])
+        self.assertIn("XAUUSD", self.paper()[0].open_positions)
+        self.assertEqual(len(self.paper()[1]), 1)
+        self.assertEqual(self.rows("RISK_V2_DECISION"), [])
+        self.assertEqual(self.rows("EXECUTION_DECISION")[0]["execution_reason"], "not_a_fixed_3r_plan")
         mapped = [from_notification(e) for e in self.rt.store.capture_notifications(
             run_id=self.rt.store.latest_review("XAUUSD")["run_id"])]
-        self.assertEqual([e.event_type for e in mapped if e], ["POSITION_CLOSED", "ORDER_SUBMITTED"])
+        self.assertEqual([e.event_type for e in mapped if e], [])
 
     def test_bos_unclosed_or_old_cannot_close(self):
         for shift in (timedelta(minutes=30), -timedelta(hours=2)):
@@ -286,6 +310,39 @@ class OppositePolicyTests(unittest.TestCase):
 
 
 class FlagAndRuntimeTests(unittest.TestCase):
+    def test_flat_structure_change_matches_block_journal_orders_and_pending_gate(self):
+        for pending, open_position in ((False, False), (True, False), (True, True)):
+            with self.subTest(pending=pending, open_position=open_position):
+                outcomes = []
+                for policy in ("BLOCK", "STRUCTURE_CHANGE"):
+                    with tempfile.TemporaryDirectory() as directory:
+                        cfg = RuntimeConfig(db_path=Path(directory) / "db", v2_opposite_setup_policy=policy)
+                        rt = DemoRunner(cfg, market_provider=Data(age=5), macro_provider=macro_fixture(),
+                                        instruments=INS, clock=lambda: T)
+                        try:
+                            if pending:
+                                broker = PaperBroker(account(), INS["XAUUSD"])
+                                broker.orders["pending"] = PaperOrder(
+                                    "1.0", "pending", "previous", "XAUUSD", "LONG", 1.,
+                                    100., 90., 130., 1., 10000., 0., T, status="PENDING")
+                                if open_position:
+                                    broker.account.open_positions["XAUUSD"] = position(
+                                        "XAUUSD", "LONG", 100., 90., 130., 1.)
+                                rt.store.save_paper(broker)
+                            with patched_scouts("LONG"), patch("execution.opposite_policy.execute") as execute, \
+                                    patch("execution.paper_broker.uuid.uuid4", return_value="same-order-id"):
+                                result = rt.run_once("XAUUSD", T)
+                            execute.assert_not_called()
+                            journal = [tuple(row) for row in rt.store.db.execute(
+                                "SELECT timestamp,run_id,symbol,source,event_type,severity,payload FROM journal ORDER BY id")]
+                            execution = rt.store.review_report(result["run_id"])["execution"]
+                            self.assertEqual(execution["execution_reason"], "PENDING_ORDER" if pending else "ORDER_SUBMITTED")
+                            self.assertEqual(len(rt.store.journal(event="PAPER_ORDER_SUBMITTED")), int(not pending))
+                            outcomes.append((journal, rt.store.paper_state(*rt.store.load_paper("paper-main")), execution))
+                        finally:
+                            rt.close()
+                self.assertEqual(outcomes[0], outcomes[1])
+
     def test_block_default_fingerprint_and_invalid_warning(self):
         default = RuntimeConfig(market_provider_mode="none")
         self.assertEqual(default.v2_opposite_setup_policy, "BLOCK")

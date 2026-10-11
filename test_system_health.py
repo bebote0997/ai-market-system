@@ -377,7 +377,12 @@ class TradingDatabaseCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(source.count(guard), 1)
         source = source.replace(guard, "")
-        # DEC-14.1 adds only notification selection/payload; all other source bytes stay pinned.
+        # DEC-14.1 fingerprint exception in storage/database.py: normalize exactly the
+        # selection fragment below by removing only "STRUCTURE_REVERSE_SUBMITTED",
+        # and strip exactly the four alert_payload lines below (each occurs once).
+        # They expose close exit_reason and reverse order geometry to Phase 9 alerts;
+        # no schema/economic write changes. Existing B2.1 exclusions above remain;
+        # every other LF-normalized byte stays pinned to FROZEN_TRADING_DB_MODULE_SHA256.
         alert_selection = '"POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED", "DAILY_SUMMARY",'
         self.assertEqual(source.count(alert_selection), 1)
         source = source.replace(alert_selection, '"POSITION_CLOSED", "DAILY_SUMMARY",')

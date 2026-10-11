@@ -56,8 +56,13 @@ Implementación de política opuesta detrás de `V2_OPPOSITE_SETUP_POLICY` (defa
 owner Jeferson Tejeda. Sin activación, deploy ni cambios en Render. Demo prevé `STRUCTURE_CHANGE`.
 Pruebas deterministas nuevas y restart con abandono seguro; detalle en fase-06 y CHANGELOG_AGENT.md.
 Replay original no disponible en workspace: `docs/replay/dec14_impact.txt` registra **NO_DATA**;
-comparación/certificación quedan pendientes. Baseline tiene cinco fallos de dashboard por fixture
-horario estático, además del expected failure ISSUE-012; no atribuibles al cambio DEC-14.1.
+comparación/certificación quedan pendientes. Review fixes: planner de main restaurado, ruta nueva
+solo con OPEN del mismo símbolo sin pendientes, similitud a 0.25 del stop original. Plan V1
+del runtime se rechaza antes del cierre; contrato fixed-3R no relajado. Corpus original
+Twelve Data ausente, no regenerable offline. Baseline: 1540 tests, cinco fallos de dashboard
+y un gate histórico del broker ajustado por la adición exacta close_market; ISSUE-012 esperado.
+Review final: ruff PASS; pytest 1541 passed, 5 fallos dashboard preexistentes, 1 xfailed,
+1100 subtests passed. Fixes locales listos; sin certificación/activación adicional.
 
 ## Historia
 El Libro Maestro en Word (versión 1.9, 2026-10-07) queda **archivado/histórico**; no se versiona aquí ni se actualiza más.

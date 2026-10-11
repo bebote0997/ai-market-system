@@ -16,10 +16,15 @@ sin cambios. `BLOCK` conserva planner, fingerprint, journal y comportamiento leg
 
 `execution/opposite_policy.py` reutiliza candidate_identity, validación de conflict_path,
 Risk V2/prepare_reservation, lock del slot, CAS de todo el estado PAPER y guards halt/REX.
-Con flag ON, el planner fixed-3R existente produce el contrato requerido por Risk V2; las nuevas
-órdenes (también cuando ya está flat) usan reservas V2 con identidad/política estampadas y fill normal.
-La zona similar se define conservadoramente como ±un incremento de precio respecto al entry real;
-fuera de ella, misma dirección sigue bloqueada. No se permite pyramiding.
+La llamada a run_floor es byte-idéntica a origin/main: el flag no selecciona otro planner.
+Solo una posición OPEN del mismo símbolo sin orden pendiente entra en execute; flat y pendientes
+conservan el submit/gate certificado y sus eventos, incluido PAPER_ORDER_SUBMITTED. El contrato
+fixed-3R sigue siendo obligatorio en candidate/Risk V2: los planes V1 del runtime se rechazan
+con not_a_fixed_3r_plan antes de cerrar; no se relaja el contrato para activar reversión.
+Mismo setup exige misma dirección y |entry nuevo − entry posición| ≤ 0.25 ×
+|entry posición − stop original| (bordes inclusivos). Stop original viene de la orden de origen,
+nunca del SL actual; orden ausente → NO_DATA para similitud. Setup_id igual nunca convierte
+una dirección opuesta en mismo setup. Fuera de la zona, misma dirección sigue bloqueada.
 
 BOS: evidencia determinista del setup 15m, dirección opuesta, break posterior a la apertura,
 bar alineado y cerrado (`start + 15m <= now`), no más viejo que el límite existente de frescura 15m;
@@ -46,3 +51,38 @@ Flag inválido → BLOCK + warning de log/journal y health `opposite_setup_polic
 Implementación ≠ certificación/activación. Replay: `python -m replay.opposite_policy_impact
 <market_replay.db> <p41a_lab_dir>`, salida en `docs/replay/dec14_impact.txt`. Corpus original ausente
 en este workspace: resultados **NO_DATA**, sin conteos inventados; comparación económica pendiente.
+
+## DEC-14.1 — review fixes locales, 2026-10-11
+
+Tests Phase 4 restaurados exactamente desde origin/main. Gate Phase 8 permite únicamente
+el método close_market exacto de DEC-14.1 y compara todos los demás bytes del broker con P3.
+No cambia certificación ni activa flags.
+
+Excepción del fingerprint de `storage/database.py` en `test_system_health.py`: además de
+las exclusiones B2.1 existentes, se normaliza únicamente el fragmento
+`"POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED", "DAILY_SUMMARY",` a
+`"POSITION_CLOSED", "DAILY_SUMMARY",` y se eliminan exactamente estas cuatro líneas:
+
+```python
+                if row["event_type"] == "STRUCTURE_REVERSE_SUBMITTED":
+                    execution = json.loads(row["payload"])
+                elif row["event_type"] == "POSITION_CLOSED" and json.loads(row["payload"]).get("exit_reason"):
+                    execution = json.loads(row["payload"])
+```
+
+Cada fragmento debe aparecer exactamente una vez. Permite seleccionar la alerta reverse y
+entregar geometría/exit_reason al mapper Phase 9, sin cambiar schema ni escrituras económicas.
+Todo otro byte LF-normalizado sigue fijado al SHA256 frozen V1
+`80f8c9ae037bb27dbcd45403ea33655b07dfed3983f3cb6637d8704e5ef4ebde`.
+
+Investigación replay offline: el corpus no puede regenerarse sin las barras originales.
+`replay/acquire.py` necesita red y key Twelve Data; `lab_run.py` reconstruye PKL solo a partir
+de una DB existente. El origen documentado es `data/replay/replay_twelve_data_12m.db`,
+Twelve Data Basic sin pago, 2025-10-06 → 2026-10-06 (V2_PHASE4_TRADE_PLANNER.md).
+No existe esa DB, market_replay.db, ni lab_*.pkl/copia de barras local; fixtures sintéticas
+no reemplazan evidencia histórica. CLI ejecutada: NO_DATA; detalle exacto en
+`docs/replay/dec14_impact.txt`, sin números fabricados.
+
+Validación review: ruff PASS; tests focalizados 115 passed / 135 subtests. Suite pytest completa:
+1541 passed, 5 failed (dashboard fixture temporal preexistente), 1 xfailed ISSUE-012,
+1100 subtests passed (175.10 s). Gate histórico broker corregido, sin otro fallo.
