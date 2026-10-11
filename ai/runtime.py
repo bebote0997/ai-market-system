@@ -2,8 +2,11 @@
 call-count control. No component outside this module invokes a provider
 directly, so every AI call is validated the same way.
 """
+from contextlib import contextmanager
+import contextvars
 import copy
 import dataclasses
+import json
 from datetime import datetime, timezone
 import time
 
@@ -61,6 +64,45 @@ class AuditLog:
         return len(self.entries)
 
 
+# V2 Phase 8 / P3 (Owner decision 2026-10-09): PASSIVE observability of every request ``call_agent`` handles, emitted
+# to a provider or skipped for lack of usable evidence. OFF by default (no observer). The observer only receives a
+# copy of facts taken from the real ``AIRequest`` object; it never changes the request, the response, the audit
+# entry, the provider calls or their order, and any observer exception is swallowed.
+_REQUEST_OBSERVER = contextvars.ContextVar("ai_request_observer", default=None)
+
+
+@contextmanager
+def observe_requests(observer):
+    """Install ``observer(record)`` for the calls made inside the ``with`` block (current context only)."""
+    token = _REQUEST_OBSERVER.set(observer)
+    try:
+        yield
+    finally:
+        _REQUEST_OBSERVER.reset(token)
+
+
+def _observe(request, *, provider_called, reason):
+    observer = _REQUEST_OBSERVER.get()
+    if observer is None:
+        return
+    try:
+        from ai.call_audit import FINGERPRINT_VERSION
+        observer({
+            "provenance": "AIRequest object passed to call_agent (observed, never reconstructed)",
+            "kind": "EMITTED" if provider_called else "SKIPPED", "provider_called": provider_called,
+            "reason": reason, "schema_version": request.schema_version, "run_id": request.run_id,
+            "symbol": request.symbol, "as_of": request.as_of, "agent_name": request.agent_name,
+            "role": request.role, "prompt_version": request.prompt_version,
+            "usable_evidence": has_usable_evidence(request),
+            # exactly the material ``evidence_fingerprint`` hashes, as JSON values (its own default=str rule)
+            "fingerprint_material": {"fingerprint_version": FINGERPRINT_VERSION, "symbol": request.symbol,
+                                     "agent": request.agent_name, "role": request.role,
+                                     "evidence": json.loads(json.dumps(list(request.deterministic_evidence),
+                                                                       default=str))}})
+    except Exception:  # noqa: BLE001 - observability can never change an agent's behaviour
+        pass
+
+
 def has_usable_evidence(request):
     return any(isinstance(item, dict) for item in request.deterministic_evidence)
 
@@ -77,6 +119,7 @@ def call_agent(provider, request, audit_log=None):
     )
     fingerprint = evidence_fingerprint(request)
     if not has_usable_evidence(request):
+        _observe(request, provider_called=False, reason="skipped_no_data")
         response = _no_data_response(request)
         if audit_log is not None:
             audit_log.record(request.run_id, request.agent_name, request.prompt_version, evidence_id_list, response,
@@ -86,6 +129,7 @@ def call_agent(provider, request, audit_log=None):
 
     error_kind = http_status = None
     call = {"called": True, "requested_at": datetime.now(timezone.utc).isoformat()}
+    _observe(request, provider_called=True, reason="emitted")
     started = time.perf_counter()
     try:
         response = provider.generate(request)

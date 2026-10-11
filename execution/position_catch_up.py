@@ -1,8 +1,9 @@
 """V2 Phase 2 / B2.1: exactly-once, chronological catch-up of EXISTING open PAPER positions.
 
-Every committed closed 5m bar after an open position's durable trading-side watermark
+Every eligible closed 5m bar after an open position's durable trading-side watermark
 (``last_processed_at``, else ``opened_at``) reaches the unchanged ``TradeManager.process_bar``
-exactly once, oldest first. Not wired into the runtime.
+exactly once, oldest first. The runtime supplies committed evidence when ON, or its
+validated observed snapshot for the Owner-authorized HIGH-8.1 OFF route.
 
 Exactly-once invariant, per (position, bar):
 - Each bar is applied to PAPER state freshly loaded from the trading DB and persisted with one
@@ -16,7 +17,7 @@ Exactly-once invariant, per (position, bar):
   The comparison includes the whole account and loaded PAPER objects so another
   symbol's progress cannot be overwritten. SQLite provides cross-process exclusion.
 
-Authorities: the Evidence Store says which bars exist (read-only here, never written); the trading
+Authorities: the Evidence Store or the supplied snapshot says which bars exist; the trading
 DB says which effects were applied. There is no cross-database transaction. If evidence cannot be
 read, nothing is applied (fail closed) and there is no fallback to newest-bar-only processing.
 
@@ -51,11 +52,17 @@ def _watermark(position):
     return position.last_processed_at if position.last_processed_at is not None else position.opened_at
 
 
-def _eligible_bars(evidence, symbol, after, as_of):
+def _eligible_bars(evidence, symbol, after, as_of, observed_bars=None):
     """Committed closed 5m bars strictly after ``after`` and closed by ``as_of``, oldest first.
     Any read failure or contract violation raises before a single bar is applied."""
     try:
-        bars = tuple(evidence.committed(symbol, TIMEFRAME, after=after))
+        if observed_bars is None:
+            bars = tuple(evidence.committed(symbol, TIMEFRAME, after=after))
+        else:
+            # HIGH-8.1: the default runtime has no Evidence Store. Reuse its observed
+            # snapshot, normalized before any economic write; never synthesize missing bars.
+            bars = tuple(sorted((bar for bar in observed_bars
+                                 if bar.start > after and bar.closed_at(as_of)), key=lambda bar: bar.start))
     except Exception as exc:  # noqa: BLE001 - every evidence failure fails closed
         raise CatchUpEvidenceError(f"committed evidence unavailable: {type(exc).__name__}") from exc
     previous = after
@@ -83,29 +90,63 @@ def _load(store, account_id, instrument):
     return broker
 
 
-def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=None, owner_key=None):
+def _admit(halt_gate, kind):
+    """V2 P4a R-HALT read 1 (L(W)) before an economic attempt loads its state; None gate = legacy."""
+    return None if halt_gate is None else halt_gate.admit(kind)
+
+
+def _pre_save(halt_gate, admission):
+    """V2 P4a R-HALT read 2 immediately before ``save_paper``; raises when halted (no call, no effect)."""
+    if halt_gate is not None:
+        halt_gate.pre_save(admission)
+
+
+def _notify(observer, event, **data):
+    """V2 P3 REX observer hook (O-4): evidence only. Never changes a decision or state; failures are ignored."""
+    if observer is None:
+        return
+    try:
+        observer(event, **data)
+    except Exception:  # noqa: BLE001 - REX evidence can never affect PAPER economics
+        pass
+
+
+def catch_up_position(store, evidence, *, account_id, symbol, as_of, instrument=None, owner_key=None,
+                      observer=None, halt_gate=None, observed_bars=None):
     """Apply every eligible committed closed 5m bar to the open position of ``symbol``.
 
     ``store`` is the trading ``storage.database.Store``; ``evidence`` is a ``MarketEvidenceEngine``.
+    With ``evidence=None``, ``observed_bars`` supplies normalized MarketBars from the default runtime snapshot.
+    Both sources use the same durable watermark, per-bar transaction and execution precedence.
     ``owner_key`` is passed to ``save_paper`` unchanged (slot ownership when called from a cycle).
+    ``observer`` (V2 P3 REX, O-4; None = legacy) receives the exact bar and ``expected_state`` before each
+    ``save_paper``; it can change neither a decision nor any state, and its failures are ignored.
+    ``halt_gate`` (V2 P4a R-HALT; None = legacy): admission per bar before its load and a second read before
+    ``save_paper``; a refusal stops at the last committed bar (I-R10) and propagates ``HaltRefused``.
     """
     if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("as_of: timezone-aware datetime required")
     as_of = as_of.astimezone(timezone.utc)
+    if evidence is not None and observed_bars is not None:
+        raise ValueError("provide evidence or observed_bars, not both")
     broker = _load(store, account_id, instrument)
     position = None if broker is None else broker.account.open_positions.get(symbol)
     if position is None:
         return CatchUpResult(symbol, "NO_OP", (), None, None)  # Bootstrap: nothing to replay.
-    bars = _eligible_bars(evidence, symbol, _watermark(position), as_of)
+    bars = _eligible_bars(evidence, symbol, _watermark(position), as_of, observed_bars)
     applied = []
     stale = False
     for bar in bars:
+        admission = _admit(halt_gate, "catch_up_bar")
         broker = _load(store, account_id, instrument)  # Durable state only, for every bar.
         position = broker.account.open_positions.get(symbol)
         if position is None or bar.start <= _watermark(position):
             break  # Closed, or progressed by another writer: never apply a bar twice.
         expected_state = store.paper_state(broker.account, broker.orders, broker.fills)
+        _notify(observer, "catch_up_bar", bar=_bar(bar), bar_start=bar.bar_start, digest=bar.digest,
+                open_positions=list(broker.account.open_positions), expected_state=expected_state)
         closed = TradeManager(broker.account, broker).process_bar(_bar(bar))
+        _pre_save(halt_gate, admission)
         if store.save_paper(broker, owner_key=owner_key, symbol=symbol, expected_state=expected_state) is False:
             stale = True
             break  # Discard this computed transition; a later call reloads/retries from durable state.

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
 import sqlite3
 
 from runtime.notifications import NullNotificationSink
@@ -11,6 +12,7 @@ from runtime.scheduler import Scheduler, slot_at, slot_key
 from runtime.service import OperationalRuntime
 from storage.database import Store
 from storage.daily_summary import build_daily_summary
+from runtime.halt import HaltRefused, startup_write
 
 
 REAL_EXECUTION_ENABLED = False
@@ -46,19 +48,29 @@ def preflight(config, *, env=None):
         "openai_credential": bool(env.get("OPENAI_API_KEY")),
         "openai_model": env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
     }
+    from runtime.config import catch_up_scope_checks, catch_up_storage_checks, persistent_write_probe
+    checks.update(catch_up_storage_checks(config, mount=None, disk_mounted=True))  # V2 P8.4 R2; {} while OFF
+    checks.update(catch_up_scope_checks(config))  # V2 P1-B: scope and STRICT evidence; {} while OFF
+    from runtime.genesis import sealed_preflight_checks
+    sealed = sealed_preflight_checks(config, env)  # V2 P2b (R-GEN-1d, D-3): {} while OFF; before any DB open
+    checks.update(sealed)
     try:
-        store = Store(config.db_path)
+        if sealed and (not sealed["sealed_genesis_context"] or not Path(config.db_path).exists()):
+            raise FileNotFoundError("sealed preflight: no verified context or no existing file (never created)")
+        if sealed:  # LOW-1: non-creating open (mode=rw)
+            from runtime.genesis import SealedStore
+            store = SealedStore(config.db_path)
+        else:
+            store = Store(config.db_path)
         try:
             checks["db_writable_schema"] = store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-            if checks["db_writable_schema"]:
-                with store.transaction():
-                    store.db.execute("CREATE TEMP TABLE IF NOT EXISTS phase7_write_probe(value INTEGER)")
-                    store.db.execute("INSERT INTO phase7_write_probe VALUES(1)")
-                    store.db.execute("DELETE FROM phase7_write_probe")
+            # P8.4G (DEC-8.11, P8.5R HIGH): persistent write probe, always rolled back (see persistent_write_probe).
+            checks["db_writable_schema"] = checks["db_writable_schema"] and persistent_write_probe(
+                store.db, config.db_path)
             checks["experiment_not_started"] = store.get_state("experiment_started") != "1"
         finally:
             store.close()
-    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):  # GenesisSealError is a RuntimeError
         checks["db_writable_schema"] = False
     return PreflightReport("READY" if all(checks.values()) else "NOT_READY", checks,
                            config.market_provider_mode, config.ai_provider_mode,
@@ -66,6 +78,8 @@ def preflight(config, *, env=None):
 
 
 class DemoRunner:
+    halt_gate = None  # V2 P4a R-HALT; None = legacy (flag OFF)
+
     def __init__(self, config, *, dry_run=False, diagnostic_outside_session=False,
                  notification_sink=None, experiment_baseline_sha=None, experiment_freeze_sha=None,
                  **runtime_kwargs):
@@ -79,15 +93,28 @@ class DemoRunner:
                                           **runtime_kwargs)
         self.store = self.runtime.store
         self.clock = self.runtime.clock
-        doctor = preflight(config)
-        with self.store.transaction():
-            self.store.set_state("runner", "RUNNING")
-            self.store.set_state("phase7_readiness", doctor.status)
-            self.store.set_state("phase7_preflight_checks", json.dumps(doctor.checks, sort_keys=True))
+        self.halt_gate = self.runtime.halt_gate  # V2 P4a R-HALT; None = legacy (flag OFF)
+        try:
+            self._start(config, experiment_baseline_sha, experiment_freeze_sha)
+        except HaltRefused:
+            self.store.close()  # V2 P4a MEDIUM-1: no runner state, experiment or notification write after T_h
+            raise
+
+    def _start(self, config, experiment_baseline_sha, experiment_freeze_sha):
+        gate = self.halt_gate
+        with startup_write(gate, "preflight"):  # the preflight write probe opens a transaction on main
+            doctor = preflight(config)
+        with startup_write(gate, "runner_state"):
+            with self.store.transaction():
+                self.store.set_state("runner", "RUNNING")
+                self.store.set_state("phase7_readiness", doctor.status)
+                self.store.set_state("phase7_preflight_checks", json.dumps(doctor.checks, sort_keys=True))
         if experiment_baseline_sha is not None:
-            self.store.start_experiment_if_unstarted(self.clock(), experiment_baseline_sha,
-                                                     experiment_freeze_sha)
-        self._capture_and_deliver()
+            with startup_write(gate, "experiment_start"):  # never start or modify an experiment after T_h
+                self.store.start_experiment_if_unstarted(self.clock(), experiment_baseline_sha,
+                                                         experiment_freeze_sha)
+        with startup_write(gate, "notifications"):
+            self._capture_and_deliver()
 
     def _capture_and_deliver(self, *, run_id=None):
         try:
@@ -123,13 +150,19 @@ class DemoRunner:
         at = scheduled_at or self.clock()
         slot = slot_at(at, self.config.cadence_minutes)
         status = self.runtime.run_cycle(symbol, slot)
+        if status == "HALT_REFUSED":  # V2 P4a: no claim, no run, nothing persisted
+            return {"schema_version": "1.0", "run_id": None, "symbol": symbol, "status": status,
+                    "durable_status": None, "review_durable": False, "journal_count": 0,
+                    "paper_orders_enabled": not self.dry_run}
         key = slot_key(symbol, slot, self.config.cadence_minutes)
         run = self.store.run(key)
         if run is None:
             raise RuntimeError("cycle has no durable run")
         # A position close belongs to its opening run, even when observed in a
         # later cycle. Capture all newly committed journal rows exactly once.
-        self._capture_and_deliver()
+        gate = getattr(self, "halt_gate", None)
+        if gate is None or gate.allow("S"):
+            self._capture_and_deliver()
         try:
             review = self.store.review_report(run["run_id"])
             journal_count = len(self.store.journal(run_id=run["run_id"]))
@@ -148,6 +181,9 @@ class DemoRunner:
 
     def daily_summary(self, at=None):
         """Persist the previous complete UTC day, then attempt notification once."""
+        gate = getattr(self, "halt_gate", None)  # None on legacy-built runners (flag OFF)
+        if gate is not None and not gate.allow("S"):
+            return False  # V2 P4a: summaries and notifications are suppressed after T_h
         at = at or self.clock()
         with self.store.transaction():
             summary = build_daily_summary(self.store, at)
@@ -163,6 +199,14 @@ class DemoRunner:
         return True
 
     def close(self):
+        gate = getattr(self, "halt_gate", None)
+        if gate is not None and gate.halted and gate.recorded_journal_id is None:
+            # V2 P4a: a halt observed outside any run (between ticks / symbols) is still recorded durably (H).
+            from runtime.halt import halt_bookkeeping
+            try:
+                halt_bookkeeping(self.store, gate)
+            except Exception as exc:  # noqa: BLE001 - rolled back: the halt is NOT confirmed
+                LOG.error("component=halt event=HALT_UNCONFIRMED error_type=%s", type(exc).__name__)
         with self.store.transaction():
             self.store.set_state("runner", "STOPPED")
         self.runtime.close()

@@ -68,6 +68,7 @@ class Bars:
 
 def config(db, evidence, flag=True):
     return RuntimeConfig(db_path=Path(db), enabled_symbols=("XAUUSD", "EURUSD"), v2_position_catch_up=flag,
+                         v2_position_catch_up_symbols=("XAUUSD", "EURUSD") if flag else (),  # P1-B: full scope = prior global
                          market_evidence_path=None if evidence is None else Path(evidence))
 
 
@@ -158,7 +159,7 @@ class CatchUpCase(unittest.TestCase):
 
 
 class FlagTests(CatchUpCase):
-    def test_1_15_flag_off_default_v1_unchanged(self):
+    def test_1_15_flag_off_default_catches_up_without_evidence_store(self):
         self.assertIs(RuntimeConfig().v2_position_catch_up, False)
         self.assertIs(RuntimeConfig.from_env().v2_position_catch_up, False)
         off = RuntimeConfig(db_path=self.db)
@@ -180,8 +181,9 @@ class FlagTests(CatchUpCase):
         runtime = self.runtime(flag=False, overrides=STOP_THEN_TARGET)
         with spy:
             runtime.run_cycle("XAUUSD", SLOT)
-        self.assertEqual(seen, [("XAUUSD", T4)])  # V1: newest bar only; T2 stop never seen.
-        self.assertIn("XAUUSD", self.paper()[0].open_positions)
+        self.assertEqual(seen, [("XAUUSD", T1), ("XAUUSD", T2)])
+        self.assertNotIn("XAUUSD", self.paper()[0].open_positions)
+        self.assertEqual(self.paper()[0].closed_trades[0].exited_at, T2)
         self.assertIsNone(runtime.evidence)
         self.assertFalse(self.ev.exists())  # Nothing opened or created when OFF.
 

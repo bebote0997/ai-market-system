@@ -25,33 +25,67 @@ def main():
     freeze_sha = os.environ.get("AI_FLOOR_GIT_COMMIT", "")
     if not SHA_PATTERN.fullmatch(freeze_sha):
         raise RuntimeError("AI_FLOOR_GIT_COMMIT must identify the deployed experiment freeze")
+    sealed_lock = sealed_context = None
+    if config.v2_sealed_genesis:  # V2 P2b startup order: the lock, then steps 1-4, BEFORE any database open
+        import fcntl
+        from runtime.genesis import verify_startup_context
+        sealed_lock_path = Path(config.db_path).with_suffix(".runner.lock")
+        sealed_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        sealed_lock = sealed_lock_path.open("a+b")
+        try:
+            fcntl.flock(sealed_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            sealed_context = verify_startup_context(config, os.environ)
+        except BlockingIOError:
+            sealed_lock.close()
+            raise RuntimeError("scheduler authority already active") from None
+        except BaseException:
+            sealed_lock.close()
+            raise
+    gate = None
+    if config.v2_rhalt:  # V2 P4a R-HALT: read-only barrier before any DB write; no automatic resume
+        from runtime.halt import HaltGate, startup_halt_check
+        startup_halt_check(config, os.environ)
+        gate = HaltGate()
     from dataclasses import replace
     activation_env = dict(os.environ, AI_FLOOR_CLOUD_RUNNER="0", AI_FLOOR_SCHEDULER="0")
-    if not cloud_preflight(replace(config, scheduler_enabled=False), env=activation_env).experiment_ready:
+    from runtime.halt import HaltRefused, startup_write
+    try:
+        with startup_write(gate, "cloud_preflight"):  # V2 P4a MEDIUM-1 (no-op while the flag is OFF)
+            ready = cloud_preflight(replace(config, scheduler_enabled=False), env=activation_env).experiment_ready
+    except HaltRefused:
+        return  # halted before the runner started: nothing written, no restart
+    if not ready:
         raise RuntimeError("experiment activation preflight not ready")
     import fcntl
     lock_path = Path(config.db_path).with_suffix(".runner.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     stop = False
 
-    def shutdown(*_):
+    def shutdown(signum=None, frame=None):
         nonlocal stop
         stop = True
+        if gate is not None:
+            gate.request(signum)  # T_h: assignments only (no I/O, lock, transaction or exception)
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
-    with lock_path.open("a+b") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError("scheduler authority already active") from None
+    with (lock_path.open("a+b") if sealed_lock is None else sealed_lock) as lock:
+        if sealed_lock is None:  # sealed mode already holds the lock (taken before steps 1-4)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError("scheduler authority already active") from None
         # The exclusive lifetime lock proves no previous authority is alive.
         # Recover even a recent interrupted run; otherwise its symbol lock can
         # survive a quick restart forever.
-        runner = DemoRunner(config, notification_sink=SlackNotificationSink(),
+        try:
+            runner = DemoRunner(config, notification_sink=SlackNotificationSink(),
                     recovery_stale_after_seconds=0, instruments=paper_instruments(),
                     experiment_baseline_sha=EXPERIMENT_BASELINE_SHA,
-                    experiment_freeze_sha=freeze_sha)
+                    experiment_freeze_sha=freeze_sha, **({} if gate is None else {"halt_gate": gate}),
+                    **({} if sealed_context is None else {"sealed_context": sealed_context}))
+        except HaltRefused:
+            return  # MEDIUM-1: a halt during the constructor stops it without writes; no automatic restart
         try:
             while not stop:
                 runner.tick()

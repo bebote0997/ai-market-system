@@ -1,5 +1,461 @@
 # Agent Changelog
 
+## 2026-10-10 — FreezeAmendmentTests / git init environment diagnosis
+
+- Preserved all pre-existing changes on `v2/phase8-p4b`, HEAD `720f4b4`. No test or production-code edits.
+- Minimal sandbox probe reproduced Git exit 128: `fatal: cannot change to '.../git-init-probe-llpwl2a6':
+  Permission denied`. The identical Git command on that SAME directory outside the sandbox returned 0;
+  the probe was then removed. Sandbox tempfile access also raised WinError 5 before test setup reached Git.
+- All five FreezeAmendmentTests pass outside the sandbox. After full-suite discovery/imports, the affected module
+  runs 26 tests: 25 PASS, 1 skip (symlink privilege). Discovery leaves the Git environment unchanged.
+- This is demonstrated executor/temporary-directory permission failure locally, not evidence for a code patch.
+  Copilot's precise stderr and eight skipped-test IDs were not supplied; their exact environment cannot be inferred.
+  Use a test executor authorized to create/access temporary repositories; do not suppress failures or add skips.
+- Single full run (standard unittest discovery, diagnostic result logger): 1376 total, 1370 PASS, 0 errors/failures,
+  6 skipped, 188.550s. Git environment delta was empty before each of the five affected tests in full-suite order.
+  Skips: `A2ToolTests.test_nc5_symlink_component` (symlink privilege), all 3 `RealSignalTests` in
+  `test_phase8_rhalt_signals`, both `RealSignalDuringStartupTests` in `test_phase8_rhalt_startup` (POSIX required).
+  Copilot's 1376/5 errors/8 skips implies 1363 PASS, not a different suite size; its 2 additional skips remain
+  unattributed without their IDs/reasons. `git diff --check` PASS; no commit, push, merge, deploy or activation.
+
+## 2026-10-10 — HIGH-8.1 local correction (Owner amendment to DEC-8.1)
+
+- Owner authorization received after the preflight below. Exact scope and economic comparability are recorded in
+  `HIGH81_OWNER_DECISION.md`; historical DEC-8.1 and `EXPERIMENT_FREEZE.md` remain intact.
+- `runtime/service.py` feeds the OFF route's normalized 5m snapshot for EURUSD/XAUUSD into the existing
+  `execution/position_catch_up.py`. The core accepts observed bars without adding data/provider dependencies,
+  preserving its per-bar durable watermark, CAS, slot ownership, halt checks and stop/target precedence.
+- ON Evidence Store semantics and explicit partial scopes remain unchanged. OFF creates no market sidecar.
+  Pending fills remain on the current gated bar. No strategy, sizing, Risk Engine, Paper Broker or TradeManager edits.
+- `replay/rex_oracle.py` recognizes the explicit snapshot-management identity, with historical record compatibility.
+- Six new runtime test methods cover both symbols and LONG/SHORT, intermediate SL/TP, gaps/priority, ordering,
+  no lookahead, malformed bars, restart before/after commit, duplicate cycles and pending-fill idempotence.
+  Existing expectations for the old omission were updated. Historical missed-touch tests now seed the old durable
+  watermark directly. REX/demo/halt fixtures use actually closed bars; halt injection targets per-bar admission.
+- Focused regression: 201 tests PASS; historical preview/simulation after the shared fixture adjustment: 12 PASS
+  (6 overlap the focused group). Earlier focused failures exposed obsolete expectations and test fixtures;
+  the core isolation test also caught a data-layer import, which was removed rather than weakening the test.
+- First full run: 1376 tests, 4 failures / 1 error / 6 skips. All five concerned additional legacy runtime fixtures
+  (bars starting at the current slot) or the former ERROR outcome rather than the catch-up's explicit
+  STALE_PAPER_STATE event. Corrected fixtures/expectations in `test_phase1_isolation.py`,
+  `test_phase6_conflict_characterization.py`, `test_stale_safe_writers.py`; their 33 tests PASS, preserving
+  concurrency, bounded retry, zero lost updates and zero stale management writes. These concrete failures justify
+  a second full run; no further executable-code changes were needed.
+- Final full regression: `python -m unittest discover -q` — 1376 tests, OK (6 skipped), 192.520s:
+  1370 passed, 6 skipped. `git diff --check` PASS. Existing CI command verified locally; remote CI not triggered.
+  HIGH-8.1 fixed locally for the authorized default OFF EURUSD/XAUUSD route; READY FOR COPILOT REVIEW.
+- Economic effect: first observed intermediate touch may change exits/PnL/equity and downstream decisions.
+  No historical repair; no mixing with the frozen baseline. Missing provider history is not reconstructed.
+- A2/G-8.INT remain separate and inactive. PAPER ONLY / REAL OFF / NAS100 OFF. No operational DB, deployed flag,
+  Libro Maestro or freeze changes. No git add, commit, push, merge or deploy. Not Phase 8 certification.
+
+## 2026-10-10 — HIGH-8.1 focused preflight (Owner decision required)
+
+- Baseline inspected: `v2/phase8-p4b`, `720f4b4d410e19c723dcaaefaad34aab337f3fe5`.
+  Pre-existing untracked `V2_PHASE8_OWNER_READINESS_PACKAGE.md` preserved.
+- Reproduced the default/OFF intermediate SL/TP omission using the existing runtime tests. The ON path already
+  calls `catch_up_position` over committed chronological evidence, with durable per-bar saves and recovery.
+  No additional catch-up implementation is missing from `runtime/service.py` for an in-scope symbol.
+- DEC-8.1 in `V2_PHASE8_EXECUTION.md` explicitly preserves the OFF runtime; changing that path changes realized
+  exits/PnL versus the frozen baseline. Requested the exact Owner decision to replace the default path locally
+  and record supersession of DEC-8.1. No approval inferred for operational activation or a new baseline.
+- Focused baseline: 68 tests PASS (`test_runtime_catch_up`, `test_position_catch_up`,
+  `test_position_catch_up_concurrency`, `test_phase8_catch_up_certification`, `test_phase8_catch_up_scope`).
+  Initial sandbox run hit Windows temporary-directory access errors; rerun outside the sandbox passed.
+- Full baseline executed once: `python -m unittest discover -q`, 1370 tests, OK (6 skipped), 188.423s.
+  `git diff --check` PASS. CI workflow exists but remote CI was not run. These are baseline results, not fix evidence.
+- A2 and G-8.INT remain separate operational follow-ups, neither activated nor prerequisites for running local
+  tests. This entry does not close HIGH-8.1 or certify Phase 8. No executable code, flags, operational databases,
+  freeze or Libro Maestro changed; PAPER only, REAL OFF, NAS100 OFF. No commit, merge or deploy.
+
+## 2026-10-10 — V2 Phase 8 P4b audit fix (Copilot REQUEST CHANGES on 7c82cf3)
+
+- MEDIUM-1 (reproduced on 7c82cf3: `--out` equal to the source destroyed the P1 DB; equal to `--archive` overwrote
+  the archive with JSON; an existing file was overwritten): `replay/archive_anchor.py` validates `--out` BEFORE any
+  work (canonical realpath vs the source, its `-wal`/`-shm`, the archive and its sidecars; any existing path refused,
+  hardlinks and symlinks included) and writes it with `O_CREAT | O_EXCL` (+ `O_NOFOLLOW` where available).
+- LOW-1: `replay/a2_readiness.py` genesis-only = EDG equal to the expected genesis (no order, fill, position, closed
+  trade or account change), one GENESIS_PREPARED, no economic event, run or E0; only the non-economic rows of a sealed
+  start stopped before E0 are allowed. Findings listed.
+- LOW-2: `replay/freeze_amendment.py` requires full 40-hex SHAs and checks each resolves to itself.
+- LOW-3: `replay/g8int.py` G2 from a section 6.7 rehearsal record (PASS only bound to the deployed commit, no STOP);
+  G3 / G4 classifiers tested at their exact thresholds. LOW-4: CI annotations list every skipped test; NC5 emits a
+  nominal notice when it executes.
+- No A2, E0, Owner signature, deploy, PR or merge. Phase 8 BLOCKED.
+
+## 2026-10-09 — V2 Phase 8 P4b preparation (tools, validators, G-8.INT; no A2 created)
+
+- Agent: Claude. Branch `v2/phase8-p4b` from the certified P2b `fd29dc7`.
+- P2b LOW-1: `runtime/genesis.py` `SealedStore` opens the sealed DB with URI `mode=rw` (never creates it); used by the
+  sealed constructor and the sealed preflights. A file removed after steps 1-4 → refusal, no residual file or account.
+- P2b LOW-2: I-G18 kept as specified (design 5.1.3.2): a start without a PASS seal check → NOT VERIFIED; a FAIL check →
+  INVALID; regression test added.
+- Finding (fixed): the P2b `SEALED_BASELINE_SHA` constant in `runtime/genesis.py` would have forced `Y_P2` to touch a
+  third file (violating I-C6). X_P2 is now read from `runtime.cloud_runner.EXPERIMENT_BASELINE_SHA` (the only pin);
+  while it is still the P1 baseline no sealed start can pass.
+- New read-only tools: `replay/archive_anchor.py` (P1 archive, flat proof, unsigned OAR-A), `replay/a2_readiness.py`
+  (3.11.1 items 2/5, I-C5/I-C7, genesis-only first start), `replay/freeze_amendment.py` (I-C6, NC10),
+  `replay/g8int.py` (G1-G15 + 10 integration points; PASS / FAIL / NOT VERIFIED / BLOCKED; global BLOCKED).
+- Docs: `V2_PHASE8_CERTIFICATION_CHECKLIST.md`. Tests: `test_phase8_p4b.py` (synthetic, ephemeral keys).
+- No A2, E0, Owner signature, deploy, PR or merge. HIGH-8.1 OPEN; M-5 OPEN; B-STRICT PROVISIONAL; Phase 8 BLOCKED.
+
+## 2026-10-09 — V2 Phase 8 P2b Sealed Genesis (DEC-8.22-i; Owner D-1..D-4; implementation only)
+
+- Agent: Claude. Branch `v2/phase8-p2b` from the P4a closure `ce0ebe1`.
+- New: `runtime/genesis.py` (SEALED_RUNTIME: `verify_startup_context` = steps 1-4 before any SQLite open, signature via
+  `ssh-keygen -Y`, canonical OAR-G, X_P2 pinned at the P4b cut (`SEALED_BASELINE_SHA = None` until then), Y_P2 =
+  `AI_FLOOR_GIT_COMMIT`, file identity; `seal_check` = steps 2-5 with the REX chain head after E0; preflight checks),
+  `runtime/genesis_prepare.py` (the only creator: signed authorization, create-exclusive, account 10000 and
+  `GENESIS_PREPARED` in one transaction), `replay/genesis_anchor.py` (G2 checks and the unsigned OAR-G body; never
+  signs), `replay/genesis_verifier.py` (GEN-1/2, I-G18, NG40/41; integrated in G15 via `replay/rex_chain.py`).
+- Changed: `runtime/config.py` (`AI_FLOOR_V2_SEALED_GENESIS`, OFF, requires REX ON), `runtime/service.py` (sealed
+  context required; identity re-check after open; seal check as a P4a STARTUP site; no creation path when sealed),
+  `runtime/demo_runner.py` / `runtime/cloud.py` (preflights never create the DB when sealed; rolled-back probe kept,
+  D-3), `runtime/cloud_runner.py` (sealed order: lock, steps 1-4, then any DB open).
+- Test compatibility: `test_phase8_economic_digest.py` inventory superseded again (genesis modules use the P2a
+  library). New tests: `test_phase8_genesis.py` (ephemeral keys; no Owner signature).
+- Flags OFF; SEALED_RUNTIME is not the only mode yet (P4b cut). No A2, E0, deploy, PR or merge. Phase 8 BLOCKED;
+  HIGH-8.1 OPEN; M-5 OPEN; B-STRICT PROVISIONAL.
+
+## 2026-10-09 — V2 Phase 8 P4a closure (documentation only)
+
+- Agent: Claude. Branch `v2/phase8-p4a`; certified SHA `d21ce66` (CI `37998764069` SUCCESS; Copilot CERTIFY subject
+  to LOW-4).
+- Recorded: Owner approval of the DEC-8.17b amendment (STARTUP deferral of `T_h`; restricted category R); LOW-4
+  resolved documentarily; LOW-1…LOW-3 accepted as residual risks; P4a CERTIFIED — COMPONENT LEVEL.
+- Files: `V2_PHASE8_P86_HANDOFF.md` (DEC-8.17b row, new section 2b), `V2_PHASE8_P86_DESIGN.md` (3.8 note),
+  `V2_PHASE8_EXECUTION.md` (P4a closure).
+- No functional code changed. Libro Maestro not updated. M-5 OPEN; HIGH-8.1 OPEN; B-STRICT PROVISIONAL; Phase 8
+  BLOCKED.
+
+## 2026-10-09 — V2 Phase 8 P4a R-HALT, correction of Copilot MEDIUM-1 and restricted R
+
+- Agent: Claude. Branch `v2/phase8-p4a`, audited SHA `3b311e3` (REQUEST CHANGES).
+- MEDIUM-1 (reproduced: 23 post-T_h writes on a new DB, 28 on an existing one): `runtime/halt.py` `startup_write`
+  guards every startup write in `OperationalRuntime` (`Store` open, `recover`, startup events, account creation,
+  startup state, heartbeat), `DemoRunner` (preflight probe, runner state, `EXPERIMENT_STARTED`, notifications) and
+  `cloud_runner` (cloud preflight); after T_h the constructor stops without writing (now 0 post-T_h writes). A halt
+  requested during a startup check + write is deferred by the handler to the end of that section (CI showed that
+  OS-level signal masking did not defer the handler; replaced by this OS-independent deferral).
+- R restricted (Owner ratification, conditioned): `HaltGate.allow_evidence` validates run, process, event type,
+  admitted write and duplicates at REX write time; REX_FAILURE is never written after T_h; REX_RUN carries
+  `process_id`; `replay/halt_verifier.py` checks the post-halt REX_RUN (one, halted run, same process).
+- Found and fixed while testing: `runtime/rex.py` `rule_identity` cache ignored its arguments (a bare recorder could
+  drop the gate constants from later runtime identities).
+- Design §3.8: P4a implementation note (D-1, restricted R, STARTUP). New tests: `test_phase8_rhalt_startup.py`.
+- Flags OFF; no activation. M-5 OPEN. Phase 8 BLOCKED; HIGH-8.1 OPEN.
+
+## 2026-10-09 — V2 Phase 8 P4a R-HALT (DEC-8.17b Alternative 1, D-1; implementation only)
+
+- Agent: Claude. Branch `v2/phase8-p4a` from the certified P3 `979e1e6`.
+- Pre-correction (separate commit `8c4d249`, CI success): `replay/rex_chain.py` classifies malformed input
+  (economic JSON, missing fields, unexpected types, malformed REX records, non-UTF-8 text, an unprocessable copy,
+  snapshot cleanup) as CERTIFICATION_INVALID with a code and a structured `context`; criteria unchanged.
+- New `runtime/halt.py`: `HaltGate` (`request` = the signal handler's single assignment; `admit` = L(W);
+  `pre_save` = read 2; `allow`), `HaltRefused`, `HaltPending`, `PERSISTENCE_SITES` (I-R14),
+  `halt_bookkeeping` (one H transaction: the halted run's status fields, the release of THAT run's symbol lock —
+  D-1, a documented exception to the original I-R1c allowlist — and one HALT_OBSERVED row; a failure rolls back and
+  the halt is not confirmed), `startup_halt_check` (read-only, before any write; the resume token must equal the
+  latest HALT_OBSERVED journal id; no automatic resume; no resume write).
+- New `replay/halt_verifier.py` (I-R1b, I-R9, I-R13, post-halt allowlist, missing evidence, residual measurement),
+  integrated in G15; never VERIFIED.
+- Changed: `runtime/config.py` (`AI_FLOOR_V2_RHALT`, OFF by default, requires REX ON; legacy fingerprint unchanged),
+  `runtime/service.py` (admission per attempt incl. every STALE retry, read 2 before `save_paper`, every persistence
+  site guarded, HALTED / HALT_REFUSED / HALT_UNCONFIRMED), `execution/position_catch_up.py` and
+  `execution/pending_order_gate.py` (`halt_gate=None`), `runtime/scheduler.py` (no claim after T_h),
+  `runtime/demo_runner.py` (S suppressed; process-level HALT_OBSERVED at close; P keys only),
+  `runtime/cloud_runner.py` (handler sets T_h; startup barrier), `runtime/rex.py` (REX_WRITE `admission`:
+  process id, seq, L(W), read2, T_stop), `replay/rex_oracle.py` (HALTED runs).
+- Post-T_h allowlist: H, P and R (REX evidence of admitted writes and of the halted run, required by DEC-8.17b (b)).
+- Not changed: `storage/database.py`, `storage/economic_digest.py`, risk, adapter, broker, AI models and prompts.
+- Tests: `test_phase8_rex_chain_malformed.py`, `test_phase8_rhalt_gate.py`, `test_phase8_rhalt_runtime.py`,
+  `test_phase8_rhalt_signals.py` (real POSIX SIGTERM in child processes: CI only; crash/restart everywhere).
+- Flags OFF; no activation, deploy, PR or merge. M-5 OPEN (independent review required). Phase 8 BLOCKED;
+  HIGH-8.1 OPEN.
+
+## 2026-10-09 — V2 Phase 8 P3 REX, G14 oracle and G15 chain verifier (DEC-8.22-d; implementation only)
+
+- Agent: Claude. Branch `v2/phase8-p3` from the certified P2a-lib `f707b32` (`v2/phase8-execution` fast-forwarded
+  `a43d10e..f707b32`, no merge commit; `main` unchanged). Owner decisions O-1…O-7 (2026-10-09).
+- New:
+  - `runtime/rex.py`: `rex_encode` (typed, unambiguous), `RexRecorder` (stages ST0–ST10, write evidence,
+    `rex_digest = H("V2REX/1", cj(...))`, payload limit, failure isolation), `RexStore` (`save_paper` forwarded
+    unchanged), `RexProviderProbe` (AI request identity). Journal rows `source='rex'` (REX_WRITE / REX_RUN /
+    REX_FAILURE); no schema change. EDG / psh only in a read transaction opened on a connection without one;
+    `data_version` + `total_changes` + CAS read-back as integrity evidence, with their limits documented.
+  - `replay/rex_oracle.py`: independent G14 oracle (standard library only): F1, ST4 V1 sizing (`float.hex`), F1b,
+    V-P1…V-P3, A1–A4, H1, P1, legacy and gated pending eligibility, the V1 fill gate clause by clause, ST8, ST9,
+    ST2 management; every write reproduced from its pre-state; reconstructed values labelled.
+  - `replay/rex_chain.py`: read-only G15 verifier on a backup-API copy; best result `SQLITE_CHECKS_PASS / NOT VERIFIED`.
+  - Tests: `test_phase8_rex_writer.py`, `test_phase8_rex_inertness.py`, `test_phase8_rex_oracle.py`,
+    `test_phase8_rex_chain.py`.
+- Changed: `runtime/config.py` (`AI_FLOOR_V2_REX`, OFF by default, legacy fingerprint unchanged when OFF);
+  `runtime/service.py` (REX stages, RexStore / observer / probe only when ON; flag OFF path call-identical);
+  `execution/position_catch_up.py`, `execution/pending_order_gate.py` (`observer=None` hooks, failures ignored);
+  `test_phase8_economic_digest.py` (explicit supersession, Owner authorization 2026-10-09: `runtime/rex.py` is now
+  the only runtime importer of the P2a library).
+- Not changed: `storage/database.py` (hash-pinned), `storage/economic_digest.py`, risk, adapter, broker, AI, floor.
+- Inertness: twin ON/OFF runs byte-identical in the five PAPER tables, runs and non-REX journal, also under injected
+  failures at every REX point.
+- AI observability correction (Owner decision 2026-10-09): `ai/runtime.py` gains a passive request observer
+  (`observe_requests`, a ContextVar, OFF by default; observer failures swallowed; no extra provider call, no change to
+  requests, responses, audit or order). Every request `call_agent` handles is observed from the real `AIRequest`
+  object, emitted or skipped, with the exact `evidence_fingerprint` material. The G14 oracle distinguishes
+  EMITTED_OBSERVED, LEGITIMATE_OMISSION (verified independently: fingerprint recomputed, skip rule re-evaluated) and
+  insufficient / contradictory evidence (FAIL); no request is ever synthesized. New test module
+  `test_phase8_rex_ai_observability.py`; EURUSD runs whose macro agent has no news now pass G14 legitimately.
+- Flag OFF; no activation, deploy, PR or merge. B-STRICT not certified; DEC-8.18 PENDING. Phase 8 BLOCKED;
+  HIGH-8.1 OPEN; M-5 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6 Owner decisions and implementation handoff (documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`.
+- Recorded:
+  - DEC-8.13, 8.14, 8.15, 8.16, 8.17 (G-8.INT measurement policy; an earlier "emergency stop" label corrected),
+    8.17b (halt stop policy, Alternative 1), 8.20 (A2) and 8.21 APPROVED POLICY;
+  - DEC-8.21b PROVISIONAL;
+  - DEC-8.18 / 8.19 PENDING;
+  - DEC-8.22-a…j and OP NOT AUTHORIZED;
+  - the package plan approved for planning only; P1 split into P1-A (LOW-1) and P1-B (catch-up); DEC-8.15 added to
+    the P1 gate; the Libro Maestro deferred by the Owner.
+- New: `V2_PHASE8_P86_HANDOFF.md` (register, packages P1–P4, sequence, P1 prompt not executed, blockers).
+- Appended: a P8.6 section in `V2_PHASE8_EXECUTION.md`; §8.4 in the design.
+- Libro Maestro: latest accessible v1.7 (Phase 5 checkpoint) predates Phases 6–8, so the current version is not
+  verifiable and it was not edited.
+- No code, tests, config or DB changed; not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F10 (closing the P8.6R10 HIGH; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R10 read; findings checked against the
+  code (also: `Store(path)` creates a missing DB).
+- `V2_PHASE8_P86_DESIGN.md`:
+  - start-mode contract: GENESIS_PREPARATION only through a separate tool with an Owner-signed authorization and
+    create-exclusive; SEALED_RUNTIME hard-wired with no creation branch;
+  - the default is refusal;
+  - configuration and DB identity verified before any DB open;
+  - start-mode failure policy;
+  - R-GEN-1a…e requirements;
+  - NG54–NG61.
+- Not committed; no code, DB, config or deploy change. Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F9 (final targeted correction of P8.6R9; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R9 read; findings checked against the
+  code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - sealed-genesis mode (OAR-G by external configuration): no account creation after sealing;
+  - a gate inside the constructor before any economic write;
+  - failure policy before and after `E0`;
+  - `GENESIS_SEAL_CHECK` evidence per process start;
+  - the restoration-detection overclaim withdrawn;
+  - R-HALT terminology unified (Alternative 1 / 2, "second check before invoking `save_paper`").
+- Not committed; no code, DB, config or deploy change. Phase 8 BLOCKED; HIGH-8.1 OPEN; M-5 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F8 (closing P8.6R8 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R8 read; findings checked against the
+  code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - account genesis before the period (G0–G5, OAR-G, `edg_start = edg_genesis`); no account reconstruction after `E0`
+    is certifiable; R-GEN-1 as a future requirement;
+  - the stop policy corrected (Alternative 1 admission contract recommended; the residual may open a transaction after
+    `T_h`; Alternative 2 needs a pinned-module authorization);
+  - chain-head anchors per UTC day, gaps ≤ 26 h, independent of counting;
+  - G14 scoped to deterministic rule replay.
+- DEC-8.17b and DEC-8.21b PENDING; M-5 OPEN. Not committed; no code, DB, config or deploy change.
+
+## 2026-10-08 — V2 Phase 8 P8.6F7 (closing P8.6R7 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R7 read; every finding checked
+  against the code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - EDG complete economic digest (all rows of the five PAPER tables, including closed positions; startup
+    reconciliation covered);
+  - trust root and the INVALID / NOT VERIFIED / VERIFIED classification, with the limitation stated (reverted
+    alterations are not detectable);
+  - halt Policies A / B (recommend B, pre-begin abort at the caller, no change to `storage/database.py`), with no
+    "zero effect" claim;
+  - adapter stage F1b and AI provenance V-P1…V-P3;
+  - post-halt persistence policy by category (allowlist: the HALTED bookkeeping plus `heartbeat`, `scheduler`,
+    `runner`).
+- DEC-8.17b and DEC-8.21b PENDING; M-5 OPEN. Not committed; no code, DB, config or deploy change.
+
+## 2026-10-08 — V2 Phase 8 P8.6F6 (closing P8.6R6 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R6 read; every finding checked
+  against the code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - REX AI / floor reproduction (F1, A1–A4 from recommendations, base status and warnings; P1 / H1; rule versions;
+    missing-value rules) and full pending-order inputs;
+  - B-STRICT evidence-gap rule (any unevidenced economic write invalidates the whole period; day exclusion never
+    applies to writes; no backfill), with B-QUARANTINE assessed;
+  - R-HALT linearization (T_sig / T_h / T_ack; single-read admit point as the write start; per-operation coverage;
+    race tests);
+  - I-R1 replaced by I-R1a–d.
+- M-5 OPEN. Not committed; no code, DB, config or deploy change. Phase 8 BLOCKED; HIGH-8.1 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F5 (closing P8.6R5 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R5 read; every finding checked
+  against the code.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - V1 fill gate (`current_equity` and `equity_at_submission` at 1 %) added to the coupling; the "sizing only" claim
+    withdrawn;
+  - REX completed (inputs → decisions → effects → evidence; AI statuses, `ai_healthy`, `paper_policy`, fill-gate and
+    `submit_plan` inputs; not-evaluated paths);
+  - atomicity alternatives A vs B (recommend B, PENDING);
+  - `psh` defined over the `paper_state` tuple, stages ST0–ST10, G15 stage replay;
+  - R-HALT CP1–CP9, bookkeeping, verifier-level recovery, I-R1 restated (M-5 OPEN);
+  - A2 contract (X_P2/Y_P2 baseline, pinned DB path, backup-API archive, OAR-A, inode/nlink/symlink checks, flat
+    proof);
+  - decisions split into policy / implementation / operational levels (acyclic); R3-5 and R-21 corrected.
+- No code, DB, config or deploy change; not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN.
+
+## 2026-10-08 — V2 Phase 8 P8.6F4 (closing P8.6R4 findings; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Complete P8.6R4 read.
+- Grounding correction: the runtime sizes with V1 `riesgo.evaluar_trade_plan` (V2 `reserve_and_submit` is not
+  wired); §1.9 corrected.
+- `V2_PHASE8_P86_DESIGN.md`:
+  - G14/G15 evidence contract (REX, a future observability-only runtime addition), covering not-evaluated runs;
+    oracle and sequence replay;
+  - T14 as a full 8-column row, an id partition with no gaps, explicit transition ids with `seq = MAX` checks;
+  - multi-symbol sequential semantics documented unchanged;
+  - continuity A1 / A2 / B comparison (recommend A2: new DB, fresh 10000 account);
+  - exact post-halt activity, R-HALT-1…5 requirements; M-5 kept OPEN (partial);
+  - M1–M10 table restored (dropped by P8.6F3); DEC-8.13…8.22 all PENDING.
+- Not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.6F3 (design correction after the complete P8.6R3; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. All four audit reports (P8.5R2, P8.6R, P8.6R2,
+  P8.6R3) received and reconciled. `V2_PHASE8_P86_DESIGN.md`:
+  - H-1: closing-event attribution (E1–E7), origin run identity kept, `run_id` uniqueness; review_reports removed from
+    the digest, with a frozen snapshot.
+  - H-2: self-hash exclusion rule and a non-circular DAG; Owner-retained SSH-signed anchors; a digest-stability
+    argument and the encoding invariant I-H6.
+  - Shared equity (new HIGH): A vs B comparison; mixed-path segments TECHNICAL_ONLY; G1/G14.
+  - Halt: control-plane procedure H1–H7.
+  - Decisions DEC-8.13…8.22 all PENDING; traceability, invariants and re-audit readiness added.
+- No code, DB, flag or deployment change; not committed. Phase 8 BLOCKED; HIGH-8.1 OPEN; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.6F2 (targeted design remediation after P8.6R2; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. `V2_PHASE8_P86_DESIGN.md`: H-1 history mapping
+  by journal id (M1–M10, PRE_START quarantine, fail-closed), H-2 deterministic integrity (canonical JSON, SHA-256,
+  membership T1–T13, PREPARE→SIGN→COMMIT→ANCHOR, crash recovery, verification V1–V6, stated limits), M-2 evidence
+  completeness (STRICT/CALENDAR), M-5 operator table, experiment status axes FS/EX/PD/RS, G-8.INT counting rules;
+  invariants and negative tests; items for independent validation. P8.6R2 report not attached. Not committed.
+
+## 2026-10-08 — V2 Phase 8 P8.6F (design correction after P8.6R; documentation only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. `V2_PHASE8_P86_DESIGN.md` revised: H-1/H-2
+  (immutable hash-chained segments, per-segment full historical validation, separate opening/closing equity, external
+  anchor, freeze amendments, per-segment 14-day counter), M-1…M-7, read-only experiment-state classification
+  (NOT_STARTED/STARTED/ACTIVE/ENDED/INCONSISTENT), risk matrix, DEC-8.13…8.22 as proposals. The P8.6R report was not
+  attached. No code, DB, flag or deployment change; not committed. Phase 8 BLOCKED; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.6 (design only: per-symbol catch-up, experiment continuity, LOW-1)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `f2f87be`. Design document `V2_PHASE8_P86_DESIGN.md` only;
+  no code, config, flag, DB or deployment change; not committed (no commit authorization in P8.6).
+- LOW-1 reproduced on temporary copies (unknown review decision -> gate CLEAR); fix proposed, not implemented.
+- Owner decisions DEC-8.13 … DEC-8.22 requested. HIGH-8.1 OPEN for the runtime; Phase 8 BLOCKED; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.4G (fixes for the two P8.5R HIGH findings)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `b5a8c3c`; final SHA = the commit that adds this entry.
+- FIX A `1dc82c8` (DEC-8.11): `persistent_write_probe` (BEGIN IMMEDIATE + main table + ROLLBACK, schema/version
+  unchanged, OS write access) replaces the TEMP probes of `cloud_preflight` and `demo_runner.preflight`; read-only,
+  permission or SQLite errors -> NOT_READY. `test_phase8_trading_db_preflight.py` (5).
+- FIX B `87dfd62` (DEC-8.12): only ACCEPTED_FIRST_COMMITTED is final; effectively ESCALATED anomalies block the gate;
+  append-only auditable review rows. `EscalationTests` (6); three earlier expectations explicitly superseded.
+- Full suite 1080. No activation; HIGH-8.1 OPEN for the runtime; Phase 8 BLOCKED; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.4F (fixes for the P8.5 independent review blockers)
+
+- Agent: Claude. Branch `v2/phase8-execution`; baseline `0f67527`; final SHA = the commit that adds this entry.
+- FIX1 `70ff008` (R2 HIGH): Evidence Store preflight uses a persistent write probe (BEGIN IMMEDIATE + main table +
+  ROLLBACK, no residue) instead of a TEMP table; a read-only store fails closed.
+- FIX2 `3d59ecc` (R3 MEDIUM): activation preview reports a pending gate bar only if it starts strictly after the
+  order's as_of (`expected_status`), as the runtime does.
+- FIX3 `e2ab0c5` (R4 HIGH): revision gate requires the Evidence DB and full coverage by `anomaly_id` (records carry
+  the evidence anomaly id; dedup/review by id; BLOCKED on missing DB, unclassified, orphan or material unreviewed).
+  P8.4 flag-OFF CLEAR assertion explicitly superseded.
+- Tests +7 (FIX1 1, FIX2 1, FIX3 5; one assertion superseded). Full suite 1069. Same-class TEMP probe on the trading DB preflight reported,
+  not changed. Per-symbol catch-up proposal documented, not implemented. Nothing activated; HIGH-8.1 OPEN for the
+  runtime; Phase 8 BLOCKED; not certified.
+
+## 2026-10-08 — V2 Phase 8 P8.4 Batch 3 (R4 REVISION visibility + pre-DEMO gate)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `fc5f8b6`; final SHA = the commit that adds this entry.
+- `runtime/revision_review.py` (classification MATERIAL/non-material, deduplicated EVIDENCE_REVISION journal rows,
+  system_state summary, Owner review, read-only pre-DEMO gate + CLI); `runtime/service.py` (flag-ON-only hook via
+  _audit_safely). P8.1B scenario 17 assertion explicitly superseded (LOW-8.6 resolved by R4).
+- `test_phase8_revision_review.py` (6). Full suite 1062. No activation; HIGH-8.1 OPEN for the default runtime;
+  Phase 8 BLOCKED. Open risks and the copied-DB simulation procedure documented.
+
+## 2026-10-08 — V2 Phase 8 P8.4 Batch 2 (R3 read-only activation preview)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `4fe10bd`; final SHA = the commit that adds this entry.
+- `replay/activation_preview.py` (offline, read-only: backup-API copies, source hashes, independent Decimal oracle;
+  watermarks, historic missed SL/TP report-only, catch-up bars, expected closes/PnL, pending gate bars, REVISIONs,
+  risks) and `test_phase8_activation_preview.py` (5: prediction equals a real flag-ON cycle on a separate copy).
+  Full suite 1056. No runtime change; no activation.
+
+## 2026-10-08 — V2 Phase 8 P8.4 Batch 1 (R1 activation route + R2 evidence preflight; flag OFF)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `8d8f98e`; final SHA = the commit that adds this entry.
+- `runtime/config.py`: `from_env` enables catch-up only for `AI_FLOOR_V2_POSITION_CATCH_UP="1"` + a separate evidence path;
+  ambiguous values fail closed; `catch_up_storage_checks` (fail-closed Evidence Store preflight, ON only).
+  `runtime/cloud.py` / `runtime/demo_runner.py`: preflights include those checks (OFF reports unchanged).
+- `test_phase8_activation_route.py` (10). Full suite 1051. P8.2 independent verdict recorded; author skip-count
+  statement corrected (CI: 1 environmental skip). No activation; HIGH-8.1 OPEN for the default runtime.
+
+## 2026-10-08 — V2 Phase 8 P8.3 (HIGH-8.1 closure preparation; no activation)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `0744868`; final SHA = the commit that adds this entry.
+  Tests and docs only; no production code changed; no flag activated; no operational DB touched.
+- `test_phase8_activation_simulation.py` (6): first-activation simulation on temporary DBs. Missed touches before
+  activation are NOT retroactively corrected (watermark); touches since the last flag-OFF cycle close at the true
+  bar; pending orders, REVISION detection, P&L reconciliation and rollback.
+- Doc P8.3: diagnosis (A), minimal plan R1-R5 (B), activation risks (C), isolated simulation procedure (D), REVISION
+  handling (E), certification conditions (F), DEC-8.6..8.10 (G). Recommendation: activation NO-GO now; Phase 8
+  BLOCKED; P8.2 report not available to the agent.
+
+## 2026-10-07 — V2 Phase 8 P8.1B (isolated certification of the chronological SL/TP catch-up)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `0bb6927` (P8.1A); final SHA = the commit that adds
+  this entry. Tests only; `v2_position_catch_up` ON only inside temporary test databases; runtime defaults unchanged.
+- `test_phase8_catch_up_certification.py` (14 methods: 11 deterministic intermediate-touch/gap/same-bar cases vs an
+  independent Decimal oracle, flag-OFF contrast, cadence jump, repeated cycle, pending interplay, evidence failure,
+  AI failure, 40 randomized oracle sequences, full traceability chain, provider revision, and real-process crash
+  before/after the close commit and a two-process race).
+- HIGH-8.1: evidence supports closure for the flag-ON path (pending P8.2 independent confirmation); it remains OPEN
+  for the default flag-OFF runtime. New LOW-8.6 (revisions visible only in evidence anomalies). Activation gate
+  documented, nothing activated.
+
+## 2026-10-07 — V2 Phase 8 P8.1A (adversarial execution tests, tests only)
+
+- Agent: Claude. Branch `v2/phase8-execution`; previous SHA `c5ba9d5` (P8.0); final SHA = the commit that adds this
+  entry. No production code changed; all flags OFF.
+- `test_phase8_adversarial.py` (12: SQLite failure matrix, fill transitions, scheduler/locks, conflicts, PAPER
+  safety, rollback fail-closed + restore idempotency) and `test_phase8_process_races.py` (4 real-process: crash
+  after/before submit commit, same-slot race, live-run recovered by another process).
+- Results: no phantom or duplicate order in any scenario. DEC-8.3 investigation documented (fail-stop accepted;
+  optional truthfulness tweak needs authorization); LOW-8.5 Store not closed on fail-closed startup. Rollback
+  procedure (DEC-8.4) and certification separation (DEC-8.5) documented. HIGH-8.1 remains OPEN for the default runtime.
+
+## 2026-10-07 — V2 Phase 8 P8.0 (Execution / Fill / Trade Manager: audit and certification plan)
+
+- Agent: Claude. Branch `v2/phase8-execution` from `main` `2753130d22abc33e12caf766e8ed5dfba17a8b70`; final SHA = the
+  commit that adds this entry. Audit only; no production code changed; no runtime activation.
+- `V2_PHASE8_EXECUTION.md` (architecture map, F08-T01..T17 matrix, findings, P8.1 batches, P8.2 gate, rollback,
+  DEC-8.1..8.5); `test_phase8_execution_characterization.py` (4 tests: finish() DB-failure fail-stop + recovery,
+  startup orphan / quantity-mismatch refusal, pending without time-in-force).
+- HIGH-8.1: the default runtime evaluates SL/TP only on the newest 5m bar per cycle (the certified catch-up is OFF).
+  Status: **READY FOR OWNER DECISIONS**.
+
 ## 2026-10-07 — V2 Phase 7 P7.1F (P7.2 FAIL correction: late AI response after the cycle budget)
 
 - Agent: Claude (author; not the reviewer). Branch `v2/phase7-ai-agent-floor`; failed P7.2 candidate
