@@ -1,16 +1,15 @@
 # V2 Phase 8 — G-8.INT certification checklist (P4b preparation)
 
-- **Status:** PREPARATION ONLY. No A2 period exists; nothing below has been measured on a real period.
+- **Status (2026-10-10):** Phase 8 CERTIFIED under DEC-8.23 + DEC-8.24 (merge `4974408e`). The live / external-evidence rows below are **deferred to Phase 13**, not passed. Historical line: PREPARATION ONLY; no A2 period exists.
 - **Tool:** `python -m replay.g8int` (read-only; backup-API copies). Classes: PASS / FAIL / NOT VERIFIED / BLOCKED.
   Absence of errors is never PASS; synthetic test periods never close HIGH-8.1 or M-5.
-- **Global verdict:** BLOCKED until every row is PASS, including the rows that depend on Owner acts, external evidence
-  and independent review.
+- **Global verdict (revised by DEC-8.24):** Phase 8 certification requires every **offline-capable** row PASS (G1, G6, G7, G9, G10, G12, G14), no FAIL, cross-AI review (G13) without open CRITICAL/HIGH; G2–G5, G8, G11, G15 are deferred to Phase 13. Original rule (all rows PASS) applies to the Phase 13 demo.
 - **Safety:** PAPER ONLY · REAL EXECUTION DISABLED · NAS100 OFF · V2 flags OFF · PHASE 8 under certification · HIGH-8.1 CLOSED (983d2d2, Codex review PASS WITH NOTES) ·
   M-5 CLOSED (PR #16) · B-STRICT PROVISIONAL.
 
 ## 0. Scope decision
 
-**DEC-8.23 — APPROVED 2026-10-10 (Owner Jeferson Tejeda / bebote0997).** The G-8.INT gates that require live sessions (G2 simulation on copies tied to a deployed commit, G3 session days, G4 cycles, G5 reconciled closes, G7 EVIDENCE_UNAVAILABLE rate, and G11 external chain-head anchors over a live period) are **re-scoped for Phase 8 certification to offline / replay evidence**: `replay.g8int` on deterministic fixtures and replay data, the existing test suite, and CI on the exact certified SHA. Live validation of these criteria moves to the 30-day PAPER demo that starts only after Phases 8-13 are certified. No A2 live period, deploy, Render change, flag or scheduler activation is authorized by this decision.
+**DEC-8.23 — APPROVED 2026-10-10 (Owner Jeferson Tejeda / bebote0997).** The G-8.INT gates that require live sessions (G2 simulation on copies tied to a deployed commit, G3 session days, G4 cycles, G5 reconciled closes, G7 EVIDENCE_UNAVAILABLE rate, and G11 external chain-head anchors over a live period) are **re-scoped for Phase 8 certification to offline / replay evidence**: `replay.g8int` on deterministic fixtures and replay data, the existing test suite, and CI on the exact certified SHA. Live validation of these criteria moves to the 30-day PAPER demo (= Phase 13), which starts only after Phases 8-12 are certified. No A2 live period, deploy, Render change, flag or scheduler activation is authorized by this decision.
 
 **DEC-8.18a — Grok Bot under Owner-delegated control, 2026-10-10.** Amendment of DEC-8.18: the H5 SSH signature is dropped; Q1–Q8 run as `python -m replay.status_verifier` (PR #18) on fixtures/DB copies; EX is reported `EX_UNATTESTED`; live verification moves to Phase 13.
 
