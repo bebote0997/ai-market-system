@@ -17,7 +17,9 @@ delivered again; because the earlier attempt may or may not have reached the rec
 ``recovery='AMBIGUOUS_RETRY'`` (at-least-once for that case, possibly a duplicate message). A completion only
 applies to the claim it belongs to, so a slow original sender cannot overwrite the recovering one.
 """
+from dataclasses import asdict
 from datetime import datetime, timezone
+import json
 import logging
 import os
 import sqlite3
@@ -62,6 +64,8 @@ class AlertDeliveryLedger:
         self._lock = threading.Lock()
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.db.execute(_SCHEMA)
+        self.db.execute("CREATE TABLE IF NOT EXISTS alert_events "
+                        "(event_id TEXT PRIMARY KEY, snapshot TEXT NOT NULL)")
 
     def close(self):
         self.db.close()
@@ -74,6 +78,7 @@ class AlertDeliveryLedger:
     def claim(self, event, channel, at, stale_after=None):
         """CLAIMED (new), RECLAIMED (stale SENDING claim taken over: AMBIGUOUS_RETRY) or None (duplicate)."""
         with self._lock:
+            self._save(event)
             if self.db.execute(
                     "INSERT OR IGNORE INTO alert_deliveries(event_id,channel,event_type,priority,status,claimed_at) "
                     "VALUES(?,?,?,?,'SENDING',?)",
@@ -90,6 +95,48 @@ class AlertDeliveryLedger:
                 "WHERE event_id=? AND channel=? AND status='SENDING' AND claimed_at=?",
                 (at, AMBIGUOUS_RETRY, event.event_id, channel, row[1])).rowcount == 1
             return RECLAIMED if taken else None
+
+    def _save(self, event):
+        self.db.execute("INSERT OR IGNORE INTO alert_events(event_id,snapshot) VALUES(?,?)",
+                        (event.event_id, json.dumps(asdict(event))))
+
+    def save(self, event):
+        """Persist the full immutable snapshot before any channel can send."""
+        with self._lock:
+            self._save(event)
+
+    def pending(self, channels, at, stale_after):
+        """Stream pending snapshots, skipping terminal and still-owned channel claims."""
+        with self._lock:
+            missing = self.db.execute(
+                "SELECT COUNT(*) FROM alert_deliveries d WHERE status='SENDING' "
+                "AND NOT EXISTS (SELECT 1 FROM alert_events e WHERE e.event_id=d.event_id)").fetchone()[0]
+        if missing:
+            LOG.warning("component=alerts event=RECOVERY_NO_DATA claims=%d", missing)
+        last_id = ""
+        while True:
+            with self._lock:
+                row = self.db.execute("SELECT event_id,snapshot FROM alert_events WHERE event_id>? "
+                                      "ORDER BY event_id LIMIT 1", (last_id,)).fetchone()
+            if row is None:
+                return
+            last_id, snapshot = row
+            statuses = self.status(last_id)
+            with self._lock:
+                claims = dict(self.db.execute("SELECT channel,claimed_at FROM alert_deliveries "
+                                              "WHERE event_id=? AND status='SENDING'", (last_id,)).fetchall())
+            if not any(name not in statuses or
+                       (name in claims and _age_seconds(claims[name], at) >= stale_after)
+                       for name in channels):
+                continue
+            try:
+                data = json.loads(snapshot)
+                data["session"] = tuple(data["session"])
+                data["trade"] = tuple(tuple(pair) for pair in data["trade"])
+                data["closes"] = tuple(data["closes"])
+                yield AlertEvent(**data)
+            except (ValueError, TypeError, KeyError) as exc:
+                LOG.warning("component=alerts event=SNAPSHOT_FAILED error_type=%s", type(exc).__name__)
 
     def complete(self, event_id, channel, at, attempts, error_type=None, claimed_at=None):
         """Record the outcome; with ``claimed_at`` only if this is still the current claim."""
@@ -159,8 +206,17 @@ class AlertDispatcher:
             return {}
         return {event.event_id: self.dispatch(event) for event in ordered}
 
+    def recover_pending(self):
+        """Startup replay without new runner events; normal claims retain atomic stale takeover."""
+        if not self.enabled:
+            return
+        channels = tuple(channel.name for channel in self.channels if channel.configured)
+        for event in self.ledger.pending(channels, self.clock(), self.stale_after):
+            self.dispatch(event)
+
     def _deliver(self, channel, event):
         try:
+            self.ledger.save(event)
             if not getattr(channel, "configured", True):
                 return "NOT_CONFIGURED"  # nothing claimed: configuring the channel later can still deliver
             claimed_at = self.clock()
