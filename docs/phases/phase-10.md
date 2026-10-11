@@ -1,6 +1,6 @@
 # Fase 10 — Command Center / Display V2
 
-**Estado:** IN PROGRESS (2026-10-11). Implementación local autorizada por el owner para [issue #22](https://github.com/bebote0997/ai-market-system/issues/22); sin certificación, merge, deploy ni activación.
+**Estado:** CERTIFIED (ligera, PLAN_RAPIDO; 2026-10-11, control delegado a Grok Bot, pendiente de confirmación del owner).
 
 Extensión de `ui/`: Overview; posiciones abiertas y órdenes pendientes de todos los símbolos; últimos setups por símbolo; decisiones AI y Risk Engine; salud, provider/API y scheduler; entregas recientes; historial con búsqueda exacta por run_id/setup_id; errores. Se conservan FLOOR, MARKETS, JOURNAL, EXPERIMENT y SYSTEM.
 
@@ -67,3 +67,10 @@ No certificación, activación, merge, deploy ni commit.
 - Sin cambio de estado de certificación, activación, deploy ni commit.
 
 Validación final: suite completa solicitada, 1495 tests OK (1 expected failure), 176.371 s; Ruff y git diff --check PASS.
+
+
+## Certificación ligera (2026-10-11)
+- [x] PR #23: Command Center (https://github.com/bebote0997/ai-market-system/pull/23), merge 3065fdb, CI https://github.com/bebote0997/ai-market-system/actions/runs/38114938843. Autor Codex; revisión independiente de Grok Bot en 2 rondas (3 MEDIUM corregidos, luego APPROVE).
+- [x] PR #31: filtros antes del LIMIT y DASHBOARD_ERROR, merge 7acf384.
+- [x] El acceso a SQLite es `mode=ro` (los tests comprueban el hash intacto), con contraseña (`AI_FLOOR_DASHBOARD_PASSWORD`) y tests de humo para cada página.
+- [ ] **Diferido al pre-flight de la Fase 13:** capturas en móvil (iPhone) y escritorio, y revisión visual del owner sobre el despliegue en Render.

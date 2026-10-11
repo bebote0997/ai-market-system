@@ -17,13 +17,13 @@ _Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente
 | 6 | Multi-Setup / Conflict | CERTIFIED | #11 | `405df6a8` |
 | 7 | AI Agent Floor | CERTIFIED | #12 | `2753130d` |
 | 8 | Execution / Fill / Trade Manager | **CERTIFIED** (2026-10-10, control delegado; revisión cruzada Codex/Claude) | [#13](https://github.com/bebote0997/ai-market-system/pull/13) | `4974408e` |
-| 9 | Email + Slack alerts (OFF por defecto) | IMPLEMENTED, merge en main (PR #21, 4452350); no certificada: falta F09-T18 (envío real en Render); #24/#25 cerrados (PR de worker aislado) | — | — |
-| 10 | Command Center / Display V2 | IMPLEMENTED, merge en main (PR #23; autor Codex, revisión independiente Grok Bot); no certificada: faltan capturas móviles/revisión visual del owner | — | — |
-| 11 | Chaos / Failure Testing | IMPLEMENTED, merge en main (PR #29; 17 tests `test_chaos_F11_*`; autor Codex, revisión Grok Bot); no certificada | — | — |
-| 12 | E2E replay determinista | IMPLEMENTED, merge en main (PR de `v2/phase12-e2e`; 5 tests E2E; autor Codex, revisión Grok Bot); no certificada | — | — |
-| 13 | Demo PAPER 30 días | NOT STARTED (requiere decisión del owner; nada en vivo hasta entonces) | — | — |
+| 9 | Email + Slack alerts | **CERTIFIED** (ligera, 2026-10-11; F09-T18 diferido al pre-flight de la Fase 13) | #21, #27, #31 | `7acf384` |
+| 10 | Command Center / Display V2 | **CERTIFIED** (ligera, 2026-10-11; capturas móviles diferidas a la Fase 13) | #23, #31 | `7acf384` |
+| 11 | Chaos / Failure Testing | **CERTIFIED** (ligera, 2026-10-11) | #29 | `d6c8ebe` |
+| 12 | E2E replay determinista | **CERTIFIED** (ligera, 2026-10-11; NOT VERIFIED del verificador es por diseño) | #32 | `22af2e9` |
+| 13 | Demo PAPER 30 días | NOT STARTED: requiere el GO del owner; ver `docs/phases/phase-13-runbook.md` | — | — |
 
-Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
+Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación ligera bajo control delegado a Grok Bot, pendiente de confirmación del owner. Detalle: `docs/phases/`.
 
 ## Abierto (ver `docs/issues.md`)
 - ISSUE-008 / ISSUE-009 (bloquean activación de SYSTEM HEALTH).
