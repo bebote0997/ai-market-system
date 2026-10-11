@@ -659,10 +659,14 @@ def _check_management(r, identity):
         refused = halt is not None and (halt.get("refused_kind"), halt.get("refused_stage")) == ("catch_up_bar", "read2")
         r.require(len(observed) == len(writes) + refused, "CATCH_UP_BAR_COVERAGE",
                   f"{len(observed)} observed bars, {len(writes)} write entries (NG12)")
-        for write in writes:
+        for index, write in enumerate(writes):
             context = write["context"]
             if context.get("observer") != "catch_up_bar" or context.get("bar") is None:
                 raise EvidenceError("CATCH_UP_BAR_MISSING", f"write {write['write_seq']}")
+            # ordered matching: write i is the save of observed bar i (its write context is that observation), so
+            # the single unmatched observation of a read-2 refusal is provably the final bar, never an earlier one
+            r.require(index < len(observed) and context == observed[index], "CATCH_UP_BAR_ORDER",
+                      f"write {write['write_seq']} is not the save of observed bar {index + 1}")
 
             def apply(state, context=context):
                 events, closed = manage_bar(state, context["bar"], context["open_positions"])

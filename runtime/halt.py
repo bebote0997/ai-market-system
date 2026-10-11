@@ -133,11 +133,21 @@ class HaltGate:
         """The gate clock: ``time.monotonic_ns()`` made strictly increasing per process. Every halt instant (L(W),
         read2, T_h, T_stop, T_ack) comes from it, so their order is never lost to clock resolution (a coarse clock,
         e.g. ~15.6 ms on Windows, returned equal values: read2 == T_h dropped the residual's REX_WRITE and T_stop ==
-        T_h hid the residual). Assignments only, so the handler may call it."""
-        now = time.monotonic_ns()
-        if now <= self._last_ns:
-            now = self._last_ns + 1
+        T_h hid the residual).
+
+        Main thread only; reentrancy-safe against the handler, which may run at any bytecode of this method. The
+        handler never writes ``_last_ns``: it only reads it (``T_h = max(monotonic, _last_ns + 1)``, see ``request``),
+        so T_h is above every value already returned. The value is stored BEFORE ``requested_at`` is read: a handler
+        that ran before the store is seen by the read and the value is moved above T_h; one that ran after the store
+        read the stored value and set T_h above it. So every value is != T_h, every value returned after T_h is set
+        is > T_h, and an instant overlapping T_h is ordered after it (conservative: a residual is over-reported, never
+        hidden; an admission or read 2 overlapping it is refused, as it checks ``requested_at`` afterwards)."""
+        now = max(time.monotonic_ns(), self._last_ns + 1)
         self._last_ns = now
+        requested = self.requested_at
+        if requested is not None and now <= requested[0]:
+            now = requested[0] + 1
+            self._last_ns = now
         return now
 
     # -- the signal handler: one assignment ---------------------------------------------------------------------------
@@ -145,8 +155,8 @@ class HaltGate:
         if self.requested_at is None:
             if self.startup_depth:  # inside a startup check + write: T_h is set when that write has completed
                 self.deferred_signal = 0 if signum is None else signum
-            else:
-                self.requested_at = (self.now_ns(), _utc_now(), signum)
+            else:  # reads the gate clock, never writes it (it may have interrupted ``now_ns``)
+                self.requested_at = (max(time.monotonic_ns(), self._last_ns + 1), _utc_now(), signum)
 
     @property
     def halted(self):

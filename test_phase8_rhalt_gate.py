@@ -44,8 +44,8 @@ class GateTests(unittest.TestCase):
             source = inspect.getsource(function)
             return {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(ast.parse(source.strip()))
                     if isinstance(n, ast.Call)}
-        self.assertLessEqual(calls(HaltGate.request), {"now_ns", "_utc_now"})
-        self.assertLessEqual(calls(HaltGate.now_ns), {"monotonic_ns"})  # the gate clock: assignments only
+        self.assertLessEqual(calls(HaltGate.request), {"max", "monotonic_ns", "_utc_now"})  # reads the gate clock
+        self.assertLessEqual(calls(HaltGate.now_ns), {"max", "monotonic_ns"})
         gate = HaltGate()
         with patch("sqlite3.connect", side_effect=AssertionError("db access")), \
                 patch("builtins.open", side_effect=AssertionError("file access")):

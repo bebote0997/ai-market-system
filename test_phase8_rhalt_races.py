@@ -11,9 +11,11 @@ I-R9 (at most one residual write), every ``save_paper`` call is admitted, the po
 single in-flight write), the economic prefix property (the halted state is the reference state after some committed
 write) and a clean verifier. Also: a coarse monotonic clock (the defect fixed with ``HaltGate.now_ns``) and the
 verifier's strict ``L(W) < T_h`` boundary. Temporary databases only; the test runner itself is never signalled."""
+import ast
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from datetime import timedelta
+import inspect
 import json
 import os
 from pathlib import Path
@@ -30,7 +32,7 @@ from unittest.mock import patch
 
 from ai.provider import DeterministicAIProvider
 from execution.paper_broker import PaperBroker
-from replay import halt_verifier
+from replay import halt_verifier, rex_oracle
 from replay.rex_chain import verify
 from runtime.halt import HaltGate
 from runtime.scheduler import Scheduler
@@ -39,7 +41,7 @@ from storage.database import Store
 from storage.economic_digest import expected_edg_genesis
 from test_demo_runner import Data, T, instrument, macro_fixture, patched_scouts
 from test_phase8_rex_inertness import snapshot
-from test_phase8_rex_writer import Ids
+from test_phase8_rex_writer import Ids, rex_rows
 from test_phase8_rhalt_runtime import WRITE, allowed_post_halt, rhalt_config
 
 ROOT = Path(__file__).resolve().parent
@@ -443,6 +445,215 @@ class CoarseClockTests(Checks):
                     out = self.in_process("period", point=POINTS[name][1], dir_=dir_)
                     self.assert_point(name, out, dir_ / "trading_floor.db")
                     self.assert_invariants(out, dir_ / "trading_floor.db")
+
+
+FROZEN_NS = 1_000
+
+
+def interrupted_clock_trace(gate, opcode, request):
+    """A ``sys.settrace`` hook that runs the handler (``request()``) at the ``opcode``-th bytecode of the FIRST
+    ``HaltGate.now_ns`` frame entered while ``request`` has not fired: a signal arriving inside the gate clock."""
+    state = {"count": 0, "fired": False, "armed": True}
+
+    def local(frame, event, arg):  # noqa: ARG001
+        if event == "opcode" and not state["fired"]:
+            state["count"] += 1
+            if state["count"] == opcode:
+                state["fired"] = True
+                request()
+        return local
+
+    def global_trace(frame, event, arg):  # noqa: ARG001
+        if event == "call" and frame.f_code is HaltGate.now_ns.__code__ and state["armed"]:
+            state["armed"] = False  # only the first now_ns frame is instrumented
+            frame.f_trace_opcodes = True
+            frame.f_trace = local  # set explicitly: CPython 3.13 emits opcode events only then
+            return local
+        return None
+    return global_trace, state
+
+
+class ClockReentrancyTests(unittest.TestCase):
+    """Codex HIGH: the handler ran ``now_ns`` between the compute and the store of ``_last_ns`` of an interrupted
+    ``now_ns`` call; the interrupted store then rewound the clock below T_h (frozen clock: T_h=1001, T_stop=1000,
+    hiding the residual, and the next instant could equal T_h). The handler now only reads the gate clock; ``now_ns``
+    stores before reading ``requested_at``. Here the handler fires at EVERY bytecode of an interrupted ``now_ns``."""
+
+    def run_interrupted(self, where, opcode):
+        """Admission + read 2 of one write, then ``where`` (``admit`` / ``read2`` / ``t_stop``) is interrupted at its
+        ``opcode``-th bytecode inside ``now_ns``; then T_ack. Frozen monotonic clock."""
+        gate = HaltGate()
+        out = {"refused": None}
+        with patch("time.monotonic_ns", lambda: FROZEN_NS):
+            trace, state = interrupted_clock_trace(gate, opcode, lambda: gate.request(15))
+            admission = None
+            if where != "admit":
+                admission = gate.admit("pending_fill")
+            if where == "t_stop":
+                gate.pre_save(admission)
+            before = gate._last_ns  # every value returned so far is <= this
+            sys.settrace(trace)
+            try:
+                if where == "admit":
+                    gate.admit("pending_fill")
+                elif where == "read2":
+                    gate.pre_save(admission)
+                else:
+                    out["t_stop"] = gate.now_ns()
+                    gate.saved(admission, out["t_stop"])
+            except Exception as exc:  # noqa: BLE001 - HaltRefused is the expected outcome for admit / read2
+                out["refused"] = type(exc).__name__
+            finally:
+                sys.settrace(None)
+            out["t_ack"] = gate.now_ns()
+        out.update(gate=gate, admission=admission, before=before, fired=state["fired"])
+        return out
+
+    def opcodes(self, where):
+        """Every bytecode position of the interrupted ``now_ns`` (until the handler no longer fires inside it)."""
+        n = 1
+        while True:
+            out = self.run_interrupted(where, n)
+            if not out["fired"]:
+                break
+            yield n, out
+            n += 1
+
+    def test_handler_inside_t_stop_never_hides_or_rewinds(self):
+        positions = 0
+        for n, out in self.opcodes("t_stop"):
+            with self.subTest(opcode=n):
+                positions += 1
+                gate, t_stop, t_ack = out["gate"], out["t_stop"], out["t_ack"]
+                t_h = gate.requested_at[0]
+                self.assertGreater(t_h, out["before"])  # above every instant already returned (read2 < T_h)
+                self.assertLess(out["admission"].read2_ns, t_h)
+                self.assertNotEqual(t_stop, t_h)  # strictly ordered, never ambiguous
+                self.assertGreater(t_ack, t_h)  # every instant after T_h is > T_h: the clock is never rewound
+                self.assertGreater(t_ack, t_stop)
+                self.assertEqual(gate._last_ns, t_ack)
+                # T_stop > T_h <=> reported residual (the verifier's rule): an overlapping save is over-reported
+                self.assertEqual(bool(gate.residual()), t_stop > t_h)
+        self.assertGreater(positions, 5)
+
+    def test_handler_during_the_clock_read_reports_the_residual(self):
+        """The handler runs inside T_stop's ``monotonic_ns`` read (before the store): T_stop is ordered after T_h and
+        the residual is reported. The compute -> store window itself is covered bytecode by bytecode above."""
+        gate = HaltGate()
+        real_request = gate.request
+        with patch("time.monotonic_ns", lambda: FROZEN_NS):
+            admission = gate.admit("pending_fill")
+            gate.pre_save(admission)
+            calls = {"n": 0}
+
+            def clock():
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    real_request(15)  # the handler runs inside now_ns, right after its clock read
+                return FROZEN_NS
+            with patch("time.monotonic_ns", clock):
+                t_stop = gate.now_ns()
+            gate.saved(admission, t_stop)
+            t_ack = gate.now_ns()
+        t_h = gate.requested_at[0]
+        self.assertLess(admission.read2_ns, t_h)
+        self.assertLess(t_h, t_stop)
+        self.assertLess(t_stop, t_ack)
+        self.assertEqual([r["seq"] for r in gate.residual()], [admission.seq])
+
+    def test_handler_inside_admission_or_read2_refuses(self):
+        for where in ("admit", "read2"):
+            positions = 0
+            for n, out in self.opcodes(where):
+                with self.subTest(where=where, opcode=n):
+                    positions += 1
+                    gate = out["gate"]
+                    self.assertEqual(out["refused"], "HaltRefused")  # requested_at is checked after the clock
+                    self.assertGreater(gate.requested_at[0], out["before"])
+                    self.assertGreater(out["t_ack"], gate.requested_at[0])
+                    if where == "read2":
+                        self.assertIsNone(out["admission"].read2_ns)
+                    else:
+                        self.assertEqual(gate.admissions, [])
+            self.assertGreater(positions, 5, where)
+
+    def test_handler_never_writes_the_gate_clock(self):
+        tree = ast.parse(inspect.getsource(HaltGate.request).strip())
+        stored = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store)}
+        self.assertEqual(stored, {"requested_at", "deferred_signal"})
+
+    @unittest.skipUnless(POSIX, "real SIGTERM delivery to a Python handler needs POSIX (Windows os.kill terminates)")
+    def test_real_sigterm_inside_now_ns(self):
+        """A REAL SIGTERM (isolated child, production handler) raised from inside the gate clock's ``monotonic_ns``
+        read on a frozen clock, at T_stop of an admitted write: the instants stay strictly ordered."""
+        code = ("import json, os, signal, sys; sys.path.insert(0, '.')\n"
+                "from unittest.mock import patch\n"
+                "from runtime.halt import HaltGate\n"
+                "gate = HaltGate(); signal.signal(signal.SIGTERM, gate.request)\n"
+                "with patch('time.monotonic_ns', lambda: 1000):\n"
+                "    a = gate.admit('pending_fill'); gate.pre_save(a)\n"
+                "    sent = []\n"
+                "    def clock():\n"
+                "        if not sent:  # once: the handler's own clock read must not signal again\n"
+                "            sent.append(1); os.kill(os.getpid(), signal.SIGTERM)\n"
+                "        return 1000\n"
+                "    with patch('time.monotonic_ns', clock):\n"
+                "        t_stop = gate.now_ns()\n"
+                "    gate.saved(a, t_stop)\n"
+                "    t_ack = gate.now_ns()\n"
+                "print(json.dumps({'read2': a.read2_ns, 't_h': gate.requested_at[0], 'signal': gate.requested_at[2],\n"
+                "                  't_stop': t_stop, 't_ack': t_ack, 'residual': gate.residual()}))\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("AI_FLOOR_")}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        out = json.loads(done.stdout.splitlines()[-1])
+        self.assertEqual(out["signal"], signal.SIGTERM)
+        self.assertLess(out["read2"], out["t_h"])
+        self.assertNotEqual(out["t_stop"], out["t_h"])
+        self.assertGreater(out["t_ack"], out["t_h"])
+        self.assertGreater(out["t_ack"], out["t_stop"])
+        self.assertEqual(bool(out["residual"]), out["t_stop"] > out["t_h"])
+
+
+class CatchUpOracleOrderTests(Checks):
+    """Codex MEDIUM: the G14 read-2 exception for catch-up bars must prove the unmatched observation is the FINAL
+    refused bar (ordered observation -> write matching), not merely that one observation is unmatched."""
+
+    def halted_catch_up(self):
+        """Three catch-up bars, the third refused at read 2: observations [b1, b2, b3], writes [w1, w2]."""
+        out = self.in_process("catch_up", point=("before_read2", "catch_up_bar", 3))
+        self.assertEqual(out["refused"], [{"kind": "catch_up_bar", "stage": "read2", "seq": 3}])
+        db = self.dir / "trading_floor.db"
+        [(_, run_id, _, record, _)] = rex_rows(db, "REX_RUN")
+        writes = [w for _, rid, _, w, _ in rex_rows(db, "REX_WRITE") if rid == run_id]
+        self.assertEqual(len([s for s in record["stages"] if s.get("observer") == "catch_up_bar"]), 3)
+        self.assertEqual([w["context"]["stage"] for w in writes], ["ST2C", "ST2C"])
+        return record, writes
+
+    def test_final_bar_refused_at_read2_passes(self):
+        record, writes = self.halted_catch_up()
+        verdict = rex_oracle.check_run(record, writes)
+        self.assertEqual(verdict["result"], "PASS", verdict["failures"])
+
+    def test_earlier_write_missing_fails(self):
+        """Doctored: the write of bar 1 is missing and the final observation removed, so the cardinality still
+        balances (2 observed == 1 write + 1 refused). The unmatched observation is bar 1, not the final bar."""
+        record, writes = self.halted_catch_up()
+        bars = [i for i, s in enumerate(record["stages"]) if s.get("observer") == "catch_up_bar"]
+        del record["stages"][bars[-1]]
+        record["writes"] = record["writes"][1:]
+        verdict = rex_oracle.check_run(record, writes[1:])
+        self.assertEqual(verdict["result"], "FAIL")
+        self.assertIn("CATCH_UP_BAR_ORDER", {f["code"] for f in verdict["failures"]})
+        self.assertNotIn("CATCH_UP_BAR_COVERAGE", {f["code"] for f in verdict["failures"]})  # cardinality alone passes
+
+    def test_reordered_writes_fail(self):
+        record, writes = self.halted_catch_up()
+        record["writes"] = list(reversed(record["writes"]))
+        verdict = rex_oracle.check_run(record, list(reversed(writes)))
+        self.assertIn("CATCH_UP_BAR_ORDER", {f["code"] for f in verdict["failures"]})
 
 
 class VerifierBoundaryTests(unittest.TestCase):
