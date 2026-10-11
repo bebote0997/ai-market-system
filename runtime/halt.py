@@ -127,6 +127,18 @@ class HaltGate:
         self.startup_depth = 0  # > 0 inside a startup check + write section (MEDIUM-1)
         self.deferred_signal = None  # a halt requested inside such a section, applied when the section ends
         self._evidence_writes, self._evidence_runs = set(), set()
+        self._last_ns = 0
+
+    def now_ns(self):
+        """The gate clock: ``time.monotonic_ns()`` made strictly increasing per process. Every halt instant (L(W),
+        read2, T_h, T_stop, T_ack) comes from it, so their order is never lost to clock resolution (a coarse clock,
+        e.g. ~15.6 ms on Windows, returned equal values: read2 == T_h dropped the residual's REX_WRITE and T_stop ==
+        T_h hid the residual). Assignments only, so the handler may call it."""
+        now = time.monotonic_ns()
+        if now <= self._last_ns:
+            now = self._last_ns + 1
+        self._last_ns = now
+        return now
 
     # -- the signal handler: one assignment ---------------------------------------------------------------------------
     def request(self, signum=None, frame=None):  # noqa: ARG002 - signal handler signature
@@ -134,7 +146,7 @@ class HaltGate:
             if self.startup_depth:  # inside a startup check + write: T_h is set when that write has completed
                 self.deferred_signal = 0 if signum is None else signum
             else:
-                self.requested_at = (time.monotonic_ns(), _utc_now(), signum)
+                self.requested_at = (self.now_ns(), _utc_now(), signum)
 
     @property
     def halted(self):
@@ -143,7 +155,7 @@ class HaltGate:
     # -- admission (Alternative 1) ------------------------------------------------------------------------------------
     def admit(self, kind):
         """Read 1 = L(W). Returns the Admission, or raises HaltRefused."""
-        now_ns, now = time.monotonic_ns(), _utc_now()  # taken BEFORE the read
+        now_ns, now = self.now_ns(), _utc_now()  # taken BEFORE the read
         if self.requested_at is not None:
             self.refused.append({"kind": kind, "stage": "admission"})
             raise HaltRefused(kind, "admission")
@@ -155,7 +167,7 @@ class HaltGate:
 
     def pre_save(self, admission):
         """Read 2, immediately before invoking ``save_paper``. Raises HaltRefused (no call, no effect)."""
-        now_ns, now = time.monotonic_ns(), _utc_now()
+        now_ns, now = self.now_ns(), _utc_now()
         if self.requested_at is not None:
             self.refused.append({"kind": admission.kind, "stage": "read2", "seq": admission.seq})
             raise HaltRefused(admission.kind, "read2")
@@ -246,14 +258,14 @@ def halt_bookkeeping(store, gate, *, run_id=None, slot_key=None, symbol=None, re
             row = store.db.execute("SELECT run_id, symbol, status FROM runs WHERE slot_key=?", (slot_key,)).fetchone()
             if row is None or row[0] != run_id or row[1] != symbol or row[2] != "RUNNING":
                 raise RuntimeError("halt bookkeeping: the halted run is not RUNNING")
-            payload["t_ack_ns"] = time.monotonic_ns()  # inside the transaction, after every admitted write returned
+            payload["t_ack_ns"] = gate.now_ns()  # inside the transaction, after every admitted write returned
             store.db.execute("UPDATE runs SET status='COMPLETED', final_status='HALTED', completed_at=? "
                              "WHERE slot_key=? AND status='RUNNING'", (_utc_now().isoformat(), slot_key))
             released = store.db.execute("DELETE FROM symbol_locks WHERE slot_key=? AND symbol=?",
                                         (slot_key, symbol)).rowcount
             payload["symbol_lock_released"] = released == 1
         else:
-            payload["t_ack_ns"] = time.monotonic_ns()
+            payload["t_ack_ns"] = gate.now_ns()
             payload["symbol_lock_released"] = None
         store._event(_utc_now(), run_id, symbol, HALT_SOURCE, HALT_EVENT, "WARNING", payload)
         journal_id = store.db.execute("SELECT last_insert_rowid()").fetchone()[0]

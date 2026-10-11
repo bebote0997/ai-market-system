@@ -654,7 +654,10 @@ def _check_management(r, identity):
     else:
         observed = r.stages("ST2C", observer="catch_up_bar")
         writes = r.writes_in("ST2C")
-        r.require(len(observed) == len(writes), "CATCH_UP_BAR_COVERAGE",
+        # V2 P4a: a bar refused at read 2 was observed (before its computation) but never saved: the last one only
+        halt = r.one("EXIT_HALT", required=False) if getattr(r, "halted", False) else None
+        refused = halt is not None and (halt.get("refused_kind"), halt.get("refused_stage")) == ("catch_up_bar", "read2")
+        r.require(len(observed) == len(writes) + refused, "CATCH_UP_BAR_COVERAGE",
                   f"{len(observed)} observed bars, {len(writes)} write entries (NG12)")
         for write in writes:
             context = write["context"]

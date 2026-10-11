@@ -409,18 +409,23 @@ class RexStore:
     def __getattr__(self, name):
         return getattr(self._store, name)
 
+    def _t_stop_ns(self):
+        """V2 P4a: ``T_stop`` from the halt gate clock (strictly ordered against T_h), else the raw monotonic clock."""
+        gate = self._recorder.halt_gate
+        return time.monotonic_ns() if gate is None else gate.now_ns()
+
     def save_paper(self, broker, *, owner_key=None, symbol=None, expected_state=None):
         token = _isolated(lambda: self._recorder.before_write(expected_state))
         try:
             result = self._store.save_paper(broker, owner_key=owner_key, symbol=symbol, expected_state=expected_state)
         except BaseException as exc:
-            t_stop = time.monotonic_ns()
+            t_stop = self._t_stop_ns()
             _isolated(lambda: self._recorder.save_returned(t_stop))
             changes = _total_changes(self._store)
             _isolated(lambda: self._recorder.after_write(token, broker, None, error=_error_name(exc),
                                                          total_changes_after_save=changes))
             raise
-        t_stop = time.monotonic_ns()
+        t_stop = self._t_stop_ns()
         _isolated(lambda: self._recorder.save_returned(t_stop))
         changes = _total_changes(self._store)
         _isolated(lambda: self._recorder.after_write(token, broker, result, total_changes_after_save=changes))

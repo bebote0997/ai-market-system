@@ -40,10 +40,12 @@ class GateTests(unittest.TestCase):
 
     def test_handler_is_one_assignment_without_io(self):
         """I-R11 / NR21: no I/O, lock, transaction or exception; a second signal keeps the first T_h."""
-        source = inspect.getsource(HaltGate.request)
-        calls = {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(ast.parse(source.strip()))
-                 if isinstance(n, ast.Call)}
-        self.assertLessEqual(calls, {"monotonic_ns", "_utc_now"})
+        def calls(function):
+            source = inspect.getsource(function)
+            return {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(ast.parse(source.strip()))
+                    if isinstance(n, ast.Call)}
+        self.assertLessEqual(calls(HaltGate.request), {"now_ns", "_utc_now"})
+        self.assertLessEqual(calls(HaltGate.now_ns), {"monotonic_ns"})  # the gate clock: assignments only
         gate = HaltGate()
         with patch("sqlite3.connect", side_effect=AssertionError("db access")), \
                 patch("builtins.open", side_effect=AssertionError("file access")):
