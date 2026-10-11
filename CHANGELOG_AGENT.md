@@ -1365,3 +1365,41 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
   Capture and delivery errors log only the exception type, never credentials.
 - The operational restart repair is separately proposed in PR #3. Revalidate
   the combined tree before either merge; keep the original freeze identity.
+
+## 2026-10-10 — DEC-8.18a read-only status verifier and offline G-8.INT
+
+- Added `replay/status_verifier.py`: Owner-made SQLite copies opened with
+  `mode=ro`; SHA-256 before/after for trading and optional evidence inputs;
+  JSON Q1–Q8, independent FS/EX/PD/RS, integrity overlay and STOP findings.
+  Reports formal-start contradictions, schema/integrity failures, outstanding
+  RUNNING rows for recovery, period boundary exclusions, M1–M10 history mapping
+  and E1–E7 economic links, quarantine counts and the existing REVISION gate.
+- DEC-8.18a removes H5 SSH execution signatures. EX is a DB observation, always
+  marked `EX_UNATTESTED (DEC-8.18a: live verification in Phase 13)`; STOPPED
+  requires the stopped runner key and stale recorded activity. Missing, future
+  or contradictory activity stays UNKNOWN. No recovery is performed.
+- Segment histories requiring external anchored section 3.3.6 verification
+  fail closed with `SEGMENT_CHAIN_NOT_VERIFIED`; this command accepts no trust
+  root and does not infer trusted anchors from DB-local records. Results remain
+  UNCERTIFIED. Missing copy_time cannot establish STARTED or fresh execution.
+- Added 14 deterministic status tests and one offline G-8.INT CLI test using
+  schema-3 Store fixtures and the existing real runtime/REX scenario helpers.
+  Covers fresh/consistent/duplicate starts, UTC/SHA contracts, schema/corruption,
+  execution observations, recovery listing, unchanged hashes, output-path
+  protection, orphan/missing history, duplicate closes and the 14-day boundary.
+- Offline G1–G15: G1 PASS; G2 BLOCKED; G3 BLOCKED; G4 BLOCKED; G5 BLOCKED;
+  G6 PASS; G7 PASS; G8 NOT VERIFIED; G9 PASS; G10 PASS; G11 BLOCKED;
+  G12 PASS; G13 BLOCKED; G14 PASS; G15 NOT VERIFIED. No criterion or integration
+  check reports FAIL. G8 records the sparse fixture's GAPs, without fabricating
+  explanations. No formal genesis/live session period, rehearsal, external
+  anchors or independent review is supplied, so the overall verdict is BLOCKED.
+- Comparability: observability and temporary test fixtures only; no trading,
+  risk, strategy, provider, prompt, schema or economic implementation changed.
+  No production DB access, runner/scheduler activation, commit, staging or push.
+- Validation: baseline suite passed; 15 focused tests passed. Full-suite final
+  result recorded below.
+- Final requested command: **1391 tests OK** (15 new; focused suite 15 OK),
+  with `PYTHONDONTWRITEBYTECODE=1 AI_FLOOR_MARKET_PROVIDER=none
+  AI_FLOOR_AI_PROVIDER=deterministic /workspace/repo/.venv/bin/python -m
+  unittest discover -q`. `git diff --check` and whitespace checks on all three
+  new files: PASS. Offline input SHA-256 values equal before/after.
