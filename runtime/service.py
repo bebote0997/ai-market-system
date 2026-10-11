@@ -12,6 +12,7 @@ import uuid
 from ai.orchestrator import run as run_ai
 from ai.provider import DeterministicAIProvider
 from ai.runtime import AuditLog
+from core.rr_contract import POLICY_V2_F3
 from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
 from data.market_evidence import EvidenceError, bars_from_frame
 from execution.contracts import PaperAccount
@@ -107,6 +108,9 @@ class OperationalRuntime:
         self.ai_cycle_budget_seconds, self.ai_alerts = ai_cycle_budget_seconds, ai_alerts
         self.ai_health = ProviderHealthTracker()
         self.risk_config = risk_config or crear_configuracion_riesgo_v2()
+        if self.config.v2_planner_policy == "V2_F3":
+            self.risk_config = dict(self.risk_config, rr_policy=POLICY_V2_F3,
+                                    ratio_minimo=3.0, ratio_maximo=3.0)
         # V2 P2b (R-GEN-1b): a sealed runtime cannot be built without the verified context of steps 1-4, which were
         # completed before any SQLite open. OFF: None, and nothing below changes.
         self.sealed_context = None
@@ -228,6 +232,8 @@ class OperationalRuntime:
     def _broker(self, symbol):
         account, orders, fills = self.store.load_paper(self.config.account_id)
         broker = PaperBroker(account, self.instruments.get(symbol))
+        if self.config.v2_planner_policy == "V2_F3":
+            broker.rr_policy = POLICY_V2_F3
         broker.orders = orders
         broker.fills = fills
         return broker
@@ -403,6 +409,8 @@ class OperationalRuntime:
                                              account_id=self.config.account_id,
                                              symbol=symbol, as_of=slot, gate=gate,
                                              instrument=self.instruments.get(symbol), owner_key=key,
+                                             **({"rr_policy": POLICY_V2_F3}
+                                                if self.config.v2_planner_policy == "V2_F3" else {}),
                                              **({} if observer is None else {"observer": observer}),
                                              **({} if self.halt_gate is None else {"halt_gate": self.halt_gate}))
             except PendingGateEvidenceError:
@@ -466,7 +474,8 @@ class OperationalRuntime:
                         "snapshot_catch_up_applies": self._snapshot_catch_up_applies(symbol),
                         "v2_ai_resilience": self.config.v2_ai_resilience, "paper_enabled": self.paper_enabled,
                         "diagnostic_outside_session": self.diagnostic_outside_session,
-                        "broker_rr_policy": None, "risk_config": dict(self.risk_config or {}),
+                        "broker_rr_policy": (POLICY_V2_F3 if self.config.v2_planner_policy == "V2_F3" else None),
+                        "risk_config": dict(self.risk_config or {}),
                         "instrument": self.instruments.get(symbol), "account_id": self.config.account_id}
             recorder = RexRecorder(self.store, account_id=self.config.account_id, run_id=run_id, slot_key=key,
                                    symbol=symbol, slot=slot, identity=identity)
@@ -701,7 +710,9 @@ class OperationalRuntime:
             stage = "deterministic"
             deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
                                       self.instruments.get(symbol), self.risk_config,
-                                      equity=decision_equity, run_id=run_id)
+                                      equity=decision_equity, run_id=run_id,
+                                      **({"planner_policy": POLICY_V2_F3}
+                                         if self.config.v2_planner_policy == "V2_F3" else {}))
             self._rex_note(rex, "ST4", lambda: self._rex_floor(deterministic, symbol, decision_equity))
             deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
             self._rex_note(rex, "F1B", lambda: {

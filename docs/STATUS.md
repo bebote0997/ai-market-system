@@ -66,3 +66,9 @@ Review final: ruff PASS; pytest 1541 passed, 5 fallos dashboard preexistentes, 1
 
 ## Historia
 El Libro Maestro en Word (versión 1.9, 2026-10-07) queda **archivado/histórico**; no se versiona aquí ni se actualiza más.
+
+## DEC-14.2 — implementación local autorizada (2026-10-11 11:33 ET)
+
+Owner Jeferson Tejeda: `V2_PLANNER_POLICY` implementado localmente, default V1; V2_F3 planifica 3.00R y aplica piso PAPER 2.50R en ambas rutas runtime. Demo configurará `V2_PLANNER_POLICY=V2_F3` con GO operativo; independiente de la política de setups opuestos. Sin activación, merge, deploy ni cambios en Render; Fase 13 sigue NOT STARTED.
+
+Validación DEC-14.2: ruff y suite unittest completa PASS (1520 tests, 1 expected failure). Pytest completo: 1514 passed, 1 xfailed; 5 fallos previos del harness de señales de Fase 8 (`TestCaseFunction.failures`). Commit local pendiente de autorizar la corrección mínima de esos dos tests y obtener pytest verde.
