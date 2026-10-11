@@ -2245,6 +2245,7 @@ None of OP-1…OP-5 is authorized by any decision above.
 |---|---|
 | DEC-8.18 | **APPROVED POLICY** as-is (status-verification procedure, four axes, H5 attestation). Execution pending: Owner DB copy + signed H5 |
 | DEC-8.19 | **APPROVED POLICY:** option (a), flat precondition under A2: no inherited positions or orders |
+| DEC-8.23 | **APPROVED:** live-session G-8.INT gates (G2/G3/G4/G5/G7/G11) re-scoped to offline/replay evidence for Phase 8; live validation moves to the post-Phase-13 30-day demo |
 
 DEC-8.22-a…j and OP-1…OP-7 remain **NOT AUTHORIZED**. No logic change.
 

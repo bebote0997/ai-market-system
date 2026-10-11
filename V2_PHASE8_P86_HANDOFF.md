@@ -31,6 +31,7 @@
 | DEC-8.15 | **APPROVED POLICY** (2026-10-08) | Global conservative revision gate (§1.6) | — | — |
 | DEC-8.16 | **APPROVED POLICY** (2026-10-08) | Mixed-path segments `TECHNICAL_ONLY`; B optional technical; A necessary; economic certification only if G-8.INT (DEC-8.17) passes (§1.9.3) | — | No certification |
 | DEC-8.21 | **APPROVED POLICY** (2026-10-08) | LOW-1 fail-closed per §4 | — | No implementation authorized |
+| DEC-8.23 | **APPROVED 2026-10-10** (Owner) | Live-session gates re-scoped to offline/replay evidence; live validation after Phase 13 (checklist §0) | — | — |
 | DEC-8.18, 8.19 | **APPROVED 2026-10-10** (Owner) | DEC-8.18 as-is; DEC-8.19 option (a) flat precondition under A2. See design §8.5 | — | — |
 | DEC-8.22-a…j | **NOT AUTHORIZED** | Implementation authorizations | — | — |
 | OP-1…OP-7 | **NOT AUTHORIZED** | Operational acts | — | — |

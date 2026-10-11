@@ -1372,3 +1372,7 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 - DEC-8.18 APPROVED as-is (status-verification procedure, axes, H5). DEC-8.19 APPROVED, option (a): flat precondition under A2.
 - Updated: `V2_PHASE8_CERTIFICATION_CHECKLIST.md`, `V2_PHASE8_P86_DESIGN.md` (§8.5), `V2_PHASE8_P86_HANDOFF.md`. Historical entries unchanged.
 - No code, flags, deploy or merge. Phase 8 NOT CERTIFIED. PAPER only; REAL OFF; NAS100 OFF.
+
+## 2026-10-10 — DEC-8.23 (documentation only)
+
+- Owner decision: live-session G-8.INT gates re-scoped to offline/replay evidence for Phase 8; live validation moves to the 30-day demo after Phase 13. Checklist §0, design §8.5, handoff updated. No code/flags/deploy.
