@@ -1,6 +1,6 @@
 # Fase 11 — Chaos / Failure Testing
 
-**Estado:** IN PROGRESS (issue #28; implementación offline autorizada por el owner, 2026-10-11).
+**Estado:** CERTIFIED (ligera, PLAN_RAPIDO; 2026-10-11, control delegado a Grok Bot, pendiente de confirmación del owner).
 
 **Alcance:** `test_phase11_chaos.py`, 17 tests en el orden exacto de la checklist F11 del Libro v1.9
 (`/workspace/libro.txt`, sección F11). Harness local con DemoRunner/OperationalRuntime, proveedores/fakes
@@ -54,3 +54,8 @@ La reparación de drawdown es exclusivamente una fixture, nunca una política de
 **Gate de certificación:** requiere fase anterior CERTIFIED, revisión independiente y aprobación explícita
 del owner. La autorización de issue #28 permite este trabajo offline; no declara Fase 10/11 certificada,
 ni autoriza runtime, deploy o Render. PAPER/DEMO, NAS100 OFF y flags V2 OFF se preservan.
+
+
+## Certificación ligera (2026-10-11)
+- [x] PR #29: 17 tests `test_chaos_F11_T01…T17` (https://github.com/bebote0997/ai-market-system/pull/29), merge d6c8ebe, CI https://github.com/bebote0997/ai-market-system/actions/runs/38116210242. Autor Codex; revisión de Grok Bot: APPROVE (3 LOW).
+- [x] Ningún fallo crea órdenes fuera de la política; la recuperación y la idempotencia están verificadas.

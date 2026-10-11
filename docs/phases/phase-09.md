@@ -1,6 +1,6 @@
 # Fase 9 — Email Notification Engine
 
-**Estado:** IMPLEMENTED, merge base en main (PR #21); fixes #24/#25 implementados localmente en `v2/phase9-alert-worker`, pendientes de revisión. No certificada ni activada.
+**Estado:** CERTIFIED (ligera, PLAN_RAPIDO; 2026-10-11, control delegado a Grok Bot, pendiente de confirmación del owner).
 
 **Tareas (Libro v1.9):** VALID/EXECUTED TRADE; ORDER SUBMITTED; POSITION OPENED; POSITION CLOSED; RISK REJECTED; AI CAUTION; PROVIDER FAILURE; SYSTEM DEGRADED; SYSTEM CRITICAL; RECOVERY; contenido completo de alerta de trade (incl. Chart, Risk %, Session, Quantity — ISSUE-007); chart e identidad visual; diseño luxury/institutional/mobile; deduplication; delivery status; email failure detection; retry policy; test emails; alert priority (F09-T01…T19)
 
@@ -60,3 +60,12 @@ PARTIAL: T18 (`make_test_alert` produce un TEST etiquetado y se valida con mocks
 - Sin certificación, activación, envío real, deploy ni commit.
 
 Validación final: suite completa solicitada, 1495 tests OK (1 expected failure), 176.371 s; Ruff y git diff --check PASS.
+
+
+## Certificación ligera (2026-10-11)
+- [x] PR #21: motor de alertas (https://github.com/bebote0997/ai-market-system/pull/21), merge 4452350, CI https://github.com/bebote0997/ai-market-system/actions/runs/38112696799. Revisión de Codex: 3 MEDIUM corregidos. Re-review: 0 CRITICAL/HIGH.
+- [x] PR #27: worker aislado y recuperación al arranque, cierra #24 y #25 (https://github.com/bebote0997/ai-market-system/pull/27), merge f7cd976, CI https://github.com/bebote0997/ai-market-system/actions/runs/38114705366. Revisión de Grok Bot: APPROVE.
+- [x] PR #31: PNG con matplotlib desde la evidencia en solo lectura y recuperación cada 60 s (https://github.com/bebote0997/ai-market-system/pull/31), merge 7acf384, CI https://github.com/bebote0997/ai-market-system/actions/runs/38117616896. Revisión de Grok Bot: APPROVE.
+- [x] Las alertas están OFF por defecto (`AI_FLOOR_ALERTS_ENABLED`), fuera del trading path; hay tests de que un fallo de alerta no cambia el estado PAPER.
+- [ ] **Diferido al pre-flight de la Fase 13:** F09-T18, el envío real de email y Slack desde Render (el box bloquea SMTP). Ver `phase-13-runbook.md`.
+- [ ] **Diferido al pre-flight de la Fase 13:** con `AI_FLOOR_V2_POSITION_CATCH_UP` OFF, el gráfico sale NO_DATA (decisión del owner).

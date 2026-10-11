@@ -1,6 +1,6 @@
 # Fase 12 — End-to-End Certification
 
-**Estado:** IN PROGRESS (issue #30; implementación offline autorizada por el owner, 2026-10-11).
+**Estado:** CERTIFIED (ligera, PLAN_RAPIDO; 2026-10-11, control delegado a Grok Bot, pendiente de confirmación del owner).
 
 **Tareas (Libro v1.9):** Cada transición DATA→ANALYSIS→SETUP→PLAN→TARGET/R:R→RISK→AI→POSITION CONFLICT→EXECUTION→ORDER→FILL→POSITION→MANAGEMENT→EXIT→EMAIL→DASHBOARD→JOURNAL, y auditar cada transición y sus fallos (F12-T01…T17).
 
@@ -72,3 +72,10 @@ La autorización de issue #30 permite implementar offline; Fase 12 sigue IN PROG
 Certificación requiere gate anterior, revisión independiente y aprobación del owner.
 Validación: **5/5 tests focales PASS; 1510 tests completos OK (1 expected failure existente)**,
 177.788 s; Ruff y `git diff --check` PASS. Comandos y evidencia: `CHANGELOG_AGENT.md`.
+
+
+## Certificación ligera (2026-10-11)
+- [x] PR #32: E2E determinista (https://github.com/bebote0997/ai-market-system/pull/32), merge 22af2e9, CI https://github.com/bebote0997/ai-market-system/actions/runs/38118073512. Autor Codex; revisión de Grok Bot: APPROVE (2 LOW).
+- [x] Los journals son byte-idénticos entre ejecuciones, EDG/REX da SQLITE_CHECKS_PASS y la G14 da PASS.
+- Nota (LOW): `replay.status_verifier` devuelve `classification = NOT VERIFIED` **por diseño** (DEC-8.18a): la verificación automática no certifica el estado en vivo, que se hace en la Fase 13. No es un fallo.
+- [ ] Diferido a la Fase 13: una replay más larga (varios días) con datos reales grabados.

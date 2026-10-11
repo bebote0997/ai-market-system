@@ -1597,3 +1597,7 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 - Gmail SMTP default timeout reduced from 15 s to 10 s; SMTP/Slack reject timeouts outside `(0, 10]`. Added mock-only tests covering 5-second sends with hook latency <50 ms, overflow, bounded shutdown, worker-only retries, timeout bounds, durable restart and delayed stale recovery. Queue admission is not durable until the worker persists it; overflow / pre-persistence crashes can lose alerts.
 - Updated phase 9 and status documentation; no strategy, risk, economics, Render, activation, dependency, staging, commit or push changes. Baseline: 1468 tests OK (one expected failure). Final validation recorded below.
 - Final validation: requested offline full-suite command **1475 tests OK (one expected failure)**; focused alert suite **49 tests OK**. `/workspace/repo/.venv/bin/ruff check .` PASS; `git diff --check` PASS. Seven new regression tests, mocks only.
+
+## 2026-10-11: certificación ligera de las fases 9-12 y runbook de la Fase 13 (Grok Bot)
+- Checklists en docs/phases/phase-09..12.md con enlaces a PRs, CI y revisiones; STATUS a 13/14.
+- Nuevo docs/phases/phase-13-runbook.md (no se ejecuta nada).
