@@ -1,5 +1,37 @@
 # Agent Changelog
 
+## 2026-10-11 — Phase 12 End-to-End (issue #30) — IN PROGRESS
+
+- Owner-authorized offline work on existing `v2/phase12-e2e`; baseline before edits:
+  1505 tests OK, 1 pre-existing expected failure (180.571 s).
+- Added `test_phase12_e2e.py`: five tests, synthetic 5m fixture replay with closed 15m/1h
+  aggregates and `replay.engine.snapshot_at`; real DemoRunner over eight cycles on temporary
+  SQLite DBs. Reuses F11 structured scout injection, P8 deterministic UUID stream, production
+  setup/planner/deterministic AI/risk/PaperBroker/TradeManager and PAPER instrument contracts.
+- Covers XAUUSD LONG TP and EURUSD SHORT SL, orders/fills/positions linked, 3R and <=1% risk,
+  five validated AI decisions with evidence references, existing-position execution block,
+  WATCH after exit, exact full journal event order and duplicate-slot nonmutation.
+  Expected equity: 10000 / 10000 / 10095.45 / 10209.10; realized PnL 209.10; quantities 10 / 9090.
+  Gross/cost/net and mark-to-market formulas checked; current PAPER cost rate is zero.
+- Asserts review reports update opening runs with closed trades, durable notifications retain
+  opening-run identity, Gmail adapter delivers two close alerts through fake SMTP with DELIVERED
+  ledger, and read-only UI projects persisted account/filled orders/flat positions without writes.
+- Two fresh independent DBs yield byte-identical canonical journals and identical SHA-256.
+  IDs generated deterministically before hashing; only REX observer wall timestamps normalized;
+  every row/ID/payload/digest and all runtime/market timestamps retained. REX verification requires
+  eight covered runs, ten economic events, G14 PASS, unchanged source and SQLITE_CHECKS_PASS /
+  NOT VERIFIED. REX OFF yields identical economic state; runtime defaults remain OFF.
+- Missing market data, macro failure, absent multiplier and AI failure block orders with explicit
+  journal/review evidence and unchanged economic state. NAS100 fails configuration and run admission
+  before data or writes. Socket connections forbidden in harness; no network, real email or secrets.
+- Updated STATUS and phase-12 with F12-T01…T17 mapping and scope/gate limitations. No production
+  bugs found, production changes, new dependencies, issues or expected failures. No certification,
+  staging, commit, push, runtime activation, merge, deploy or Render changes.
+- Focused suite: 5 tests PASS (2.786 s). Ruff full repository PASS (existing malformed-noqa warning
+  in runtime/genesis.py:209). Final required unittest discovery: 1510 tests OK in 177.788 s,
+  1 pre-existing expected failure; `PYTHONDONTWRITEBYTECODE=1 AI_FLOOR_MARKET_PROVIDER=none
+  AI_FLOOR_AI_PROVIDER=deterministic /workspace/repo/.venv/bin/python -m unittest discover -q`.
+  `/workspace/repo/.venv/bin/ruff check .` PASS; `git diff --check` PASS.
 ## 2026-10-11 — Owner-authorized Phase 9/10 small fixes (local, no commit)
 
 - Read existing closed 5m evidence sidecar via mode=ro; last 48 symbol closes whose bar end is at or before the alert event. Worker prepares new and recovered events. Missing evidence yields NO_DATA.
