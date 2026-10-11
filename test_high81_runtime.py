@@ -1,3 +1,4 @@
+import unittest
 """Owner F08/HIGH-8.1: default OFF runtime, temporary DBs, no operational activation."""
 from datetime import timedelta
 from unittest.mock import patch
@@ -120,6 +121,39 @@ class DefaultRuntimeTests(certification.Harness):
         self.assertEqual(len(fills), 1)
         self.assertEqual(next(iter(fills.values())).fill_timestamp, certification.B4)
         self.assertEqual(account.closed_trades, [])
+
+    @unittest.expectedFailure
+    def test_pending_does_not_fill_on_bar_not_yet_closed(self):
+        """KNOWN GAP (Codex review of 983d2d2, LOW; tracked in docs/issues.md as ISSUE-012).
+        progress_pending trusts the provider's closed-bar contract: a bar starting at the slot is NOT filtered by
+        the runtime. Real adapters already drop forming bars (data/twelve_data_provider.py, data/massive_provider.py),
+        so PAPER is not affected with them. Fixing it in the runtime changes many certified fixtures; deferred to an
+        explicit decision. Remove expectedFailure when the runtime guard lands."""
+        pending = PaperOrder("1.0", "pend", "run-pend", "XAUUSD", "LONG", 1.0, 100.0, 95.0, 130.0,
+                             1.0, 10000.0, 0.0, certification.OPEN)
+        self.seed(side=None, pending=pending)
+        slot = certification.SLOT
+        runtime = make_runtime(self.db, None, slot, flag=False, recovery=0)
+        load = runtime.market_provider.load_snapshot
+
+        def snapshot(symbol, at):
+            # 13:30 bar closes at 13:35 > slot; it touches the entry but must stay invisible.
+            data = load(symbol, at)
+            data["5m"].loc[slot] = {"Open": 101., "High": 102., "Low": 99., "Close": 101.,
+                                   "symbol": symbol, "is_closed": True}
+            return data
+
+        runtime.market_provider.load_snapshot = snapshot
+        try:
+            self.assertNotEqual(runtime.run_cycle("XAUUSD", slot), "ERROR")
+        finally:
+            runtime.close()
+        self.run_default("XAUUSD", {}, slot + timedelta(minutes=15))
+        _, orders, fills, _ = self.paper()
+        self.assertEqual(orders["pend"].status, "FILLED")
+        self.assertEqual(len(fills), 1)
+        fill = next(iter(fills.values()))
+        self.assertEqual((fill.fill_timestamp, fill.fill_price), (certification.B4, 100.))
 
     def test_invalid_intermediate_bar_blocks_economics(self):
         self.seed()
