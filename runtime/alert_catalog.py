@@ -126,6 +126,7 @@ def make_test_alert(occurred_at_utc, *, nonce):
 
 # Existing durable NotificationEvent types (runtime.notifications) mapped onto the catalog. Unmapped → None.
 _NOTIFICATION_MAP = MappingProxyType({
+    "STRUCTURE_REVERSE_SUBMITTED": "ORDER_SUBMITTED",
     "POSITION_OPENED": "POSITION_OPENED", "POSITION_CLOSED": "POSITION_CLOSED",
     "RISK_REJECTED": "RISK_REJECTED", "AI_CAUTION": "AI_CAUTION",
     "PROVIDER_FAILURE": "PROVIDER_FAILURE", "AUTH_ERROR": "PROVIDER_FAILURE",
@@ -140,6 +141,10 @@ def from_notification(event):
     """Map a persisted ``NotificationEvent`` to an AlertEvent, or None when it is not an alert."""
     event_type = _NOTIFICATION_MAP.get(event.type)
     execution = event.execution or {}
+    # The reverse alert is already durable with its order; the ordinary execution projection
+    # reports the same submission and must not send a second Phase 9 alert for that fact.
+    if event.type == "EXECUTION_DECISION" and execution.get("execution_reason") == "STRUCTURE_REVERSE_SUBMITTED":
+        return None
     if event.type == "EXECUTION_DECISION" and execution.get("execution_status") == "SUBMITTED":
         event_type = "ORDER_SUBMITTED"
     if event_type is None:
@@ -147,10 +152,13 @@ def from_notification(event):
     risk = event.risk_decision or {}
     trade = {"setup_id": execution.get("setup_id"), "order_id": execution.get("order_id"),
              "side": execution.get("side") or risk.get("side")}
+    if event.type == "STRUCTURE_REVERSE_SUBMITTED":
+        trade.update({key: execution[key] for key in ("entry", "stop_loss", "take_profit", "quantity")})
     if event.paper_order_ids:
         trade["order_id"] = trade["order_id"] or event.paper_order_ids[0]
+    summary = execution.get("exit_reason") or execution.get("reason") or ("source=" + event.type)
     return alert_event(event.event_id, event_type, event.timestamp_utc, run_id=event.run_id,
-                       symbol=event.symbol, session=event.session, summary="source=" + event.type,
+                       symbol=event.symbol, session=event.session, summary=summary,
                        trade={key: value for key, value in trade.items() if value is not None})
 
 

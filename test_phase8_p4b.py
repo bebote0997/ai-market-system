@@ -594,11 +594,29 @@ class CompatibilityTests(unittest.TestCase):
         self.assertNotIn("risk_reservation", service)
         done = subprocess.run([freeze_amendment._git(), "-C", str(ROOT), "diff", "--name-only", "979e1e6", "HEAD",
                                "--", "execution/conflict_path.py", "execution/risk_reservation.py", "riesgo.py",
-                               "execution/paper_broker.py", "runtime/paper_contracts.py", "core/"],
+                               "runtime/paper_contracts.py", "core/"],
                               capture_output=True, text=True)
         if done.returncode != 0:  # e.g. a shallow CI checkout without the P3 base: not checked, never a vacuous pass
             self.skipTest("the P3 base commit is not available in this checkout")
-        self.assertEqual(done.stdout.strip(), "")  # Phase 6 engine, risk, adapter and broker untouched since P3
+        self.assertEqual(done.stdout.strip(), "")  # Phase 6 engine, risk and adapter untouched since P3
+        frozen = subprocess.run([freeze_amendment._git(), "-C", str(ROOT), "show",
+                                 "979e1e6:execution/paper_broker.py"], capture_output=True, text=True, check=True).stdout
+        # DEC-14.1 permits only this explicit PAPER exit; every other broker byte remains frozen.
+        market_exit = (
+            '    def close_market(self, symbol, price, as_of, *, exit_reason, decision_run_id):\n'
+            '        """Explicit deterministic PAPER exit; shared accounting with ordinary SL/TP exits."""\n'
+            '        from execution.trade_manager import TradeManager\n'
+            '        if not _aware(as_of) or not _valid(price):\n'
+            '            raise ValueError("invalid paper market exit")\n'
+            '        position = self.account.open_positions[symbol]\n'
+            '        if position.status != "OPEN" or as_of <= position.opened_at:\n'
+            '            raise ValueError("invalid paper position exit")\n'
+            '        return TradeManager(self.account, self).close_position(\n'
+            '            position, float(price), as_of, exit_reason, event_run_id=decision_run_id)\n\n'
+        )
+        broker_source = (ROOT / "execution" / "paper_broker.py").read_text(encoding="utf-8")
+        self.assertEqual(broker_source.count(market_exit), 1)
+        self.assertEqual(broker_source.replace(market_exit, ""), frozen)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,88 @@
 - Added durable runtime cycle tests: 3R plans; 2.6R fills accepted and 2.4R rejected under F3, V1 rejects below 3R; both fill paths. Config/env/warning/fingerprint tests and minimal Phase 4 static gate updates.
 - Baseline: 1517 unittest tests OK (1 expected failure), 196.961 s. Final: ruff PASS; diff-check PASS; full unittest 1520 tests OK (1 expected failure), 165.530 s.
 - Requested full pytest: 1514 passed, 1 xfailed, 1100 subtests passed; 5 pre-existing failures in Phase 8 signal/startup AnnotateFailures.run (pytest passes TestCaseFunction, which has no failures/errors). Those two test files are unchanged; scope extension requested for a minimal harness compatibility fix. No local commit while pytest remains failing (AGENTS.md).
+## 2026-10-11 — DEC-14.1 review fixes (PR #34, local only)
+
+- Owner-authorized review fixes on `v2/opposite-setup-policy`; commit requested locally only.
+  No push, merge, Render/render.yaml, activation, dependency or economic-policy change.
+- Removed POLICY_V2_F3 switch and planner_options entirely from runtime/service.py;
+  run_floor call byte-identical to origin/main. Restored both Phase 4 test files exactly with
+  `git checkout origin/main -- test_phase4_fixed_3r.py test_phase4_target_planner.py`.
+- STRUCTURE_CHANGE execute only for an OPEN same-symbol position with no same-symbol pending;
+  flat uses the existing certified submit unchanged, including PAPER_ORDER_SUBMITTED. Tests compare
+  full journals, durable account/orders/fills and execution records against BLOCK (fixed UUID only),
+  plus pending gates both flat and with an open position. No alternate planner authorization inferred:
+  legacy runtime V1 plans fail closed as not_a_fixed_3r_plan before closing; candidate/Risk untouched.
+- Same setup requires same direction and entry difference <= 0.25 * original entry-stop distance.
+  Original stop is read from the originating order, never substituted by current position SL;
+  absent origin returns NO_DATA for similarity. Tests cover both inclusive boundaries, just inside/
+  outside, moved SL, missing origin and opposite direction with matching setup_id.
+- Phase 8 historical compatibility gate now admits only the exact already-authorized close_market
+  addition, while comparing every other broker byte to P3 (979e1e6); other historical gates retained.
+- Replay tooling/fixtures/builders and historical instructions investigated: historical source DB,
+  lab PKL and raw OHLC exports absent. Original git-ignored replay_twelve_data_12m.db was acquired
+  from Twelve Data Basic (no payment), 2025-10-06 through 2026-10-06. lab_run can rebuild PKL from
+  that DB, but acquisition needs network/API key. Synthetic fixtures cannot restore the corpus.
+  Ran `.venv/bin/python -m replay.opposite_policy_impact`; saved NO_DATA and exact provenance/reason
+  in docs/replay/dec14_impact.txt. No invented impact counts.
+- Baseline WORKFLOW unittest: 1540 tests, 6 failures (5 dashboard subtests + historical broker gate),
+  1 expected ISSUE-012 failure. Focused review/Phase 4/storage/Phase 8: 115 passed,
+  135 subtests passed. `ruff check .`: PASS. Full `.venv/bin/python -m pytest -q`: 1541 passed,
+  5 failed (the same dashboard fixture failures), 1 xfailed (ISSUE-012), 1100 subtests passed
+  in 175.10 s. No remaining non-dashboard failure. Local commit follows the owner’s explicit
+  instruction allowing the separately fixed dashboard failures; no dashboard changes in this task.
+
+Excepción del fingerprint de `storage/database.py` en `test_system_health.py`: además de
+las exclusiones B2.1 existentes, se normaliza únicamente el fragmento
+`"POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED", "DAILY_SUMMARY",` a
+`"POSITION_CLOSED", "DAILY_SUMMARY",` y se eliminan exactamente estas cuatro líneas:
+
+```python
+                if row["event_type"] == "STRUCTURE_REVERSE_SUBMITTED":
+                    execution = json.loads(row["payload"])
+                elif row["event_type"] == "POSITION_CLOSED" and json.loads(row["payload"]).get("exit_reason"):
+                    execution = json.loads(row["payload"])
+```
+
+Cada fragmento debe aparecer exactamente una vez. Permite seleccionar la alerta reverse y
+entregar geometría/exit_reason al mapper Phase 9, sin cambiar schema ni escrituras económicas.
+Todo otro byte LF-normalizado sigue fijado al SHA256 frozen V1
+`80f8c9ae037bb27dbcd45403ea33655b07dfed3983f3cb6637d8704e5ef4ebde`.
+
+
+## 2026-10-11 — DEC-14.1 opposite setup policy (local, owner approved 10:00 ET)
+
+- Branch `v2/opposite-setup-policy`; PAPER only, NAS100 OFF, no Render/render.yaml/push/activation.
+- Flag env BLOCK (default, unchanged fingerprint/legacy path) / STRUCTURE_CHANGE; invalid values
+  fail closed with log/journal warning and DEGRADED policy-health state.
+- Deterministic 15m BOS/closed original bar beyond held SL; existing validator/freshness/1H structure,
+  conservative similar-zone ±one price increment, no pyramiding and no pending cancellation.
+- Existing fixed-3R planner and Phase 6 candidate validation/immutable claim; both saves use runtime
+  slot lock, whole-state CAS and halt/REX guards. PAPER close accounts costs once and MTM equity;
+  fresh Risk V2 reservation after durable close, rejected reverse stays flat.
+- Close/reverse alerts through Phase 9; terminal decisions and atomic close marker journal every
+  outcome. Safe restart choice: REVERSE_ABANDONED_AFTER_RESTART, no re-close or resumed old open.
+  Recovery excludes active runs of other writers; same-run/candidate reruns do not duplicate exposure.
+- New `test_dec14_opposite_policy.py`: validator/broker/Risk/SQLite, full runtime integration,
+  duplicates/same-direction/no-BOS/profit/loss/rejection/stale/AI/lock/pending/crash/rerun/fill/alerts.
+- Baseline command from WORKFLOW using `.venv/bin/python` (bare `python` absent): 1517 tests,
+  5 preexisting dashboard assertion failures (static 12:00 UTC fixture becomes STALE_DATA),
+  1 expected ISSUE-012 failure. Target policy+safety: 30 passed, 16 subtests passed.
+- Replay CLI reuses Phase 6 Cohort, chronological calendar, closed-bar reconstruction and production
+  broker/Risk V2. Ran it; saved `docs/replay/dec14_impact.txt`: NO_DATA for both policies because
+  original replay DB/lab_*.pkl are absent. No fabricated counts; corpus replay remains pending.
+- Updated Phase 4 static gates for owner-authorized opt-in fixed-3R (Policy D still forbidden),
+  pinned frozen storage bytes after stripping only the exact new alert selection/payload addition,
+  and made Phase 8 signal-test annotation adapters work under both unittest and pytest.
+- Final full `.venv/bin/python -m pytest -q`: 1537 passed, 5 failed, 1 xfailed (ISSUE-012),
+  1091 subtests passed (174.27 s). All five failures reproduce the baseline dashboard clock fixture.
+  Policy tests: 23 passed, 4 subtests passed; compatibility/signal/health group: 89 passed,
+  109 subtests passed. Final policy/alerts/E2E/safety: 94 passed, 77 subtests passed (14.75 s).
+  `git diff --check` clean. No implementation failures remain.
+- Local commit withheld by AGENTS.md / WORKFLOW no-failing-tests gate. Requested owner permission
+  for a minimal deterministic dashboard-fixture clock fix; no response yet. Original corpus paths
+  also requested; no corpus found. No staging, commit, push or Render actions performed.
+
 
 ## 2026-10-11 — Phase 12 End-to-End (issue #30) — IN PROGRESS
 

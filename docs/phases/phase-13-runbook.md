@@ -33,6 +33,7 @@
 | `AI_FLOOR_V2_REX` | `1` (recomendado) | Evidencia REX en el journal, solo de observación; no cambia la economía (lo comprueba el test E2E de la Fase 12). |
 | `AI_FLOOR_V2_RHALT` | `1` (recomendado, requiere REX) | Puerta de halt/recovery (M-5). |
 | `AI_FLOOR_V2_SEALED_GENESIS` | `1` (recomendado con DB nueva, requiere REX) | Sella el genesis del baseline A2. |
+| `V2_OPPOSITE_SETUP_POLICY` | `STRUCTURE_CHANGE` (previsto, aún no activado) | DEC-14.1; default `BLOCK`; requiere GO operativo. |
 | `AI_FLOOR_V2_POSITION_CATCH_UP` | **decisión del owner** (sección 3) | |
 
 ## 3. Decisión: `AI_FLOOR_V2_POSITION_CATCH_UP`
@@ -72,3 +73,10 @@
 - Recomendación de GO / NO-GO para la siguiente etapa. REAL sigue **prohibido** salvo una fase nueva con su propia aprobación.
 
 DEC-14.2: el oráculo REX actual verifica V1 únicamente. F3 registra la política efectiva y el verifier rechaza `UNSUPPORTED_RR_POLICY`; no interpretar esa ejecución como verificada por ese oráculo.
+## DEC-14.1 — política de setups opuestos
+
+El demo PAPER habilitará `V2_OPPOSITE_SETUP_POLICY=STRUCTURE_CHANGE` (decisión del owner
+Jeferson Tejeda, 2026-10-11 10:00 ET). **No está habilitado todavía**: default `BLOCK`, sin
+cambio de env, Render, scheduler ni deploy. GO operativo y evidencia/certificación siguen pendientes.
+Pre-flight: tests de DEC-14.1, replay con corpus original disponible, warning fail-closed para valores
+inválidos y verificación del cierre/reverse/abandono en journal y alertas. Diseño/restart en fase-06.

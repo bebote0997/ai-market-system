@@ -147,6 +147,14 @@ class OperationalRuntime:
             with startup_write(gate, "genesis_seal_check"):
                 seal_check(self.store, self.sealed_context, at=self.clock(),
                            process_id=None if gate is None else gate.process_id)
+        from execution.opposite_policy import abandon_incomplete
+        if self.store.db.execute("SELECT 1 FROM journal WHERE event_type='DEC14_CLOSE' LIMIT 1").fetchone():
+            with startup_write(gate, "opposite_policy_recovery"):
+                abandon_incomplete(self.store, self.clock())
+        if self.config.v2_opposite_setup_policy_warning:
+            with startup_write(gate, "opposite_policy_warning"):
+                self.store.event(self.clock(), None, None, "config", "V2_OPPOSITE_SETUP_POLICY_INVALID", "WARNING")
+                self.store.set_state("opposite_setup_policy_health", "DEGRADED")
         account, orders, fills = self.store.load_paper(self.config.account_id)
         if account is None and self.sealed_context is not None:  # I-G17: no creation path in SEALED_RUNTIME
             from runtime.genesis import GenesisSealError
@@ -851,6 +859,19 @@ class OperationalRuntime:
                 execution_reason = "PAPER_DIAGNOSTIC_BLOCKED"
             elif eligible and paper_blocked is not None:
                 execution_reason = paper_blocked  # B2.3B: no submission over unreconciled positions.
+            elif (self.config.v2_opposite_setup_policy == "STRUCTURE_CHANGE"
+                  and deterministic.final_status == "PLAN_READY" and self.paper_enabled
+                  and paper_blocked is None
+                  and symbol in broker.account.open_positions
+                  and broker.account.open_positions[symbol].status == "OPEN"
+                  and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values())):
+                from execution.opposite_policy import execute
+                outcome = execute(self, deterministic, snapshot, key=key, at=execution_at,
+                                  ai_allowed=eligible and ai_healthy, writer=rex_store)
+                execution_status, execution_reason, submitted_order_id = outcome.status, outcome.reason, outcome.order_id
+                position = broker.account.open_positions.get(symbol)
+                if position is not None and outcome.status != "SUBMITTED":
+                    blocking_position_id = position.position_id
             elif eligible and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()) and symbol not in broker.account.open_positions:
                 if not self.store.owns_slot(key, symbol):
                     raise RuntimeError("slot ownership lost")

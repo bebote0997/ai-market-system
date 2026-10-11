@@ -1,0 +1,37 @@
+{
+  "status": "NO_DATA",
+  "inputs": {
+    "store": "data/replay/market_replay.db",
+    "lab_dir": "data/replay/p41a"
+  },
+  "reason": "Cannot regenerate the Phase 6 corpus offline: data/replay/market_replay.db and data/replay/p41a/lab_*.pkl are absent; the documented original data/replay/replay_twelve_data_12m.db and raw historical bar exports are also absent from this workspace.",
+  "cohort": "NO_DATA",
+  "policies": {
+    "BLOCK": {
+      "opposite_conflicts": "NO_DATA",
+      "would_close_profit": "NO_DATA",
+      "would_keep": "NO_DATA",
+      "would_close_loss": "NO_DATA",
+      "reversals_approved_by_risk": "NO_DATA",
+      "blocked_no_BOS": "NO_DATA",
+      "duplicates": "NO_DATA"
+    },
+    "STRUCTURE_CHANGE": {
+      "opposite_conflicts": "NO_DATA",
+      "would_close_profit": "NO_DATA",
+      "would_keep": "NO_DATA",
+      "would_close_loss": "NO_DATA",
+      "reversals_approved_by_risk": "NO_DATA",
+      "blocked_no_BOS": "NO_DATA",
+      "duplicates": "NO_DATA"
+    }
+  },
+  "investigation": {
+    "original_production": "V2_PHASE4_TRADE_PLANNER.md, Real-data replay observation: original git-ignored Replay Store data/replay/replay_twelve_data_12m.db acquired from Twelve Data Basic with an existing API key, no payment, XAUUSD/EURUSD 1h/15m/5m for 2025-10-06 through 2026-10-06. No evidence establishes market_replay.db as an archived alias of that store.",
+    "lab_builder": "replay/lab_run.py consumes an existing Replay Store offline, runs production scouts/validator plus lab variants at 15-minute cadence for 2025-11-03 through 2026-10-05, saves 56 lab_XX.pkl chunks (2 symbols x 28). CHANGELOG_AGENT.md P4.1A documents these lab artifacts; replay/risk_audit.py Cohort selects records containing v1; conflict_audit.py and opposite_policy_impact.py consume that cohort.",
+    "missing_source": "replay/acquire.py creates the store by paging https://api.twelvedata.com/time_series; requires network and TWELVE_DATA_API_KEY. replay/store.py only creates schema; engine/lab_run/conflict_audit cannot reconstruct missing OHLC bars. No historical DB, lab PKL or raw market export found in repo/workspace.",
+    "fixtures": "test_phase4_replay.py and DEC14 tests build explicit synthetic bars for tests only; these cannot regenerate or stand in for the original Phase 6 corpus.",
+    "command": ".venv/bin/python -m replay.opposite_policy_impact",
+    "decision": "NO_DATA retained; no network acquisition, paid API, synthetic substitution or fabricated impact counts."
+  }
+}

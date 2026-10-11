@@ -139,10 +139,12 @@ class AnnotateFailures:
     annotations (workflow commands on stdout)."""
 
     def run(self, result=None):
-        before = 0 if result is None else len(result.failures) + len(result.errors)
+        # pytest supplies its own result adapter; native pytest handles its failure reporting.
+        annotated_result = result if isinstance(result, unittest.TestResult) else None
+        before = 0 if annotated_result is None else len(annotated_result.failures) + len(annotated_result.errors)
         outcome = super().run(result)
-        if result is not None:
-            for test, trace in (result.failures + result.errors)[before:]:
+        if annotated_result is not None:
+            for test, trace in (annotated_result.failures + annotated_result.errors)[before:]:
                 text = trace[-1800:].replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")
                 sys.__stdout__.write("::error title=" + test.id() + "::" + text + chr(10))
                 sys.__stdout__.flush()

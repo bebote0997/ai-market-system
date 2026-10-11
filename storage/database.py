@@ -304,7 +304,7 @@ class Store:
                     "RECOVERY_COMPLETED", "PROVIDER_FAILURE", "AUTH_ERROR",
                     "ENTITLEMENT_ERROR", "RATE_LIMITED", "AI_CAUTION",
                     "RISK_REJECTED", "EXECUTION_DECISION", "POSITION_OPENED",
-                    "POSITION_CLOSED", "DAILY_SUMMARY", "MACRO_HIGH_IMPORTANCE",
+                    "POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED", "DAILY_SUMMARY", "MACRO_HIGH_IMPORTANCE",
                     "MACRO_HIGH_RELEVANCE"}
         events = []
         with self.transaction():
@@ -347,6 +347,10 @@ class Store:
                         evidence = tuple(dict.fromkeys((*evidence, macro_id)))
                 entity = row["source"]
                 execution = None
+                if row["event_type"] == "STRUCTURE_REVERSE_SUBMITTED":
+                    execution = json.loads(row["payload"])
+                elif row["event_type"] == "POSITION_CLOSED" and json.loads(row["payload"]).get("exit_reason"):
+                    execution = json.loads(row["payload"])
                 if row["event_type"] == "EXECUTION_DECISION":
                     execution = json.loads(row["payload"])
                     execution.update({"setup_status": review.get("setup_status") if review else None,
