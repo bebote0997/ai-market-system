@@ -22,4 +22,6 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 | HIGH-8.1 owner decision | 2026-10-10 | RECORDED | Ruta OFF EURUSD/XAUUSD → catch-up cronológico; PnL no comparable con baseline congelado (`HIGH81_OWNER_DECISION.md`) |
 | **DEC-8.18** | 2026-10-10 | **APPROVED** (owner Jeferson Tejeda / bebote0997) | Status-verification procedure (axes, H5), aprobado tal cual |
 | **DEC-8.19** | 2026-10-10 | **APPROVED** (owner Jeferson Tejeda / bebote0997) | Boundary handling = opción (a): precondición flat bajo A2 (sin posiciones ni órdenes heredadas) |
+| **DEC-8.23** | 2026-10-10 | **APPROVED** (owner) | Gates G-8.INT de sesión en vivo (G2/G3/G4/G5/G7/G11) se certifican con evidencia offline/replay (`replay.g8int`, fixtures deterministas, CI en el SHA exacto); validación en vivo pasa al demo de 30 días tras Fase 13 |
+| DEC-13.0 (owner) | 2026-10-10 | **APPROVED** (owner) | Fase 13 = demo PAPER de 30 días (sustituye los 60 días del Libro v1.9) y se lanza solo tras certificar Fases 8–12 |
 | DEC-8.22-a…j, OP-1…7 | — | NOT AUTHORIZED | Autorizaciones de implementación/operación |
