@@ -60,7 +60,7 @@ genesis tool's create-exclusive enforces freshness.
 
 ## 4. Owner acts still required (none performed)
 
-- DEC-8.19 (boundary handling) and DEC-8.18 (status verification) remain PENDING.
+- DEC-8.18 (status verification, as-is: axes, H5) and DEC-8.19 (boundary handling, option (a): flat precondition under A2, no inherited positions/orders) APPROVED 2026-10-10 by the Owner (Jeferson Tejeda / bebote0997). The DEC-8.18 procedure has not been executed yet (needs an Owner DB copy and a signed H5 attestation).
 - `EXPERIMENT_FREEZE_P2.md` and the signed `Y_P2` (on Owner instruction).
 - H5 attestation, OAR-A (archive) and OAR-G (genesis) signatures — OP-7.
 - Chain-head anchors (OP-6) and the single-writer attestation.

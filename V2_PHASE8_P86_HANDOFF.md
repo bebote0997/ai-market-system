@@ -31,7 +31,7 @@
 | DEC-8.15 | **APPROVED POLICY** (2026-10-08) | Global conservative revision gate (§1.6) | — | — |
 | DEC-8.16 | **APPROVED POLICY** (2026-10-08) | Mixed-path segments `TECHNICAL_ONLY`; B optional technical; A necessary; economic certification only if G-8.INT (DEC-8.17) passes (§1.9.3) | — | No certification |
 | DEC-8.21 | **APPROVED POLICY** (2026-10-08) | LOW-1 fail-closed per §4 | — | No implementation authorized |
-| DEC-8.18, 8.19 | **PENDING** | Unchanged from design section 8.1 | — | — |
+| DEC-8.18, 8.19 | **APPROVED 2026-10-10** (Owner) | DEC-8.18 as-is; DEC-8.19 option (a) flat precondition under A2. See design §8.5 | — | — |
 | DEC-8.22-a…j | **NOT AUTHORIZED** | Implementation authorizations | — | — |
 | OP-1…OP-7 | **NOT AUTHORIZED** | Operational acts | — | — |
 
@@ -226,7 +226,7 @@ PAPER ONLY · REAL EXECUTION DISABLED · NAS100 OFF · PHASE 8 BLOCKED · HIGH-8
 |---|---|---|
 | B-1 | `V2_PHASE8_P86_DESIGN.md` and this handoff are **uncommitted** (no commit authorization) | Implementation prompts cannot cite a design SHA; the Owner must authorize a documentation-only commit first |
 | B-2 | The current Libro Maestro version is not accessible or verifiable (latest found v1.7 predates Phase 6–8) | **Deferred by the Owner (2026-10-08)**; this register is to be transferred later |
-| B-3 | DEC-8.18 and 8.19 PENDING (DEC-8.13 / 8.14 / 8.15 / 8.16 / 8.21 approved 2026-10-08) | The P1 policy gate is met; the P2a verifier gate (DEC-8.18) is not |
+| B-3 | DEC-8.18 and 8.19 APPROVED 2026-10-10 (DEC-8.13 / 8.14 / 8.15 / 8.16 / 8.21 approved 2026-10-08) | Policy gates met; the DEC-8.18 procedure still has to be executed (Owner DB copy + H5) |
 | B-4 | DEC-8.22-a…j and OP-1…OP-7 NOT AUTHORIZED | No package may start |
 | B-5 | DEC-8.21b PROVISIONAL | P3 needs validation, or an explicit authorization to implement while provisional |
 | B-6 | The experiment's current state is unknown (DEC-8.18 procedure not run) | No A2 operational step can be planned in time |

@@ -2236,8 +2236,17 @@ None of OP-1…OP-5 is authorized by any decision above.
 | DEC-8.21b | **PROVISIONAL:** B-STRICT pending operational validation |
 | Package plan | **APPROVED (planning only)** |
 
-- DEC-8.18 and DEC-8.19 remain **PENDING**. DEC-8.22-a…j (including a / b) and OP-1…OP-7 remain **NOT AUTHORIZED**.
+- DEC-8.18 and DEC-8.19 were PENDING at this record (2026-10-08); see §8.5. DEC-8.22-a…j (including a / b) and OP-1…OP-7 remain **NOT AUTHORIZED**.
 - Details are in `V2_PHASE8_P86_HANDOFF.md`.
+
+### 8.5 Owner decisions recorded 2026-10-10
+
+| ID | Status |
+|---|---|
+| DEC-8.18 | **APPROVED POLICY** as-is (status-verification procedure, four axes, H5 attestation). Execution pending: Owner DB copy + signed H5 |
+| DEC-8.19 | **APPROVED POLICY:** option (a), flat precondition under A2: no inherited positions or orders |
+
+DEC-8.22-a…j and OP-1…OP-7 remain **NOT AUTHORIZED**. No logic change.
 
 ## 9. GO / NO-GO per component (P8.6F8; every decision PENDING)
 
