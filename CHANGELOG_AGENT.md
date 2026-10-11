@@ -1480,3 +1480,17 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
   APPROVED Risk decision (unit, Risk V2 reservation and full runtime cycle with a spy). Mutation-checked.
 - Comparability: strategy, signals, risk, R:R, sizing, fills, prompts, providers and economics unchanged. The NAS100
   block matches the frozen config (NAS100 not enabled). Tests: 1389 OK; `ruff check .` passes.
+
+## 2026-10-10 — Phase 8 owner decisions DEC-8.18 / DEC-8.19 (documentation only)
+
+- DEC-8.18 APPROVED as-is (status-verification procedure, axes, H5). DEC-8.19 APPROVED, option (a): flat precondition under A2.
+- Updated: `V2_PHASE8_CERTIFICATION_CHECKLIST.md`, `V2_PHASE8_P86_DESIGN.md` (§8.5), `V2_PHASE8_P86_HANDOFF.md`. Historical entries unchanged.
+- No code, flags, deploy or merge. Phase 8 NOT CERTIFIED. PAPER only; REAL OFF; NAS100 OFF.
+
+## 2026-10-10 — DEC-8.23 (documentation only)
+
+- Owner decision: live-session G-8.INT gates re-scoped to offline/replay evidence for Phase 8; live validation moves to the 30-day demo after Phase 13. Checklist §0, design §8.5, handoff updated. No code/flags/deploy.
+
+## 2026-10-10 — M-5 CLOSED, DEC-8.18a, offline G-8.INT summary (docs only)
+
+- Checklist §0 updated: DEC-8.18a amendment, M-5 CLOSED (PR #16), offline G-8.INT results (PR #18), ISSUE-012/013.

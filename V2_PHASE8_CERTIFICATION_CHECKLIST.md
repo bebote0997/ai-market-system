@@ -5,24 +5,36 @@
   Absence of errors is never PASS; synthetic test periods never close HIGH-8.1 or M-5.
 - **Global verdict:** BLOCKED until every row is PASS, including the rows that depend on Owner acts, external evidence
   and independent review.
-- **Safety:** PAPER ONLY · REAL EXECUTION DISABLED · NAS100 OFF · V2 flags OFF · PHASE 8 BLOCKED · HIGH-8.1 OPEN ·
-  M-5 OPEN · B-STRICT PROVISIONAL.
+- **Safety:** PAPER ONLY · REAL EXECUTION DISABLED · NAS100 OFF · V2 flags OFF · PHASE 8 under certification · HIGH-8.1 CLOSED (983d2d2, Codex review PASS WITH NOTES) ·
+  M-5 CLOSED (PR #16) · B-STRICT PROVISIONAL.
+
+## 0. Scope decision
+
+**DEC-8.23 — APPROVED 2026-10-10 (Owner Jeferson Tejeda / bebote0997).** The G-8.INT gates that require live sessions (G2 simulation on copies tied to a deployed commit, G3 session days, G4 cycles, G5 reconciled closes, G7 EVIDENCE_UNAVAILABLE rate, and G11 external chain-head anchors over a live period) are **re-scoped for Phase 8 certification to offline / replay evidence**: `replay.g8int` on deterministic fixtures and replay data, the existing test suite, and CI on the exact certified SHA. Live validation of these criteria moves to the 30-day PAPER demo that starts only after Phases 8-13 are certified. No A2 live period, deploy, Render change, flag or scheduler activation is authorized by this decision.
+
+**DEC-8.18a — Grok Bot under Owner-delegated control, 2026-10-10.** Amendment of DEC-8.18: the H5 SSH signature is dropped; Q1–Q8 run as `python -m replay.status_verifier` (PR #18) on fixtures/DB copies; EX is reported `EX_UNATTESTED`; live verification moves to Phase 13.
+
+**M-5 — CLOSED 2026-10-10.** R-HALT race tests (a)–(g), real SIGTERM, property test, reentrancy-safe halt clock and ordered G14 matching (PR #16, merge 43c3103). Independent review by Codex: round 1 FAIL (HIGH/MEDIUM), fixed in cc9a154; round 2 PASS WITH NOTES, no findings.
+
+**Offline G-8.INT run (PR #18, `test_phase8_g8int_offline.py`):** PASS G1, G6, G7, G9, G10, G12, G14 · NOT VERIFIED G8, G15 (fixture gaps / external evidence) · BLOCKED G2–G5, G11 (live, re-scoped to Phase 13 by DEC-8.23), G13 (independent review: provided by cross-AI reviews on PRs #13, #16–#19). No FAIL.
+
+**Open follow-ups:** ISSUE-012 (runtime does not filter an unclosed bar for pending fills; real adapters filter it; PR #19 expectedFailure) and ISSUE-013 (status_verifier MEDIUM review notes, PR #18).
 
 ## 1. G-8.INT criteria (design section 5)
 
 | # | Criterion | Evidence source | Tool / check | Needs beyond the code |
 |---|---|---|---|---|
 | G1 | Scope A (all enabled symbols in scope) | REX run identity | `g8int` G1 | the A2 configuration |
-| G2 | Simulation on copies (section 6) | Owner copies, export, frozen clock | `g8int --simulation-record` (`V2_SECTION6_SIMULATION/1`: PASS, no STOP, input hashes, bound to the deployed commit) | **BLOCKED** until the Owner's rehearsal record exists (OP-1) |
-| G3 | ≥ 10 counted session days per symbol | `runs`, scheduler sessions, halts | `g8int` G3 | **BLOCKED:** a live A2 period |
-| G4 | ≥ 200 cycles per symbol, ≥ 1 position under catch-up | `runs`, REX ST2C writes | `g8int` G4 | live A2 period |
-| G5 | ≥ 5 reconciled closes per symbol (20-day extension) | REX ST2C + G14 + Evidence Store digests | `g8int` G5 | live A2 period |
+| G2 (offline per DEC-8.23) | Simulation on copies (section 6) | Owner copies, export, frozen clock | `g8int --simulation-record` (`V2_SECTION6_SIMULATION/1`: PASS, no STOP, input hashes, bound to the deployed commit) | **BLOCKED** until the Owner's rehearsal record exists (OP-1) |
+| G3 (offline per DEC-8.23) | ≥ 10 counted session days per symbol | `runs`, scheduler sessions, halts | `g8int` G3 | **BLOCKED:** a live A2 period |
+| G4 (offline per DEC-8.23) | ≥ 200 cycles per symbol, ≥ 1 position under catch-up | `runs`, REX ST2C writes | `g8int` G4 | live A2 period |
+| G5 (offline per DEC-8.23) | ≥ 5 reconciled closes per symbol (20-day extension) | REX ST2C + G14 + Evidence Store digests | `g8int` G5 | live A2 period |
 | G6 | 0 duplicate fills, closes, claims | PAPER tables, `runs` | `g8int` G6 | — |
-| G7 | `EVIDENCE_UNAVAILABLE` ≤ 1 % of in-scope cycles | journal, REX | `g8int` G7 | live A2 period |
+| G7 (offline per DEC-8.23) | `EVIDENCE_UNAVAILABLE` ≤ 1 % of in-scope cycles | journal, REX | `g8int` G7 | live A2 period |
 | G8 | 0 unexplained evidence GAPs | Evidence Store anomalies | `g8int` G8 (any GAP → NOT VERIFIED) | Owner explanation records |
 | G9 | Revision gate CLEAR | `revision_review.demo_gate` | `g8int` G9 | Owner reviews if anomalies |
 | G10 | 0 ERROR runs, 0 halts in the window | `runs`, `HALT_OBSERVED` | `g8int` G10 | — |
-| G11 | Chain matches external anchors | anchors (OP-6), OAR-G, OAR-A | — | **BLOCKED:** external anchors |
+| G11 (offline per DEC-8.23) | Chain matches external anchors | anchors (OP-6), OAR-G, OAR-A | — | **BLOCKED:** external anchors |
 | G12 | Safety on every run | runs, schema, `REAL_EXECUTION_ENABLED` | `g8int` G12 | — |
 | G13 | Independent review PASS | reviewer | — | **BLOCKED:** Copilot + Owner |
 | G14 | Every run reproduces from REX | REX | `rex_oracle` via `g8int` | — |
@@ -60,7 +72,7 @@ genesis tool's create-exclusive enforces freshness.
 
 ## 4. Owner acts still required (none performed)
 
-- DEC-8.19 (boundary handling) and DEC-8.18 (status verification) remain PENDING.
+- DEC-8.18 (status verification, as-is: axes, H5) and DEC-8.19 (boundary handling, option (a): flat precondition under A2, no inherited positions/orders) APPROVED 2026-10-10 by the Owner (Jeferson Tejeda / bebote0997). The DEC-8.18 procedure has not been executed yet (needs an Owner DB copy and a signed H5 attestation).
 - `EXPERIMENT_FREEZE_P2.md` and the signed `Y_P2` (on Owner instruction).
 - H5 attestation, OAR-A (archive) and OAR-G (genesis) signatures — OP-7.
 - Chain-head anchors (OP-6) and the single-writer attestation.
