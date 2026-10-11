@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
-import os
 import re
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET

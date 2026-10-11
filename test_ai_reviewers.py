@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 
 from ai.agents import setup_reviewer_ai, trade_reviewer_ai
-from ai.provider import DeterministicAIProvider, FakeAIProvider
+from ai.provider import DeterministicAIProvider
 from core.contracts import RiskDecision, SetupAssessment, TradePlan
 
 RUN_ID = "run-review"
@@ -27,7 +27,6 @@ class TestSetupReviewerAI(unittest.TestCase):
 
     def test_valid_setup_with_aligned_specialists_agrees(self):
         setup = SetupAssessment("1.0", RUN_ID, AS_OF, SYMBOL, "VALID_SETUP", "LONG", ("1h", "15m", "5m"), invalidation=90.0)
-        structure_bias = FakeAIProvider(response=None)
         from ai.contracts import AI_SCHEMA_VERSION, AIResponse
         ai_structure = AIResponse(AI_SCHEMA_VERSION, RUN_ID, AS_OF, SYMBOL, "structure_ai", "OK", bias="BULLISH")
         ai_liquidity = AIResponse(AI_SCHEMA_VERSION, RUN_ID, AS_OF, SYMBOL, "liquidity_ai", "OK", bias="BULLISH")

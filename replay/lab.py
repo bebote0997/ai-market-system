@@ -35,7 +35,6 @@ Selection rule (applied to DISCOVERY only, mechanical): a variant is FEASIBLE if
 order D1, D2, D3 (fewest candidate classes first). The chosen variant is then reported on HOLDOUT once,
 unchanged. Outcomes/PnL are never a selection input.
 """
-from decimal import Decimal
 
 import pandas as pd
 

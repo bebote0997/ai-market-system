@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 import agents.setup_validator as validator
-from agents.setup_validator import CHECKS, DECIDING_CHECK, _evaluar_setup_v1, evaluar_setup, setup_identity
+from agents.setup_validator import CHECKS, DECIDING_CHECK, _evaluar_setup_v1, evaluar_setup
 from agents.trade_planner import crear_trade_plan
 from ai.agents.setup_reviewer_ai import build_request
 from core.contracts import AgentMessage
@@ -361,7 +361,6 @@ class IdentityTests(unittest.TestCase):
 
 class TraceabilityTests(unittest.TestCase):
     def test_review_carries_explanation_and_execution_links_same_setup_id(self):
-        from unittest.mock import patch
         import test_demo_runner as fixture
         case = fixture.TestDemoRunner("test_preflight_ready_and_missing_credentials")
         case.setUp()

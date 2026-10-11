@@ -5,7 +5,7 @@ function renamed ``v1_evaluar_setup``). Every decision family is compared field 
 the downstream authority it feeds (Trade Planner, Risk, AI setup-review request)."""
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pandas as pd
 
@@ -14,7 +14,7 @@ from agents.trade_planner import crear_trade_plan
 from ai.agents.setup_reviewer_ai import build_request
 from core.contracts import AgentMessage, InstrumentSpec, SetupAssessment
 from riesgo import crear_configuracion_riesgo_v2, evaluar_trade_plan
-from test_setup_validator_v2 import AT, macro, msg, scenarios, scouts
+from test_setup_validator_v2 import AT, msg, scenarios, scouts
 
 # ---- verbatim V1 oracle (agents/setup_validator.py @ c7aaafb) ----------------------------------------
 def _payload(message):

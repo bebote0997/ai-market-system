@@ -10,7 +10,7 @@ from runtime.service import OperationalRuntime
 
 def main():
     parser = argparse.ArgumentParser(description="AI Trading Floor PAPER runtime")
-    parser.add_argument("--once", choices=("XAUUSD", "NAS100", "EURUSD"))
+    parser.add_argument("--once", choices=("XAUUSD", "EURUSD"))
     parser.add_argument("--recover-only", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")

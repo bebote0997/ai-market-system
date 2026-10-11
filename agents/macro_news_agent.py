@@ -1,10 +1,8 @@
 """Deterministic Macro/News scout over normalized provider data only."""
 from datetime import date, datetime, timedelta, timezone
-import math
-from typing import Optional
 from zoneinfo import ZoneInfo
 
-from core.contracts import AgentMessage, MacroEvent, NewsItem
+from core.contracts import AgentMessage
 from data.macro_news import macro_event_to_dict, news_item_to_dict
 
 UPCOMING_WINDOW = timedelta(hours=24)

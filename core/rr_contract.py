@@ -10,7 +10,7 @@ Arithmetic is ``Decimal`` on the shortest ``repr`` of each price, so increment-n
 exactly (no binary-float artifacts such as 1.0939999999999996 deciding a boundary).
 """
 from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation, localcontext
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
 import math
 
 POLICY_V1 = "V1_FIXED_3R"

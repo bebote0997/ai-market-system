@@ -4,7 +4,6 @@ import math
 
 import pandas as pd
 
-from runtime.scheduler import session_names
 
 
 def fresh_snapshot(snapshot, symbol, as_of, limits):

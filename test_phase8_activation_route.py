@@ -14,7 +14,7 @@ from runtime.demo_runner import preflight
 from runtime.service import OperationalRuntime
 from storage.evidence_store import EvidenceStore
 from test_phase8_catch_up_certification import SLOT, Harness
-from test_runtime_catch_up import Bars, make_runtime
+from test_runtime_catch_up import Bars
 
 ENV_KEYS = ("AI_FLOOR_V2_POSITION_CATCH_UP", "AI_FLOOR_MARKET_EVIDENCE_PATH", "AI_FLOOR_DB_PATH")
 

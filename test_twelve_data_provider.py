@@ -1,7 +1,6 @@
 """Offline Twelve Data adapter and active-provider certification checks."""
 from datetime import datetime, timedelta, timezone
 import io
-import json
 import os
 from pathlib import Path
 from urllib.error import HTTPError

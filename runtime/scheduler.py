@@ -1,5 +1,5 @@
 """Clock-injected 15-minute slots and DST-aware analysis windows."""
-from datetime import datetime, timezone
+from datetime import timezone
 from zoneinfo import ZoneInfo
 
 from storage.codec import utc
