@@ -1490,3 +1490,7 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 ## 2026-10-10 — DEC-8.23 (documentation only)
 
 - Owner decision: live-session G-8.INT gates re-scoped to offline/replay evidence for Phase 8; live validation moves to the 30-day demo after Phase 13. Checklist §0, design §8.5, handoff updated. No code/flags/deploy.
+
+## 2026-10-10 — M-5 CLOSED, DEC-8.18a, offline G-8.INT summary (docs only)
+
+- Checklist §0 updated: DEC-8.18a amendment, M-5 CLOSED (PR #16), offline G-8.INT results (PR #18), ISSUE-012/013.
