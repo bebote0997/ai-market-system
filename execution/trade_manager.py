@@ -68,10 +68,8 @@ class TradeManager:
                 position.last_price = float(close)
                 position.last_processed_at = timestamp
                 continue
-            gross = ((exit_price - position.entry_price) if position.side == "LONG" else (position.entry_price - exit_price)) * position.quantity * position.contract_multiplier
-            cost = position.cost_rate * position.quantity * position.entry_price / 100
-            net = gross - cost
-            trade = ClosedTrade("1.0", str(uuid.uuid4()), position.position_id, position.run_id, position.symbol, position.side, position.entry_price, exit_price, position.quantity, gross, cost, net, bar["timestamp"], reason)
+            trade = self._closed_trade(position, exit_price, bar["timestamp"], reason)
+            net = trade.net_pnl
             position.status = "CLOSED"
             self.account.realized_pnl += net
             self.account.closed_trades.append(trade)
@@ -83,6 +81,35 @@ class TradeManager:
         self.account.unrealized_pnl = sum(self._unrealized(position) for position in self.account.open_positions.values())
         self.account.equity = self.account.starting_equity + self.account.realized_pnl + self.account.unrealized_pnl
         return closed
+
+    @staticmethod
+    def _closed_trade(position, exit_price, at, reason):
+        gross = ((exit_price - position.entry_price) if position.side == "LONG" else
+                 (position.entry_price - exit_price)) * position.quantity * position.contract_multiplier
+        cost = position.cost_rate * position.quantity * position.entry_price / 100
+        return ClosedTrade("1.0", str(uuid.uuid4()), position.position_id, position.run_id, position.symbol,
+                           position.side, position.entry_price, exit_price, position.quantity, gross, cost,
+                           gross - cost, at, reason)
+
+    def close_position(self, position, exit_price, at, reason, *, event_run_id=None):
+        """One cost charge and MTM recomputation; caller persists broker atomically."""
+        if not _valid_multiplier(position.contract_multiplier):
+            raise ValueError("invalid position contract multiplier")
+        trade = self._closed_trade(position, exit_price, at, reason)
+        net = trade.net_pnl
+        position.status = "CLOSED"
+        self.account.realized_pnl += net
+        self.account.closed_trades.append(trade)
+        del self.account.open_positions[position.symbol]
+        run_id = position.run_id if event_run_id is None else event_run_id
+        if reason in ("stop", "target"):
+            self.broker._event(at, run_id, position.symbol, trade.trade_id,
+                               "STOP_HIT" if reason == "stop" else "TARGET_HIT")
+        self.broker._event(at, run_id, position.symbol, trade.trade_id, "POSITION_CLOSED",
+                           {"exit_reason": reason} if event_run_id is not None else None)
+        self.account.unrealized_pnl = sum(self._unrealized(p) for p in self.account.open_positions.values())
+        self.account.equity = self.account.starting_equity + self.account.realized_pnl + self.account.unrealized_pnl
+        return trade
 
     def _unrealized(self, position):
         if position.last_price is None or not _valid_multiplier(position.contract_multiplier):

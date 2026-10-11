@@ -377,6 +377,18 @@ class TradingDatabaseCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(source.count(guard), 1)
         source = source.replace(guard, "")
+        # DEC-14.1 adds only notification selection/payload; all other source bytes stay pinned.
+        alert_selection = '"POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED", "DAILY_SUMMARY",'
+        self.assertEqual(source.count(alert_selection), 1)
+        source = source.replace(alert_selection, '"POSITION_CLOSED", "DAILY_SUMMARY",')
+        alert_payload = (
+            '                if row["event_type"] == "STRUCTURE_REVERSE_SUBMITTED":\n'
+            '                    execution = json.loads(row["payload"])\n'
+            '                elif row["event_type"] == "POSITION_CLOSED" and json.loads(row["payload"]).get("exit_reason"):\n'
+            '                    execution = json.loads(row["payload"])\n'
+        )
+        self.assertEqual(source.count(alert_payload), 1)
+        source = source.replace(alert_payload, "")
         self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(), FROZEN_TRADING_DB_MODULE_SHA256)
         self.assertEqual(SCHEMA_VERSION, 3)
 

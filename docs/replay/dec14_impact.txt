@@ -1,0 +1,29 @@
+{
+  "status": "NO_DATA",
+  "inputs": {
+    "store": "data/replay/market_replay.db",
+    "lab_dir": "data/replay/p41a"
+  },
+  "reason": "Phase 6 replay DB / lab_*.pkl corpus unavailable",
+  "cohort": "NO_DATA",
+  "policies": {
+    "BLOCK": {
+      "opposite_conflicts": "NO_DATA",
+      "would_close_profit": "NO_DATA",
+      "would_keep": "NO_DATA",
+      "would_close_loss": "NO_DATA",
+      "reversals_approved_by_risk": "NO_DATA",
+      "blocked_no_BOS": "NO_DATA",
+      "duplicates": "NO_DATA"
+    },
+    "STRUCTURE_CHANGE": {
+      "opposite_conflicts": "NO_DATA",
+      "would_close_profit": "NO_DATA",
+      "would_keep": "NO_DATA",
+      "would_close_loss": "NO_DATA",
+      "reversals_approved_by_risk": "NO_DATA",
+      "blocked_no_BOS": "NO_DATA",
+      "duplicates": "NO_DATA"
+    }
+  }
+}

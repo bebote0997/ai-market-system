@@ -1,5 +1,39 @@
 # Agent Changelog
 
+## 2026-10-11 — DEC-14.1 opposite setup policy (local, owner approved 10:00 ET)
+
+- Branch `v2/opposite-setup-policy`; PAPER only, NAS100 OFF, no Render/render.yaml/push/activation.
+- Flag env BLOCK (default, unchanged fingerprint/legacy path) / STRUCTURE_CHANGE; invalid values
+  fail closed with log/journal warning and DEGRADED policy-health state.
+- Deterministic 15m BOS/closed original bar beyond held SL; existing validator/freshness/1H structure,
+  conservative similar-zone ±one price increment, no pyramiding and no pending cancellation.
+- Existing fixed-3R planner and Phase 6 candidate validation/immutable claim; both saves use runtime
+  slot lock, whole-state CAS and halt/REX guards. PAPER close accounts costs once and MTM equity;
+  fresh Risk V2 reservation after durable close, rejected reverse stays flat.
+- Close/reverse alerts through Phase 9; terminal decisions and atomic close marker journal every
+  outcome. Safe restart choice: REVERSE_ABANDONED_AFTER_RESTART, no re-close or resumed old open.
+  Recovery excludes active runs of other writers; same-run/candidate reruns do not duplicate exposure.
+- New `test_dec14_opposite_policy.py`: validator/broker/Risk/SQLite, full runtime integration,
+  duplicates/same-direction/no-BOS/profit/loss/rejection/stale/AI/lock/pending/crash/rerun/fill/alerts.
+- Baseline command from WORKFLOW using `.venv/bin/python` (bare `python` absent): 1517 tests,
+  5 preexisting dashboard assertion failures (static 12:00 UTC fixture becomes STALE_DATA),
+  1 expected ISSUE-012 failure. Target policy+safety: 30 passed, 16 subtests passed.
+- Replay CLI reuses Phase 6 Cohort, chronological calendar, closed-bar reconstruction and production
+  broker/Risk V2. Ran it; saved `docs/replay/dec14_impact.txt`: NO_DATA for both policies because
+  original replay DB/lab_*.pkl are absent. No fabricated counts; corpus replay remains pending.
+- Updated Phase 4 static gates for owner-authorized opt-in fixed-3R (Policy D still forbidden),
+  pinned frozen storage bytes after stripping only the exact new alert selection/payload addition,
+  and made Phase 8 signal-test annotation adapters work under both unittest and pytest.
+- Final full `.venv/bin/python -m pytest -q`: 1537 passed, 5 failed, 1 xfailed (ISSUE-012),
+  1091 subtests passed (174.27 s). All five failures reproduce the baseline dashboard clock fixture.
+  Policy tests: 23 passed, 4 subtests passed; compatibility/signal/health group: 89 passed,
+  109 subtests passed. Final policy/alerts/E2E/safety: 94 passed, 77 subtests passed (14.75 s).
+  `git diff --check` clean. No implementation failures remain.
+- Local commit withheld by AGENTS.md / WORKFLOW no-failing-tests gate. Requested owner permission
+  for a minimal deterministic dashboard-fixture clock fix; no response yet. Original corpus paths
+  also requested; no corpus found. No staging, commit, push or Render actions performed.
+
+
 ## 2026-10-11 — Phase 12 End-to-End (issue #30) — IN PROGRESS
 
 - Owner-authorized offline work on existing `v2/phase12-e2e`; baseline before edits:

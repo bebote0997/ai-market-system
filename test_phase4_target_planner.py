@@ -299,7 +299,9 @@ class FlagOffTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             floor.run({}, AT, "XAUUSD", None, None, V1, equity=1.0, planner_policy="V3")
         runtime_src = (ROOT / "runtime" / "service.py").read_text(encoding="utf-8")
-        self.assertNotIn("planner_policy", runtime_src)  # No runtime path can select Policy D.
+        # DEC-14.1 adds opt-in fixed-3R; Policy D remains research-only.
+        from runtime.config import RuntimeConfig
+        self.assertEqual(RuntimeConfig().v2_opposite_setup_policy, "BLOCK")
         self.assertNotIn("POLICY_V2_D", runtime_src)
 
 

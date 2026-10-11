@@ -75,6 +75,17 @@ class PaperBroker:
         self._event(as_of, order.run_id, order.symbol, order.order_id, "ORDER_SUBMITTED")
         return order
 
+    def close_market(self, symbol, price, as_of, *, exit_reason, decision_run_id):
+        """Explicit deterministic PAPER exit; shared accounting with ordinary SL/TP exits."""
+        from execution.trade_manager import TradeManager
+        if not _aware(as_of) or not _valid(price):
+            raise ValueError("invalid paper market exit")
+        position = self.account.open_positions[symbol]
+        if position.status != "OPEN" or as_of <= position.opened_at:
+            raise ValueError("invalid paper position exit")
+        return TradeManager(self.account, self).close_position(
+            position, float(price), as_of, exit_reason, event_run_id=decision_run_id)
+
     def _fill_rr_rejected(self, order, fill_price, risk_per_unit, reward):
         """Frozen V1 fill-time R:R expression (used only when ``rr_policy`` is None)."""
         return reward / risk_per_unit < 3

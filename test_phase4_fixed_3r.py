@@ -187,7 +187,9 @@ class BrokerTests(unittest.TestCase):
             self.assertEqual(order.status, status)
             self.assertEqual(events.get("ORDER_FILLED", events.get("ORDER_REJECTED")),
                              {} if status == "FILLED" else {"reason": "post_fill_risk_or_geometry"})
-        self.assertNotIn("POLICY_V2_F3", (ROOT / "runtime" / "service.py").read_text(encoding="utf-8"))
+        # DEC-14.1 authorizes fixed-3R only behind STRUCTURE_CHANGE; default remains legacy.
+        from runtime.config import RuntimeConfig
+        self.assertEqual(RuntimeConfig().v2_opposite_setup_policy, "BLOCK")
         with self.assertRaises(ValueError):
             floor.run({}, AT, "XAUUSD", None, None, {}, equity=1.0, planner_policy="FIXED_2R")
 
