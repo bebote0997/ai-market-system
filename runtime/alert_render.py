@@ -1,8 +1,7 @@
 """V2 Phase 9: alert rendering — one responsive HTML template plus plain text (F09-T12/T13).
 
-Every caller value is HTML-escaped. No remote images, scripts or tracking. When the caller supplied bar closes,
-a small inline SVG sparkline (``runtime.alert_chart``) is embedded; otherwise the Chart field is the caller's
-chart reference or NO_DATA.
+Every caller value is HTML-escaped. No remote images, scripts or tracking. The email embeds a worker-rendered
+PNG via CID when available, with the inline SVG sparkline as fallback. Missing closes yield NO_DATA.
 """
 from html import escape
 
@@ -76,13 +75,14 @@ def render_text(event):
     return "\n".join(lines)
 
 
-def render_html(event):
+def render_html(event, *, chart_cid=None):
     svg = sparkline_svg(event.closes) if event.kind.trade else None  # generated markup, numbers only
+    chart = f'<img src="cid:{escape(chart_cid, quote=True)}" alt="Close price chart" width="480" style="max-width:100%;height:auto;">' if chart_cid else svg
     return _HTML.format(
         title=escape(subject(event)), brand=escape(BRAND), label=escape(event.kind.label),
         priority=escape(event.priority), color=_PRIORITY_COLOR[event.priority],
         rows="".join(_ROW.format(escape(label), escape(value)) for label, value in rows(event)),
-        chart=_CHART.format(svg) if svg else "")
+        chart=_CHART.format(chart) if chart else "")
 
 
 __all__ = ["render_html", "render_text", "rows", "subject"]

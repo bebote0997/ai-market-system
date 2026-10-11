@@ -44,5 +44,9 @@ Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
 
+## Correcciones locales autorizadas (2026-10-11)
+
+Alertas: evidencia 5m read-only, PNG Agg/CID y recuperación cada 60 s. Dashboard: filtros SQL antes del LIMIT y captura DASHBOARD_ERROR. Detalle y validación en fases 09/10 y CHANGELOG_AGENT.md. No cambia certificación ni activa runtime; sin commit/deploy.
+
 ## Historia
 El Libro Maestro en Word (versión 1.9, 2026-10-07) queda **archivado/histórico**; no se versiona aquí ni se actualiza más.
