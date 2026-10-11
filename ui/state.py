@@ -36,7 +36,8 @@ def operational_store():
 def enabled_market_symbols():
     """Read the runtime's published selection; never infer it from UI fixtures."""
     with dashboard_database() as db:
-        if db is None:
+        if db is None or not db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='system_state'").fetchone():
             return DEFAULT_ENABLED_SYMBOLS
         row = db.execute("SELECT value FROM system_state WHERE key='enabled_symbols'").fetchone()
         raw = row[0] if row else None

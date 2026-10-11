@@ -12,16 +12,45 @@ PAGES = ("OVERVIEW", "POSITIONS", "SETUPS", "DECISIONS", "HEALTH", "ALERTS", "HI
 TABLES = frozenset({"runs", "setups", "agent_decisions", "risk_decisions",
                    "paper_accounts", "paper_orders", "paper_positions", "closed_trades",
                    "review_reports", "journal", "system_state", "ui_snapshots",
-                   "notification_events", "notification_deliveries", "component_health"})
+                   "notification_events", "notification_deliveries", "component_health", "alert_deliveries"})
 
 
-def records(db, table):
+ROW_LIMIT = 200
+
+
+def records(db, table, *, run_id="", setup_id="", offset=0):
+    """Filter in SQL before returning a bounded page, newest published rows first."""
     if table not in TABLES:
         raise ValueError("unsupported dashboard table")
     if db is None or not db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
         return []
-    return [dict(row) for row in db.execute(f'SELECT * FROM "{table}"')]
+    columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
+    predicates, params = [], []
+    for key, value in (("run_id", run_id), ("setup_id", setup_id)):
+        if not value:
+            continue
+        matches = []
+        if key in columns:
+            matches.append(f'CAST(t."{key}" AS TEXT) = ?')
+            params.append(value)
+        for column in ("payload", "plan", "evidence"):
+            if column in columns:
+                matches.append(f'EXISTS (SELECT 1 FROM json_tree(t."{column}") '
+                               'WHERE key = ? AND CAST(atom AS TEXT) = ?)')
+                params.extend((key, value))
+        if key == "run_id" and "slot_key" in columns and table != "runs":
+            matches.append('EXISTS (SELECT 1 FROM runs r WHERE r.slot_key=t.slot_key AND r.run_id=?)')
+            params.append(value)
+        predicates.append("(" + " OR ".join(matches or ["0"]) + ")")
+    where = " WHERE " + " AND ".join(predicates) if predicates else ""
+    timestamp = next((name for name in ("attempted_at", "claimed_at", "as_of", "timestamp")
+                      if name in columns), None)
+    # Identity/payload tables use deterministic publication order.
+    order = f't."{timestamp}" DESC, t.rowid DESC' if timestamp else 't.rowid DESC'
+    return [dict(row) for row in db.execute(
+        f'SELECT t.* FROM "{table}" t{where} ORDER BY {order} LIMIT ? OFFSET ?',
+        (*params, ROW_LIMIT, offset))]
 
 
 def payloads(db, table):
@@ -40,12 +69,12 @@ def identities(value, key):
     return set()
 
 
-def history(db, run_id="", setup_id=""):
-    runs = records(db, "runs")
+def history(db, run_id="", setup_id="", offset=0):
+    runs = records(db, "runs", run_id=run_id, setup_id=setup_id, offset=offset)
     by_slot = {row["slot_key"]: row for row in runs}
     rows = [{"record": "runs", **row} for row in runs]
     for table in ("setups", "review_reports", "paper_orders", "paper_positions", "closed_trades", "journal"):
-        for original in records(db, table):
+        for original in records(db, table, run_id=run_id, setup_id=setup_id, offset=offset):
             row = dict(original)
             for key in ("payload", "plan", "evidence"):
                 if row.get(key):
@@ -55,6 +84,10 @@ def history(db, run_id="", setup_id=""):
                     if key not in row and key in row["payload"]:
                         row[key] = row["payload"][key]
             parent = by_slot.get(row.get("slot_key"), {})
+            if not parent and row.get("slot_key"):
+                persisted = db.execute("SELECT run_id,symbol FROM runs WHERE slot_key=?",
+                                       (row["slot_key"],)).fetchone()
+                parent = dict(persisted) if persisted else {}
             rows.append({"record": table, "run_id": parent.get("run_id"),
                          "symbol": parent.get("symbol"), **row})
     return [row for row in rows
@@ -129,9 +162,16 @@ def render(st, page):
                 st.subheader("Provider / API run evidence")
                 table(st, [{key: row.get(key) for key in
                             ("run_id", "symbol", "as_of", "status", "provider_metadata", "error")}
-                           for row in records(db, "runs")[-20:]])
+                           for row in records(db, "runs")[:20]])
             elif page == "ALERTS":
-                st.subheader("Recent notification deliveries")
+                st.subheader("Phase 9 alert deliveries")
+                ledger_path = os.environ.get("AI_FLOOR_ALERTS_LEDGER_PATH")
+                if ledger_path:
+                    with dashboard_database(ledger_path) as ledger_db:
+                        table(st, records(ledger_db, "alert_deliveries"))
+                else:
+                    st.info("NO_DATA")
+                st.subheader("V1 notification deliveries")
                 events = {row["event_id"]: json.loads(row["payload"])
                           for row in records(db, "notification_events")}
                 rows = [{**events.get(row["event_id"], {}), **row}
@@ -140,8 +180,10 @@ def render(st, page):
             elif page == "HISTORY":
                 run_id = st.text_input("Run ID", key="history_run_id").strip()
                 setup_id = st.text_input("Setup ID", key="history_setup_id").strip()
-                st.caption("Exact persisted IDs; both fields combine with AND. Empty fields show all history.")
-                table(st, history(db, run_id, setup_id))
+                page_number = st.number_input("History page", min_value=1, value=1, step=1,
+                                              key="history_page")
+                st.caption("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first.")
+                table(st, history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT))
             elif page == "ERRORS":
                 st.subheader("Failed runs")
                 table(st, [row for row in records(db, "runs") if row.get("error") or row["status"] == "FAILED"])

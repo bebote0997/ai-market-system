@@ -4,7 +4,7 @@
 
 Extensión de `ui/`: Overview; posiciones abiertas y órdenes pendientes de todos los símbolos; últimos setups por símbolo; decisiones AI y Risk Engine; salud, provider/API y scheduler; entregas recientes; historial con búsqueda exacta por run_id/setup_id; errores. Se conservan FLOOR, MARKETS, JOURNAL, EXPERIMENT y SYSTEM.
 
-SQLite se abre con URI `mode=ro`, sin migrar esquemas ni crear DBs ausentes. Alertas consultan `notification_deliveries` y su evento relacionado; sin tabla o filas se muestra `NO_DATA`. La salud lee estados publicados y, si existe, el sidecar `system_health.db` (override `AI_FLOOR_HEALTH_DB_PATH`) en solo lectura. La configuración de un provider no acredita que su API esté saludable. No se ejecutan probes. Los IDs se buscan únicamente en campos persistidos, incluyendo payloads anidados; no se inventan IDs para setups legacy. Los datos numéricos se muestran tal como fueron persistidos.
+SQLite se abre con URI `mode=ro`, sin migrar esquemas ni crear DBs ausentes. Alertas muestran el ledger Fase 9 `alert_deliveries` cuando `AI_FLOOR_ALERTS_LEDGER_PATH` apunta a un archivo existente, además de V1 `notification_deliveries` y su evento relacionado. Cada fuente ausente/vacía muestra `NO_DATA`; no se instancia el dispatcher ni se crea/migra el ledger. La salud lee estados publicados y, si existe, el sidecar `system_health.db` (override `AI_FLOOR_HEALTH_DB_PATH`) en solo lectura. La configuración de un provider no acredita que su API esté saludable. No se ejecutan probes. Los IDs se buscan únicamente en campos persistidos, incluyendo payloads anidados; no se inventan IDs para setups legacy. Los datos numéricos se muestran tal como fueron persistidos.
 
 Password gate existente (`AI_FLOOR_DASHBOARD_PASSWORD`): requerido en remoto y también localmente cuando está configurado. El gate precede el acceso a SQLite. Diseño dark existente con columnas apiladas a ≤640px; sin controles operativos. Las páginas Command Center siempre muestran evidencia persistida; SAMPLE / DEMO aplica a las páginas legacy de snapshots.
 
@@ -47,3 +47,14 @@ Mapa de cobertura de las tareas del Libro v1.9 al alcance local del issue. Tests
 - `/workspace/repo/.venv/bin/ruff check .` y `git diff --check`: PASS.
 
 **Gate:** requiere fase anterior CERTIFIED y aprobación explícita del owner para certificación/activación. La autorización de esta tarea permite implementación local; no cambia flags, trading, riesgo, broker, scheduler, Render ni economía.
+
+## PR #23 — revisión Grok Bot (2026-10-11)
+
+Hallazgos MEDIUM/LOW atendidos localmente, pendientes de re-revisión independiente:
+- STATUS conserva Phase 9 de main; solo se actualizan la fila y próximos pasos Phase 10.
+- Ledger Phase 9 en `mode=ro`, junto a V1; tests de campos de canal/intentos/recuperación, hash intacto, escrituras rechazadas y NO_DATA sin crear archivos.
+- Consultas limitadas a 200 filas con ORDER BY determinista; historial filtra IDs exactos en SQL (columnas, JSON anidado y run asociado) antes del LIMIT, con paginación por tabla. Tests con más de 200 filas, páginas disjuntas, filtros antiguos, AND y parent fuera de la página reciente.
+- DB sin `system_state`: símbolos DEFAULT y app operativa. Se elimina `ui/pages/positions.py`; POSITIONS usa Command Center y conserva cobertura de navegación.
+- Regresiones: 13 tests Phase 10 PASS (6 nuevos). Suite completa solicitada: 1481 tests OK, 1 expected failure (183.177s); Ruff y git diff --check PASS. Evidencia registrada también en CHANGELOG_AGENT.md.
+
+No certificación, activación, merge, deploy ni commit.

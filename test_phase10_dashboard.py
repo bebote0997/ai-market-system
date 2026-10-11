@@ -14,8 +14,9 @@ from execution.contracts import PaperAccount
 from storage.codec import paper_encode
 from storage.database import Store
 from storage.health_store import HealthStore
-from ui.pages.dashboard import history
-from ui.state import dashboard_database
+from ui.pages.dashboard import history, records, ROW_LIMIT
+from ui.state import dashboard_database, enabled_market_symbols
+from runtime.config import DEFAULT_ENABLED_SYMBOLS
 
 APP = Path(__file__).parent / "ui" / "app.py"
 T = "2026-10-11T12:00:00+00:00"
@@ -187,6 +188,94 @@ class Phase10DashboardTests(unittest.TestCase):
         app.button[0].click().run()
         self.assert_rendered(app)
         self.assertTrue(app.radio)
+
+    def test_phase9_ledger_and_v1_render_without_writes(self):
+        from runtime.alert_dispatch import AlertDeliveryLedger
+        path = Path(self.tmp.name) / "alerts.db"
+        ledger = AlertDeliveryLedger(path)
+        ledger.db.execute("INSERT INTO alert_deliveries "
+                          "(event_id,channel,event_type,priority,status,attempts,error_type,claimed_at,recovery) "
+                          "VALUES(?,?,?,?,?,?,?,?,?)",
+                          ("phase9", "slack", "RUN_FAILED", "HIGH", "FAILED", 3,
+                           "TIMEOUT", T, "AMBIGUOUS_RETRY"))
+        ledger.close()
+        before = path.read_bytes()
+        with patch.dict(os.environ, {"AI_FLOOR_ALERTS_LEDGER_PATH": str(path)}):
+            app = self.app()
+            app.radio[0].set_value("ALERTS").run()
+            self.assert_rendered(app)
+            row = app.dataframe[0].value.iloc[0]
+            self.assertEqual((row["channel"], row["attempts"], row["recovery"]),
+                             ("slack", 3, "AMBIGUOUS_RETRY"))
+            self.assertEqual(app.dataframe[1].value.iloc[0]["event_id"], "alert-1")
+            with dashboard_database(path) as db:
+                with self.assertRaises(sqlite3.OperationalError):
+                    db.execute("DELETE FROM alert_deliveries")
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_phase9_missing_unconfigured_and_empty_ledger(self):
+        empty = Path(self.tmp.name) / "empty-ledger.db"
+        sqlite3.connect(empty).close()
+        missing = Path(self.tmp.name) / "missing-ledger.db"
+        for path in ("", str(missing), str(empty)):
+            with self.subTest(path=path), patch.dict(os.environ, {"AI_FLOOR_ALERTS_LEDGER_PATH": path}):
+                app = self.app()
+                app.radio[0].set_value("ALERTS").run()
+                self.assert_rendered(app)
+                self.assertTrue(any(item.value == "NO_DATA" for item in app.info))
+                self.assertEqual(app.dataframe[0].value.iloc[0]["event_id"], "alert-1")
+        self.assertFalse(missing.exists())
+
+    def test_bounded_ordered_queries_and_sql_history_filters(self):
+        with sqlite3.connect(self.path) as db:
+            db.executemany("INSERT INTO journal(timestamp,run_id,symbol,source,event_type,severity,payload) "
+                           "VALUES(?,?,?,?,?,?,?)",
+                           [(T, f"bulk-{i}", "XAUUSD", "fixture", "TEST", "INFO", "{}")
+                            for i in range(ROW_LIMIT + 10)])
+        with dashboard_database() as db:
+            queries = []
+            db.set_trace_callback(queries.append)
+            first = records(db, "journal")
+            second = records(db, "journal", offset=ROW_LIMIT)
+            self.assertEqual(len(first), ROW_LIMIT)
+            self.assertEqual(first[0]["run_id"], "bulk-209")
+            self.assertFalse({r["id"] for r in first} & {r["id"] for r in second})
+            result = history(db, "run-1", "setup-1")
+            self.assertIn("journal", {r["record"] for r in result})
+            self.assertTrue(all("LIMIT 200 OFFSET" in q and "ORDER BY" in q
+                                for q in queries if q.startswith("SELECT t.*")))
+            self.assertTrue(any("json_tree" in q and "WHERE" in q for q in queries))
+        app = self.app()
+        app.radio[0].set_value("HISTORY").run()
+        app.number_input(key="history_page").set_value(2).run()
+        self.assert_rendered(app)
+        self.assertEqual(app.dataframe[0].value.iloc[0]["run_id"], "bulk-9")
+
+    def test_nested_identity_and_parent_run_outside_recent_page(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE setups SET plan=? WHERE slot_key='slot-1'",
+                       (json.dumps({"nested": [{"setup_id": "nested-id"}], "text": "fake-id"}),))
+            db.executemany("INSERT INTO runs(slot_key,run_id,symbol,as_of,started_at,status) VALUES(?,?,?,?,?,?)",
+                           [(f"new-{i}", f"new-run-{i}", "XAUUSD", T, T, "COMPLETED")
+                            for i in range(ROW_LIMIT + 1)])
+        with dashboard_database() as db:
+            result = history(db, "run-1", "nested-id")
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["run_id"], "run-1")
+            self.assertFalse(history(db, setup_id="fake-id"))
+
+    def test_missing_system_state_uses_defaults_and_app_renders(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute("DROP TABLE system_state")
+        self.assertEqual(enabled_market_symbols(), DEFAULT_ENABLED_SYMBOLS)
+        self.assert_rendered(self.app())
+
+    def test_positions_routes_to_command_center(self):
+        self.assertFalse((APP.parent / "pages" / "positions.py").exists())
+        app = self.app()
+        app.radio[0].set_value("POSITIONS").run()
+        self.assert_rendered(app)
+        self.assertEqual(app.dataframe[0].value.iloc[0]["position_id"], "open")
 
     def test_sqlite_connection_rejects_writes(self):
         before = self.digest()

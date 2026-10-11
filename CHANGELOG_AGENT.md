@@ -1515,3 +1515,12 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 ## 2026-10-10 — M-5 CLOSED, DEC-8.18a, offline G-8.INT summary (docs only)
 
 - Checklist §0 updated: DEC-8.18a amendment, M-5 CLOSED (PR #16), offline G-8.INT results (PR #18), ISSUE-012/013.
+
+## 2026-10-11 — PR #23 MEDIUM/LOW review fixes (Phase 10, uncommitted)
+
+- Preserved main's Phase 9 STATUS; updated only Phase 10 row/next steps after Grok Bot REQUEST_CHANGES.
+- ALERTS reads the optional Phase 9 alert_deliveries ledger directly with SQLite mode=ro, plus V1 deliveries; missing/empty sources show NO_DATA without creating files or importing dispatcher at runtime.
+- Bounded dashboard queries (200, deterministic ORDER BY); SQL exact identity filters before LIMIT and per-table history pagination. No invented IDs; parent runs remain resolvable outside the recent page.
+- Missing system_state falls back to DEFAULT; removed unused legacy positions page. Six regression tests cover these fixes, immutable ledger, missing data, nested IDs, old matches and pagination.
+- Baseline requested suite exited 0; focused Phase 10: 13 tests PASS. Full requested suite: 1481 tests OK, 1 expected failure (183.177s). `/workspace/repo/.venv/bin/ruff check .` and `git diff --check`: PASS.
+- PAPER only; flags, execution, risk, economy and Render unchanged. No staging/commit/push.
