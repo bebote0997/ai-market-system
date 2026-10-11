@@ -18,7 +18,7 @@ from agents.structure_agent import analizar_estructura
 from ai.provider import DeterministicAIProvider
 from core.contracts import SetupAssessment
 from core.risk_policy import RISK_POLICY_V2_P5
-from execution.contracts import PaperAccount, PaperOrder, PaperPosition
+from execution.contracts import PaperOrder, PaperPosition
 from execution.paper_broker import PaperBroker
 from execution.risk_engine_v2 import evaluate
 from execution.trade_manager import TradeManager
@@ -47,7 +47,7 @@ class RuntimeExistingExposureTests(unittest.TestCase):
 
     def cycle(self, minutes, side, *extra):
         """One real runtime cycle in a fresh process-like runner (new connection); returns (result, store)."""
-        runner = DemoRunner(self.config, market_provider=Data(), ai_provider=DeterministicAIProvider(),
+        runner = DemoRunner(self.config, market_provider=Data(age=5), ai_provider=DeterministicAIProvider(),
                             macro_provider=macro_fixture(), instruments={"XAUUSD": instrument()},
                             clock=lambda: T + timedelta(minutes=minutes))
         try:

@@ -38,7 +38,7 @@ class Data:
         spread = close * .001
         return {tf: pd.DataFrame({"Open": [close], "High": [close + spread], "Low": [close - spread],
                                   "Close": [close], "symbol": [symbol], "is_closed": [True]},
-                                 index=pd.DatetimeIndex([at])) for tf in ("1h", "15m", "5m")}
+                                 index=pd.DatetimeIndex([at - timedelta(minutes=5)])) for tf in ("1h", "15m", "5m")}
 
 
 def filled(order_id, symbol, entry, stop, target, quantity):
@@ -169,7 +169,7 @@ class LegacyWriterTests(StaleSafeCase):
         self.assertEqual([t.symbol for t in account.closed_trades], ["EURUSD"])
         self.assertEqual(account.realized_pnl, account.closed_trades[0].net_pnl)
         self.assertLess(account.realized_pnl, 0)
-        self.assertEqual(account.open_positions["XAUUSD"].last_processed_at, T)  # A's update kept too.
+        self.assertEqual(account.open_positions["XAUUSD"].last_processed_at, T - timedelta(minutes=5))
         self.assertEqual(len(self.events("POSITION_CLOSED")), 1)
         self.assertEqual(sorted(o.status for o in orders.values()), ["FILLED", "FILLED"])
 
@@ -186,7 +186,8 @@ class LegacyWriterTests(StaleSafeCase):
             return original(manager, bar)
 
         with patch.object(TradeManager, "process_bar", always_raced):
-            self.assertEqual(runtime.run_cycle("XAUUSD", T), "ERROR")
+            self.assertEqual(runtime.run_cycle("XAUUSD", T), "NO_SETUP")
+        self.assertEqual(len(self.events(STALE_PAPER_STATE)), 1)  # catch-up blocks economics explicitly.
         self.assertEqual(calls, ["XAUUSD", "XAUUSD"])  # One retry only.
         account = self.paper()[0]
         self.assertIsNone(account.open_positions["XAUUSD"].last_processed_at)  # Nothing written.
@@ -304,7 +305,7 @@ class SingleWriterTests(StaleSafeCase):
         self.assertEqual(calls, [(True, None)] * len(calls))  # Guarded, and never STALE.
         self.assertEqual(([o.status for o in orders.values()], len(fills), list(account.open_positions)),
                          (["FILLED"], 1, ["XAUUSD"]))
-        self.assertEqual(account.open_positions["XAUUSD"].last_processed_at, T + timedelta(minutes=30))
+        self.assertEqual(account.open_positions["XAUUSD"].last_processed_at, T + timedelta(minutes=25))
         self.assertEqual(self.events(STALE_PAPER_STATE), [])
 
 

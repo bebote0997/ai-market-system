@@ -17,7 +17,6 @@ import json
 import pickle
 import sys
 from collections import Counter, defaultdict
-from dataclasses import replace
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -26,7 +25,7 @@ import pandas as pd
 
 from core.contracts import FloorRunReport, SetupAssessment, TradePlan
 from core.risk_policy import RISK_POLICY_V2_P5
-from core.rr_contract import POLICY_V2_F3, geometry
+from core.rr_contract import POLICY_V2_F3
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
 from execution.risk_engine_v2 import evaluate
@@ -175,7 +174,6 @@ def portfolio(cohort, rule):
     orders, events, seq = {}, [], 0
     counts, fills, closes = Counter(), Counter(), Counter()
     peak_risk_pct, min_equity, by_symbol = 0.0, START, defaultdict(Counter)
-    exits = {}
 
     def mark(at):
         unrealized = 0.0

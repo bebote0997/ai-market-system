@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from runtime.config import RuntimeConfig
+from runtime.config import RuntimeConfig, catch_up_scope_checks, catch_up_storage_checks, persistent_write_probe
 from runtime.demo_runner import REAL_EXECUTION_ENABLED
 from storage.database import Store
 from storage.codec import parse_utc
@@ -71,16 +71,22 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "experiment_not_started": False,
         "experiment_resumable": False,
     }
-    if checks["durable_path"] and checks["durable_mount"]:
+    from runtime.genesis import sealed_preflight_checks
+    sealed_checks = sealed_preflight_checks(config, env)  # V2 P2b (R-GEN-1d, D-3): {} while OFF; before any DB open
+    checks.update(sealed_checks)
+    sealed_blocked = bool(sealed_checks) and (not sealed_checks["sealed_genesis_context"] or not path.exists())
+    if checks["durable_path"] and checks["durable_mount"] and not sealed_blocked:
         try:
-            store = Store(path)
+            if sealed_checks:  # LOW-1: non-creating open (mode=rw)
+                from runtime.genesis import SealedStore
+                store = SealedStore(path)
+            else:
+                store = Store(path)
             try:
                 checks["db_writable_schema"] = store.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-                if checks["db_writable_schema"]:
-                    with store.transaction():
-                        store.db.execute("CREATE TEMP TABLE IF NOT EXISTS cloud_write_probe(value INTEGER)")
-                        store.db.execute("INSERT INTO cloud_write_probe VALUES(1)")
-                        store.db.execute("DELETE FROM cloud_write_probe")
+                # P8.4G (DEC-8.11, P8.5R HIGH): a TEMP table proved nothing about the file; probe a persistent write
+                # that is always rolled back (no data, schema or schema-version change).
+                checks["db_writable_schema"] = checks["db_writable_schema"] and persistent_write_probe(store.db, path)
                 checks["experiment_not_started"] = store.get_state("experiment_started") != "1"
                 if not checks["experiment_not_started"]:
                     # A restart must retain the experiment identity and ledger.
@@ -105,11 +111,14 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
             checks["db_writable_schema"] = False
     checks["experiment_state_compatible"] = (
         checks["experiment_not_started"] or checks["experiment_resumable"])
+    catch_up_checks = {**catch_up_storage_checks(config, mount=mount, disk_mounted=disk_mounted),
+                       **catch_up_scope_checks(config)}  # P1-B: scope and STRICT evidence; {} while OFF
+    checks.update(catch_up_checks)  # empty while the catch-up flag is OFF: the OFF report is unchanged
     infrastructure = (
         "paper_only", "enabled_symbols", "market_provider", "ai_provider",
         "macro_provider_valid", "scheduler_single_authority", "scheduler_not_started",
         "durable_path", "durable_mount", "dashboard_auth", "db_writable_schema",
-        "experiment_state_compatible",
+        "experiment_state_compatible", *catch_up_checks, *sealed_checks,
     )
     infra_ready = all(checks[name] for name in infrastructure)
     experiment_ready = infra_ready and all(checks[name] for name in (
