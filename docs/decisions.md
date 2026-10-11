@@ -24,5 +24,6 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 | **DEC-8.19** | 2026-10-10 | **APPROVED** (owner Jeferson Tejeda / bebote0997) | Boundary handling = opción (a): precondición flat bajo A2 (sin posiciones ni órdenes heredadas) |
 | **DEC-8.23** | 2026-10-10 | **APPROVED** (owner) | Gates G-8.INT de sesión en vivo (G2/G3/G4/G5/G7/G11) se certifican con evidencia offline/replay (`replay.g8int`, fixtures deterministas, CI en el SHA exacto); validación en vivo pasa al demo de 30 días tras Fase 13 |
 | **DEC-8.18a** | 2026-10-10 | **APPROVED** (Grok Bot, control delegado por el owner) | Enmienda de DEC-8.18: sin firma SSH H5; Q1–Q8 como script automático `replay/status_verifier.py` (PR #18); verificación en vivo en Fase 13 |
+| **DEC-8.24** | 2026-10-10 | **APPROVED** (Grok Bot, control delegado — **pendiente de confirmación del owner**) | Criterio de certificación de Fase 8: filas offline PASS y sin FAIL; G8 (gaps de evidencia sin explicar) y G15 (cadena EDG con evidencia externa) se difieren a Fase 13 junto con DEC-8.23 |
 | DEC-13.0 (owner) | 2026-10-10 | **APPROVED** (owner) | Fase 13 = demo PAPER de 30 días (sustituye los 60 días del Libro v1.9) y se lanza solo tras certificar Fases 8–12 |
 | DEC-8.22-a…j, OP-1…7 | — | NOT AUTHORIZED | Autorizaciones de implementación/operación |

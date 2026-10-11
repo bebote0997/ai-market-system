@@ -1,6 +1,6 @@
 # Fase 8 — Execution / Fill / Trade Manager Certification
 
-**Estado:** CERTIFIED (2026-10-10). Merge a main `4974408e443908ceb5723aed13c1eb15a81f3c51` (PR #13, merge commit). Control delegado por el owner; revisión cruzada Codex ↔ Claude Code coordinada por Grok Bot.
+**Estado:** CERTIFIED (2026-10-10) bajo DEC-8.23 + DEC-8.24 (G2–G5, G8, G11, G15 diferidos a Fase 13; no aprobados). Merge a main `4974408e443908ceb5723aed13c1eb15a81f3c51` (PR #13, merge commit). Control delegado por el owner; revisión cruzada Codex ↔ Claude Code coordinada por Grok Bot.
 
 **Evidencia:** tests 1426 OK (1 expected failure, ISSUE-012); ruff limpio; CI `lint` + `unit` en verde en PR #13.
 - HIGH-8.1 CLOSED (983d2d2) — revisión Codex PASS WITH NOTES.

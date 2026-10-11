@@ -30,14 +30,15 @@ Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 - [x] DEC-8.18 — APPROVED 2026-10-10 (owner): procedimiento de verificación de estado tal cual (ejes, H5).
 - [x] DEC-8.19 — APPROVED 2026-10-10 (owner): opción (a), precondición flat bajo A2.
 - [ ] Nuevo baseline económico/freeze tras HIGH-8.1 (A2: cuenta PAPER nueva USD 10 000, DB nueva, sealed genesis — DEC-8.20 aprobado como política).
-- [x] DEC-8.23 — APPROVED 2026-10-10: gates en vivo de Fase 8 → evidencia offline/replay; nada en vivo hasta después de Fase 13.
+- [x] DEC-8.23 — APPROVED 2026-10-10: gates en vivo de Fase 8 → evidencia offline/replay; nada en vivo antes de la Fase 13; la validación en vivo diferida (G2–G5, G8, G11, G15) se hace durante el demo de 30 días de la Fase 13, tras certificar las Fases 8–12 y con aprobación operativa explícita.
+- [ ] DEC-8.24 — confirmar (owner): G8/G15 diferidos a Fase 13 en la certificación de Fase 8.
 - [x] DEC-8.18a — 2026-10-10 (Grok Bot, control delegado): sin firma H5; Q1–Q8 automatizadas (`replay/status_verifier.py`).
 - [ ] DEC-8.22-a…j / OP-1…OP-7 (NOT AUTHORIZED).
 - [ ] Autorizar `AI_FLOOR_CLOUD_RUNNER` / `AI_FLOOR_SCHEDULER` en Render (hoy `0`).
 
 ## Próximos pasos hacia el demo PAPER de 30 días
 1. Fase 8 CERTIFIED y mergeada (PR #13).
-2. Fase 9 (email + Slack, solo mocks) en curso.
+2. Siguiente: Fase 9 (email + Slack, solo mocks) — NOT STARTED hasta que se abra su issue/PR.
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
 

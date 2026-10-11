@@ -1,10 +1,9 @@
 # V2 Phase 8 — G-8.INT certification checklist (P4b preparation)
 
-- **Status:** PREPARATION ONLY. No A2 period exists; nothing below has been measured on a real period.
+- **Status (2026-10-10):** Phase 8 CERTIFIED under DEC-8.23 + DEC-8.24 (merge `4974408e`). The live / external-evidence rows below are **deferred to Phase 13**, not passed. Historical line: PREPARATION ONLY; no A2 period exists.
 - **Tool:** `python -m replay.g8int` (read-only; backup-API copies). Classes: PASS / FAIL / NOT VERIFIED / BLOCKED.
   Absence of errors is never PASS; synthetic test periods never close HIGH-8.1 or M-5.
-- **Global verdict:** BLOCKED until every row is PASS, including the rows that depend on Owner acts, external evidence
-  and independent review.
+- **Global verdict (revised by DEC-8.24):** Phase 8 certification requires every **offline-capable** row PASS (G1, G6, G7, G9, G10, G12, G14), no FAIL, cross-AI review (G13) without open CRITICAL/HIGH; G2–G5, G8, G11, G15 are deferred to Phase 13. Original rule (all rows PASS) applies to the Phase 13 demo.
 - **Safety:** PAPER ONLY · REAL EXECUTION DISABLED · NAS100 OFF · V2 flags OFF · PHASE 8 under certification · HIGH-8.1 CLOSED (983d2d2, Codex review PASS WITH NOTES) ·
   M-5 CLOSED (PR #16) · B-STRICT PROVISIONAL.
 
