@@ -1,11 +1,10 @@
-import math
 import unittest
 from datetime import datetime, timedelta, timezone
 
 from execution.contracts import PaperAccount, PaperOrder, PaperPosition
 from execution.paper_broker import PaperBroker
 from execution.trade_manager import TradeManager
-from core.contracts import FloorRunReport, InstrumentSpec, RiskDecision, SetupAssessment, TradePlan
+from core.contracts import FloorRunReport, InstrumentSpec, SetupAssessment, TradePlan
 from riesgo import crear_configuracion_riesgo_v2, evaluar_trade_plan
 
 
@@ -246,7 +245,7 @@ class TestExecution(unittest.TestCase):
         broker = PaperBroker(account, self.instrument(2.0))
         order = broker.submit_plan(self.report(), {}, self.t(0))
         order.cost_rate = 0.1
-        position = broker.process_next_bar(order, self.bar(self.t(1)))
+        broker.process_next_bar(order, self.bar(self.t(1)))
         manager = TradeManager(account, broker)
         manager.process_bar(self.bar(self.t(2), close=105, high=106))
         self.assertEqual(account.unrealized_pnl, 10.0)

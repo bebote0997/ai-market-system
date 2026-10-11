@@ -1,4 +1,4 @@
-from ui.adapters import MARKETS, symbol_enablement
+from ui.adapters import MARKETS
 
 
 def render(st, vm, enabled_symbols):

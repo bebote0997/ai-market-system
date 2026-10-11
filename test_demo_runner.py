@@ -1,5 +1,4 @@
 """Deterministic operational tests; no paid API calls."""
-import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -287,7 +286,7 @@ class TestDemoRunner(unittest.TestCase):
             equity = account.equity
         finally:
             runner.close()
-        runner = DemoRunner(self.config, market_provider=Data(close=131), ai_provider=DeterministicAIProvider(),
+        runner = DemoRunner(self.config, market_provider=Data(close=131, age=5), ai_provider=DeterministicAIProvider(),
                             macro_provider=macro_fixture(),
                             instruments={"XAUUSD": instrument()}, clock=lambda: T + timedelta(minutes=30))
         try:
