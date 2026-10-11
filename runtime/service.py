@@ -911,12 +911,12 @@ class OperationalRuntime:
                 return self._halt_run(key, run_id, symbol, HaltRefused("error_after_halt", type(exc).__name__), rex)
             LOG.error("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_FAILED status=ERROR error_type=%s",
                       run_id, symbol, utc(slot), type(exc).__name__)
-            self._rex_note(rex, "EXIT_ERROR", lambda: {"stage": stage, "error_type": type(exc).__name__})
+            self._rex_note(rex, "EXIT_ERROR", lambda exc=exc: {"stage": stage, "error_type": type(exc).__name__})
             try:
                 if stage in {"market_data", "ai"}:
                     self._persist("O", lambda: self._set_states(
                         (("market_data_provider" if stage == "market_data" else "ai_provider", "ERROR"),)))
-                self._persist("L", lambda: self.store.finish(key, self.clock(), "FAILED", "ERROR", type(exc).__name__))
+                self._persist("L", lambda exc=exc: self.store.finish(key, self.clock(), "FAILED", "ERROR", type(exc).__name__))
             except HaltRefused as halt:  # T_h arrived while recording the failure: bookkeeping replaces it
                 return self._halt_run(key, run_id, symbol, halt, rex)
             return "ERROR"

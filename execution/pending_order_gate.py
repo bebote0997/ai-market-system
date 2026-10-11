@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from execution.paper_broker import PaperBroker
-from storage.codec import utc
 
 TIMEFRAME = "5m"
 EVENT = "PENDING_NOT_EVALUATED"

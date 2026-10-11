@@ -16,12 +16,12 @@ from core.risk_policy import RISK_POLICY_V2, RISK_POLICY_V2_P5
 from execution import conflict_engine, conflict_path
 from execution.conflict_engine import classify
 from execution.conflict_path import EVENT, submit_with_conflict_control
-from execution.contracts import PaperOrder, PaperPosition
+from execution.contracts import PaperOrder
 from execution.paper_broker import PaperBroker
 from execution.trade_manager import TradeManager
 from storage.codec import paper_decode, paper_encode
 from storage.database import SCHEMA_VERSION, Store
-from test_phase5_risk_engine import (ACCOUNT, AT, EUR_SHORT, INS, XAU_LONG, account, bar, f3_plan, pending,
+from test_phase5_risk_engine import (ACCOUNT, AT, INS, XAU_LONG, account, bar, f3_plan, pending,
                                      position)
 
 ROOT = Path(__file__).resolve().parent

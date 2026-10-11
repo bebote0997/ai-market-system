@@ -8,7 +8,6 @@ deferring the halt signals across check + write (POSIX; verified with real signa
 R: after T_h only REX evidence of the halted run of this process (one REX_WRITE per admitted write whose read 2
 preceded T_h, one REX_RUN); everything else is refused at write time and flagged by the verifier."""
 import ast
-from datetime import timedelta
 import json
 import os
 from pathlib import Path

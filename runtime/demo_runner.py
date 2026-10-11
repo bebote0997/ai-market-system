@@ -1,6 +1,5 @@
 """PAPER demo runner: durable cycles, preflight, and optional no-order diagnosis."""
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
 import logging
 import os

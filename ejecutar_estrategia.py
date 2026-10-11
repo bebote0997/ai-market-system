@@ -126,11 +126,13 @@ def ejecutar_multiples_tickers_con_riesgo(tickers, **configuracion):
         if not normalizado or normalizado in procesados:
             continue
         procesados.add(normalizado)
+        detalle = None
         try:
             resultado = ejecutar_para_ticker_con_riesgo(normalizado, **configuracion)
         except Exception as error:
             resultado = None
-        resultados[normalizado] = resultado if resultado is not None else {"ticker": normalizado, "error": "no_disponible", "detalle": str(error) if 'error' in locals() else None}
+            detalle = str(error)
+        resultados[normalizado] = resultado if resultado is not None else {"ticker": normalizado, "error": "no_disponible", "detalle": detalle}
     return resultados
 
 
