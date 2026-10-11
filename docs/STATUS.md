@@ -19,7 +19,8 @@ _Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente
 | 8 | Execution / Fill / Trade Manager | **CERTIFIED** (2026-10-10, control delegado; revisión cruzada Codex/Claude) | [#13](https://github.com/bebote0997/ai-market-system/pull/13) | `4974408e` |
 | 9 | Email + Slack alerts (OFF por defecto) | IMPLEMENTED, merge en main (PR #21, 4452350); no certificada: falta F09-T18 (envío real en Render); #24/#25 cerrados (PR de worker aislado) | — | — |
 | 10 | Command Center / Display V2 | IN PROGRESS (issue #22, PR #23, sin revisión independiente todavía) | — | — |
-| 11–13 | Chaos, E2E, demo PAPER 30 días | NOT STARTED | — | — |
+| 11 | Chaos / Failure Testing | IN PROGRESS (issue #28; 17 escenarios offline, sin certificar) | — | — |
+| 12–13 | E2E, demo PAPER 30 días | NOT STARTED | — | — |
 
 Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 
