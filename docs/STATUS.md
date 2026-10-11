@@ -40,7 +40,7 @@ Progreso certificado: 9/14 (64.29 %). Detalle: `docs/phases/`.
 
 ## Próximos pasos hacia el demo PAPER de 30 días
 1. Fase 8 CERTIFIED y mergeada (PR #13).
-2. Siguiente: Fase 9 (email + Slack, solo mocks) — NOT STARTED hasta que se abra su issue/PR.
+2. Fase 9 en main (PR #21). Pendiente: #24 (claims obsoletos tras reinicio), #25 (worker aislado), prueba real F09-T18 en Render. Fase 10: PR #23 abierta, a la espera de la revisión de Claude Code (límite semanal hasta el 12 de octubre a las 15:00 ET).
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
 5. Fase 10: extensión local read-only de `ui/` autorizada por el owner (issue #22), con smoke AppTest, búsqueda run/setup y hashes SQLite. Detalle y mapa F10-T01…T22 en `docs/phases/phase-10.md`. Revisión visual e independiente y certificación pendientes; no modifica el estado certificado de Fase 9.

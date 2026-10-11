@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 
+from runtime.alert_hook import AlertHook
 from runtime.notifications import NullNotificationSink
 from runtime.scheduler import Scheduler, slot_at, slot_key
 from runtime.service import OperationalRuntime
@@ -81,12 +82,13 @@ class DemoRunner:
 
     def __init__(self, config, *, dry_run=False, diagnostic_outside_session=False,
                  notification_sink=None, experiment_baseline_sha=None, experiment_freeze_sha=None,
-                 **runtime_kwargs):
+                 alert_hook=None, **runtime_kwargs):
         if (experiment_baseline_sha is None) != (experiment_freeze_sha is None):
             raise ValueError("experiment baseline and freeze SHAs must be supplied together")
         self.config = config
         self.dry_run = bool(dry_run)
         self.sink = notification_sink or NullNotificationSink()
+        self.alert_hook = alert_hook or AlertHook()
         self.runtime = OperationalRuntime(config, paper_enabled=not self.dry_run,
                                           diagnostic_outside_session=diagnostic_outside_session,
                                           **runtime_kwargs)
@@ -122,6 +124,11 @@ class DemoRunner:
         except Exception as exc:
             LOG.warning("component=notifications event=CAPTURE_OR_DELIVERY_FAILED error_type=%s",
                         type(exc).__name__)
+            return
+        try:  # V2 Phase 9: alerts read only the events persisted above; OFF unless AI_FLOOR_ALERTS_ENABLED=1
+            self.alert_hook(events)
+        except Exception as exc:
+            LOG.warning("component=alerts event=HOOK_FAILED error_type=%s", type(exc).__name__)
 
     def _deliver(self, events):
         for event in events:
