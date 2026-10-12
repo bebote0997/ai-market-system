@@ -217,6 +217,32 @@ CHART_BARS = [
 
 
 class SetupChartTests(unittest.TestCase):
+    def test_money_labels_use_contract_multiplier(self):
+        from ui.components.setup_chart import build_setup_figure
+        plan = {'entry':100, 'stop':99, 'target':103, 'quantity':2, 'contract_multiplier':100}
+        labels = ' '.join(a.text for a in build_setup_figure(CHART_BARS, plan, 'XAUUSD').layout.annotations)
+        self.assertIn('$200.00 risk', labels)
+        self.assertIn('$600.00 reward', labels)
+        for bad in (None, 0, -1, float('nan'), True, '100'):
+            labels = ' '.join(a.text for a in build_setup_figure(
+                CHART_BARS, {**plan, 'contract_multiplier': bad}, 'XAUUSD').layout.annotations)
+            self.assertNotIn('$', labels, bad)
+            self.assertIn('1.00 price distance', labels)
+            self.assertIn('3.00 price distance', labels)
+
+    def test_validated_setups_propagates_risk_multiplier(self):
+        fixtures.Phase10DashboardTests.setUp(self)
+        from ui.pages.setups import validated_setups
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE setups SET status='VALID_SETUP', plan=? WHERE slot_key='slot-1'",
+                       (json.dumps({'entry':100, 'stop':99, 'target':103}),))
+            db.execute('DELETE FROM risk_decisions')
+            db.execute("INSERT INTO risk_decisions VALUES('slot-1','APPROVED','ok',1000,0.01,2,200,100,99,103,100)")
+            db.row_factory = sqlite3.Row
+            rows = validated_setups(db)
+        self.assertEqual(rows[0]['plan']['quantity'], 2)
+        self.assertEqual(rows[0]['plan']['contract_multiplier'], 100)
+
     def test_levels_zones_title_and_palette(self):
         from ui.components.setup_chart import build_setup_figure
         fig = build_setup_figure(CHART_BARS, {'entry':100, 'stop':99, 'target':103, 'quantity':2}, 'XAUUSD')
@@ -230,7 +256,10 @@ class SetupChartTests(unittest.TestCase):
         self.assertIn('11 Oct 10:00 → 11 Oct 10:15 ET', fig.layout.title.text)
         self.assertIn('Last: 100.50', fig.layout.title.text)
         labels = ' '.join(a.text for a in fig.layout.annotations)
-        for label in ('ENTRY', 'STOP LOSS', '$2.00 risk', 'TAKE PROFIT 1:3', '$6.00 reward'):
+        # No persisted contract_multiplier: never assume 1, show price distance.
+        self.assertNotIn('$', labels)
+        self.assertIn('price distance', labels)
+        for label in ('ENTRY', 'STOP LOSS', 'TAKE PROFIT 1:3'):
             self.assertIn(label, labels)
         short = build_setup_figure(CHART_BARS, {'entry':100, 'stop':101, 'target':97}, 'EURUSD')
         self.assertIn('price distance', ' '.join(a.text for a in short.layout.annotations))

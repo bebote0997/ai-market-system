@@ -38,10 +38,14 @@ def build_setup_figure(bars, plan, symbol):
     entry, stop, target = (plan.get(key) for key in ('entry', 'stop', 'target'))
     if all(isinstance(v, (int, float)) and math.isfinite(v) for v in (entry, stop, target)):
         quantity = plan.get('quantity')
-        known = isinstance(quantity, (int, float)) and math.isfinite(quantity)
+        multiplier = plan.get('contract_multiplier')
+        # Money labels need persisted quantity AND contract multiplier; never assume 1.
+        known = all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0
+                    for v in (quantity, multiplier))
         risk, reward = abs(entry-stop), abs(target-entry)
-        risk_label = f'${risk*quantity:,.2f} risk' if known else f'{risk:,.2f} price distance'
-        reward_label = f'${reward*quantity:,.2f} reward' if known else f'{reward:,.2f} price distance'
+        scale = quantity * multiplier if known else None
+        risk_label = f'${risk*scale:,.2f} risk' if known else f'{risk:,.2f} price distance'
+        reward_label = f'${reward*scale:,.2f} reward' if known else f'{reward:,.2f} price distance'
         rr = reward/risk if risk else None
         ratio = '1:3' if rr is not None and math.isclose(rr, 3) else (f'1:{rr:.2f}' if rr is not None else 'R:R unavailable')
         for level, label, color in ((entry, 'ENTRY', GOLD),

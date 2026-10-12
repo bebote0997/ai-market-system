@@ -20,8 +20,10 @@ def validated_setups(db, *, run_id=''):
             plan = json.loads(row['plan']) if row.get('plan') else snapshot.get('plan')
             plan = dict(plan or {})
             risks = records(db, 'risk_decisions', run_id=run['run_id'])
-            if risks and risks[0].get('quantity') is not None:
-                plan['quantity'] = risks[0]['quantity']
+            if risks:
+                for key in ('quantity', 'contract_multiplier'):
+                    if risks[0].get(key) is not None:
+                        plan[key] = risks[0][key]
             reviews = payloads(db, 'review_reports', run_id=run['run_id'])
             setup = reviews[0].get('setup') or {} if reviews else {}
             execution = reviews[0].get('execution') or {} if reviews else {}
