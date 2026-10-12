@@ -20,7 +20,8 @@ luxury.apply(st)
 
 with st.sidebar:
     luxury.html(st, '<div class="brand">Trading Floor<small>PAPER · V2</small></div>')
-    page = st.radio("Navigation", luxury.PAGES + dashboard.PAGES + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation")
+    page = st.radio("Navigation", luxury.PAGES + dashboard.PAGES + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation",
+                    format_func=lambda name: name if name in luxury.PAGES else f"Legacy · {name.title()}")
     enabled_symbols = enabled_market_symbols()
     symbol = st.selectbox("Market", MARKETS,
                           format_func=lambda market: f"{market} · {symbol_enablement(market, enabled_symbols)}")

@@ -96,7 +96,7 @@ class Phase10DashboardTests(unittest.TestCase):
         before = self.digest()
         health_before = hashlib.sha256(self.health_path.read_bytes()).hexdigest()
         app = self.app()
-        for page in app.radio[0].options:
+        for page in [o.removeprefix("Legacy · ").upper() if o.startswith("Legacy · ") else o for o in app.radio[0].options]:
             with self.subTest(page=page):
                 app.radio[0].set_value(page).run()
                 self.assert_rendered(app)
@@ -128,7 +128,7 @@ class Phase10DashboardTests(unittest.TestCase):
         before = hashlib.sha256(empty.read_bytes()).hexdigest()
         with patch.dict(os.environ, {"AI_FLOOR_DB_PATH": str(empty)}):
             app = self.app()
-            for page in app.radio[0].options:
+            for page in [o.removeprefix("Legacy · ").upper() if o.startswith("Legacy · ") else o for o in app.radio[0].options]:
                 with self.subTest(page=page):
                     app.radio[0].set_value(page).run()
                     self.assert_rendered(app)

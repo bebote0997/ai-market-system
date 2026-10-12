@@ -50,13 +50,13 @@ def cycle_evidence(db, run):
         setups + ([{'review': review['setup']}] if review.get('setup') else []), conflict,
         plans, [decoded(r) for r in records(db, 'risk_decisions', run_id=run_id)]
         + [r for r in journal if r.get('event_type') == 'RISK_V2_DECISION' or r.get('source') == 'risk'],
-        entry, exits, [decoded(run)] + [{'net_pnl': r.get('payload', {}).get('net_pnl')} for r in exits])))
+        entry, exits, [decoded(run)] + [{'net_pnl': (r.get('payload') or {}).get('net_pnl')} for r in exits])))
     gaps = [step for step, rows in result.items() if not rows]
     if not snapshot.get('bars'):
         gaps.append('Cycle OHLC bars')
     if not review.get('macro_evidence'):
         gaps.append('Macro provider/news evidence')
-    if not review.get('planner_policy') and not any(r.get('plan', {}).get('planner_policy') for r in setups):
+    if not review.get('planner_policy') and not any((r.get('plan') if isinstance(r.get('plan'), dict) else {}).get('planner_policy') for r in setups):
         gaps.append('Per-cycle planner policy')
     return result, gaps
 

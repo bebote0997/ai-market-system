@@ -167,6 +167,18 @@ class LuxuryDashboardTests(unittest.TestCase):
         self.assertEqual(app.radio[0].value, 'Process')
         self.assertEqual(next(s for s in app.selectbox if s.label == 'Cycle · newest first').value, 'run-1')
 
+    def test_null_plan_and_payload_render_every_screen(self):
+        """Regression: a setup row whose plan is JSON null crashed Process (demo DB QA)."""
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE setups SET plan='null'")
+        app = self.app()
+        from ui.pages.luxury import PAGES
+        for page in PAGES:
+            with self.subTest(page=page):
+                app.radio[0].set_value(page).run()
+                self.assertFalse(app.exception)
+                self.assert_rendered(app)
+
     def test_process_empty_has_explicit_gaps(self):
         with patch.dict(os.environ, {'AI_FLOOR_DB_PATH': str(Path(self.tmp.name)/'absent.db')}):
             app = self.app()

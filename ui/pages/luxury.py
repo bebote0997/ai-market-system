@@ -20,6 +20,13 @@ MISSING = "not available yet"
 def display(value):
     if value is None or value == "":
         return MISSING
+    if isinstance(value, float):
+        return f"{value:,.5f}".rstrip("0").rstrip(".") if abs(value) < 10 else f"{value:,.2f}"
+    if isinstance(value, str) and len(value) >= 19 and value[4:5] == "-" and value[10:11] == "T":
+        try:
+            return parse_utc(value).astimezone(ZoneInfo("America/New_York")).strftime("%d %b %Y %H:%M ET")
+        except (ValueError, TypeError):
+            return value
     if isinstance(value, (tuple, list, dict)):
         return json.dumps(value, ensure_ascii=False, default=str)
     return str(value)
@@ -122,7 +129,13 @@ def overview(st, db, now):
                  value=account.get('equity', MISSING))
         if curve:
             st.caption('Closed-trade curve · cumulative realized PnL only')
-            st.line_chart(curve, x='Closed at', y='Cumulative realized PnL', color='#c8a96a', width='stretch')
+            import plotly.graph_objects as go
+            fig = go.Figure(go.Scatter(x=[r['Closed at'] for r in curve], y=[r['Cumulative realized PnL'] for r in curve],
+                                       mode='lines+markers', line=dict(color='#c8a96a', width=1.5)))
+            fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor='rgba(0,0,0,0)',
+                              plot_bgcolor='rgba(0,0,0,0)', font=dict(family='IBM Plex Sans', color='#8a877f'),
+                              xaxis=dict(gridcolor='#1c1c1f'), yaxis=dict(gridcolor='#1c1c1f'))
+            st.plotly_chart(fig, width='stretch', theme=None, key='equity-curve')
         else:
             card(st, 'Closed-trade curve', summary=MISSING)
     with cols[1]:

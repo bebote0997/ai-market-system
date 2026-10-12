@@ -25,11 +25,25 @@ header[data-testid="stHeader"] {background:transparent}
  .lux .top{align-items:flex-start;gap:14px;flex-wrap:wrap}
 }
 
-[data-testid="stSidebar"] [role="radiogroup"] > label:nth-child(6) {border-top:1px solid #26262a;padding-top:38px;position:relative}
-[data-testid="stSidebar"] [role="radiogroup"] > label:nth-child(6)::before {content:'Legacy / Detail';position:absolute;top:10px;left:0;color:#c8a96a;font-size:10px;letter-spacing:.16em}
+[data-testid="stSidebar"] [role="radiogroup"] > label:nth-child(8) {border-top:1px solid #26262a;padding-top:38px;position:relative}
+[data-testid="stSidebar"] [role="radiogroup"] > label:nth-child(8)::before {content:'Legacy / Detail';position:absolute;top:10px;left:0;color:#c8a96a;font-size:10px;letter-spacing:.16em}
 [data-testid="stMetric"] {background:#111113;border:1px solid #26262a;padding:12px}
 .safety {border-left:2px solid #c8a96a;background:#111113;padding:10px 14px}
 .critical {border:1px solid #c48a7f;padding:12px}
 
 [data-testid="stSidebar"] [role="radiogroup"] label {color:#8a877f;font-size:11px;text-transform:uppercase}
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {color:#c8a96a}
+
+/* Hide Streamlit's auto multipage list (ui/pages is a package, not st pages). */
+[data-testid="stSidebarNav"],[data-testid="stSidebarNavSeparator"] {display:none}
+/* Dark native widgets, gold accent. */
+[data-baseweb="select"] > div,[data-baseweb="input"] > div,.stTextInput input {background:#111113!important;border:1px solid #26262a!important;color:#e9e6df!important}
+[data-baseweb="select"] *,[data-baseweb="popover"] li {color:#e9e6df!important}
+[data-baseweb="popover"] ul,[data-baseweb="menu"] {background:#111113!important}
+.stButton > button,.stDownloadButton > button {background:transparent!important;border:1px solid #c8a96a66!important;color:#c8a96a!important;border-radius:0}
+.stButton > button:hover {border-color:#c8a96a!important}
+[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {background:transparent!important;border:1px solid #5c5a55!important;width:8px;height:8px}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) > div:first-child {background:#c8a96a!important;border-color:#c8a96a!important}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) > div:first-child > div {display:none}
+[data-testid="stCheckbox"] label,[data-testid="stWidgetLabel"] {color:#8a877f}
+@media(max-width:640px){.lux .scroll{max-width:100%}.lux td,.lux th{min-width:80px;font-size:12px}}
