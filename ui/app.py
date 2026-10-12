@@ -20,17 +20,21 @@ luxury.apply(st)
 
 with st.sidebar:
     luxury.html(st, '<div class="brand">Trading Floor<small>PAPER · V2</small></div>')
-    page = st.radio("Navigation", luxury.PAGES + dashboard.PAGES + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"))
+    page = st.radio("Navigation", luxury.PAGES + dashboard.PAGES + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation")
     enabled_symbols = enabled_market_symbols()
     symbol = st.selectbox("Market", MARKETS,
                           format_func=lambda market: f"{market} · {symbol_enablement(market, enabled_symbols)}")
     st.caption("Enabled for experiment: " + ", ".join(enabled_symbols))
     st.toggle("SAMPLE / DEMO · FLOOR, MARKETS, JOURNAL, SYSTEM", value=not remote_dashboard_enabled(), key="sample_mode")
+    refresh = st.toggle("Auto-refresh · every 60s", value=True, key="auto_refresh")
     st.caption("PAPER · REAL EXECUTION DISABLED")
     st.caption("Observation only · no live orders")
 
 if page in luxury.PAGES:
-    luxury.render(st, page, enabled_symbols)
+    @st.fragment(run_every="60s" if refresh else None)
+    def render_luxury():
+        luxury.render(st, page, enabled_symbols)
+    render_luxury()
     st.stop()
 
 if page in dashboard.PAGES:

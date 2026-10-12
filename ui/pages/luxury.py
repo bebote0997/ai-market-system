@@ -13,7 +13,7 @@ from ui.adapters import from_persisted_snapshot
 from ui.pages.dashboard import ROW_LIMIT, payloads, records
 from ui.state import dashboard_database
 
-PAGES = ("Overview", "The Floor", "Trades", "Decisions", "Analysts · soon")
+PAGES = ("Overview", "The Floor", "Process", "Trades", "Decisions", "Analysts · soon")
 MISSING = "not available yet"
 
 
@@ -208,6 +208,7 @@ def trades(st, db):
     selected = st.selectbox('Trade detail', range(len(rows)),
                             format_func=lambda i: display(rows[i].get('trade_id', rows[i].get('position_id'))))
     trade = rows[selected]
+    process_link(st, trade.get('run_id'), 'trade-process')
     plan = linked_plan(db, trade)
     left, right = st.columns(2)
     with left:
@@ -221,6 +222,14 @@ def trades(st, db):
               ('R realized', 'realized_r'), ('Exit reason', 'reason')]])
 
 
+def process_link(st, run_id, key):
+    def select():
+        st.session_state['process_run_id'] = run_id
+        st.session_state['luxury_navigation'] = 'Process'
+    if run_id:
+        st.button('Open Process · ' + run_id, key=key, on_click=select)
+
+
 def decisions(st, db):
     rows = []
     for source in ('runs', 'agent_decisions', 'risk_decisions'):
@@ -228,6 +237,9 @@ def decisions(st, db):
             parent = dict(db.execute('SELECT run_id,symbol,as_of FROM runs WHERE slot_key=?',
                                     (row['slot_key'],)).fetchone() or {})
             rows.append({**parent, **row, 'source': source})
+    if rows:
+        selected = st.selectbox('Decision process', list(dict.fromkeys(r['run_id'] for r in rows if r.get('run_id'))))
+        process_link(st, selected, 'decision-process')
     rows.sort(key=lambda r: r.get('as_of') or '', reverse=True)
     table(st, 'Decisions · newest first', rows[:ROW_LIMIT], ['as_of', 'symbol', 'run_id', 'source',
           'agent_name', 'status', 'bias', 'confidence', 'reasoning_summary', 'reason', 'error'])
@@ -247,6 +259,9 @@ def render(st, page, symbols):
                 overview(st, db, now)
             elif page == 'The Floor':
                 floor(st, db, symbols)
+            elif page == 'Process':
+                from ui.pages.process import render as render_process
+                render_process(st, db)
             elif page == 'Trades':
                 trades(st, db)
             elif page == 'Decisions':

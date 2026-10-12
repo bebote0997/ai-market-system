@@ -137,3 +137,29 @@ class LuxuryDashboardTests(unittest.TestCase):
                 app.radio[0].set_value(page).run()
                 self.assert_rendered(app)
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+
+    def test_process_real_rows_refresh_and_links(self):
+        before = self.digest()
+        app = self.app()
+        self.assertTrue(any(t.label == 'Auto-refresh · every 60s' and t.value for t in app.toggle))
+        app.radio[0].set_value('Process').run()
+        next(s for s in app.selectbox if s.label == 'Cycle · newest first').set_value('run-1').run()
+        self.assert_rendered(app)
+        content = '\n'.join(m.value for m in app.markdown)
+        from ui.pages.process import STEPS
+        for step in STEPS:
+            self.assertIn(step, content)
+        for value in ('Structure AI', 'fixture only', 'setup-1', 'closed-1', 'not persisted yet', 'Gaps'):
+            self.assertIn(value, content)
+        self.assertEqual(self.digest(), before)
+        app.radio[0].set_value('Trades').run()
+        next(b for b in app.button if b.key == 'trade-process').click().run()
+        self.assertEqual(app.radio[0].value, 'Process')
+        self.assertEqual(next(s for s in app.selectbox if s.label == 'Cycle · newest first').value, 'run-1')
+
+    def test_process_empty_has_explicit_gaps(self):
+        with patch.dict(os.environ, {'AI_FLOOR_DB_PATH': str(Path(self.tmp.name)/'absent.db')}):
+            app = self.app()
+            app.radio[0].set_value('Process').run()
+            self.assert_rendered(app)
+            self.assertIn('not persisted yet', '\n'.join(m.value for m in app.markdown))
