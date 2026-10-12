@@ -42,11 +42,14 @@ def cycle_evidence(db, run):
     plans = [dict(plan=r['plan']) for r in setups if r.get('plan')]
     if review.get('target_decision'):
         plans.append({'target_decision': review['target_decision']})
-    entry = [r for r in linked if r['record'] in ('paper_orders', 'paper_positions')]
+    plans.extend(r for r in journal if r.get('event_type') == 'PLAN_CREATED')
+    setups.extend(r for r in journal if r.get('source') == 'setup')
+    entry = [r for r in linked if r['record'] in ('paper_orders', 'paper_fills', 'paper_positions')]
     exits = [r for r in linked if r['record'] == 'closed_trades']
-    result = dict(zip(STEPS, (intake, agents or snapshot.get('agents', []),
+    result = dict(zip(STEPS, (intake, agents or snapshot.get('agents') or review.get('agents', []),
         setups + ([{'review': review['setup']}] if review.get('setup') else []), conflict,
-        plans, [decoded(r) for r in records(db, 'risk_decisions', run_id=run_id)],
+        plans, [decoded(r) for r in records(db, 'risk_decisions', run_id=run_id)]
+        + [r for r in journal if r.get('event_type') == 'RISK_V2_DECISION' or r.get('source') == 'risk'],
         entry, exits, [decoded(run)] + [{'net_pnl': r.get('payload', {}).get('net_pnl')} for r in exits])))
     gaps = [step for step, rows in result.items() if not rows]
     if not snapshot.get('bars'):
@@ -84,5 +87,25 @@ def render(st, db):
     evidence, gaps = cycle_evidence(db, runs[ids.index(selected)])
     st.caption('Timestamps below are persisted record timestamps; absent step timestamps are not inferred.')
     for index, (step, rows) in enumerate(evidence.items(), 1):
-        card(st, f'{index}. {step}', summary=rows or 'not persisted yet')
+        timestamps = []
+        for row in rows:
+            value = {**row, **row['payload']} if isinstance(row.get('payload'), dict) else row
+            at = next((value.get(k) for k in ('timestamp', 'timestamp_utc', 'as_of', 'opened_at', 'exited_at', 'completed_at', 'started_at', 'filled_at', 'fill_timestamp') if value.get(k)), None)
+            if at:
+                timestamps.append(at)
+        if rows and not timestamps:
+            gaps.append(step + ' timestamp')
+        statuses = []
+        for row in rows:
+            value = {**row, **row['payload']} if isinstance(row.get('payload'), dict) else row
+            statuses.extend(str(value[k]) for k in ('status', 'final_status', 'decision', 'execution_status') if value.get(k))
+        status = ', '.join(dict.fromkeys(statuses)) or ('Persisted evidence' if rows else 'not persisted yet')
+        card(st, f'{index}. {step}', [('Status', status),
+             ('Timestamp', ', '.join(dict.fromkeys(timestamps)) or 'not persisted yet')],
+             summary=rows or 'not persisted yet')
+        if step == 'Agent outputs':
+            for agent in rows:
+                card(st, agent.get('agent_name') or agent.get('name') or agent.get('agent'),
+                     [(k, agent.get(k)) for k in ('status', 'bias', 'confidence', 'as_of', 'timestamp',
+                      'reasoning_summary', 'evidence', 'conflicts')])
     card(st, 'Gaps · not persisted yet', summary=', '.join(gaps) or 'None')

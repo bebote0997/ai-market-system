@@ -139,6 +139,12 @@ class LuxuryDashboardTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
 
     def test_process_real_rows_refresh_and_links(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute('UPDATE runs SET provider_metadata=? WHERE run_id=?',
+                       (json.dumps({'market': {'provider':'twelve_data', 'status':'OK'}}), 'run-1'))
+            db.execute('INSERT INTO journal(timestamp,run_id,symbol,source,event_type,severity,payload) VALUES(?,?,?,?,?,?,?)',
+                       (T, 'run-1', 'XAUUSD', 'conflict_engine', 'CONFLICT_DECISION', 'INFO',
+                        json.dumps({'decision':'BLOCK', 'reason':'OPPOSITE_POSITION_CONFLICT'})))
         before = self.digest()
         app = self.app()
         self.assertTrue(any(t.label == 'Auto-refresh · every 60s' and t.value for t in app.toggle))
@@ -149,8 +155,12 @@ class LuxuryDashboardTests(unittest.TestCase):
         from ui.pages.process import STEPS
         for step in STEPS:
             self.assertIn(step, content)
-        for value in ('Structure AI', 'fixture only', 'setup-1', 'closed-1', 'not persisted yet', 'Gaps'):
+        for value in ('Structure AI', 'fixture only', 'setup-1', 'closed-1', 'twelve_data', 'OPPOSITE_POSITION_CONFLICT', 'not persisted yet', 'Gaps'):
             self.assertIn(value, content)
+        self.assertEqual(self.digest(), before)
+        next(t for t in app.toggle if t.label == 'Auto-refresh · every 60s').set_value(False).run()
+        self.assert_rendered(app)
+        self.assertFalse(next(t for t in app.toggle if t.label == 'Auto-refresh · every 60s').value)
         self.assertEqual(self.digest(), before)
         app.radio[0].set_value('Trades').run()
         next(b for b in app.button if b.key == 'trade-process').click().run()
@@ -163,3 +173,189 @@ class LuxuryDashboardTests(unittest.TestCase):
             app.radio[0].set_value('Process').run()
             self.assert_rendered(app)
             self.assertIn('not persisted yet', '\n'.join(m.value for m in app.markdown))
+
+    def test_setups_real_bars_and_missing_bars(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE setups SET status='VALID_SETUP' WHERE slot_key='slot-1'")
+        app = self.app()
+        app.radio[0].set_value('Setups').run()
+        self.assert_rendered(app)
+        self.assertIn('chart unavailable: bars not persisted', '\n'.join(m.value for m in app.markdown))
+        with sqlite3.connect(self.path) as db:
+            snap = json.loads(db.execute('SELECT payload FROM ui_snapshots').fetchone()[0])
+            snap['bars'] = {'15m': CHART_BARS}
+            db.execute('UPDATE ui_snapshots SET payload=?', (json.dumps(snap),))
+        before = self.digest()
+        app.run()
+        self.assert_rendered(app)
+        self.assertTrue(app.get('plotly_chart'))
+        self.assertEqual(self.digest(), before)
+        # A newer snapshot is never joined to an older setup by symbol alone.
+        with sqlite3.connect(self.path) as db:
+            snap['run_id'] = 'other-run'
+            db.execute('UPDATE ui_snapshots SET payload=?', (json.dumps(snap),))
+        app.run()
+        self.assertIn('chart unavailable: bars not persisted', '\n'.join(m.value for m in app.markdown))
+
+
+CHART_BARS = [
+    {'timestamp': '2026-10-11T14:00:00Z', 'open': 100, 'high': 102, 'low': 99, 'close': 101},
+    {'timestamp': '2026-10-11T14:15:00Z', 'open': 101, 'high': 102, 'low': 100, 'close': 100.5},
+]
+
+
+class SetupChartTests(unittest.TestCase):
+    def test_levels_zones_title_and_palette(self):
+        from ui.components.setup_chart import build_setup_figure
+        fig = build_setup_figure(CHART_BARS, {'entry':100, 'stop':99, 'target':103, 'quantity':2}, 'XAUUSD')
+        self.assertEqual(fig.layout.paper_bgcolor, '#0b0b0c')
+        self.assertEqual(fig.layout.xaxis.gridcolor, '#1c1c1f')
+        self.assertEqual(fig.data[0].increasing.line.color, '#9fb89a')
+        self.assertEqual(fig.data[0].decreasing.line.color, '#c48a7f')
+        self.assertEqual([s.y0 for s in fig.layout.shapes[:3]], [100,99,103])
+        self.assertTrue(all(s.line.dash == 'dash' for s in fig.layout.shapes[:3]))
+        self.assertEqual(len(fig.layout.shapes), 5)
+        self.assertIn('11 Oct 10:00 → 11 Oct 10:15 ET', fig.layout.title.text)
+        self.assertIn('Last: 100.50', fig.layout.title.text)
+        labels = ' '.join(a.text for a in fig.layout.annotations)
+        for label in ('ENTRY', 'STOP LOSS', '$2.00 risk', 'TAKE PROFIT 1:3', '$6.00 reward'):
+            self.assertIn(label, labels)
+        short = build_setup_figure(CHART_BARS, {'entry':100, 'stop':101, 'target':97}, 'EURUSD')
+        self.assertIn('price distance', ' '.join(a.text for a in short.layout.annotations))
+        non3 = build_setup_figure(CHART_BARS, {'entry':100, 'stop':99, 'target':102}, 'EURUSD')
+        self.assertNotIn('1:3', ' '.join(a.text for a in non3.layout.annotations))
+        with self.assertRaisesRegex(ValueError, 'not persisted'):
+            build_setup_figure([], {}, 'XAUUSD')
+
+
+class SetupEmailTests(unittest.TestCase):
+    digest = fixtures.Phase10DashboardTests.digest
+
+    def setUp(self):
+        fixtures.Phase10DashboardTests.setUp(self)
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE setups SET status='VALID_SETUP', plan=? WHERE slot_key='slot-1'",
+                       (json.dumps({'setup_id':'setup-1', 'entry':100, 'stop':99, 'target':103, 'side':'LONG', 'risk_reward':3}),))
+            snap = json.loads(db.execute('SELECT payload FROM ui_snapshots').fetchone()[0])
+            snap['bars'] = {'15m': CHART_BARS}
+            db.execute('UPDATE ui_snapshots SET payload=?', (json.dumps(snap),))
+        self.env = {'AI_FLOOR_DB_PATH':str(self.path), 'AI_FLOOR_SETUP_CHART_EMAIL':'1',
+                    'AI_FLOOR_ALERTS_ENABLED':'0', 'AI_FLOOR_ALERT_EMAIL_FROM':'sender@example.invalid',
+                    'AI_FLOOR_ALERT_EMAIL_TO':'owner@example.invalid', 'GMAIL_APP_PASSWORD':'fixture-only'}
+
+    def dispatcher(self, env=None):
+        from runtime.alert_dispatch import dispatcher_from_env
+        dispatcher = dispatcher_from_env(environ=env or self.env)
+        dispatcher.sleep = lambda _: None
+        self.addCleanup(dispatcher.ledger.close)
+        return dispatcher
+
+    def test_off_no_send_no_attachment_no_config_change(self):
+        from runtime.setup_chart_email import publish_setup_charts
+        from runtime.config import RuntimeConfig
+        env = {**self.env, 'AI_FLOOR_SETUP_CHART_EMAIL':'0'}
+        dispatcher = self.dispatcher(env)
+        before = self.digest()
+        baseline = RuntimeConfig.from_env().fingerprint()
+        with patch('smtplib.SMTP_SSL') as smtp, patch('ui.components.setup_chart.build_setup_figure') as builder:
+            publish_setup_charts(dispatcher, env)
+            smtp.assert_not_called()
+            builder.assert_not_called()
+        with patch.dict(os.environ, {'AI_FLOOR_SETUP_CHART_EMAIL':'1'}):
+            self.assertEqual(RuntimeConfig.from_env().fingerprint(), baseline)
+        self.assertEqual(dispatcher.ledger.db.execute('SELECT count(*) FROM alert_events').fetchone()[0], 0)
+        self.assertEqual(self.digest(), before)
+
+    def test_on_png_fake_smtp_dedup_and_recovery_snapshot(self):
+        from runtime.setup_chart_email import publish_setup_charts, CHANNEL
+        dispatcher = self.dispatcher()
+        before = self.digest()
+        from unittest.mock import Mock
+        smtp = Mock()
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', return_value=b'\x89PNG\r\n\x1a\nfixture'):
+            publish_setup_charts(dispatcher, self.env)
+            publish_setup_charts(dispatcher, self.env)
+            dispatcher.recover_pending()
+        self.assertEqual(smtp.send_message.call_count, 1)
+        message = smtp.send_message.call_args.args[0]
+        attachments = list(message.iter_attachments())
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0].get_filename(), 'setup.png')
+        self.assertEqual(attachments[0].get_content_type(), 'image/png')
+        self.assertTrue(attachments[0].get_payload(decode=True).startswith(b'\x89PNG'))
+        status = dispatcher.ledger.db.execute('SELECT channel,status FROM alert_deliveries').fetchall()
+        self.assertEqual(status, [(CHANNEL, 'DELIVERED')])
+        self.assertEqual(self.digest(), before)
+
+    def test_render_failure_falls_back(self):
+        from runtime.setup_chart_email import publish_setup_charts
+        from unittest.mock import Mock
+        smtp = Mock()
+        dispatcher = self.dispatcher()
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', side_effect=RuntimeError('kaleido missing')):
+            publish_setup_charts(dispatcher, self.env)
+        self.assertEqual(smtp.send_message.call_count, 1)
+        self.assertEqual(list(smtp.send_message.call_args.args[0].iter_attachments()), [])
+
+    def test_hook_reconciles_on_worker_and_deduplicates_restart(self):
+        from runtime.alert_hook import AlertHook
+        from unittest.mock import Mock
+        env = {**self.env, 'AI_FLOOR_ALERTS_LEDGER_PATH':str(Path(self.tmp.name)/'alerts.db')}
+        smtp = Mock()
+        before = self.digest()
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', return_value=b'\x89PNGfixture'):
+            for _ in range(2):
+                hook = AlertHook(environ=env)
+                self.assertTrue(hook.flush())
+                self.assertTrue(hook.close())
+        self.assertEqual(smtp.send_message.call_count, 1)
+        self.assertEqual(self.digest(), before)
+
+    def test_pending_setup_snapshot_recovery_and_flag_off(self):
+        from runtime.alert_dispatch import dispatcher_from_env
+        from runtime.setup_chart_email import SetupChartEvent
+        from unittest.mock import Mock
+        ledger_path = str(Path(self.tmp.name)/'pending-alerts.db')
+        event = SetupChartEvent('pending-setup-event', 'SETUP_VALIDATED', T, 'run-1', 'XAUUSD',
+            (), 'Validated PAPER setup', (('setup_id','setup-1'),), (), tuple(CHART_BARS),
+            {'entry':100, 'stop':99, 'target':103})
+        dispatcher = dispatcher_from_env(ledger_path=ledger_path, environ=self.env)
+        dispatcher.ledger.save(event)
+        dispatcher.ledger.close()
+        smtp = Mock()
+        off = dispatcher_from_env(ledger_path=ledger_path,
+            environ={**self.env, 'AI_FLOOR_SETUP_CHART_EMAIL':'0', 'AI_FLOOR_ALERTS_ENABLED':'1'})
+        with patch('smtplib.SMTP_SSL', return_value=smtp):
+            off.recover_pending()
+        smtp.send_message.assert_not_called()
+        off.ledger.close()
+        on = dispatcher_from_env(ledger_path=ledger_path, environ=self.env)
+        self.addCleanup(on.ledger.close)
+        before = self.digest()
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', return_value=b'\x89PNGsnapshot'):
+            on.recover_pending()
+            on.recover_pending()
+        self.assertEqual(smtp.send_message.call_count, 1)
+        self.assertEqual(self.digest(), before)
+        self.assertEqual(on.ledger.status(event.event_id)['setup_chart_email']['status'], 'DELIVERED')
+
+    def test_missing_bars_fallback_and_retry(self):
+        import smtplib
+        from runtime.setup_chart_email import publish_setup_charts
+        from unittest.mock import Mock
+        with sqlite3.connect(self.path) as db:
+            snapshot = json.loads(db.execute('SELECT payload FROM ui_snapshots').fetchone()[0])
+            snapshot.pop('bars')
+            db.execute('UPDATE ui_snapshots SET payload=?', (json.dumps(snapshot),))
+        before = self.digest()
+        dispatcher = self.dispatcher()
+        smtp = Mock()
+        smtp.send_message.side_effect = [smtplib.SMTPServerDisconnected(), None]
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image') as render:
+            publish_setup_charts(dispatcher, self.env)
+        render.assert_not_called()
+        self.assertEqual(smtp.send_message.call_count, 2)
+        self.assertEqual(list(smtp.send_message.call_args.args[0].iter_attachments()), [])
+        self.assertIn('chart unavailable: bars not persisted', smtp.send_message.call_args.args[0].get_body(preferencelist=('plain',)).get_content())
+        self.assertEqual(dispatcher.ledger.db.execute('SELECT attempts FROM alert_deliveries').fetchone()[0], 2)
+        self.assertEqual(self.digest(), before)

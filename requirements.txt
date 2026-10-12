@@ -1,2 +1,6 @@
 # Static alert charts (Agg backend; no browser renderer).
 matplotlib==3.10.7
+
+# Optional validated-setup PNG export; failures fall back to email without image.
+plotly>=5.0,<8
+kaleido>=1.0,<2

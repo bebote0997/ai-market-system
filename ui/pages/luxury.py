@@ -13,7 +13,7 @@ from ui.adapters import from_persisted_snapshot
 from ui.pages.dashboard import ROW_LIMIT, payloads, records
 from ui.state import dashboard_database
 
-PAGES = ("Overview", "The Floor", "Process", "Trades", "Decisions", "Analysts · soon")
+PAGES = ("Overview", "The Floor", "Process", "Setups", "Trades", "Decisions", "Analysts · soon")
 MISSING = "not available yet"
 
 
@@ -227,7 +227,8 @@ def process_link(st, run_id, key):
         st.session_state['process_run_id'] = run_id
         st.session_state['luxury_navigation'] = 'Process'
     if run_id:
-        st.button('Open Process · ' + run_id, key=key, on_click=select)
+        if st.button('Open Process · ' + run_id, key=key, on_click=select):
+            st.rerun(scope='app')
 
 
 def decisions(st, db):
@@ -259,6 +260,9 @@ def render(st, page, symbols):
                 overview(st, db, now)
             elif page == 'The Floor':
                 floor(st, db, symbols)
+            elif page == 'Setups':
+                from ui.pages.setups import render as render_setups
+                render_setups(st, db)
             elif page == 'Process':
                 from ui.pages.process import render as render_process
                 render_process(st, db)

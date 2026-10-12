@@ -11,7 +11,7 @@ from ui.state import dashboard_database
 
 PAGES = ("OVERVIEW", "POSITIONS", "SETUPS", "DECISIONS", "HEALTH", "ALERTS", "HISTORY", "ERRORS")
 TABLES = frozenset({"runs", "setups", "agent_decisions", "risk_decisions",
-                   "paper_accounts", "paper_orders", "paper_positions", "closed_trades",
+                   "paper_accounts", "paper_orders", "paper_fills", "paper_positions", "closed_trades",
                    "review_reports", "journal", "system_state", "ui_snapshots",
                    "notification_events", "notification_deliveries", "component_health", "alert_deliveries"})
 
@@ -81,7 +81,7 @@ def history(db, run_id="", setup_id="", offset=0):
     runs = records(db, "runs", run_id=run_id, setup_id=setup_id, offset=offset)
     by_slot = {row["slot_key"]: row for row in runs}
     rows = [{"record": "runs", **row} for row in runs]
-    for table in ("setups", "review_reports", "paper_orders", "paper_positions", "closed_trades", "journal"):
+    for table in ("setups", "review_reports", "paper_orders", "paper_fills", "paper_positions", "closed_trades", "journal"):
         for original in records(db, table, run_id=run_id, setup_id=setup_id, offset=offset):
             row = dict(original)
             for key in ("payload", "plan", "evidence"):
