@@ -1,3 +1,4 @@
+from ui.tables import dataframe
 def render(st, vm, operational_health=None, review=None, notifications=(), evidence_json=None,
            store=None):
     st.header("SYSTEM")
@@ -16,7 +17,7 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
     ]
     if operational_health and not vm.sample:
         rows = [{"service": key.replace("_", " ").title(), "status": value} for key, value in operational_health.items()]
-    st.dataframe(rows, hide_index=True, use_container_width=True)
+    dataframe(st, rows, hide_index=True, width="stretch")
     st.write("Warnings:", vm.warnings or "—")
     st.write("Prompt versions:", dict(vm.prompt_versions) if vm.prompt_versions else "NO_DATA")
     st.write("Schema version:", vm.schema_version or "NO_DATA")
@@ -42,15 +43,15 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
                     st.json({key: record.get(key) for key in ("run_id", "symbol", "as_of",
                             "final_status", "setup_status", "risk_decision", "execution",
                             "paper", "error")})
-                    st.dataframe(store.journal(run_id=run_id, limit=500),
-                                 hide_index=True, use_container_width=True)
+                    dataframe(st, store.journal(run_id=run_id, limit=500),
+                                 hide_index=True, width="stretch")
                     st.download_button("Download run evidence (JSON)",
                                        run_evidence_json(store, run_id),
                                        file_name="paper-run-evidence.json", mime="application/json")
         st.subheader("Notifications")
-        st.dataframe([{"timestamp_utc": e["timestamp_utc"], "type": e["type"],
+        dataframe(st, [{"timestamp_utc": e["timestamp_utc"], "type": e["type"],
                        "severity": e["severity"], "run_id": e["run_id"]}
-                      for e in notifications[-20:]], hide_index=True, use_container_width=True)
+                      for e in notifications[-20:]], hide_index=True, width="stretch")
         if evidence_json is not None:
             st.download_button("Download review evidence (JSON)", evidence_json,
                                file_name="paper-review-evidence.json", mime="application/json")

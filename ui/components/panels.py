@@ -33,7 +33,7 @@ def chart(st, vm):
         return
     try:
         fig = price_action_figure(vm.bars, vm.annotations)
-        st.plotly_chart(fig, use_container_width=True, theme=None, key=f"chart-{vm.symbol}")
+        st.plotly_chart(fig, width="stretch", theme=None, key=f"chart-{vm.symbol}")
     except Exception as exc:
         st.error(f"CHART_ERROR — {type(exc).__name__}")
     cols = st.columns(3)

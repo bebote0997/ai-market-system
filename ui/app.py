@@ -11,17 +11,16 @@ from ui.auth import remote_dashboard_enabled, require_dashboard_access
 from ui.adapters import MARKETS, symbol_enablement
 from ui.components import panels
 from ui.fixtures.demo_floor import demo_market
-from ui.pages import dashboard, experiment, floor, journal, markets, system
+from ui.pages import dashboard, experiment, floor, journal, markets, system, luxury
 from ui.state import current_market, enabled_market_symbols, operational_store
-from ui.theme import apply
 
 st.set_page_config(page_title="AI Trading Floor · PAPER", layout="wide", page_icon="📊")
 require_dashboard_access(st)
-apply(st)
+luxury.apply(st)
 
 with st.sidebar:
-    st.caption("AI TRADING FLOOR · PAPER")
-    page = st.radio("Navigation", dashboard.PAGES + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"))
+    luxury.html(st, '<div class="brand">Trading Floor<small>PAPER · V2</small></div>')
+    page = st.radio("Navigation", luxury.PAGES + dashboard.PAGES + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"))
     enabled_symbols = enabled_market_symbols()
     symbol = st.selectbox("Market", MARKETS,
                           format_func=lambda market: f"{market} · {symbol_enablement(market, enabled_symbols)}")
@@ -29,6 +28,10 @@ with st.sidebar:
     st.toggle("SAMPLE / DEMO · FLOOR, MARKETS, JOURNAL, SYSTEM", value=not remote_dashboard_enabled(), key="sample_mode")
     st.caption("PAPER · REAL EXECUTION DISABLED")
     st.caption("Observation only · no live orders")
+
+if page in luxury.PAGES:
+    luxury.render(st, page, enabled_symbols)
+    st.stop()
 
 if page in dashboard.PAGES:
     st.markdown('<div class="safety">PAPER MODE · REAL EXECUTION DISABLED · NO REAL MONEY</div>', unsafe_allow_html=True)

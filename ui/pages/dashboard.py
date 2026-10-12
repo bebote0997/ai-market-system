@@ -1,4 +1,5 @@
 """Read-only Command Center views of published evidence, never runtime actions."""
+from ui.tables import dataframe
 import json
 import os
 import sqlite3
@@ -106,10 +107,7 @@ def table(st, rows):
     if not rows:
         st.info("NO_DATA")
         return
-    # Nested evidence stays visible as JSON without mixed Arrow column types.
-    display = [{key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
-                for key, value in row.items()} for row in rows]
-    st.dataframe(display, hide_index=True, width="stretch")
+    dataframe(st, rows, hide_index=True, width="stretch")
 
 
 def render(st, page):

@@ -1,3 +1,4 @@
+from ui.tables import dataframe
 from ui.components import panels
 
 
@@ -19,7 +20,7 @@ def render(st, vm):
     with st.expander("MACRO / NEWS · FACT vs AI INTERPRETATION"):
         st.caption("FACT")
         if vm.macro_facts:
-            st.dataframe(vm.macro_facts, use_container_width=True)
+            dataframe(st, vm.macro_facts, width="stretch")
         else:
             st.write("NO_DATA — no sourced event facts in this snapshot.")
         st.caption("AI INTERPRETATION")
