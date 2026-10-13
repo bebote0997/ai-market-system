@@ -809,6 +809,10 @@ class OperationalRuntime:
                     symbol, slot, "NO_DATA", provider_state, run_id)))
                 self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA"))
                 return "NO_DATA"
+            if self.config.candle_cache_path is not None:  # pre-demo: alert charts; best effort, never a decision
+                from runtime import candle_cache
+                self._audit_safely(lambda: candle_cache.record(self.config.candle_cache_path, symbol,
+                                                               snapshot.get("5m"), slot), run_id, symbol)
             paper_blocked = None  # B2.3B: reason PAPER economics are blocked this cycle (in-scope symbols only).
             if self.config.v2_position_catch_up:
                 self._last_ingest = None
