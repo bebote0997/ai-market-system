@@ -10,6 +10,8 @@ import uuid
 from storage.codec import paper_decode, paper_encode, public_metadata, safe_json, utc, parse_utc
 
 SCHEMA_VERSION = 3
+ALERT_TRADE_EVENTS = frozenset({"EXECUTION_DECISION", "STRUCTURE_REVERSE_SUBMITTED", "POSITION_OPENED",
+                                "POSITION_CLOSED"})
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
 PHASE8_SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_deliveries(
@@ -359,6 +361,10 @@ class Store:
                     execution.update({"setup_status": review.get("setup_status") if review else None,
                                       "plan_status": review.get("final_status") if review else None,
                                       "side": (review.get("risk_decision") or {}).get("side") if review else None})
+                alert_trade = None
+                if row["event_type"] in ALERT_TRADE_EVENTS and (
+                        row["event_type"] != "EXECUTION_DECISION" or execution.get("execution_status") == "SUBMITTED"):
+                    alert_trade = self.alert_trade(row, review, json.loads(row["payload"] or "{}")) or None
                 event = NotificationEvent(
                     "1.0", event_id, row["run_id"] or "system", row["timestamp"],
                     row["severity"], row["event_type"], row["symbol"],
@@ -367,11 +373,55 @@ class Store:
                     (entity,) if row["event_type"] in {"ORDER_SUBMITTED", "POSITION_OPENED"} else (),
                     (entity,) if row["event_type"] == "POSITION_CLOSED" else (), evidence,
                     json.loads(row["payload"]) if row["event_type"] == "DAILY_SUMMARY" else None,
-                    execution)
+                    execution, alert_trade)
                 self.db.execute("INSERT INTO notification_events VALUES(?,?,?)",
                                 (event_id, row["id"], safe_json(event.payload())))
                 events.append(event)
         return events
+
+    def _paper_row(self, table, id_field, value, name):
+        if not value:
+            return None
+        row = self.db.execute(f"SELECT payload FROM {table} WHERE {id_field}=?", (value,)).fetchone()
+        return None if row is None else paper_decode(name, row[0])
+
+    def alert_trade(self, row, review, payload):
+        """Pre-demo: the trade block of an order/position alert, read from the durable order, position, closed trade
+        and the run's review. Values are formatted here once (Python owns R:R and risk); anything not durable stays
+        absent (rendered NO_DATA). Returns {} when the event carries no order."""
+        trade = position = None
+        if row["event_type"] == "POSITION_CLOSED":
+            trade = self._paper_row("closed_trades", "trade_id", row["source"], "ClosedTrade")
+            position = trade and self._paper_row("paper_positions", "position_id", trade.position_id, "PaperPosition")
+        elif row["event_type"] == "POSITION_OPENED":
+            position = self._paper_row("paper_positions", "position_id", row["source"], "PaperPosition")
+        order_id = position.origin_order_id if position is not None else (payload or {}).get("order_id")
+        order = self._paper_row("paper_orders", "order_id", order_id, "PaperOrder")
+        if order is None:
+            return {}
+        entry = position.entry_price if position is not None else order.planned_entry
+        out = {"side": order.side, "entry": entry, "stop_loss": order.stop, "take_profit": order.target,
+               "quantity": order.quantity, "order_id": order.order_id}
+        setup_id = order.setup_id or ((review or {}).get("execution") or {}).get("setup_id")
+        if setup_id:
+            out["setup_id"] = setup_id
+        risk, reward = abs(entry - order.stop), abs(order.target - entry)
+        if risk > 0:
+            out["rr"] = f"1:{reward / risk:.2f}"
+        planned_money = abs(order.planned_entry - order.stop) * order.quantity * (order.contract_multiplier or 0)
+        if planned_money > 0 and order.equity_at_submission:
+            out["risk_pct"] = f"{planned_money / order.equity_at_submission * 100:.2f}%"
+        elif ((review or {}).get("risk_decision") or {}).get("risk_fraction") is not None:
+            out["risk_pct"] = f"{review['risk_decision']['risk_fraction'] * 100:.2f}%"
+        signal = (review or {}).get("as_of") or (None if order.as_of is None else utc(order.as_of))
+        if signal:
+            out["signal_at_utc"] = utc(parse_utc(signal))
+        if position is None:
+            out.update(executed_at_utc="PENDING_FILL", closed_at_utc="NOT_FILLED")
+        else:
+            out["executed_at_utc"] = utc(position.opened_at)
+            out["closed_at_utc"] = utc(trade.exited_at) if trade is not None else "OPEN"
+        return out
 
     def notification_events(self, *, run_id=None):
         rows = self.db.execute("SELECT payload FROM notification_events ORDER BY journal_id").fetchall()
