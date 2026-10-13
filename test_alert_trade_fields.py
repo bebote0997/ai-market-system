@@ -12,7 +12,7 @@ from runtime.demo_runner import DemoRunner
 from runtime.notifications import FakeNotificationSink, NotificationEvent
 from test_demo_runner import Data, T, instrument, macro_fixture, patched_scouts
 
-OPTIONAL = {"Chart", "Setup ID"}  # Chart: item 5 (closes); Setup ID: the V1 setup path has none
+OPTIONAL = {"Chart"}  # Chart: item 5 (closes)
 
 
 class AlertTradeFieldTests(unittest.TestCase):
@@ -68,6 +68,11 @@ class AlertTradeFieldTests(unittest.TestCase):
             self.assertEqual([label for label, value in alert_rows.items() if value == NO_DATA and label not in OPTIONAL],
                              [])
         self.assertIn("Entry: " + str(position.entry_price), render_text(opened))
+        # Original (V1) setup path: the order is unstamped; Setup ID comes from the submitting run's record.
+        self.assertIsNone(order.setup_id)
+        setup_id = runner.store.review_report(order.run_id)["execution"]["setup_id"]
+        self.assertTrue(setup_id)
+        self.assertEqual((dict(submitted.trade_rows())["Setup ID"], rows["Setup ID"]), (setup_id, setup_id))
 
     def test_event_without_trade_block_keeps_no_data(self):
         event = NotificationEvent("1.0", "n-1", "run-1", T.isoformat(), "INFO", "POSITION_OPENED", "XAUUSD", (), (),

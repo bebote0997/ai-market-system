@@ -1,5 +1,21 @@
 # Agent Changelog
 
+## 2026-10-13 — Pre-demo fixes: cancelación de órdenes pendientes por tiempo + Setup ID (branch `v2/pre-demo-fixes`, PR #39)
+
+- Órdenes PENDING se cancelan en el primer cierre NY (17:00 America/New_York) que sea viernes o el cierre Day-2 tras
+  su envío (`order.as_of`), lo que ocurra antes (`trade_duration.order_cancel_boundary`). Razones claras:
+  `TIME_CANCEL_FRIDAY_NY_CLOSE` / `TIME_CANCEL_DAY2_NY_CLOSE` en el evento `ORDER_CANCELLED` (con `boundary_utc`,
+  timestamp = la frontera) y en el log. Actúa en el pase fuera de sesión del Scheduler (no necesita datos de mercado)
+  y en cada ciclo antes de evaluar el fill (un pase perdido no deja que la orden se llene después). Escritura CAS
+  guardada (`order_time_cancel`); sin escritura ni admisión R-HALT si no hay nada que cancelar. `paper_broker.py` intacto.
+- Setup ID en alertas (ruta de setup original/V1, orden sin `setup_id`): se toma del run que envió la orden
+  (`execution.setup_id` de ese run si corresponde a esa orden; si no, `setup.setup_id` de su explicación), nunca del
+  run que emite la alerta (p. ej. un cierre por otro run). Sin registro sigue `NO_DATA`.
+- Tests: `test_pending_order_time_cancel.py` (fronteras, DST, viernes Day-1/Day-2, pase fuera de sesión sin
+  proveedor, idempotencia, ciclo retrasado, orden Day-1 intacta, resolución de Setup ID); `test_alert_trade_fields.py`
+  ahora exige Setup ID real en ORDER SUBMITTED / POSITION OPENED.
+- REAL OFF, NAS100 bloqueado, sin Render. pytest: baseline 1631 passed, 1 skipped, 1 xfailed; final 1640 passed, 1 skipped, 1 xfailed.
+
 ## 2026-10-13 — Pre-demo fixes: revisión independiente Codex (branch `v2/pre-demo-fixes`, draft PR)
 
 - HIGH: la salida Day-2 por estructura se decide en orden temporal con SL/TP (`trade_duration.first_adverse_structure`

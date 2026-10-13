@@ -85,3 +85,7 @@ Validación: ruff PASS; pytest 1624 passed, 1 skipped, 1 xfailed (baseline 1590 
 Revisión Codex (4 hallazgos: 1 HIGH, 3 MED) corregida en la misma rama: salida Day-2 por estructura en orden
 temporal con SL/TP (también fuera de sesión), revalidación de frontera en la escritura CAS, precios de la regla
 desde evidencia comprometida con catch-up ON, SL de la posición en alertas. pytest 1631 passed, 1 skipped, 1 xfailed.
+Seguimiento (misma rama, PR #39): órdenes PENDING canceladas por tiempo en el viernes 17:00 ET o el cierre NY Day-2
+tras su envío, lo que ocurra antes (`TIME_CANCEL_FRIDAY_NY_CLOSE` / `TIME_CANCEL_DAY2_NY_CLOSE` en `ORDER_CANCELLED`),
+en el pase fuera de sesión y en cada ciclo antes del fill. Setup ID de alertas en la ruta de setup original: se toma
+del run que envió la orden (sin registro sigue NO_DATA). pytest 1640 passed, 1 skipped, 1 xfailed (baseline 1631).

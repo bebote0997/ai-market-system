@@ -542,21 +542,65 @@ class OperationalRuntime:
                 closed.append(symbol)
         return None
 
+    @staticmethod
+    def _due_orders(orders, symbol, slot):
+        """[(order, boundary, reason)] of ``symbol``'s PENDING orders whose time-cancel boundary is at or before
+        ``slot`` (execution.trade_duration.order_cancel_boundary)."""
+        from execution import trade_duration as td
+        due = []
+        for order in orders.values():
+            if order.symbol == symbol and order.status == "PENDING" and order.as_of is not None:
+                boundary, reason = td.order_cancel_boundary(order)
+                if boundary <= slot:
+                    due.append((order, boundary, reason))
+        return due
+
+    def _cancel_due_orders(self, symbol, slot, key, store=None):
+        """Pre-demo: cancel every PENDING order of ``symbol`` whose NY-close boundary (Friday 17:00 ET, or the Day-2
+        close after submission) is at or before ``slot``. Runs before any fill evaluation of the slot, in one guarded
+        CAS write (none when nothing is due). Returns (cancelled order ids, None), or ((), STALE_PAPER_STATE) when the
+        write lost twice (nothing cancelled)."""
+        if not self._due_orders(self._broker(symbol).orders, symbol, slot):
+            return (), None
+
+        def cancel(fresh):
+            cancelled = []
+            for order, boundary, reason in self._due_orders(fresh.orders, symbol, slot):
+                order.status = "CANCELLED"
+                fresh._event(boundary, order.run_id, symbol, order.order_id, "ORDER_CANCELLED",
+                             {"reason": reason, "boundary_utc": utc(boundary)})
+                LOG.info("symbol=%s component=trade_duration event=ORDER_CANCELLED order_id=%s reason=%s",
+                         symbol, order.order_id, reason)
+                cancelled.append(order.order_id)
+            return bool(cancelled), tuple(cancelled)
+        fresh, cancelled = self._guarded_paper_write(symbol, key, cancel, store, "order_time_cancel")
+        return ((), STALE_PAPER_STATE) if fresh is None else (cancelled, None)
+
     def manage_trade_duration(self, at):
         """Out-of-session pass so the NY-close rule acts at 17:00 ET and the Day-2 structure exit at every 15m close,
         when no cycle runs. No slot claim and no run row: every write is the same guarded CAS save as in a cycle.
         Returns {symbol: outcome}."""
         from execution import trade_duration as td
         results = {}
-        if not self.paper_enabled or self.market_provider is None:
+        if not self.paper_enabled:
             return results
         slot = slot_at(at, self.config.cadence_minutes)
-        account, _, _ = self.store.load_paper(self.config.account_id)
+        account, orders, _ = self.store.load_paper(self.config.account_id)
         for symbol in self.config.enabled_symbols:
             if self.halt_gate is not None and self.halt_gate.halted:
                 break
+            if self._due_orders(orders, symbol, slot):  # pending orders: Friday / Day-2 NY close (no data needed)
+                try:
+                    cancelled, blocked = self._cancel_due_orders(symbol, slot, None)
+                    results[symbol] = blocked or ("ORDERS_CANCELLED" if cancelled else "CHECKED")
+                except HaltRefused:
+                    break
+                except Exception as exc:  # noqa: BLE001 - retried at the next tick; a cycle also cancels
+                    LOG.warning("symbol=%s component=trade_duration event=ORDER_CANCEL_FAILED error_type=%s",
+                                symbol, type(exc).__name__)
+                    results[symbol] = "ERROR"
             position = None if account is None else account.open_positions.get(symbol)
-            if position is None:
+            if position is None or self.market_provider is None:
                 continue
             day2_check = position.duration_stage is not None and slot.minute % 15 == 0  # a 15m BOS needs a 15m close
             if td.next_boundary(position) > slot and not day2_check:
@@ -891,6 +935,8 @@ class OperationalRuntime:
             if self.paper_enabled and paper_blocked is None:
                 paper_blocked = self._enforce_trade_duration(symbol, slot, key, snapshot, rex_store,
                                                              None if rex is None else rex.observer, duration_closed)
+            if self.paper_enabled and paper_blocked is None:  # pending orders past their Friday / Day-2 NY close
+                paper_blocked = self._cancel_due_orders(symbol, slot, key, rex_store)[1]
 
             def manage_positions(fresh):
                 had_open = bool(fresh.account.open_positions)

@@ -6,6 +6,8 @@
   after the Day-1 close), decided in time order with SL/TP management (``first_adverse_structure``).
 - Day-2 NY close: force-close.
 - Friday 17:00 NY: every open position is closed, whatever its day.
+- Pending (unfilled) orders: cancelled at the first Friday 17:00 NY or the Day-2 NY close after submission, whichever
+  comes first (``order_cancel_boundary``), so no order can fill over the weekend or outlive the trade-duration rule.
 
 R is always measured against the ORIGINAL stop distance (``initial_stop`` once the stop was moved).
 Nothing here reads a wall clock: callers pass the cycle time.
@@ -26,6 +28,9 @@ CLOSE_DAY2_NY_CLOSE = "TIME_EXIT_DAY2_NY_CLOSE"
 CLOSE_FRIDAY = "TIME_EXIT_FRIDAY_NY_CLOSE"
 CLOSE_REASONS = (CLOSE_DAY1_BELOW_HALF_R, CLOSE_DAY2_STRUCTURE, CLOSE_DAY2_NY_CLOSE, CLOSE_FRIDAY)
 STOP_MOVED_TO_ENTRY = "STOP_MOVED_TO_ENTRY"
+CANCEL_DAY2_NY_CLOSE = "TIME_CANCEL_DAY2_NY_CLOSE"
+CANCEL_FRIDAY = "TIME_CANCEL_FRIDAY_NY_CLOSE"
+CANCEL_REASONS = (CANCEL_DAY2_NY_CLOSE, CANCEL_FRIDAY)
 
 
 def _aware(value):
@@ -59,6 +64,16 @@ def next_boundary(position):
 
 def is_friday_close(boundary):
     return boundary.astimezone(NEW_YORK).weekday() == FRIDAY
+
+
+def order_cancel_boundary(order):
+    """(boundary, reason) at which the still-PENDING ``order`` is cancelled: the Day-1 NY close after its submission
+    (``order.as_of``) if that is a Friday, else the Day-2 NY close (Friday reason when that one is a Friday)."""
+    day1 = ny_close_after(order.as_of)
+    if is_friday_close(day1):
+        return day1, CANCEL_FRIDAY
+    day2 = ny_close_after(day1)
+    return day2, CANCEL_FRIDAY if is_friday_close(day2) else CANCEL_DAY2_NY_CLOSE
 
 
 def unrealized_r(position, price):
@@ -139,7 +154,8 @@ def first_adverse_structure(position, frame_15m, after, until):
     return None
 
 
-__all__ = ["CLOSE_DAY1_BELOW_HALF_R", "CLOSE_DAY2_NY_CLOSE", "CLOSE_DAY2_STRUCTURE", "CLOSE_FRIDAY",
-           "CLOSE_REASONS", "MIN_KEEP_R", "STAGE_DAY2", "STOP_MOVED_TO_ENTRY", "adverse_structure",
-           "boundary_decision", "day1_close", "day2_close", "first_adverse_structure", "is_friday_close",
-           "move_stop_to_entry", "next_boundary", "ny_close_after", "price_bar", "unrealized_r"]
+__all__ = ["CANCEL_DAY2_NY_CLOSE", "CANCEL_FRIDAY", "CANCEL_REASONS", "CLOSE_DAY1_BELOW_HALF_R",
+           "CLOSE_DAY2_NY_CLOSE", "CLOSE_DAY2_STRUCTURE", "CLOSE_FRIDAY", "CLOSE_REASONS", "MIN_KEEP_R", "STAGE_DAY2",
+           "STOP_MOVED_TO_ENTRY", "adverse_structure", "boundary_decision", "day1_close", "day2_close",
+           "first_adverse_structure", "is_friday_close", "move_stop_to_entry", "next_boundary", "ny_close_after",
+           "order_cancel_boundary", "price_bar", "unrealized_r"]

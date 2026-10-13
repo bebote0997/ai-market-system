@@ -51,6 +51,19 @@ def _paper(store, table, id_field, value, name):
     return None if row is None else paper_decode(name, row[0])
 
 
+def order_setup_id(store, order):
+    """Setup ID of an order not stamped with one (original V1 setup path): the setup identity recorded by the run
+    that submitted it (its execution outcome, else its Setup Validator explanation). Never the alerting run's own
+    setup, which may be a different opportunity (e.g. a position closed by a later run). None when unrecorded."""
+    review = store.review_report(order.run_id) if order.run_id else None
+    if not review:
+        return None
+    execution = review.get("execution") or {}
+    if execution.get("setup_id") and execution.get("order_id") in {None, order.order_id}:
+        return execution["setup_id"]
+    return (review.get("setup") or {}).get("setup_id")
+
+
 def trade_block(store, row, review):
     """The order/position alert block of journal ``row`` from durable PAPER state, or {} without an order."""
     payload = json.loads(row["payload"] or "{}")
@@ -71,7 +84,7 @@ def trade_block(store, row, review):
     stop = position.stop if position is not None else order.stop
     out = {"side": order.side, "entry": entry, "stop_loss": stop, "take_profit": order.target,
            "quantity": order.quantity, "order_id": order.order_id}
-    setup_id = order.setup_id or (review.get("execution") or {}).get("setup_id")
+    setup_id = order.setup_id or order_setup_id(store, order)
     if setup_id:
         out["setup_id"] = setup_id
     risk, reward = abs(entry - order.stop), abs(order.target - entry)
@@ -108,4 +121,4 @@ def with_trade(store, events):
     return out
 
 
-__all__ = ["AI_REVIEW_EVENTS", "capture_ai_review_health", "trade_block", "with_trade"]
+__all__ = ["AI_REVIEW_EVENTS", "capture_ai_review_health", "order_setup_id", "trade_block", "with_trade"]
