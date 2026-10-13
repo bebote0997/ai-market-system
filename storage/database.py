@@ -305,7 +305,7 @@ class Store:
                     "ENTITLEMENT_ERROR", "RATE_LIMITED", "AI_CAUTION",
                     "RISK_REJECTED", "EXECUTION_DECISION", "POSITION_OPENED",
                     "POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED", "DAILY_SUMMARY", "MACRO_HIGH_IMPORTANCE",
-                    "MACRO_HIGH_RELEVANCE"}
+                    "MACRO_HIGH_RELEVANCE", "AI_REVIEW_UNHEALTHY", "AI_REVIEW_RECOVERED"}
         events = []
         with self.transaction():
             rows = self.db.execute("SELECT * FROM journal WHERE (? IS NULL OR run_id=?) ORDER BY id",
@@ -316,6 +316,9 @@ class Store:
                 event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"journal:{row['id']}"))
                 if self.db.execute("SELECT 1 FROM notification_events WHERE event_id=?", (event_id,)).fetchone():
                     continue
+                if (row["event_type"] == "AI_REVIEW_UNHEALTHY"
+                        and json.loads(row["payload"] or "{}").get("notify") is False):
+                    continue  # pre-demo: journaled every time, alerted on the transition only
                 review = self.review_report(row["run_id"]) if row["run_id"] else None
                 if row["event_type"] == "EXECUTION_DECISION":
                     decision = json.loads(row["payload"])
@@ -347,7 +350,7 @@ class Store:
                         evidence = tuple(dict.fromkeys((*evidence, macro_id)))
                 entity = row["source"]
                 execution = None
-                if row["event_type"] == "STRUCTURE_REVERSE_SUBMITTED":
+                if row["event_type"] in {"STRUCTURE_REVERSE_SUBMITTED", "AI_REVIEW_UNHEALTHY", "AI_REVIEW_RECOVERED"}:
                     execution = json.loads(row["payload"])
                 elif row["event_type"] == "POSITION_CLOSED" and json.loads(row["payload"]).get("exit_reason"):
                     execution = json.loads(row["payload"])

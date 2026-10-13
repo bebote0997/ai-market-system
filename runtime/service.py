@@ -44,6 +44,9 @@ EVIDENCE_OBSERVE_SKIPPED_BUSY = "EVIDENCE_OBSERVE_SKIPPED_BUSY"
 OBSERVE_BUSY_TIMEOUT_MS = 500
 EVIDENCE_BUSY_TIMEOUT_MS = 10000  # the Evidence Store's own default (restored after every observation)
 OBSERVE_DEGRADED_AFTER = 4
+# Pre-demo: an AI review needed for this cycle returned NO_DATA (retried once; still NO_DATA => no trade).
+AI_REVIEW_UNHEALTHY = "AI_REVIEW_UNHEALTHY"
+MACRO_NO_DATA_REASON = "AI_REVIEW_UNHEALTHY: macro=NO_DATA"
 
 
 class OperationalRuntime:
@@ -545,6 +548,65 @@ class OperationalRuntime:
                 results[symbol] = "ERROR"
         return results
 
+    def _macro_review_matters(self, ai, deterministic, symbol):
+        """Macro AI review NO_DATA in a cycle where it gates something: a PLAN_READY plan or a pending order."""
+        if ai.ai_macro is None or ai.ai_macro.status != "NO_DATA":
+            return False
+        if deterministic.final_status == "PLAN_READY":
+            return True
+        _, orders, _ = self.store.load_paper(self.config.account_id)
+        return any(o.symbol == symbol and o.status == "PENDING" for o in orders.values())
+
+    def _note_ai_review_health(self, run_id, symbol, payload):
+        """Journal AI_REVIEW_UNHEALTHY (``payload``) or a recovery (None). Alerts are sent on transitions only
+        (``notify``), so a long macro outage alerts once and its recovery once. Observability: never a decision."""
+        state_key = f"ai_review_health:{symbol}"
+
+        def write():
+            with self.store.transaction():
+                previous = self.store.get_state(state_key)
+                if payload is not None:
+                    self.store._event(self.clock(), run_id, symbol, "ai", AI_REVIEW_UNHEALTHY, "WARNING",
+                                      {**payload, "notify": previous != "UNHEALTHY"})
+                    if previous != "UNHEALTHY":
+                        self.store.set_state(state_key, "UNHEALTHY")
+                elif previous == "UNHEALTHY":
+                    self.store._event(self.clock(), run_id, symbol, "ai", "AI_REVIEW_RECOVERED", "INFO",
+                                      {"reason": "AI_REVIEW_RECOVERED: macro", "agent": "macro_ai"})
+                    self.store.set_state(state_key, "OK")
+        self._audit_safely(write, run_id, symbol)
+
+    def _retry_macro_review(self, deterministic, ai, audit, ai_provider, snapshot, slot, symbol, run_id, equity):
+        """Macro AI review NO_DATA: clear reason, alert, and ONE retry in the same cycle. The deterministic floor is
+        rerun (it re-reads the macro provider; everything else is deterministic on the same snapshot) and the AI
+        floor is rerun only if the macro evidence is now usable. Still NO_DATA => the cycle cannot trade.
+        Returns (deterministic, ai, audit, still_unhealthy)."""
+        LOG.warning("run_id=%s symbol=%s component=ai event=%s macro=NO_DATA attempt=1 action=RETRY",
+                    run_id, symbol, AI_REVIEW_UNHEALTHY)
+        self._note_ai_review_health(run_id, symbol, {"reason": MACRO_NO_DATA_REASON, "agent": "macro_ai",
+                                                     "status": "NO_DATA", "attempt": 1, "action": "RETRY",
+                                                     "final_status": ai.final_status})
+        retried = run_floor(snapshot, slot, symbol, self.macro_provider, self.instruments.get(symbol),
+                            self.risk_config, equity=equity, run_id=run_id,
+                            **({"planner_policy": POLICY_V2_F3} if self.config.v2_planner_policy == "V2_F3" else {}))
+        retried = apply_paper_quantity_increment(retried, self.instruments.get(symbol))
+        macro = retried.macro_news_report
+        if macro is not None and macro.status in {"OK", "PARTIAL"} and macro.evidence and any(
+                macro.evidence[0].get(k) for k in ("macro_events", "news_items")):
+            retry_audit = AuditLog()
+            retried_ai = run_ai(retried, ai_provider, retry_audit)
+            if retried_ai.ai_macro is not None and retried_ai.ai_macro.status in {"OK", "PARTIAL"}:
+                LOG.info("run_id=%s symbol=%s component=ai event=AI_REVIEW_RETRY outcome=RECOVERED", run_id, symbol)
+                self._note_ai_review_health(run_id, symbol, None)
+                return retried, retried_ai, retry_audit, False
+            deterministic, ai, audit = retried, retried_ai, retry_audit
+        LOG.warning("run_id=%s symbol=%s component=ai event=%s macro=NO_DATA attempt=2 action=NO_TRADE",
+                    run_id, symbol, AI_REVIEW_UNHEALTHY)
+        self._note_ai_review_health(run_id, symbol, {"reason": MACRO_NO_DATA_REASON, "agent": "macro_ai",
+                                                     "status": "NO_DATA", "attempt": 2, "action": "NO_TRADE",
+                                                     "final_status": ai.final_status})
+        return deterministic, ai, audit, True
+
     def _record_ai_health(self, events, run_id, symbol):
         """Observability only: journal provider health transitions; alerts only if an alerts object was supplied."""
         for event in events:
@@ -888,6 +950,12 @@ class OperationalRuntime:
                     rex.fail("ai_observer", exc)
             with observing:
                 ai = run_ai(deterministic, ai_provider, audit)
+                macro_unhealthy = self._macro_review_matters(ai, deterministic, symbol)
+                if macro_unhealthy:  # pre-demo: log + alert, then ONE retry of the macro review in this cycle
+                    deterministic, ai, audit, macro_unhealthy = self._retry_macro_review(
+                        deterministic, ai, audit, ai_provider, snapshot, slot, symbol, run_id, decision_equity)
+                elif ai.ai_macro is not None and ai.ai_macro.status in {"OK", "PARTIAL"}:
+                    self._note_ai_review_health(run_id, symbol, None)
             self._rex_note(rex, "ST5", lambda: self._rex_ai(ai, audit))
             if self.config.v2_ai_resilience:
                 health_events = self.ai_health.drain()
@@ -1054,6 +1122,8 @@ class OperationalRuntime:
                 else:
                     position = broker.account.open_positions.get(symbol)
                     execution_reason, blocking_position_id = "EXISTING_POSITION", position.position_id
+            elif macro_unhealthy and ai.final_status == "PLAN_READY":
+                execution_reason = AI_REVIEW_UNHEALTHY  # macro review still NO_DATA after the retry: no trade
             else:
                 execution_reason = ai.final_status if ai.final_status != "PLAN_READY" else "POLICY_REVIEW_UNAVAILABLE"
             self._rex_note(rex, "ST10", lambda: {
