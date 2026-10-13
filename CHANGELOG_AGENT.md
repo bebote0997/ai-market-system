@@ -1693,3 +1693,36 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 ## 2026-10-11: certificación ligera de las fases 9-12 y runbook de la Fase 13 (Grok Bot)
 - Checklists en docs/phases/phase-09..12.md con enlaces a PRs, CI y revisiones; STATUS a 13/14.
 - Nuevo docs/phases/phase-13-runbook.md (no se ejecuta nada).
+
+## 2026-10-13 — PR #37 dashboard readability, bounded memory and candle-cache charts
+
+Owner-authorized work on `v2/dashboard-luxury`: fetched origin and ran `git merge origin/main`;
+latest main `8b11da0` already an ancestor, result **Already up to date**, no conflicts.
+Inspected `origin/v2/pre-demo-fixes:runtime/candle_cache.py` without merging that branch.
+
+- JSON: identities/outcomes first, escaped indented collapsible details; legacy dataframe JSON
+  detail limited to 20 displayed records, native JSON collapsed. Scalar ET/number/NO_DATA formatting retained.
+- Mobile: single-column Streamlit columns and luxury grids through 768px. Computed Chromium CSS
+  checks at 375/640/768/1024px, including long identities/no page overflow.
+- Memory: tables capped at 200; Process/validated Setups queries bounded (validation filters before
+  LIMIT), one selected setup chart; old exact-run Process links preserved. Overview metrics stream
+  scalar full-ledger fields with only 200 curve points retained. Legacy view loads account totals,
+  OPEN positions and latest 200 orders (pending prioritized), without reconstructing full fills/closed-trade ledgers.
+- Read-only stdlib cache adapter for exact pre-demo `candles(symbol,bar_start,close) WITHOUT ROWID`
+  schema. `AI_FLOOR_CANDLE_CACHE_PATH`, default `candle_cache.db` beside `AI_FLOOR_DB_PATH`.
+  Last 48 closed 5m prices at setup `as_of`, chronological, symbol scoped; no future/open bars,
+  file creation, provider calls or synthetic OHLC. Missing/invalid cache falls back to exact-cycle
+  persisted 15m OHLC or explicit unavailable state. UI `st.cache_data(ttl=30,max_entries=32)`.
+- Setup email stays OFF by default; cache prices saved with event for retries/restart. Existing
+  worker/dedup path retained, reconciliation paged. Real PNG generated via existing matplotlib Agg,
+  plan levels and multiplier-aware labels shared with dashboard; no Chrome/Kaleido requirement.
+  Removed unused Kaleido requirement. Render errors preserve text delivery; SMTP tests mocked.
+- Validation: repo venv baseline 1614 tests OK (1 skipped, 1 expected failure); system Python lacked
+  optional dependencies. Focused dashboard/readability/legacy/replay tests: 58 PASS. Chromium CSS: PASS.
+  Ruff and `git diff --check`: PASS. Closing full suite: 1629 tests OK (2 skipped, 1 expected failure), 190.416s.
+  The optional Chromium test passes separately in the existing Playwright environment; the other skip is preexisting.
+  Running authenticated app: Overview columns PASS at 375/640/768/1024px; Setups cache chart PASS at 375px.
+  First closing run detected legacy FILLED-order compatibility; fixed with bounded pending-first order history,
+  and the replay regression plus final full suite pass.
+
+PAPER/DEMO only; no risk/strategy/runtime activation, NAS100 enablement, Render changes, main merge or deploy.

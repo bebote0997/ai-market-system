@@ -47,8 +47,19 @@ def records(db, table, *, run_id="", setup_id="", offset=0, statuses=(), failed=
     if statuses:
         key = "severity" if table == "journal" else "status"
         field = f't."{key}"' if key in columns else f"json_extract(t.payload, '$.{key}')"
-        predicates.append(field + " IN (" + ",".join("?" for _ in statuses) + ")")
+        status_filter = field + " IN (" + ",".join("?" for _ in statuses) + ")"
         params.extend(statuses)
+        if table == 'setups' and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_snapshots'").fetchone():
+            # Preserve exact-cycle snapshot validation on legacy WATCH rows and
+            # their persisted plan/IDs while filtering eligible setups before LIMIT.
+            status_filter = '(' + status_filter + ' OR EXISTS (SELECT 1 FROM ui_snapshots s JOIN runs r '
+            status_filter += 'ON r.slot_key=t.slot_key WHERE s.symbol=r.symbol '
+            status_filter += "AND json_extract(s.payload,'$.symbol')=r.symbol AND json_extract(s.payload,'$.run_id')=r.run_id "
+            status_filter += "AND COALESCE(json_extract(s.payload,'$.setup_status'),json_extract(s.payload,'$.state')) IN ("
+            status_filter += ','.join('?' for _ in statuses) + ')))'
+            params.extend(statuses)
+        predicates.append(status_filter)
     if failed:
         predicates.append("(t.status='FAILED' OR COALESCE(t.error, '') <> '')")
     where = " WHERE " + " AND ".join(predicates) if predicates else ""

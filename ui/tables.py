@@ -1,5 +1,9 @@
 """Arrow-safe presentation for every legacy dataframe."""
 import json
+from itertools import islice
+from ui.json_views import ordered, structured
+
+TABLE_ROW_LIMIT = 200
 
 
 def normalize_rows(rows):
@@ -20,4 +24,9 @@ def normalize_rows(rows):
 
 
 def dataframe(st, rows, **kwargs):
-    return st.dataframe(normalize_rows(rows), **kwargs)
+    rows = [ordered(dict(row)) for row in islice(rows, TABLE_ROW_LIMIT)]
+    result = st.dataframe(normalize_rows(rows), **kwargs)
+    if any(isinstance(structured(value), (dict, list)) for row in rows for value in row.values()):
+        with st.expander('Formatted JSON · first 20 displayed records', expanded=False):
+            st.json(rows[:20], expanded=False)
+    return result

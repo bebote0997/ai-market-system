@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from collections import deque
 from zoneinfo import ZoneInfo
 
 from runtime.scheduler import session_names
@@ -12,6 +13,7 @@ from storage.codec import parse_utc
 from ui.adapters import from_persisted_snapshot
 from ui.pages.dashboard import ROW_LIMIT, payloads, records
 from ui.state import dashboard_database
+from ui.json_views import details, structured
 
 PAGES = ("Overview", "The Floor", "Process", "Setups", "Trades", "Decisions", "Analysts · soon")
 MISSING = "not available yet"
@@ -40,11 +42,15 @@ def html(st, content):
     st.markdown(f'<div class="lux">{content}</div>', unsafe_allow_html=True)
 
 
+def content(value):
+    return details(value) if isinstance(structured(value), (list, tuple, dict)) else e(value)
+
+
 def card(st, title, fields=(), *, value=None, summary=None):
     body = f'<div class="big num">{e(value)}</div>' if value is not None else ''
     if summary is not None:
-        body += f'<div class="bubble">{e(summary)}</div>'
-    body += ''.join(f'<div class="row"><span class="mute">{e(key)}</span><span>{e(val)}</span></div>'
+        body += f'<div class="bubble">{content(summary)}</div>'
+    body += ''.join(f'<div class="row"><span class="mute">{e(key)}</span><span>{content(val)}</span></div>'
                     for key, val in fields)
     html(st, f'<div class="card"><h3>{e(title)}</h3>{body}</div>')
 
@@ -55,7 +61,7 @@ def table(st, title, rows, columns=None):
         return
     columns = columns or list(dict.fromkeys(key for row in rows for key in row if key != 'payload'))
     head = ''.join(f'<th>{e(key.replace("_", " "))}</th>' for key in columns)
-    body = ''.join('<tr>'+''.join(f'<td>{e(row.get(key))}</td>' for key in columns)+'</tr>'
+    body = ''.join('<tr>'+''.join(f'<td>{content(row.get(key))}</td>' for key in columns)+'</tr>'
                    for row in rows[:ROW_LIMIT])
     html(st, f'<div class="card"><h3>{e(title)}</h3><div class="scroll"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div></div>')
 
@@ -96,14 +102,43 @@ def trade_statistics(trades, now):
     return result, curve
 
 
-def all_closed(db):
-    rows, offset = [], 0
-    while True:
-        page = payloads(db, 'closed_trades', offset=offset)
-        rows.extend(page)
-        if len(page) < ROW_LIMIT:
-            return rows
-        offset += ROW_LIMIT
+def ledger_statistics(db, now):
+    """Stream scalar ledger fields; exact metrics, only the latest 200 curve points."""
+    missing = dict.fromkeys(('Today PnL · ET', 'Win rate · closed trades', 'Avg R realized',
+                             'Max drawdown · realized PnL'), MISSING)
+    if db is None or not db.execute("SELECT 1 FROM sqlite_master WHERE name='closed_trades'").fetchone():
+        return missing, []
+    cursor = db.execute("SELECT json_extract(payload,'$.net_pnl'),json_extract(payload,'$.exited_at'),"
+                        "json_extract(payload,'$.realized_r') FROM closed_trades "
+                        "ORDER BY julianday(json_extract(payload,'$.exited_at')),rowid")
+    count = wins = 0
+    total = peak = drawdown = today_pnl = sum_r = 0.0
+    known_r = valid = True
+    today = now.astimezone(ZoneInfo('America/New_York')).date()
+    curve = deque(maxlen=ROW_LIMIT)
+    for pnl, stamp, realized_r in cursor:
+        count += 1
+        if not number(pnl) or not stamp:
+            valid = False
+            continue
+        at = parse_utc(stamp)
+        total += pnl
+        peak = max(peak, total)
+        drawdown = max(drawdown, peak-total)
+        wins += pnl > 0
+        if at.astimezone(ZoneInfo('America/New_York')).date() == today:
+            today_pnl += pnl
+        if number(realized_r):
+            sum_r += realized_r
+        else:
+            known_r = False
+        curve.append({'Closed at': at, 'Cumulative realized PnL': total})
+    if not count or not valid:
+        return missing, []
+    return {'Today PnL · ET': f'{today_pnl:,.2f}',
+            'Win rate · closed trades': f'{100*wins/count:.1f}%',
+            'Avg R realized': f'{sum_r/count:.2f}R' if known_r else MISSING,
+            'Max drawdown · realized PnL': f'{drawdown:,.2f} (cash)'}, list(curve)
 
 
 def policy_value(states, key):
@@ -117,8 +152,7 @@ def policy_value(states, key):
 def overview(st, db, now):
     states = {r['key']: r['value'] for r in records(db, 'system_state')}
     accounts = payloads(db, 'paper_accounts')
-    trades = all_closed(db)
-    stats, curve = trade_statistics(trades, now)
+    stats, curve = ledger_statistics(db, now)
     cols = st.columns([1.6, 1, 1])
     with cols[0]:
         if not accounts:
@@ -128,7 +162,7 @@ def overview(st, db, now):
                  ('Realized PnL', account.get('realized_pnl')), ('Unrealized PnL', account.get('unrealized_pnl'))],
                  value=account.get('equity', MISSING))
         if curve:
-            st.caption('Closed-trade curve · cumulative realized PnL only')
+            st.caption('Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger')
             import plotly.graph_objects as go
             fig = go.Figure(go.Scatter(x=[r['Closed at'] for r in curve], y=[r['Cumulative realized PnL'] for r in curve],
                                        mode='lines+markers', line=dict(color='#c8a96a', width=1.5)))

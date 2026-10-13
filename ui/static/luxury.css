@@ -47,3 +47,15 @@ header[data-testid="stHeader"] {background:transparent}
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) > div:first-child > div {display:none}
 [data-testid="stCheckbox"] label,[data-testid="stWidgetLabel"] {color:#8a877f}
 @media(max-width:640px){.lux .scroll{max-width:100%}.lux td,.lux th{min-width:80px;font-size:12px}}
+.lux .json-key-fields{line-height:1.7;overflow-wrap:anywhere;margin-bottom:8px}
+.lux .json-details summary{cursor:pointer;color:var(--gold)}
+.lux .json-details pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-size:12px;line-height:1.5;padding:12px}
+@media(max-width:768px){
+ [data-testid="stHorizontalBlock"]{flex-direction:column!important;align-items:stretch!important}
+ [data-testid="stColumn"]{width:100%!important;min-width:0!important;max-width:100%!important;flex:1 1 100%!important}
+ .lux .wrap,.lux .grid{grid-template-columns:minmax(0,1fr)!important}
+ .lux .row{flex-direction:column;gap:6px}
+ .lux .card{min-width:0;padding:16px}
+ .lux .scroll{max-width:100%}
+ .block-container{padding:24px 16px}
+}

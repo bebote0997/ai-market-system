@@ -313,7 +313,7 @@ class SetupEmailTests(unittest.TestCase):
         before = self.digest()
         from unittest.mock import Mock
         smtp = Mock()
-        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', return_value=b'\x89PNG\r\n\x1a\nfixture'):
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('runtime.setup_chart_email.setup_chart_png', return_value=b'\x89PNG\r\n\x1a\nfixture'):
             publish_setup_charts(dispatcher, self.env)
             publish_setup_charts(dispatcher, self.env)
             dispatcher.recover_pending()
@@ -333,7 +333,7 @@ class SetupEmailTests(unittest.TestCase):
         from unittest.mock import Mock
         smtp = Mock()
         dispatcher = self.dispatcher()
-        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', side_effect=RuntimeError('kaleido missing')):
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('runtime.setup_chart_email.setup_chart_png', side_effect=RuntimeError('kaleido missing')):
             publish_setup_charts(dispatcher, self.env)
         self.assertEqual(smtp.send_message.call_count, 1)
         self.assertEqual(list(smtp.send_message.call_args.args[0].iter_attachments()), [])
@@ -344,7 +344,7 @@ class SetupEmailTests(unittest.TestCase):
         env = {**self.env, 'AI_FLOOR_ALERTS_LEDGER_PATH':str(Path(self.tmp.name)/'alerts.db')}
         smtp = Mock()
         before = self.digest()
-        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', return_value=b'\x89PNGfixture'):
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('runtime.setup_chart_email.setup_chart_png', return_value=b'\x89PNGfixture'):
             for _ in range(2):
                 hook = AlertHook(environ=env)
                 self.assertTrue(hook.flush())
@@ -373,7 +373,7 @@ class SetupEmailTests(unittest.TestCase):
         on = dispatcher_from_env(ledger_path=ledger_path, environ=self.env)
         self.addCleanup(on.ledger.close)
         before = self.digest()
-        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image', return_value=b'\x89PNGsnapshot'):
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('runtime.setup_chart_email.setup_chart_png', return_value=b'\x89PNGsnapshot'):
             on.recover_pending()
             on.recover_pending()
         self.assertEqual(smtp.send_message.call_count, 1)
@@ -392,7 +392,7 @@ class SetupEmailTests(unittest.TestCase):
         dispatcher = self.dispatcher()
         smtp = Mock()
         smtp.send_message.side_effect = [smtplib.SMTPServerDisconnected(), None]
-        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('plotly.graph_objects.Figure.to_image') as render:
+        with patch('smtplib.SMTP_SSL', return_value=smtp), patch('runtime.setup_chart_email.setup_chart_png') as render:
             publish_setup_charts(dispatcher, self.env)
         render.assert_not_called()
         self.assertEqual(smtp.send_message.call_count, 2)

@@ -69,3 +69,20 @@ Validación final: suite completa solicitada, 1495 tests OK (1 expected failure)
 - [x] Las alertas están OFF por defecto (`AI_FLOOR_ALERTS_ENABLED`), fuera del trading path; hay tests de que un fallo de alerta no cambia el estado PAPER.
 - [ ] **Diferido al pre-flight de la Fase 13:** F09-T18, el envío real de email y Slack desde Render (el box bloquea SMTP). Ver `phase-13-runbook.md`.
 - [ ] **Diferido al pre-flight de la Fase 13:** con `AI_FLOOR_V2_POSITION_CATCH_UP` OFF, el gráfico sale NO_DATA (decisión del owner).
+
+## PR #37 — setup-chart email listo con cache (2026-10-13)
+
+`AI_FLOOR_SETUP_CHART_EMAIL` OFF por defecto. El worker reconcilia setups validados por páginas,
+lee cierres 5m de cache en modo read-only al timestamp del setup y persiste los precios junto al evento.
+Dedup por setup ID y recuperación sin releer cache conservados. PNG con matplotlib Agg existente,
+Entry/SL/TP y labels compartidos (incluye contract_multiplier; sin multiplier, distancia de precio).
+Sin Chrome/Kaleido; requisito Kaleido eliminado. Falta de cache → OHLC exact-cycle o texto;
+fallo de rendering → email texto. No merge de `origin/v2/pre-demo-fixes` ni cambio del writer.
+
+Tests offline con PNG real + SMTP mock: esquema/ruta default y explícita, read-only/hash,
+cutoff/cierre/símbolo/límite, OFF no-op, dedup/restart con cache borrado, fallback y reconciliación
+más de 200 setups. Suite enfocada dashboard/alertas: 58 PASS; cierre full-suite en CHANGELOG_AGENT.md.
+F09-T18 (envío real desde Render) sigue diferido; sin activación, envío real ni deploy.
+
+Cierre PR #37: suite completa 1629 tests OK (2 skipped, 1 expected failure), 190.416s.
+Chromium CSS y app real local con fixtures: PASS; Ruff/diff-check: PASS.

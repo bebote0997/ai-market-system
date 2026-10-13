@@ -4,49 +4,45 @@ import json
 from ui.pages.dashboard import ROW_LIMIT, payloads, records
 
 
-def validated_setups(db, *, run_id=''):
-    rows, offset = [], 0
-    while True:
-        page = records(db, 'setups', run_id=run_id, offset=offset)
-        for row in page:
-            run = dict(db.execute('SELECT * FROM runs WHERE slot_key=?', (row['slot_key'],)).fetchone() or {})
-            if not run:
-                continue
-            snapshots = [s for s in payloads(db, 'ui_snapshots', run_id=run['run_id'])
-                         if s.get('run_id') == run['run_id'] and s.get('symbol') == run['symbol']]
-            snapshot = snapshots[0] if snapshots else {}
-            if row['status'] not in ('VALID_SETUP', 'PLAN_READY') and snapshot.get('setup_status', snapshot.get('state')) not in ('VALID_SETUP', 'PLAN_READY'):
-                continue
-            plan = json.loads(row['plan']) if row.get('plan') else snapshot.get('plan')
-            plan = dict(plan or {})
-            risks = records(db, 'risk_decisions', run_id=run['run_id'])
-            if risks:
-                for key in ('quantity', 'contract_multiplier'):
-                    if risks[0].get(key) is not None:
-                        plan[key] = risks[0][key]
-            reviews = payloads(db, 'review_reports', run_id=run['run_id'])
-            setup = reviews[0].get('setup') or {} if reviews else {}
-            execution = reviews[0].get('execution') or {} if reviews else {}
-            setup_id = plan.get('setup_id') or setup.get('setup_id') or execution.get('setup_id')
-            if not setup_id:
-                decisions = [j for j in payloads(db, 'journal', run_id=run['run_id'])
-                             if j.get('event_type') == 'EXECUTION_DECISION']
-                setup_id = decisions[0].get('setup_id') if decisions else None
-            bars = snapshot.get('bars') or []
-            if isinstance(bars, dict):
-                bars = bars.get('15m', [])
-            else:
-                # An unlabelled list is not proof that candles are 15m.
-                bars = [b for b in bars if str(b.get('timeframe', '')).lower() in ('15m', '15min')]
-            status = row['status'] if row['status'] in ('VALID_SETUP', 'PLAN_READY') else snapshot.get('setup_status', snapshot.get('state'))
-            rows.append({**run, 'setup_id': setup_id, 'setup_status': status,
-                         'plan': plan, 'bars': bars, 'setup': setup})
-        if len(page) < ROW_LIMIT:
-            break
-        offset += ROW_LIMIT
+def validated_setups(db, *, run_id='', offset=0):
+    rows = []
+    page = records(db, 'setups', run_id=run_id, offset=offset, statuses=('VALID_SETUP', 'PLAN_READY'))
+    for row in page:
+        run = dict(db.execute('SELECT * FROM runs WHERE slot_key=?', (row['slot_key'],)).fetchone() or {})
+        if not run:
+            continue
+        snapshots = [s for s in payloads(db, 'ui_snapshots', run_id=run['run_id'])
+                     if s.get('run_id') == run['run_id'] and s.get('symbol') == run['symbol']]
+        snapshot = snapshots[0] if snapshots else {}
+        if row['status'] not in ('VALID_SETUP', 'PLAN_READY') and snapshot.get('setup_status', snapshot.get('state')) not in ('VALID_SETUP', 'PLAN_READY'):
+            continue
+        plan = json.loads(row['plan']) if row.get('plan') else snapshot.get('plan')
+        plan = dict(plan or {})
+        risks = records(db, 'risk_decisions', run_id=run['run_id'])
+        if risks:
+            for key in ('quantity', 'contract_multiplier'):
+                if risks[0].get(key) is not None:
+                    plan[key] = risks[0][key]
+        reviews = payloads(db, 'review_reports', run_id=run['run_id'])
+        setup = reviews[0].get('setup') or {} if reviews else {}
+        execution = reviews[0].get('execution') or {} if reviews else {}
+        setup_id = plan.get('setup_id') or setup.get('setup_id') or execution.get('setup_id')
+        if not setup_id:
+            decisions = [j for j in payloads(db, 'journal', run_id=run['run_id'])
+                         if j.get('event_type') == 'EXECUTION_DECISION']
+            setup_id = decisions[0].get('setup_id') if decisions else None
+        bars = snapshot.get('bars') or []
+        if isinstance(bars, dict):
+            bars = bars.get('15m', [])
+        else:
+            # An unlabelled list is not proof that candles are 15m.
+            bars = [b for b in bars if str(b.get('timeframe', '')).lower() in ('15m', '15min')]
+        status = row['status'] if row['status'] in ('VALID_SETUP', 'PLAN_READY') else snapshot.get('setup_status', snapshot.get('state'))
+        rows.append({**run, 'setup_id': setup_id, 'setup_status': status,
+                     'plan': plan, 'bars': bars, 'setup': setup})
     # Exact-run snapshots can carry validated setups even without a legacy setups row.
     existing = {r['run_id'] for r in rows}
-    for snapshot in payloads(db, 'ui_snapshots', run_id=run_id):
+    for snapshot in (payloads(db, 'ui_snapshots', run_id=run_id) if offset == 0 else []):
         if snapshot.get('setup_status', snapshot.get('state')) not in ('VALID_SETUP', 'PLAN_READY') or snapshot.get('run_id') in existing:
             continue
         parents = records(db, 'runs', run_id=snapshot.get('run_id')) if snapshot.get('run_id') else []
@@ -60,17 +56,32 @@ def validated_setups(db, *, run_id=''):
     return sorted(rows, key=lambda r: r['as_of'], reverse=True)
 
 
+def iter_validated_setups(db, *, run_id=''):
+    """Reconcile history one bounded page at a time; do not retain the ledger."""
+    offset = 0
+    while True:
+        yield from validated_setups(db, run_id=run_id, offset=offset)
+        if len(records(db, 'setups', run_id=run_id, offset=offset, statuses=('VALID_SETUP', 'PLAN_READY'))) < ROW_LIMIT:
+            return
+        offset += ROW_LIMIT
+
+
 def render(st, db):
     from ui.components.setup_chart import build_setup_figure
     from ui.pages.luxury import card, process_link, MISSING
-    rows = validated_setups(db)
+    rows = validated_setups(db)[:ROW_LIMIT]
+    from runtime.setup_candle_reader import cache_path
+    from ui.candle_cache import cached_candles
+    st.caption('Latest 200 setups · cache: closed 5m prices as of setup; OHLC only when persisted.')
     if not rows:
         card(st, 'Validated setups', summary=f'{MISSING} · not persisted yet')
         return
     symbol = st.selectbox('Setups symbol', ['All'] + sorted({r['symbol'] for r in rows}))
-    for index, row in enumerate(rows):
-        if symbol != 'All' and row['symbol'] != symbol:
-            continue
+    visible = [row for row in rows if symbol == 'All' or row['symbol'] == symbol]
+    selected = st.selectbox('Setup · newest first', range(len(visible)),
+                            format_func=lambda i: f"{visible[i]['symbol']} · {visible[i]['setup_id'] or visible[i]['run_id']} · {visible[i]['as_of']}")
+    for index, row in enumerate([visible[selected]]):
+        row['bars'] = cached_candles(str(cache_path()), row['symbol'], row['as_of']) or row['bars'][-48:]
         card(st, row['symbol'] + ' · ' + row['setup_status'],
              [('Run ID', row['run_id']), ('Setup ID', row['setup_id']), ('As of', row['as_of'])], summary=row['setup'])
         process_link(st, row['run_id'], f'setup-process-{index}')
@@ -81,6 +92,7 @@ def render(st, db):
             card(st, 'Gaps', summary='Exact-cycle 15m OHLC bars not persisted')
         else:
             try:
+                st.caption('5m close prices · candle_cache · no OHLC available' if row['bars'][0].get('source') == 'candle_cache' else 'Persisted 15m OHLC')
                 st.plotly_chart(build_setup_figure(row['bars'], row['plan'], row['symbol']), width='stretch', key=f'setup-chart-{index}')
             except (ValueError, KeyError, TypeError):
                 card(st, 'Chart', summary='chart unavailable: persisted bars invalid')

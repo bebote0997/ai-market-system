@@ -71,7 +71,7 @@ else:
             st.warning("Review export temporarily unavailable; PAPER execution is unaffected.")
         system.render(st, vm, health(store) if store else None,
                       store.latest_review(symbol) if store else None,
-                      store.notification_events() if store else (),
+                      dashboard.payloads(store.db, 'notification_events') if store else (),
                       evidence_json, store=store)
     finally:
         if store:

@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
+_Última actualización: 2026-10-13 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 
 **Entorno:** PAPER / DEMO únicamente · `REAL_EXECUTION_ENABLED = False` · NAS100 OFF · runtime V2 y SYSTEM HEALTH INACTIVE · sin deploy V2.
 **main:** `4974408e443908ceb5723aed13c1eb15a81f3c51` (merge PR #13, Fase 8).
@@ -72,3 +72,16 @@ El Libro Maestro en Word (versión 1.9, 2026-10-07) queda **archivado/histórico
 Owner Jeferson Tejeda: `V2_PLANNER_POLICY` implementado localmente, default V1; V2_F3 planifica 3.00R y aplica piso PAPER 2.50R en ambas rutas runtime. Demo configurará `V2_PLANNER_POLICY=V2_F3` con GO operativo; independiente de la política de setups opuestos. Sin activación, merge, deploy ni cambios en Render; Fase 13 sigue NOT STARTED.
 
 Validación DEC-14.2: ruff y suite unittest completa PASS (1520 tests, 1 expected failure). Pytest completo: 1514 passed, 1 xfailed; 5 fallos previos del harness de señales de Fase 8 (`TestCaseFunction.failures`). Commit local pendiente de autorizar la corrección mínima de esos dos tests y obtener pytest verde.
+
+## PR #37 — dashboard follow-up autorizado (2026-10-13)
+
+Implementación en `v2/dashboard-luxury`: origin/main ya integrado (`8b11da0`, merge no-op).
+JSON formateado/colapsable, layout móvil hasta 768px, lecturas/tablas/caché acotadas;
+Setups y email opcional leen `candle_cache.db` en solo lectura, compatibles con el esquema
+pre-demo de cierres 5m (no OHLC inventado). PNG de email mediante Agg, flag
+`AI_FLOOR_SETUP_CHART_EMAIL` OFF por defecto. Rama pre-demo inspeccionada, no mergeada.
+Detalle/evidencia en fases 09/10 y CHANGELOG_AGENT.md. PR sigue draft; sin certificación,
+activación, merge a main, cambios en Render ni deploy.
+
+Validación PR #37: suite completa 1629 tests OK (2 skipped, 1 expected failure); 58 checks
+enfocados PASS, Chromium CSS y app móvil PASS, Ruff/diff-check PASS.

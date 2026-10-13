@@ -63,13 +63,11 @@ def cycle_evidence(db, run):
 
 def render(st, db):
     from ui.pages.luxury import card, MISSING
-    runs, offset = [], 0
-    while True:
-        page = records(db, 'runs', offset=offset)
-        runs.extend(page)
-        if len(page) < 200:
-            break
-        offset += 200
+    runs = records(db, 'runs')
+    requested = st.session_state.get('process_run_id')
+    if requested and requested not in {r['run_id'] for r in runs}:
+        runs = records(db, 'runs', run_id=requested) + runs[:199]
+    st.caption('Latest 200 cycles; exact run links can open older cycles.')
     symbol = st.selectbox('Process symbol', ['All'] + sorted({r['symbol'] for r in runs}))
     runs = [r for r in runs if symbol == 'All' or r['symbol'] == symbol]
     runs.sort(key=lambda r: (r['as_of'], r['started_at']), reverse=True)

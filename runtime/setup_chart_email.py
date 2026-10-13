@@ -3,6 +3,8 @@ from dataclasses import dataclass, replace
 import logging
 
 from runtime.alert_catalog import AlertEvent, AlertKind, alert_event_id, display
+from runtime.setup_candle_reader import cache_path, read_candles
+from runtime.setup_chart_png import setup_chart_png
 
 LOG = logging.getLogger(__name__)
 FLAG = 'AI_FLOOR_SETUP_CHART_EMAIL'
@@ -40,31 +42,35 @@ def publish_setup_charts(dispatcher, environ, run_id=''):
         from runtime.demo_runner import REAL_EXECUTION_ENABLED
         if REAL_EXECUTION_ENABLED:
             return
-        from ui.pages.setups import validated_setups
+        from ui.pages.setups import iter_validated_setups
         from ui.state import dashboard_database
         with dashboard_database(environ.get('AI_FLOOR_DB_PATH', 'data/runtime/trading_floor.db')) as db:
-            rows = validated_setups(db, run_id=run_id)
-        for row in rows:
-            # A running cycle has not completed its decision/order boundary.
-            if row['status'] not in ('COMPLETED', 'FAILED'):
-                continue
-            setup_id = row['setup_id']
-            if not setup_id:
-                LOG.warning('component=alerts event=SETUP_CHART_NO_SETUP_ID')
-                continue
-            plan = row['plan']
-            trade = {'setup_id': setup_id, 'side': plan.get('side'), 'entry': plan.get('entry'),
-                     'stop_loss': plan.get('stop'), 'take_profit': plan.get('target'),
-                     'quantity': plan.get('quantity'), 'rr': plan.get('risk_reward'),
-                     'chart_ref': 'Persisted 15m bars' if row['bars'] else 'chart unavailable: bars not persisted'}
-            event = SetupChartEvent(alert_event_id(KIND.event_type, setup_id), KIND.event_type,
-                row.get('completed_at') or row['as_of'], row['run_id'], row['symbol'], (),
-                'Validated PAPER setup. Informational; no order authorization.',
-                tuple((k, display(v)) for k, v in trade.items()), (), tuple(row['bars']), dict(plan))
-            dispatcher.dispatch(event)
+            for row in iter_validated_setups(db, run_id=run_id):
+                _publish_row(dispatcher, environ, row)
     except Exception as exc:  # noqa: BLE001 - post-decision alerting never affects a cycle
         LOG.warning('component=alerts event=SETUP_CHART_FAILED error_type=%s', type(exc).__name__)
 
+
+def _publish_row(dispatcher, environ, row):
+    # A running cycle has not completed its decision/order boundary.
+    if row['status'] not in ('COMPLETED', 'FAILED'):
+        return
+    setup_id = row['setup_id']
+    if not setup_id:
+        LOG.warning('component=alerts event=SETUP_CHART_NO_SETUP_ID')
+        return
+    plan = row['plan']
+    bars = read_candles(cache_path(environ), row['symbol'], row['as_of']) or row['bars'][-48:]
+    trade = {'setup_id': setup_id, 'side': plan.get('side'), 'entry': plan.get('entry'),
+             'stop_loss': plan.get('stop'), 'take_profit': plan.get('target'),
+             'quantity': plan.get('quantity'), 'rr': plan.get('risk_reward'),
+             'chart_ref': ('Closed 5m prices · candle_cache · no OHLC' if bars and bars[0].get('source') == 'candle_cache'
+                           else 'Persisted 15m bars' if bars else 'chart unavailable: bars not persisted')}
+    event = SetupChartEvent(alert_event_id(KIND.event_type, setup_id), KIND.event_type,
+        row.get('completed_at') or row['as_of'], row['run_id'], row['symbol'], (),
+        'Validated PAPER setup. Informational; no order authorization.',
+        tuple((k, display(v)) for k, v in trade.items()), (), tuple(bars), dict(plan))
+    dispatcher.dispatch(event)
 
 class SetupChartEmailChannel:
     name = CHANNEL
@@ -80,11 +86,9 @@ class SetupChartEmailChannel:
         attachments = ()
         if event.bars:
             try:
-                from ui.components.setup_chart import build_setup_figure
-                png = build_setup_figure(event.bars, event.plan or {}, event.symbol).to_image(
-                    format='png', width=1600, height=900, scale=1)
+                png = setup_chart_png(event.bars, event.plan or {}, event.symbol)
                 attachments = (('setup.png', png, 'image', 'png'),)
-            except Exception as exc:  # noqa: BLE001 - kaleido/Chrome/plotly failure falls back to text
+            except Exception as exc:  # noqa: BLE001 - render failure falls back to text
                 LOG.warning('component=alerts event=SETUP_CHART_RENDER_FAILED error_type=%s', type(exc).__name__)
                 trade = dict(event.trade)
                 trade['chart_ref'] = 'chart unavailable: PNG rendering failed'

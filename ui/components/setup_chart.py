@@ -1,4 +1,4 @@
-"""Pure candlestick figure over supplied persisted 15m OHLC; no fetch or synthesis."""
+"""Persisted 15m OHLC or pre-demo 5m close prices; never synthesize candles."""
 from datetime import datetime
 from html import escape
 import math
@@ -13,30 +13,36 @@ ET = ZoneInfo('America/New_York')
 def build_setup_figure(bars, plan, symbol):
     if not bars:
         raise ValueError('chart unavailable: bars not persisted')
+    close_only = all(bar.get('source') == 'candle_cache' and bar.get('timeframe') == '5m' for bar in bars)
     times, candles = [], []
     for bar in bars:
-        if str(bar.get('timeframe', '15m')).lower() not in ('15m', '15min'):
+        if not close_only and str(bar.get('timeframe', '15m')).lower() not in ('15m', '15min'):
             raise ValueError('15m bars required')
         raw = bar.get('timestamp') or bar.get('start') or bar.get('bar_start')
         at = datetime.fromisoformat(raw.replace('Z', '+00:00'))
         if at.tzinfo is None:
             raise ValueError('bar timezone required')
-        values = [float(bar[key]) for key in ('open', 'high', 'low', 'close')]
-        if not all(math.isfinite(v) for v in values):
+        keys = ('close',) if close_only else ('open', 'high', 'low', 'close')
+        if any(isinstance(bar[key], bool) for key in keys):
+            raise ValueError('numeric prices required')
+        values = [float(bar[key]) for key in keys]
+        if not all(math.isfinite(v) and v > 0 for v in values):
             raise ValueError('finite OHLC required')
-        if values[1] < max(values[0], values[3]) or values[2] > min(values[0], values[3]) or values[1] < values[2]:
+        if not close_only and (values[1] < max(values[0], values[3]) or values[2] > min(values[0], values[3]) or values[1] < values[2]):
             raise ValueError('invalid OHLC range')
         times.append(at.astimezone(ET))
         candles.append(values)
     ordered = sorted(zip(times, candles), key=lambda item: item[0])
     times, candles = zip(*ordered)
-    fig = go.Figure(go.Candlestick(x=times,
+    frame_label = '5m closes · no OHLC' if close_only else '15m'
+    fig = go.Figure(go.Scatter(x=times, y=[v[0] for v in candles], mode='lines',
+        line=dict(color=GOLD), name='5m close') if close_only else go.Candlestick(x=times,
         open=[v[0] for v in candles], high=[v[1] for v in candles],
         low=[v[2] for v in candles], close=[v[3] for v in candles],
         increasing_line_color=UP, increasing_fillcolor=UP,
         decreasing_line_color=DOWN, decreasing_fillcolor=DOWN, name='15m'))
     entry, stop, target = (plan.get(key) for key in ('entry', 'stop', 'target'))
-    if all(isinstance(v, (int, float)) and math.isfinite(v) for v in (entry, stop, target)):
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (entry, stop, target)):
         quantity = plan.get('quantity')
         multiplier = plan.get('contract_multiplier')
         # Money labels need persisted quantity AND contract multiplier; never assume 1.
@@ -58,11 +64,12 @@ def build_setup_figure(bars, plan, symbol):
                           line_width=0, layer='below')
     else:
         fig.add_annotation(text='Plan levels not persisted', xref='paper', yref='paper', x=0, y=1, showarrow=False)
-    fig.update_layout(title=dict(text=f'{escape(symbol)} — 15m | Last: {candles[-1][3]:,.2f} | '
-        f'{times[0]:%d %b %H:%M} → {times[-1]:%d %b %H:%M} ET',
-        font=dict(family='Cormorant Garamond', size=24)),
+    fig.update_layout(title=dict(text=f'{escape(symbol)} — {frame_label}<br>'
+        f'<span style="font-size:12px">Last: {candles[-1][-1]:,.2f}<br>'
+        f'{times[0]:%d %b %H:%M} → {times[-1]:%d %b %H:%M} ET</span>',
+        x=0.02, xanchor='left', font=dict(family='Cormorant Garamond', size=18)),
         paper_bgcolor=BG, plot_bgcolor=BG, font=dict(family='IBM Plex Sans', color='#d8d4cc'),
         xaxis=dict(gridcolor=GRID, rangeslider=dict(visible=False), title='America/New_York'),
         yaxis=dict(gridcolor=GRID, side='right'), height=600,
-        margin=dict(l=30, r=40, t=85, b=45), showlegend=False)
+        margin=dict(l=30, r=40, t=110, b=45), showlegend=False)
     return fig

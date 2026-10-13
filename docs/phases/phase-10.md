@@ -74,3 +74,25 @@ Validación final: suite completa solicitada, 1495 tests OK (1 expected failure)
 - [x] PR #31: filtros antes del LIMIT y DASHBOARD_ERROR, merge 7acf384.
 - [x] El acceso a SQLite es `mode=ro` (los tests comprueban el hash intacto), con contraseña (`AI_FLOOR_DASHBOARD_PASSWORD`) y tests de humo para cada página.
 - [ ] **Diferido al pre-flight de la Fase 13:** capturas en móvil (iPhone) y escritorio, y revisión visual del owner sobre el despliegue en Render.
+
+## PR #37 — JSON, mobile, memory y cache (2026-10-13)
+
+Owner autoriza actualizar `v2/dashboard-luxury`; `git merge origin/main` → Already up to date
+(`8b11da0`). JSON escapado/indentado/colapsable, IDs/estado primero; tablas 200 filas y detalle
+JSON de 20. CSS fuerza columnas únicas hasta 768px; Chromium verifica 375/640/768/1024px.
+Process consulta 200 ciclos, conservando links exactos a ciclos anteriores; Setups filtra validación
+antes del LIMIT y renderiza un solo setup seleccionado. Estadísticas exactas sobre todo el ledger
+con campos escalares por cursor, curva limitada a 200 puntos; legacy no carga fills/trades completos.
+
+`runtime/setup_candle_reader.py`: adapter read-only del esquema de `origin/v2/pre-demo-fixes`,
+sin merge. Ruta `AI_FLOOR_CANDLE_CACHE_PATH`, o `candle_cache.db` junto a `AI_FLOOR_DB_PATH`.
+48 cierres 5m del símbolo, cerrados a `as_of`; gráfico de línea etiquetado **no OHLC**, con
+Entry/SL/TP y labels del plan. Caché UI TTL 30s / max_entries 32. Ausencia/error → OHLC 15m
+persistido en ciclo exacto, o unavailable; no fetch ni datos inventados.
+
+Validación enfocada: 58 tests PASS; Chromium CSS PASS; Ruff/diff-check PASS. Baseline venv:
+1614 tests OK (1 skipped, 1 expected failure). Cierre full-suite en CHANGELOG_AGENT.md.
+PR continúa draft; no certificación ni deploy.
+
+Cierre PR #37: suite completa 1629 tests OK (2 skipped, 1 expected failure), 190.416s.
+Chromium CSS y app real local con fixtures: PASS; Ruff/diff-check: PASS.

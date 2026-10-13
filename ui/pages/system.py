@@ -1,4 +1,5 @@
 from ui.tables import dataframe
+from ui.json_views import ordered
 def render(st, vm, operational_health=None, review=None, notifications=(), evidence_json=None,
            store=None):
     st.header("SYSTEM")
@@ -24,11 +25,11 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
     if operational_health and not vm.sample:
         st.subheader("Latest review")
         if review:
-            st.json({"run_id": review["run_id"], "final_status": review["final_status"],
+            st.json(ordered({"run_id": review["run_id"], "final_status": review["final_status"],
                      "setup_status": review["setup_status"], "agents": review["agents"],
                      "risk_decision": review["risk_decision"], "execution": review.get("execution"),
                      "paper": review["paper"],
-                     "error": review["error"]})
+                     "error": review["error"]}), expanded=False)
         else:
             st.write("NO_DATA")
         if store is not None:
@@ -40,9 +41,9 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
                 if record is None:
                     st.info("Run ID not found")
                 else:
-                    st.json({key: record.get(key) for key in ("run_id", "symbol", "as_of",
+                    st.json(ordered({key: record.get(key) for key in ("run_id", "symbol", "as_of",
                             "final_status", "setup_status", "risk_decision", "execution",
-                            "paper", "error")})
+                            "paper", "error")}), expanded=False)
                     dataframe(st, store.journal(run_id=run_id, limit=500),
                                  hide_index=True, width="stretch")
                     st.download_button("Download run evidence (JSON)",
