@@ -182,6 +182,14 @@ class DemoRunner:
                 "journal_count": journal_count,
                 "paper_orders_enabled": not self.dry_run}
 
+    def manage_trade_duration(self, at):
+        """Out-of-session trade-duration pass (Scheduler); its closes are notified like any other."""
+        results = self.runtime.manage_trade_duration(at)
+        gate = getattr(self, "halt_gate", None)
+        if results and (gate is None or gate.allow("S")):
+            self._capture_and_deliver()
+        return results
+
     def tick(self):
         return Scheduler(self, self.clock).tick()
 

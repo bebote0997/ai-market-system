@@ -98,6 +98,10 @@ class PaperPosition:
     last_processed_at: Optional[object] = None
     # V2 Phase 6 (DEC-6.1): inherited from the originating order at fill; None = UNKNOWN. Omitted when None.
     setup_id: Optional[str] = None
+    # Pre-demo trade-duration rule (execution.trade_duration): set together when the Day-1 NY close keeps the
+    # position with its stop moved to entry. None = Day 1 (stop never moved). Omitted from the payload when None.
+    initial_stop: Optional[float] = None
+    duration_stage: Optional[str] = None
 
     def __post_init__(self):
         if not _valid_side(self.side):

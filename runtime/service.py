@@ -419,6 +419,132 @@ class OperationalRuntime:
                 return None
         return STALE_PAPER_STATE
 
+    def _duration_write(self, symbol, key, position_id, decide, store=None, kind="trade_duration"):
+        """One guarded CAS write of the trade-duration rule on the still-open ``position_id``."""
+        def apply(fresh):
+            position = fresh.account.open_positions.get(symbol)
+            if position is None or position.position_id != position_id or position.status != "OPEN":
+                return False, None
+            return decide(fresh, position)
+        return self._guarded_paper_write(symbol, key, apply, store, kind)
+
+    def _enforce_trade_duration(self, symbol, slot, key, snapshot, store=None, observer=None, closed=None):
+        """Pre-demo trade-duration rule at every NY close passed by ``slot`` (execution.trade_duration).
+
+        Before acting at a NY close, SL/TP management first runs up to that close only (the same catch-up route as
+        the cycle), so a bar after the close can never stop out a position the rule had already closed. Returns
+        None, or the reason PAPER economics are blocked for this cycle."""
+        from execution import trade_duration as td
+        for _ in range(2):  # at most the Day-1 then the Day-2 close
+            position = self._broker(symbol).account.open_positions.get(symbol)
+            if position is None:
+                return None
+            boundary = td.next_boundary(position)
+            if boundary > slot:
+                return None
+            if self._snapshot_catch_up_applies(symbol):
+                blocked = self._catch_up_positions(symbol, boundary, key, store, observer, snapshot["5m"])
+            elif self.config.catch_up_applies(symbol):
+                blocked = self._catch_up_positions(symbol, boundary, key, store, observer)
+            else:
+                blocked = None  # legacy newest-bar route (no enabled PAPER symbol uses it)
+            if blocked is not None:
+                return blocked
+            try:
+                bars = bars_from_frame(snapshot["5m"], symbol=symbol, timeframe="5m")
+            except (EvidenceError, KeyError):
+                bars = ()
+            bar = td.price_bar((b for b in bars if b.closed_at(slot)), position, boundary)
+            if bar is None:
+                LOG.warning("symbol=%s component=trade_duration event=TRADE_DURATION_NO_DATA boundary=%s",
+                            symbol, utc(boundary))
+                self._persist("O", lambda: self.store.event(self.clock(), position.run_id, symbol, "trade_duration",
+                                                            "TRADE_DURATION_NO_DATA", "WARNING",
+                                                            {"boundary_utc": utc(boundary)}))
+                return None
+
+            def decide(fresh, position, boundary=boundary, bar=bar):
+                action, reason = td.boundary_decision(position, boundary, bar.close)
+                details = {"boundary_utc": utc(boundary), "price": bar.close, "price_bar_start": utc(bar.start),
+                           "unrealized_r": None if (r := td.unrealized_r(position, bar.close)) is None else str(r)}
+                if action == "CLOSE":
+                    fresh.close_market(symbol, bar.close, bar.end, exit_reason=reason, decision_run_id=position.run_id)
+                    fresh._event(bar.end, position.run_id, symbol, position.position_id, "TRADE_DURATION_EXIT",
+                                 {**details, "exit_reason": reason})
+                    LOG.info("symbol=%s component=trade_duration event=POSITION_CLOSED reason=%s", symbol, reason)
+                else:
+                    td.move_stop_to_entry(position)
+                    fresh._event(bar.end, position.run_id, symbol, position.position_id, td.STOP_MOVED_TO_ENTRY,
+                                 {**details, "initial_stop": position.initial_stop, "stop": position.stop})
+                    LOG.info("symbol=%s component=trade_duration event=STOP_MOVED_TO_ENTRY", symbol)
+                return True, action
+            fresh, action = self._duration_write(symbol, key, position.position_id, decide, store)
+            if fresh is None:
+                return STALE_PAPER_STATE
+            if action == "CLOSE" and closed is not None:
+                closed.append(symbol)
+        return None
+
+    def _day2_structure_exit(self, symbol, slot, key, snapshot, store=None):
+        """Day 2 of the trade-duration rule: close early on an adverse 15m structure change. True if closed."""
+        from execution import trade_duration as td
+        position = self._broker(symbol).account.open_positions.get(symbol)
+        if position is None or position.duration_stage is None or "15m" not in snapshot:
+            return False
+        bos = td.adverse_structure(position, snapshot["15m"], slot)
+        if bos is None:
+            return False
+        bars = [b for b in bars_from_frame(snapshot["5m"], symbol=symbol, timeframe="5m") if b.closed_at(slot)]
+        if not bars or bars[-1].end <= position.opened_at:
+            return False
+        bar = bars[-1]
+
+        def decide(fresh, position):
+            fresh.close_market(symbol, bar.close, bar.end, exit_reason=td.CLOSE_DAY2_STRUCTURE,
+                               decision_run_id=position.run_id)
+            fresh._event(bar.end, position.run_id, symbol, position.position_id, "TRADE_DURATION_EXIT",
+                         {"exit_reason": td.CLOSE_DAY2_STRUCTURE, "price": bar.close,
+                          "price_bar_start": utc(bar.start), "bos_break_utc": utc(bos["break_timestamp"].to_pydatetime()),
+                          "bos_direction": bos["direction"]})
+            LOG.info("symbol=%s component=trade_duration event=POSITION_CLOSED reason=%s",
+                     symbol, td.CLOSE_DAY2_STRUCTURE)
+            return True, True
+        fresh, closed = self._duration_write(symbol, key, position.position_id, decide, store, "trade_duration_structure")
+        if fresh is None:
+            raise RuntimeError("stale paper state")
+        return bool(closed)
+
+    def manage_trade_duration(self, at):
+        """Out-of-session pass so the NY-close rule acts at 17:00 ET, when no cycle runs. No slot claim and no run
+        row: every write is the same guarded CAS save as in a cycle. Returns {symbol: outcome}."""
+        from execution import trade_duration as td
+        results = {}
+        if not self.paper_enabled or self.market_provider is None:
+            return results
+        slot = slot_at(at, self.config.cadence_minutes)
+        account, _, _ = self.store.load_paper(self.config.account_id)
+        for symbol in self.config.enabled_symbols:
+            if self.halt_gate is not None and self.halt_gate.halted:
+                break
+            position = None if account is None else account.open_positions.get(symbol)
+            if position is None or td.next_boundary(position) > slot:
+                continue
+            try:
+                snapshot = self.market_provider.load_snapshot(symbol, slot)
+                if self.config.catch_up_applies(symbol):
+                    blocked = self._ingest_evidence(symbol, snapshot, slot)
+                    if blocked is not None:
+                        results[symbol] = blocked
+                        continue
+                results[symbol] = self._enforce_trade_duration(symbol, slot, None, snapshot) or "CHECKED"
+            except HaltRefused:
+                break
+            except Exception as exc:  # noqa: BLE001 - retried at the next tick; a cycle also enforces the rule
+                LOG.warning("symbol=%s component=trade_duration event=TRADE_DURATION_FAILED error_type=%s",
+                            symbol, type(exc).__name__)
+                results[symbol] = "ERROR"
+        return results
+
     def _record_ai_health(self, events, run_id, symbol):
         """Observability only: journal provider health transitions; alerts only if an alerts object was supplied."""
         for event in events:
@@ -669,6 +795,11 @@ class OperationalRuntime:
                    "open": float(last_bar["Open"]), "high": float(last_bar["High"]),
                    "low": float(last_bar["Low"]), "close": float(last_bar["Close"]), "is_closed": True}
 
+            duration_closed = []  # Pre-demo trade-duration rule: NY closes passed by this slot, before management.
+            if self.paper_enabled and paper_blocked is None:
+                paper_blocked = self._enforce_trade_duration(symbol, slot, key, snapshot, rex_store,
+                                                             None if rex is None else rex.observer, duration_closed)
+
             def manage_positions(fresh):
                 had_open = bool(fresh.account.open_positions)
                 self._rex_note(rex, "ST2L_INPUT", lambda: {"had_open": had_open, "paper_enabled": self.paper_enabled,
@@ -696,6 +827,10 @@ class OperationalRuntime:
                 if paper_blocked is not None:
                     self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_evidence",
                                                                 paper_blocked, "ERROR"))
+                broker = self._broker(symbol)
+            if (self.paper_enabled and paper_blocked is None
+                    and self._day2_structure_exit(symbol, slot, key, snapshot, rex_store)):
+                duration_closed.append(symbol)
                 broker = self._broker(symbol)
             decision_equity = broker.account.equity
             self._rex_note(rex, "ST3", lambda: {
@@ -859,6 +994,8 @@ class OperationalRuntime:
                 execution_reason = "PAPER_DIAGNOSTIC_BLOCKED"
             elif eligible and paper_blocked is not None:
                 execution_reason = paper_blocked  # B2.3B: no submission over unreconciled positions.
+            elif eligible and duration_closed:
+                execution_reason = "TRADE_DURATION_EXIT"  # no new entry in the cycle that time-closed a position
             elif (self.config.v2_opposite_setup_policy == "STRUCTURE_CHANGE"
                   and deterministic.final_status == "PLAN_READY" and self.paper_enabled
                   and paper_blocked is None

@@ -1,9 +1,11 @@
 """Clock-injected 15-minute slots and DST-aware analysis windows."""
 from datetime import timezone
+import logging
 from zoneinfo import ZoneInfo
 
 from storage.codec import utc
 
+LOG = logging.getLogger("ai_floor.runtime")
 ZONES = {"LONDON": ZoneInfo("Europe/London"), "NEW_YORK": ZoneInfo("America/New_York")}
 
 
@@ -52,6 +54,15 @@ class Scheduler:
             with self.runtime.store.transaction():
                 self.runtime.store.set_state("scheduler_slot", utc(slot))
         if not set(session_names(slot)) & set(config.sessions):
+            # Pre-demo trade-duration rule: the 17:00 NY close falls outside every session, so open positions
+            # are checked here too (no cycle, no slot claim). Never raises into the scheduler.
+            manage = getattr(self.runtime, "manage_trade_duration", None)
+            if manage is not None and (gate is None or not gate.halted):
+                try:
+                    manage(slot)
+                except Exception as exc:  # noqa: BLE001
+                    LOG.warning("component=trade_duration event=TRADE_DURATION_FAILED error_type=%s",
+                                type(exc).__name__)
             return []
         if gate is None:
             return [self.runtime.run_cycle(symbol, slot) for symbol in config.enabled_symbols]
