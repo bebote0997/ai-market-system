@@ -1,5 +1,28 @@
 # Agent Changelog
 
+## 2026-10-13 — Pre-demo fixes (branch `v2/pre-demo-fixes`, draft PR; no merge/deploy/Render)
+
+- Tarea asignada por el owner. REAL execution OFF, NAS100 bloqueado, sin cambios en Render/env remoto.
+- 1) Regla de duración de trade (`execution/trade_duration.py`): cierre NY 17:00 America/New_York (zoneinfo,
+  DST correcto, solo días hábiles). Day-1: < +0.5R cierra (`TIME_EXIT_DAY1_BELOW_0_5R`), si no stop a entrada
+  (`STOP_MOVED_TO_ENTRY`, `initial_stop` conservado). Day 2: BOS 15m confirmado en contra tras el cierre Day-1
+  cierra (`TIME_EXIT_DAY2_STRUCTURE_CHANGE`); cierre Day-2 fuerza salida (`TIME_EXIT_DAY2_NY_CLOSE`); viernes
+  17:00 ET cierra todo (`TIME_EXIT_FRIDAY_NY_CLOSE`). SL/TP se gestionan hasta el cierre NY antes de la regla.
+  Pase fuera de sesión en el Scheduler para actuar a las 17:00 ET (sin claim de slot). Sin entrada nueva en el
+  ciclo que cerró por tiempo. `PaperPosition.initial_stop/duration_stage` opcionales (bytes legacy intactos).
+- 2) Macro NO_DATA cuando importa (PLAN_READY o pending): `AI_REVIEW_UNHEALTHY: macro=NO_DATA` en log+journal,
+  alerta en la transición (SYSTEM_DEGRADED; RECOVERY al recuperar), un reintento en el mismo ciclo (rerun del
+  floor determinista; rerun IA solo si el macro trae evidencia). Sigue NO_DATA => sin trade
+  (`execution_reason=AI_REVIEW_UNHEALTHY`).
+- 3) Trade Reviewer `NOT_REQUIRED` (no MISSING) sin TradePlan: no más PARTIAL_AI_FAILURE falso en WATCH.
+- 4) Alertas ORDER SUBMITTED / POSITION OPENED / CLOSED con Entry/SL/TP/Quantity/R:R/Risk%/tiempos desde el
+  estado PAPER durable (`runtime/notification_extras.py`; `storage/database.py` sigue byte-congelado).
+- 5) `runtime/candle_cache.py`: cierres 5m por ciclo, SQLite junto a la DB, 288 barras/símbolo; el gráfico de
+  alerta lo lee en solo lectura (Evidence Store como respaldo). Nueva env opcional `AI_FLOOR_CANDLE_CACHE_PATH`.
+- Limitación conocida: el oráculo REX (solo V1) no modela la regla de duración; los runs donde actúa salen
+  INVALID en `replay.rex_chain` (G14/NON_ECONOMIC_EVENT_IN_WRITE). El ciclo funciona con REX/R-HALT ON.
+- Baseline pytest: 1590 passed, 1 skipped, 1 xfailed. Final: ver docs/STATUS.md.
+
 ## 2026-10-11 — DEC-14.2: planner policy runtime flag
 
 - Owner Jeferson Tejeda approved 2026-10-11 11:33 ET; local feature branch only, no activation/Render/push/merge.

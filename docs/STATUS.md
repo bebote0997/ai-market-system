@@ -72,3 +72,13 @@ El Libro Maestro en Word (versión 1.9, 2026-10-07) queda **archivado/histórico
 Owner Jeferson Tejeda: `V2_PLANNER_POLICY` implementado localmente, default V1; V2_F3 planifica 3.00R y aplica piso PAPER 2.50R en ambas rutas runtime. Demo configurará `V2_PLANNER_POLICY=V2_F3` con GO operativo; independiente de la política de setups opuestos. Sin activación, merge, deploy ni cambios en Render; Fase 13 sigue NOT STARTED.
 
 Validación DEC-14.2: ruff y suite unittest completa PASS (1520 tests, 1 expected failure). Pytest completo: 1514 passed, 1 xfailed; 5 fallos previos del harness de señales de Fase 8 (`TestCaseFunction.failures`). Commit local pendiente de autorizar la corrección mínima de esos dos tests y obtener pytest verde.
+
+## Pre-demo fixes — rama `v2/pre-demo-fixes` (2026-10-13, draft PR, sin merge/deploy)
+
+Tarea asignada por el owner: regla de duración de trade (cierre NY 17:00 ET Day-1 < +0.5R / stop a entrada,
+salida Day-2 por estructura adversa, cierre forzado Day-2, viernes 17:00 ET cierra todo), macro NO_DATA con
+razón clara + alerta + un reintento (sigue NO_DATA => sin trade), sin PARTIAL_AI_FAILURE falso en ciclos WATCH,
+alertas de orden/posición con datos reales, caché de velas para gráficos (`AI_FLOOR_CANDLE_CACHE_PATH`
+opcional). REAL OFF, NAS100 bloqueado, Fase 13 sigue NOT STARTED. Limitación conocida: el oráculo REX (solo V1)
+no modela la regla de duración; los runs donde actúa salen INVALID en `replay.rex_chain`.
+Validación: ruff PASS; pytest 1624 passed, 1 skipped, 1 xfailed (baseline 1590 passed, 1 skipped, 1 xfailed).
