@@ -576,7 +576,7 @@ class OperationalRuntime:
                     self.store.set_state(state_key, "OK")
         self._audit_safely(write, run_id, symbol)
 
-    def _retry_macro_review(self, deterministic, ai, audit, ai_provider, snapshot, slot, symbol, run_id, equity):
+    def _retry_macro_review(self, deterministic, ai, audit, ai_provider, floor_once, symbol, run_id):
         """Macro AI review NO_DATA: clear reason, alert, and ONE retry in the same cycle. The deterministic floor is
         rerun (it re-reads the macro provider; everything else is deterministic on the same snapshot) and the AI
         floor is rerun only if the macro evidence is now usable. Still NO_DATA => the cycle cannot trade.
@@ -586,10 +586,7 @@ class OperationalRuntime:
         self._note_ai_review_health(run_id, symbol, {"reason": MACRO_NO_DATA_REASON, "agent": "macro_ai",
                                                      "status": "NO_DATA", "attempt": 1, "action": "RETRY",
                                                      "final_status": ai.final_status})
-        retried = run_floor(snapshot, slot, symbol, self.macro_provider, self.instruments.get(symbol),
-                            self.risk_config, equity=equity, run_id=run_id,
-                            **({"planner_policy": POLICY_V2_F3} if self.config.v2_planner_policy == "V2_F3" else {}))
-        retried = apply_paper_quantity_increment(retried, self.instruments.get(symbol))
+        retried = apply_paper_quantity_increment(floor_once(), self.instruments.get(symbol))
         macro = retried.macro_news_report
         if macro is not None and macro.status in {"OK", "PARTIAL"} and macro.evidence and any(
                 macro.evidence[0].get(k) for k in ("macro_events", "news_items")):
@@ -905,11 +902,13 @@ class OperationalRuntime:
                 "pending_on_symbol": [o.order_id for o in broker.orders.values()
                                       if o.symbol == symbol and o.status == "PENDING"]})
             stage = "deterministic"
-            deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
-                                      self.instruments.get(symbol), self.risk_config,
-                                      equity=decision_equity, run_id=run_id,
-                                      **({"planner_policy": POLICY_V2_F3}
-                                         if self.config.v2_planner_policy == "V2_F3" else {}))
+            def floor_once():  # the single deterministic floor call site (also used by the macro retry)
+                return run_floor(snapshot, slot, symbol, self.macro_provider,
+                                 self.instruments.get(symbol), self.risk_config,
+                                 equity=decision_equity, run_id=run_id,
+                                 **({"planner_policy": POLICY_V2_F3}
+                                    if self.config.v2_planner_policy == "V2_F3" else {}))
+            deterministic = floor_once()
             self._rex_note(rex, "ST4", lambda: self._rex_floor(deterministic, symbol, decision_equity))
             deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
             self._rex_note(rex, "F1B", lambda: {
@@ -953,7 +952,7 @@ class OperationalRuntime:
                 macro_unhealthy = self._macro_review_matters(ai, deterministic, symbol)
                 if macro_unhealthy:  # pre-demo: log + alert, then ONE retry of the macro review in this cycle
                     deterministic, ai, audit, macro_unhealthy = self._retry_macro_review(
-                        deterministic, ai, audit, ai_provider, snapshot, slot, symbol, run_id, decision_equity)
+                        deterministic, ai, audit, ai_provider, floor_once, symbol, run_id)
                 elif ai.ai_macro is not None and ai.ai_macro.status in {"OK", "PARTIAL"}:
                     self._note_ai_review_health(run_id, symbol, None)
             self._rex_note(rex, "ST5", lambda: self._rex_ai(ai, audit))
