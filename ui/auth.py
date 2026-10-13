@@ -106,7 +106,7 @@ def require_dashboard_access(st, env=None, *, clock=time.monotonic, sleep=time.s
         if not remote_dashboard_enabled(env) and _loopback_only(st):
             return True
         return _deny(st, "Dashboard access is not configured: set AI_FLOOR_DASHBOARD_PASSWORD "
-                         "(or bind Streamlit to 127.0.0.1 for local use)")
+                         "(or run `streamlit run ui/app.py --server.address=127.0.0.1` for local use)")
     if not password_strong_enough(password):
         return _deny(st, "Dashboard access is misconfigured: AI_FLOOR_DASHBOARD_PASSWORD must have at "
                          f"least {MIN_PASSWORD_LENGTH} characters")

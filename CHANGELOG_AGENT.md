@@ -13,6 +13,7 @@
 - I-2: `replay/safe_pickle.py` restricted unpickler for `lab_*.pkl` in fill_audit/risk_audit/lab_report.
 - I-5: dashboard never lists a blocked symbol (NAS100) as enabled.
 - Tests: new `test_security_hardening.py`; fixtures updated for the 12-char password, explicit email addresses and the `ui.views` rename.
+- Codex review MED: Streamlit's default `server.address` is unset, so the documented `streamlit run ui/app.py` hit the no-password loopback gate. Launch docs (`UI_SPEC.md`, `OPERATIONAL_RUNTIME_SPEC.md`, `ui/app.py`) and the gate message now use `--server.address=127.0.0.1`; `DocumentedLaunchTests` parses each documented command through Streamlit's own CLI/config and asserts the gate opens (bare launch still refused).
 
 ## 2026-10-11 — DEC-14.2: planner policy runtime flag
 

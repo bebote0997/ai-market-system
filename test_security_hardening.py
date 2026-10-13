@@ -1,5 +1,6 @@
 """Regression tests for the 2026-10 security audit fixes (M-1, L-1..L-7, I-1..I-5)."""
 from datetime import datetime, timezone
+import importlib.util
 import io
 import json
 import logging
@@ -7,6 +8,7 @@ import os
 from pathlib import Path
 import pickle
 import re
+import shlex
 import sqlite3
 import tempfile
 import unittest
@@ -152,6 +154,45 @@ class DashboardLoginTests(unittest.TestCase):
                 self.assertEqual(self.attempt(ui, {}), "STOP")
                 self.assertIn("not configured", ui.errors[-1])
         self.assertEqual(self.attempt(FakeUI(address="127.0.0.1"), {"RENDER": "true"}), "STOP")
+
+
+DOCUMENTED_LAUNCH = re.compile(r"streamlit run ui/app\.py[^`\"\n;)]*")
+
+
+@unittest.skipUnless(importlib.util.find_spec("streamlit"), "streamlit not installed")
+class DocumentedLaunchTests(unittest.TestCase):
+    """The documented local launch passes the no-password loopback gate under real Streamlit config."""
+
+    def launch_address(self, command):
+        import streamlit
+        from streamlit.web import bootstrap, cli
+        argv = shlex.split(command)
+        self.assertEqual(argv[:3], ["streamlit", "run", "ui/app.py"])
+        params = cli.main_run.make_context("run", argv[2:]).params
+        flags = {name: value for name, value in params.items() if name not in ("target", "args")}
+        self.addCleanup(bootstrap.load_config_options, {})
+        bootstrap.load_config_options(flag_options=flags)
+        return streamlit
+
+    def documented_commands(self):
+        commands = []
+        for name in ("UI_SPEC.md", "OPERATIONAL_RUNTIME_SPEC.md", "ui/app.py"):
+            found = DOCUMENTED_LAUNCH.findall((ROOT / name).read_text(encoding="utf-8"))
+            self.assertTrue(found, name)
+            commands += [(name, command.strip()) for command in found]
+        return commands
+
+    def test_documented_launch_commands_open_locally_without_password(self):
+        for name, command in self.documented_commands():
+            with self.subTest(source=name, command=command):
+                st = self.launch_address(command)
+                self.assertEqual(st.get_option("server.address"), "127.0.0.1")
+                self.assertTrue(require_dashboard_access(st, {}))
+
+    def test_bare_launch_without_address_is_refused(self):
+        st = self.launch_address("streamlit run ui/app.py")
+        self.assertIsNone(st.get_option("server.address"))
+        self.assertFalse(auth._loopback_only(st))
 
 
 class CloudStartupTests(unittest.TestCase):

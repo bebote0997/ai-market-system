@@ -1,4 +1,4 @@
-"""AI Trading Floor entry point: streamlit run ui/app.py."""
+"""AI Trading Floor entry point: `streamlit run ui/app.py --server.address=127.0.0.1`."""
 import sys
 from pathlib import Path
 
