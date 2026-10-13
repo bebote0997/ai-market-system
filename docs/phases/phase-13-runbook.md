@@ -10,9 +10,10 @@
 - [ ] Secretos cargados en Render (los configura el owner, nunca se pegan en el chat ni en el repo):
   - `OPENAI_API_KEY`: proveedor de IA (`AI_FLOOR_AI_PROVIDER=openai`, modelo `OPENAI_MODEL` en `render.yaml`).
   - `TWELVE_DATA_API_KEY`: datos de mercado de XAUUSD y EURUSD en 5 min.
-  - `AI_FLOOR_DASHBOARD_PASSWORD`: protege el Command Center.
+  - `AI_FLOOR_DASHBOARD_PASSWORD`: protege el Command Center. **Mínimo 12 caracteres** (usar un valor largo y aleatorio); con menos, `runtime.cloud` no arranca. Opcional: `AI_FLOOR_DASHBOARD_SESSION_TTL_SECONDS` (por defecto 28800 = 8 h; rango 300..604800).
+  - Recomendado (owner): fijar `PYTHON_VERSION=3.13.x` en Render; las dependencias ya están fijadas con hashes en `requirements-ci.txt`.
   - `SLACK_WEBHOOK_URL`: alertas de Slack.
-  - `GMAIL_APP_PASSWORD`: alertas por email (el remitente y el destinatario son yefersontejeda@gmail.com). **No está en `render.yaml`**: el owner debe añadirlo en el panel de Render.
+  - `GMAIL_APP_PASSWORD`: alertas por email (requiere además `AI_FLOOR_ALERT_EMAIL_FROM` y `AI_FLOOR_ALERT_EMAIL_TO`; no hay dirección por defecto). **No está en `render.yaml`**: el owner debe añadirlo en el panel de Render.
   - Opcionales y sin uso por defecto: `MASSIVE_API_KEY`, `FINNHUB_API_KEY`, `FXMACRODATA_API_KEY` (macro = `none`).
 - [ ] El disco persistente `paper-state` (1 GB) está montado en `data/runtime`, y hay que empezar con una DB nueva para el baseline A2.
 - [ ] Backup: guardar fuera de Render una copia de la DB anterior, si existe.

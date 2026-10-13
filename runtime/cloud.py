@@ -14,6 +14,7 @@ from runtime.config import RuntimeConfig, catch_up_scope_checks, catch_up_storag
 from runtime.demo_runner import REAL_EXECUTION_ENABLED
 from storage.database import Store
 from storage.codec import parse_utc
+from ui.auth import MIN_PASSWORD_LENGTH, password_strong_enough, session_ttl_seconds
 
 
 DISK_MOUNT = Path("/opt/render/project/src/data/runtime")
@@ -63,7 +64,7 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "scheduler_not_started": not config.scheduler_enabled and env.get("AI_FLOOR_CLOUD_RUNNER", "0") == "0",
         "durable_path": path.is_absolute() and (path == mount or mount in path.parents),
         "durable_mount": bool(disk_mounted),
-        "dashboard_auth": bool(env.get("AI_FLOOR_DASHBOARD_PASSWORD")),
+        "dashboard_auth": password_strong_enough(env.get("AI_FLOOR_DASHBOARD_PASSWORD")),
         "openai_credential": bool(env.get("OPENAI_API_KEY")),
         "twelve_data_credential": bool(env.get("TWELVE_DATA_API_KEY")),
         "slack_configured": bool(env.get("SLACK_WEBHOOK_URL")),
@@ -138,6 +139,9 @@ def serve():
         raise ValueError("invalid PORT")
     if not os.environ.get("AI_FLOOR_DASHBOARD_PASSWORD"):
         raise RuntimeError("dashboard access not configured")
+    if not password_strong_enough(os.environ.get("AI_FLOOR_DASHBOARD_PASSWORD")):
+        raise RuntimeError(f"AI_FLOOR_DASHBOARD_PASSWORD must have at least {MIN_PASSWORD_LENGTH} characters")
+    session_ttl_seconds()  # invalid AI_FLOOR_DASHBOARD_SESSION_TTL_SECONDS fails startup, not the first login
     children = []
     stop = False
 
@@ -169,7 +173,9 @@ def serve():
             raise RuntimeError("cloud infrastructure preflight not ready")
     children.append(subprocess.Popen([
         sys.executable, "-m", "streamlit", "run", "ui/app.py", "--server.headless=true",
-        "--server.address=0.0.0.0", f"--server.port={port}"]))
+        "--server.address=0.0.0.0", f"--server.port={port}",
+        # Never show tracebacks or exception messages to remote visitors.
+        "--client.showErrorDetails=none"]))
     started = time.monotonic()
     last_health_check = 0.0
     try:

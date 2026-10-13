@@ -11,7 +11,7 @@ from ui.auth import remote_dashboard_enabled, require_dashboard_access
 from ui.adapters import MARKETS, symbol_enablement
 from ui.components import panels
 from ui.fixtures.demo_floor import demo_market
-from ui.pages import dashboard, experiment, floor, journal, markets, system
+from ui.views import dashboard, experiment, floor, journal, markets, system
 from ui.state import current_market, enabled_market_symbols, operational_store
 from ui.theme import apply
 
