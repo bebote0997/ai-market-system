@@ -95,7 +95,10 @@ def trade_block(store, row, review):
         out["risk_pct"] = f"{planned_money / order.equity_at_submission * 100:.2f}%"
     elif (review.get("risk_decision") or {}).get("risk_fraction") is not None:
         out["risk_pct"] = f"{review['risk_decision']['risk_fraction'] * 100:.2f}%"
-    signal = review.get("as_of") or (None if order.as_of is None else utc(order.as_of))
+    signal = None if order.as_of is None else utc(order.as_of)
+    if signal is None and order.run_id:
+        submitting_review = store.review_report(order.run_id) or {}
+        signal = submitting_review.get("as_of")
     if signal:
         out["signal_at_utc"] = utc(parse_utc(signal))
     if position is None:

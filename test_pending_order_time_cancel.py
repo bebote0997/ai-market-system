@@ -2,11 +2,13 @@
 import json
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from execution import trade_duration as td
 from execution.contracts import PaperAccount, PaperOrder
 from execution.paper_broker import PaperBroker
 from runtime.notification_extras import order_setup_id
+from test_demo_runner import patched_scouts
 from storage.database import Store
 from test_trade_duration import (ACCOUNT, FIVE, FRI_CLOSE, THU_OPEN, THU_SLOT, TUE_OPEN, UTC, WED_CLOSE, Prices,
                                  RuntimeCase)
@@ -100,6 +102,40 @@ class RuntimeCancelTests(RuntimeCase):
         orders, journal = self.orders()
         self.assertNotEqual(orders["ord-p"].status, "CANCELLED")
         self.assertEqual(journal, [])
+
+    def test_two_stale_cancellation_writes_remain_blocked_after_successful_catch_up(self):
+        self.seed_orders(order(TUE_OPEN - FIVE))
+        runtime = self.runtime(Prices(lambda at: 100.0, TUE_OPEN - 4 * FIVE), THU_SLOT)
+        save_paper = runtime.store.save_paper
+        stale_writes = []
+        catch_up_results = []
+        catch_up = runtime._catch_up_positions
+
+        def save(broker, **kwargs):
+            if any(e.event_type == "ORDER_CANCELLED" for e in broker.journal):
+                stale_writes.append(True)
+                return False
+            return save_paper(broker, **kwargs)
+
+        def catch(*args, **kwargs):
+            self.assertEqual(len(stale_writes), 2)
+            result = catch_up(*args, **kwargs)
+            catch_up_results.append(result)
+            return result
+
+        with patch.object(runtime.store, "save_paper", side_effect=save), \
+                patch.object(runtime, "_catch_up_positions", side_effect=catch), patched_scouts("LONG"):
+            self.assertNotEqual(runtime.run_cycle("XAUUSD", THU_SLOT), "ERROR")
+        self.assertEqual(len(stale_writes), 2)
+        self.assertEqual(catch_up_results, [None])
+        orders, cancelled = self.orders()
+        self.assertEqual(orders["ord-p"].status, "PENDING")
+        self.assertEqual(cancelled, [])
+        account, journal = self.paper()
+        self.assertEqual(account.open_positions, {})
+        self.assertEqual(account.closed_trades, [])
+        self.assertIn("STALE_PAPER_STATE", [event for event, _ in journal])
+        self.assertNotIn("POSITION_OPENED", [event for event, _ in journal])
 
 
 class OrderSetupIdTests(unittest.TestCase):

@@ -69,3 +69,7 @@ Validación final: suite completa solicitada, 1495 tests OK (1 expected failure)
 - [x] Las alertas están OFF por defecto (`AI_FLOOR_ALERTS_ENABLED`), fuera del trading path; hay tests de que un fallo de alerta no cambia el estado PAPER.
 - [ ] **Diferido al pre-flight de la Fase 13:** F09-T18, el envío real de email y Slack desde Render (el box bloquea SMTP). Ver `phase-13-runbook.md`.
 - [ ] **Diferido al pre-flight de la Fase 13:** con `AI_FLOOR_V2_POSITION_CATCH_UP` OFF, el gráfico sale NO_DATA (decisión del owner).
+
+PR #39, review fix local (2026-10-13): Signal (UTC) toma el timestamp de la orden original, con fallback al review
+del run de envío; un cierre por otro run no puede cambiarlo. Sin evidencia original queda NO_DATA. Regresión
+con cierre por run distinto, prioridad de la orden y fallback/ausencia; validación en CHANGELOG_AGENT.md.

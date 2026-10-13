@@ -1747,3 +1747,17 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 ## 2026-10-11: certificación ligera de las fases 9-12 y runbook de la Fase 13 (Grok Bot)
 - Checklists en docs/phases/phase-09..12.md con enlaces a PRs, CI y revisiones; STATUS a 13/14.
 - Nuevo docs/phases/phase-13-runbook.md (no se ejecuta nada).
+
+## 2026-10-13 — PR #39: cancellation block and originating signal time (local)
+
+- Snapshot position catch-up still runs, but cannot overwrite an earlier PAPER block. Two failed cancellation
+  CAS writes retain `STALE_PAPER_STATE`, blocking pending fills and new submissions for the cycle.
+- Trade alerts use the originating order's `as_of`, falling back only to its submitting review. A later closing
+  run cannot supply the signal timestamp; absent original evidence remains NO_DATA.
+- Two regression tests failed on the original implementation (expired order FILLED; later signal timestamp)
+  and pass after the fixes. Coverage includes successful catch-up following both stale writes, order timestamp
+  priority, submitting-review fallback and missing timestamps.
+- Baseline: unittest 1642 tests OK (1 skipped, 1 expected failure). Focused suite: 39 tests OK.
+- Final full offline unittest suite: 1644 tests OK (1 skipped, 1 expected failure), 205.346 s.
+  `ruff check .` and `git diff --check`: PASS. PAPER only; no flags, dependencies, activation, merge or deploy.
+  No staging, commit or push.

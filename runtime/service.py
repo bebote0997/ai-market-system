@@ -947,8 +947,11 @@ class OperationalRuntime:
                 return self.paper_enabled and (had_open or bool(fresh.journal)), None
             if self._snapshot_catch_up_applies(symbol):
                 if self.paper_enabled:
-                    paper_blocked = self._catch_up_positions(
+                    catch_up_blocked = self._catch_up_positions(
                         symbol, slot, key, rex_store, None if rex is None else rex.observer, snapshot["5m"])
+                    # Position management cannot clear an earlier duration/cancellation failure.
+                    if paper_blocked is None:
+                        paper_blocked = catch_up_blocked
                 if paper_blocked is not None:
                     self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_data",
                                                                 paper_blocked, "ERROR"))

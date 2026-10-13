@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -378,6 +379,34 @@ class CommittedEvidencePricingTests(RuntimeCase):
 
 
 class ClosedAlertStopTests(RuntimeCase):
+    def test_different_run_close_keeps_originating_signal_time(self):
+        self.seed(position())
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        account, orders, fills = store.load_paper(ACCOUNT)
+        broker = PaperBroker(account)
+        broker.orders, broker.fills = orders, fills
+        broker.close_market("XAUUSD", 103.0, THU_SLOT, exit_reason="test_close", decision_run_id="run-later")
+        store.save_paper(broker)
+        row = store.db.execute("SELECT * FROM journal WHERE event_type='POSITION_CLOSED'").fetchone()
+        self.assertEqual(row["run_id"], "run-later")
+        signal_at = WED_OPEN - FIVE
+        review_signal_at = signal_at - FIVE
+        original_review = {"as_of": review_signal_at.isoformat(), "setup": {"setup_id": "S-ORIGINAL"}}
+        later_review = {"as_of": THU_SLOT.isoformat(), "setup": {"setup_id": "S-LATER"}}
+        with patch.object(store, "review_report", side_effect=lambda run: original_review if run == "run-open"
+                          else later_review):
+            block = trade_block(store, row, later_review)
+            self.assertEqual(block["setup_id"], "S-ORIGINAL")
+            self.assertEqual(block["signal_at_utc"], signal_at.isoformat())
+            self.assertEqual(block["closed_at_utc"], THU_SLOT.isoformat())
+            # Missing order timestamp uses only the submitting review; missing both stays NO_DATA.
+            orders["ord-1"].as_of = None
+            store.save_paper(broker)
+            self.assertEqual(trade_block(store, row, later_review)["signal_at_utc"], review_signal_at.isoformat())
+            original_review.pop("as_of")
+            self.assertNotIn("signal_at_utc", trade_block(store, row, later_review))
+
     def test_closed_alert_after_breakeven_move_shows_the_position_stop(self):
         """Codex MED: the POSITION_CLOSED alert reports the moved stop, not the original order SL."""
         self.seed(position())

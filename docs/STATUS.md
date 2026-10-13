@@ -89,3 +89,8 @@ Seguimiento (misma rama, PR #39): órdenes PENDING canceladas por tiempo en el v
 tras su envío, lo que ocurra antes (`TIME_CANCEL_FRIDAY_NY_CLOSE` / `TIME_CANCEL_DAY2_NY_CLOSE` en `ORDER_CANCELLED`),
 en el pase fuera de sesión y en cada ciclo antes del fill. Setup ID de alertas en la ruta de setup original: se toma
 del run que envió la orden (sin registro sigue NO_DATA). pytest 1640 passed, 1 skipped, 1 xfailed (baseline 1631).
+
+Review fixes PR #39 (2026-10-13): el catch-up de posiciones conserva `STALE_PAPER_STATE` tras dos CAS fallidos
+de cancelación; no permite fills ni nuevas órdenes en ese ciclo. Signal (UTC) usa `order.as_of`, con fallback
+exclusivo al review del run que envió la orden; nunca al run posterior que la cierra. Dos regresiones reproducen
+los hallazgos antes del fix. Validación final registrada en CHANGELOG_AGENT.md; Fase 13 sigue NOT STARTED.
