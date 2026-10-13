@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -292,6 +292,50 @@ if __name__ == "__main__":
 
 
 class TestDashboardSqlFilters(unittest.TestCase):
+    def test_history_renders_every_record_type_across_pages(self):
+        from ui.pages import dashboard
+        record_types = ("runs", "setups", "review_reports", "paper_orders", "paper_fills",
+                        "paper_positions", "closed_trades", "journal")
+        with sqlite3.connect(":memory:") as db:
+            db.row_factory = sqlite3.Row
+            db.execute("CREATE TABLE runs(slot_key TEXT, run_id TEXT, symbol TEXT)")
+            db.executemany("INSERT INTO runs VALUES(?,?,?)",
+                           [(f"slot-{i}", f"run-{i}", "XAUUSD") for i in range(ROW_LIMIT + 1)])
+            for record_type in record_types[1:]:
+                db.execute(f"CREATE TABLE {record_type}(slot_key TEXT, payload TEXT)")
+                db.executemany(f"INSERT INTO {record_type} VALUES(?,?)",
+                               [(f"slot-{i}", json.dumps({"setup_id": f"setup-{i}"}))
+                                for i in range(ROW_LIMIT + 1)])
+
+            def rendered(page, run_id="", setup_id=""):
+                st = MagicMock()
+                st.text_input.side_effect = [run_id, setup_id]
+                st.number_input.return_value = page
+                with patch.object(dashboard, "dashboard_database") as database:
+                    database.return_value.__enter__.return_value = db
+                    dashboard.render(st, "HISTORY")
+                st.error.assert_not_called()
+                return [call.args[0] for call in st.dataframe.call_args_list]
+
+            first, second = rendered(1), rendered(2)
+            for pages, count in ((first, ROW_LIMIT), (second, 1)):
+                self.assertEqual(len(pages), len(record_types))
+                for record_type, rows in zip(record_types, pages):
+                    self.assertEqual(len(rows), count)
+                    self.assertEqual({row["record"] for row in rows}, {record_type})
+            for first_rows, second_rows in zip(first, second):
+                first_ids = {row["run_id"] for row in first_rows}
+                second_ids = {row["run_id"] for row in second_rows}
+                self.assertFalse(first_ids & second_ids)
+                self.assertEqual(first_ids | second_ids,
+                                 {f"run-{i}" for i in range(ROW_LIMIT + 1)})
+            filtered = rendered(1, "run-0", "setup-0")
+            self.assertEqual(len(filtered), len(record_types) - 1)
+            self.assertTrue(all(len(rows) == 1 and rows[0]["run_id"] == "run-0"
+                                for rows in filtered))
+            self.assertEqual(rendered(1, "run-0", "setup-1"), [])
+            self.assertEqual(rendered(3), [])
+
     def test_status_and_error_filters_precede_limit(self):
         for name, columns, filters, expected, parameters in (
                 ("paper_positions", ("position_id", "payload"), {"statuses": ("OPEN",)},

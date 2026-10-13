@@ -96,3 +96,17 @@ PR continúa draft; no certificación ni deploy.
 
 Cierre PR #37: suite completa 1629 tests OK (2 skipped, 1 expected failure), 190.416s.
 Chromium CSS y app real local con fixtures: PASS; Ruff/diff-check: PASS.
+
+## PR #37 — History pagination review fix (P2, 2026-10-13)
+
+History muestra una tabla por tipo de registro, cada una con su página SQL de
+hasta 200 filas. El cap de presentación ya no elimina evidencia detrás de runs.
+Regresión en memoria: 201 registros de cada uno de los ocho tipos; dos páginas
+completas sin solapamiento, filtros exactos combinados y páginas vacías. Falla
+contra el render original y pasa corregida. Suite Phase 10: 17 tests PASS.
+Baseline local: 1629 tests, dos errores previos por matplotlib ausente, 2 skipped,
+1 expected failure. Sin certificación, commit, push, activación ni deploy.
+
+Validación final del fix History: 1630 tests en 190.121 s; mismos dos errores
+preexistentes por matplotlib ausente, 2 skipped, 1 expected failure; sin fallos nuevos.
+Suite enfocada: 17 PASS; git diff --check PASS. Ruff no disponible en el entorno.

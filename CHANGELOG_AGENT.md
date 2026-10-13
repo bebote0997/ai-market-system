@@ -1726,3 +1726,18 @@ Inspected `origin/v2/pre-demo-fixes:runtime/candle_cache.py` without merging tha
   and the replay regression plus final full suite pass.
 
 PAPER/DEMO only; no risk/strategy/runtime activation, NAS100 enablement, Render changes, main merge or deploy.
+
+## 2026-10-13 — PR #37 History evidence pagination review fix (P2)
+
+- History renders each already-paginated record type in its own bounded table, so
+  200 runs no longer discard setups, reviews, orders, fills, positions, trades or journal.
+- In-memory regression covers 201 records per type, two complete/non-overlapping
+  pages, exact combined ID filters and empty pages. It fails against the original
+  rendering (one table instead of eight); focused Phase 10 suite: 17 tests PASS.
+- Baseline: 1629 tests, two preexisting errors caused by missing matplotlib
+  (PNG rendering and SMTP attachment), 2 skipped, 1 expected failure.
+- Local changes only on `v2/dashboard-luxury`; no commit, push, runtime or deploy.
+
+Validación final del fix History: 1630 tests en 190.121 s; mismos dos errores
+preexistentes por matplotlib ausente, 2 skipped, 1 expected failure; sin fallos nuevos.
+Suite enfocada: 17 PASS; git diff --check PASS. Ruff no disponible en el entorno.

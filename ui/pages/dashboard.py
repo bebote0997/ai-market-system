@@ -3,6 +3,7 @@ from ui.tables import dataframe
 import json
 import os
 import sqlite3
+from itertools import groupby
 from pathlib import Path
 
 from ui.adapters import from_persisted_snapshot
@@ -199,7 +200,12 @@ def render(st, page):
                 page_number = st.number_input("History page", min_value=1, value=1, step=1,
                                               key="history_page")
                 st.caption("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first.")
-                table(st, history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT))
+                rows = history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT)
+                if not rows:
+                    st.info("NO_DATA")
+                for record_type, group in groupby(rows, key=lambda row: row["record"]):
+                    st.subheader(record_type)
+                    table(st, list(group))
             elif page == "ERRORS":
                 st.subheader("Failed runs")
                 table(st, records(db, "runs", failed=True))

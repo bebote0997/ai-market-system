@@ -85,3 +85,12 @@ activación, merge a main, cambios en Render ni deploy.
 
 Validación PR #37: suite completa 1629 tests OK (2 skipped, 1 expected failure); 58 checks
 enfocados PASS, Chromium CSS y app móvil PASS, Ruff/diff-check PASS.
+
+PR #37 History review fix (P2, 2026-10-13): tablas separadas por tipo conservan
+las páginas SQL de 200 filas sin descartar evidencia. Regresión en memoria y
+17 tests Phase 10 PASS; baseline local con dos errores por matplotlib ausente.
+Sin cambio de certificación, activación, commit ni deploy.
+
+Validación final del fix History: 1630 tests en 190.121 s; mismos dos errores
+preexistentes por matplotlib ausente, 2 skipped, 1 expected failure; sin fallos nuevos.
+Suite enfocada: 17 PASS; git diff --check PASS. Ruff no disponible en el entorno.
