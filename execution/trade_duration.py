@@ -3,7 +3,7 @@
 - Day-1 NY close (the first 17:00 America/New_York after the fill, weekdays only, DST-correct via zoneinfo):
   close if the unrealized result is below +0.5R, otherwise keep the position with its stop moved to entry.
 - Day 2: close early on an adverse market-structure change (a confirmed closed 15m BOS against the position
-  after the Day-1 close).
+  after the Day-1 close), decided in time order with SL/TP management (``first_adverse_structure``).
 - Day-2 NY close: force-close.
 - Friday 17:00 NY: every open position is closed, whatever its day.
 
@@ -121,7 +121,25 @@ def adverse_structure(position, frame_15m, as_of):
     return bos
 
 
+def first_adverse_structure(position, frame_15m, after, until):
+    """The earliest moment in [``after``, ``until``] (strictly before the Day-2 close) at which an adverse 15m BOS is
+    known, as (acted_at, bos), or None. ``after`` is the end of the last bar already managed: SL/TP and the structure
+    exit are then decided in time order. A BOS confirmed before ``after`` acts at ``after`` (never retroactively).
+    Each check only sees the 15m bars closed by that moment (no lookahead)."""
+    if position.duration_stage is None or frame_15m is None or len(frame_15m) == 0:
+        return None
+    step = timedelta(minutes=15)
+    ends = [stamp.to_pydatetime() + step for stamp in frame_15m.index]
+    boundary = next_boundary(position)
+    moments = sorted({after, *(end for end in ends if end > after)})
+    for at in (at for at in moments if at <= until and at < boundary):
+        bos = adverse_structure(position, frame_15m[[end <= at for end in ends]], at)
+        if bos is not None:
+            return max(bos["break_timestamp"].to_pydatetime() + step, after), bos
+    return None
+
+
 __all__ = ["CLOSE_DAY1_BELOW_HALF_R", "CLOSE_DAY2_NY_CLOSE", "CLOSE_DAY2_STRUCTURE", "CLOSE_FRIDAY",
            "CLOSE_REASONS", "MIN_KEEP_R", "STAGE_DAY2", "STOP_MOVED_TO_ENTRY", "adverse_structure",
-           "boundary_decision", "day1_close", "day2_close", "is_friday_close", "move_stop_to_entry",
-           "next_boundary", "ny_close_after", "price_bar", "unrealized_r"]
+           "boundary_decision", "day1_close", "day2_close", "first_adverse_structure", "is_friday_close",
+           "move_stop_to_entry", "next_boundary", "ny_close_after", "price_bar", "unrealized_r"]

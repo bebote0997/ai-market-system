@@ -66,7 +66,10 @@ def trade_block(store, row, review):
         return {}
     review = review or {}
     entry = position.entry_price if position is not None else order.planned_entry
-    out = {"side": order.side, "entry": entry, "stop_loss": order.stop, "take_profit": order.target,
+    # The position's own stop once filled (the trade-duration rule may have moved it to entry); R:R and risk stay
+    # measured on the original order stop.
+    stop = position.stop if position is not None else order.stop
+    out = {"side": order.side, "entry": entry, "stop_loss": stop, "take_profit": order.target,
            "quantity": order.quantity, "order_id": order.order_id}
     setup_id = order.setup_id or (review.get("execution") or {}).get("setup_id")
     if setup_id:

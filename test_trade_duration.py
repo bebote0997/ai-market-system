@@ -13,6 +13,7 @@ from execution import trade_duration as td
 from execution.contracts import PaperAccount, PaperOrder, PaperPosition
 from execution.paper_broker import PaperBroker
 from runtime.config import RuntimeConfig
+from runtime.notification_extras import trade_block
 from runtime.scheduler import Scheduler
 from runtime.service import OperationalRuntime
 from storage.codec import paper_decode, paper_encode
@@ -252,6 +253,150 @@ class Day2RuntimeTests(RuntimeCase):
         lows = [108, 107, 108, 109, 110, 109.5, 110.5, 111, 105.5]
         fifteen = frame(stamps, [low + .5 for low in lows], "XAUUSD", lows=lows)
         self.assertIsNone(td.adverse_structure(p, fifteen, datetime(2026, 1, 15, 13, 15, tzinfo=UTC)))
+
+
+BOS_STAMPS = list(pd.date_range(datetime(2026, 1, 15, 11, tzinfo=UTC), periods=9, freq="15min"))
+BOS_LOWS = [108, 107, 108, 109, 110, 109.5, 110.5, 111, 105.5]
+BOS_AT = BOS_STAMPS[-1] + timedelta(minutes=15)  # the bearish 15m BOS is confirmed at 13:15 UTC Thursday
+
+
+def bos_frame(stamps=BOS_STAMPS, flat_until=None):
+    """The bearish-BOS 15m bars, then flat closed bars (no new swing) through ``flat_until`` (data stays fresh)."""
+    tail = [] if flat_until is None else list(pd.date_range(stamps[-1] + timedelta(minutes=15),
+                                                              flat_until - timedelta(minutes=15), freq="15min"))
+    lows = BOS_LOWS + [105.5] * len(tail)
+    return frame(stamps + tail, [low + .5 for low in BOS_LOWS[:-1]] + [106.0] * (len(tail) + 1), "XAUUSD",
+                 lows=lows, highs=[low + 1 for low in lows])
+
+
+def day2_position():
+    return position(target=120.0, stop=100.0, initial_stop=95.0, stage=td.STAGE_DAY2)
+
+
+class ChronologicalStructureTests(RuntimeCase):
+    """Codex HIGH: the Day-2 structure exit is decided in time order with SL/TP, in and out of sessions."""
+
+    def test_delayed_cycle_structure_exit_before_a_later_stop_wins(self):
+        self.seed(day2_position())
+        slot = datetime(2026, 1, 15, 15, 0, tzinfo=UTC)
+
+        def price(at):
+            if at >= datetime(2026, 1, 15, 14, tzinfo=UTC):
+                return 98.0  # a later stop-out (stop at entry 100) must not replace the earlier structure exit
+            return 106.0 if at >= BOS_STAMPS[0] else 104.0
+        runtime = self.runtime(Prices(price, WED_OPEN - 4 * FIVE, bos_frame(flat_until=slot)), slot)
+        self.assertNotIn(runtime.run_cycle("XAUUSD", slot), ("ERROR", "STALE_DATA", "DATA_UNAVAILABLE"))
+        trade, _ = self.closed_trade()
+        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_DAY2_STRUCTURE, 106.0, BOS_AT))
+
+    def test_delayed_cycle_earlier_stop_beats_a_later_structure_exit(self):
+        self.seed(day2_position())
+        slot = datetime(2026, 1, 15, 15, 0, tzinfo=UTC)
+
+        def price(at):
+            if datetime(2026, 1, 15, 12, tzinfo=UTC) <= at < datetime(2026, 1, 15, 12, 5, tzinfo=UTC):
+                return 99.0  # the moved stop (entry 100) is hit before the BOS is known
+            return 106.0 if at >= BOS_STAMPS[0] else 104.0
+        runtime = self.runtime(Prices(price, WED_OPEN - 4 * FIVE, bos_frame(flat_until=slot)), slot)
+        self.assertNotIn(runtime.run_cycle("XAUUSD", slot), ("ERROR", "STALE_DATA", "DATA_UNAVAILABLE"))
+        trade, _ = self.closed_trade()
+        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at),
+                         ("stop", 99.0, datetime(2026, 1, 15, 12, tzinfo=UTC)))
+
+    def test_structure_exit_is_checked_overnight_out_of_session(self):
+        self.seed(day2_position())
+        stamps = list(pd.date_range(datetime(2026, 1, 15, 0, tzinfo=UTC), periods=9, freq="15min"))
+        slot = stamps[-1] + timedelta(minutes=15)  # 02:15 UTC Thursday: no London/New York session
+        runtime = self.runtime(Prices(lambda at: 106.0 if at >= stamps[0] else 104.0, WED_OPEN - 4 * FIVE,
+                                      bos_frame(stamps)), slot)
+        self.assertEqual(runtime.manage_trade_duration(slot), {"XAUUSD": "CHECKED"})
+        trade, journal = self.closed_trade()
+        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_DAY2_STRUCTURE, 106.0, slot))
+        self.assertEqual(next(p for e, p in journal if e == "TRADE_DURATION_EXIT")["bos_direction"], "bearish")
+
+    def test_first_adverse_structure_never_looks_ahead_and_never_acts_retroactively(self):
+        p = day2_position()
+        self.assertIsNone(td.first_adverse_structure(p, bos_frame(), WED_CLOSE, BOS_AT - FIVE))
+        self.assertEqual(td.first_adverse_structure(p, bos_frame(), WED_CLOSE, BOS_AT)[0], BOS_AT)
+        late = BOS_AT + timedelta(minutes=10)  # bars through 13:25 were already managed
+        self.assertEqual(td.first_adverse_structure(p, bos_frame(), late, late + FIVE)[0], late)
+        self.assertIsNone(td.first_adverse_structure(position(), bos_frame(), WED_CLOSE, BOS_AT))  # Day 1
+
+
+class DurationWriteRevalidationTests(RuntimeCase):
+    def test_concurrent_runner_already_moved_the_stop_so_day1_boundary_is_not_reused(self):
+        """Codex MED: another runner moves the stop at the Day-1 close between our read and our guarded write."""
+        self.seed(position())
+        runtime = self.runtime(Prices(lambda at: 103.0 if at >= WED_CLOSE - FIVE else 100.0,
+                                      WED_OPEN - 4 * FIVE), THU_SLOT)
+        original, raced = runtime._guarded_paper_write, []
+
+        def other_runner_first(symbol, key, apply, store=None, kind="paper_write"):
+            if kind == "trade_duration" and not raced:
+                raced.append(kind)
+                other = Store(self.db)
+                try:
+                    account, orders, fills = other.load_paper(ACCOUNT)
+                    broker = PaperBroker(account)
+                    broker.orders, broker.fills = orders, fills
+                    td.move_stop_to_entry(broker.account.open_positions["XAUUSD"])
+                    other.save_paper(broker)
+                finally:
+                    other.close()
+            return original(symbol, key, apply, store, kind)
+        runtime._guarded_paper_write = other_runner_first
+        self.assertEqual(runtime.manage_trade_duration(THU_SLOT), {"XAUUSD": "CHECKED"})
+        self.assertEqual(raced, ["trade_duration"])
+        account, journal = self.paper()
+        p = account.open_positions["XAUUSD"]  # not force-closed at the Day-1 boundary as a "Day-2 close"
+        self.assertEqual((p.stop, p.initial_stop, p.duration_stage), (100.0, 95.0, td.STAGE_DAY2))
+        self.assertEqual(account.closed_trades, [])
+        self.assertNotIn("TRADE_DURATION_EXIT", [event for event, _ in journal])
+
+
+class CommittedEvidencePricingTests(RuntimeCase):
+    def test_provider_revision_does_not_reprice_the_day1_decision(self):
+        """Codex MED: with evidence catch-up ON, the duration rule prices from committed evidence."""
+        self.seed(position())
+        evidence = Path(self.tmp.name) / "market_evidence.db"
+        config = RuntimeConfig(db_path=self.db, enabled_symbols=("XAUUSD", "EURUSD"), v2_position_catch_up=True,
+                               v2_position_catch_up_symbols=("XAUUSD", "EURUSD"), market_evidence_path=evidence)
+        committed = Prices(lambda at: 103.0 if at >= WED_CLOSE - FIVE else 100.0, WED_OPEN - 4 * FIVE)
+        revised = Prices(lambda at: 101.0 if at == WED_CLOSE - FIVE else 103.0 if at >= WED_CLOSE else 100.0,
+                         WED_OPEN - 4 * FIVE)
+        runtime = OperationalRuntime(config, market_provider=revised, ai_provider=DeterministicAIProvider(),
+                                     macro_provider=macro_fixture(),
+                                     instruments={"XAUUSD": instrument(), "EURUSD": EUR}, clock=lambda: THU_SLOT)
+        self.addCleanup(runtime.close)
+        self.assertIsNone(runtime._ingest_evidence("XAUUSD", committed.load_snapshot("XAUUSD", WED_CLOSE), WED_CLOSE))
+        self.assertEqual(runtime.manage_trade_duration(THU_SLOT), {"XAUUSD": "CHECKED"})
+        account, journal = self.paper()
+        p = account.open_positions["XAUUSD"]  # committed 103.0 (+0.6R) keeps; the revised 101.0 would have closed
+        self.assertEqual((p.stop, p.duration_stage), (100.0, td.STAGE_DAY2))
+        moved = next(payload for event, payload in journal if event == td.STOP_MOVED_TO_ENTRY)
+        self.assertEqual((moved["price"], moved["unrealized_r"]), (103.0, "0.6"))
+
+
+class ClosedAlertStopTests(RuntimeCase):
+    def test_closed_alert_after_breakeven_move_shows_the_position_stop(self):
+        """Codex MED: the POSITION_CLOSED alert reports the moved stop, not the original order SL."""
+        self.seed(position())
+
+        def price(at):
+            if WED_CLOSE - FIVE <= at < WED_CLOSE + timedelta(hours=2):
+                return 103.0
+            return 99.0 if at >= WED_CLOSE + timedelta(hours=2) else 100.0
+        runtime = self.runtime(Prices(price, WED_OPEN - 4 * FIVE), THU_SLOT)
+        self.assertNotEqual(runtime.run_cycle("XAUUSD", THU_SLOT), "ERROR")
+        self.assertEqual(self.closed_trade()[0].reason, "stop")
+        store = Store(self.db)
+        try:
+            row = store.db.execute("SELECT * FROM journal WHERE event_type='POSITION_CLOSED'").fetchone()
+            block = trade_block(store, row, None)
+        finally:
+            store.close()
+        self.assertEqual((block["stop_loss"], block["entry"], block["take_profit"]), (100.0, 100.0, 110.0))
+        self.assertEqual(block["rr"], "1:2.00")  # R:R stays on the original stop distance
 
 
 class FridayAndOffSessionTests(RuntimeCase):

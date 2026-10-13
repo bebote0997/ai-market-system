@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-10-13 — Pre-demo fixes: revisión independiente Codex (branch `v2/pre-demo-fixes`, draft PR)
+
+- HIGH: la salida Day-2 por estructura se decide en orden temporal con SL/TP (`trade_duration.first_adverse_structure`
+  + `_enforce_trade_duration`): SL/TP se gestiona solo hasta el momento en que el BOS adverso se conoce; un stop
+  posterior ya no sustituye la salida, y un stop anterior sigue ganando. El pase fuera de sesión revisa también la
+  salida por estructura en cada cierre 15m (posiciones Day 2). Tests: ciclo retrasado (ambos órdenes) y nocturno.
+- MED: la escritura de duración revalida la frontera dentro del CAS (`MOVED` si otro runner ya movió el stop) y
+  relee la posición; ya no cierra en la frontera Day-1 como "Day-2 close". Test de runner concurrente.
+- MED: con catch-up de evidencia ON, el precio de la regla (y el 15m de estructura) sale de la evidencia
+  comprometida, no del snapshot crudo; una revisión del proveedor no cambia la decisión +0.5R ni el PnL. Test.
+- MED: alertas de posición muestran el stop de la posición (stop movido a entrada); R:R/Risk% siguen sobre el stop
+  original de la orden. Test de alerta de cierre tras break-even.
+- REAL OFF, NAS100 bloqueado. Baseline pytest 1624 passed, 1 skipped, 1 xfailed; final 1631 passed, 1 skipped,
+  1 xfailed; ruff PASS.
+
 ## 2026-10-13 — Pre-demo fixes (branch `v2/pre-demo-fixes`, draft PR; no merge/deploy/Render)
 
 - Tarea asignada por el owner. REAL execution OFF, NAS100 bloqueado, sin cambios en Render/env remoto.

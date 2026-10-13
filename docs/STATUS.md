@@ -82,3 +82,6 @@ alertas de orden/posición con datos reales, caché de velas para gráficos (`AI
 opcional). REAL OFF, NAS100 bloqueado, Fase 13 sigue NOT STARTED. Limitación conocida: el oráculo REX (solo V1)
 no modela la regla de duración; los runs donde actúa salen INVALID en `replay.rex_chain`.
 Validación: ruff PASS; pytest 1624 passed, 1 skipped, 1 xfailed (baseline 1590 passed, 1 skipped, 1 xfailed).
+Revisión Codex (4 hallazgos: 1 HIGH, 3 MED) corregida en la misma rama: salida Day-2 por estructura en orden
+temporal con SL/TP (también fuera de sesión), revalidación de frontera en la escritura CAS, precios de la regla
+desde evidencia comprometida con catch-up ON, SL de la posición en alertas. pytest 1631 passed, 1 skipped, 1 xfailed.
