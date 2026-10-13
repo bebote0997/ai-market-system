@@ -33,4 +33,4 @@
 
 PARTIAL aceptados: T11 (una exposición por símbolo por diseño, DEC-6.3/6.4; multi-símbolo cubierto); T16 (reinicio real de servicio se prueba en Fase 11, F11-T11/T12).
 
-Detalle técnico: `V2_PHASE8_EXECUTION.md`, `V2_PHASE8_P86_DESIGN.md`, `V2_PHASE8_P86_HANDOFF.md`, `V2_PHASE8_CERTIFICATION_CHECKLIST.md`.
+Detalle técnico: `docs/archive/V2_PHASE8_EXECUTION.md`, `docs/archive/V2_PHASE8_P86_DESIGN.md`, `docs/archive/V2_PHASE8_P86_HANDOFF.md`, `docs/archive/V2_PHASE8_CERTIFICATION_CHECKLIST.md`.

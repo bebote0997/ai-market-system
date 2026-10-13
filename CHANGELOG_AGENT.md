@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-13 — Repo cleanup (organizational only)
+
+- Owner-assigned task on `v2/repo-cleanup`; draft PR only, no merge/Render/env/runtime/economics change. REAL execution OFF, NAS100 blocked (unchanged).
+- Deleted unused files: `PROGRESO.md` (empty), `runtime/provider.py`, `runtime/certify_finnhub.py`, `runtime/certify_official_macro.py` (no imports/refs).
+- `git mv` of the 40 historical root docs (`AUDIT_*`, `V2_PHASE*`, `*_SPEC`, `V1_POSTMORTEM`, `EXPERIMENT_FREEZE`, etc.) into `docs/archive/`; root keeps `AGENTS.md`, `CLAUDE.md`, `CHANGELOG_AGENT.md`. Updated references in AGENTS.md, docs/decisions.md, docs/phases/phase-06/08, pyproject.toml, runtime/system_health.py docstring, test_phase7 docstring and two relative links. Older entries below keep their original root paths.
+- Added `test_repo_cleanup.py` (deleted files absent, root doc set, archive present, relative md links and `docs/archive/` refs resolve).
 ## 2026-10-11 — DEC-14.2: planner policy runtime flag
 
 - Owner Jeferson Tejeda approved 2026-10-11 11:33 ET; local feature branch only, no activation/Render/push/merge.
