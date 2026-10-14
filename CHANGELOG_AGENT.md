@@ -1762,6 +1762,54 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 - Checklists en docs/phases/phase-09..12.md con enlaces a PRs, CI y revisiones; STATUS a 13/14.
 - Nuevo docs/phases/phase-13-runbook.md (no se ejecuta nada).
 
+## 2026-10-13 — PR #37 dashboard readability, bounded memory and candle-cache charts
+
+Owner-authorized work on `v2/dashboard-luxury`: fetched origin and ran `git merge origin/main`;
+latest main `8b11da0` already an ancestor, result **Already up to date**, no conflicts.
+Inspected `origin/v2/pre-demo-fixes:runtime/candle_cache.py` without merging that branch.
+
+- JSON: identities/outcomes first, escaped indented collapsible details; legacy dataframe JSON
+  detail limited to 20 displayed records, native JSON collapsed. Scalar ET/number/NO_DATA formatting retained.
+- Mobile: single-column Streamlit columns and luxury grids through 768px. Computed Chromium CSS
+  checks at 375/640/768/1024px, including long identities/no page overflow.
+- Memory: tables capped at 200; Process/validated Setups queries bounded (validation filters before
+  LIMIT), one selected setup chart; old exact-run Process links preserved. Overview metrics stream
+  scalar full-ledger fields with only 200 curve points retained. Legacy view loads account totals,
+  OPEN positions and latest 200 orders (pending prioritized), without reconstructing full fills/closed-trade ledgers.
+- Read-only stdlib cache adapter for exact pre-demo `candles(symbol,bar_start,close) WITHOUT ROWID`
+  schema. `AI_FLOOR_CANDLE_CACHE_PATH`, default `candle_cache.db` beside `AI_FLOOR_DB_PATH`.
+  Last 48 closed 5m prices at setup `as_of`, chronological, symbol scoped; no future/open bars,
+  file creation, provider calls or synthetic OHLC. Missing/invalid cache falls back to exact-cycle
+  persisted 15m OHLC or explicit unavailable state. UI `st.cache_data(ttl=30,max_entries=32)`.
+- Setup email stays OFF by default; cache prices saved with event for retries/restart. Existing
+  worker/dedup path retained, reconciliation paged. Real PNG generated via existing matplotlib Agg,
+  plan levels and multiplier-aware labels shared with dashboard; no Chrome/Kaleido requirement.
+  Removed unused Kaleido requirement. Render errors preserve text delivery; SMTP tests mocked.
+- Validation: repo venv baseline 1614 tests OK (1 skipped, 1 expected failure); system Python lacked
+  optional dependencies. Focused dashboard/readability/legacy/replay tests: 58 PASS. Chromium CSS: PASS.
+  Ruff and `git diff --check`: PASS. Closing full suite: 1629 tests OK (2 skipped, 1 expected failure), 190.416s.
+  The optional Chromium test passes separately in the existing Playwright environment; the other skip is preexisting.
+  Running authenticated app: Overview columns PASS at 375/640/768/1024px; Setups cache chart PASS at 375px.
+  First closing run detected legacy FILLED-order compatibility; fixed with bounded pending-first order history,
+  and the replay regression plus final full suite pass.
+
+PAPER/DEMO only; no risk/strategy/runtime activation, NAS100 enablement, Render changes, main merge or deploy.
+
+## 2026-10-13 — PR #37 History evidence pagination review fix (P2)
+
+- History renders each already-paginated record type in its own bounded table, so
+  200 runs no longer discard setups, reviews, orders, fills, positions, trades or journal.
+- In-memory regression covers 201 records per type, two complete/non-overlapping
+  pages, exact combined ID filters and empty pages. It fails against the original
+  rendering (one table instead of eight); focused Phase 10 suite: 17 tests PASS.
+- Baseline: 1629 tests, two preexisting errors caused by missing matplotlib
+  (PNG rendering and SMTP attachment), 2 skipped, 1 expected failure.
+- Local changes only on `v2/dashboard-luxury`; no commit, push, runtime or deploy.
+
+Validación final del fix History: 1630 tests en 190.121 s; mismos dos errores
+preexistentes por matplotlib ausente, 2 skipped, 1 expected failure; sin fallos nuevos.
+Suite enfocada: 17 PASS; git diff --check PASS. Ruff no disponible en el entorno.
+
 ## 2026-10-13 — PR #39: cancellation block and originating signal time (local)
 
 - Snapshot position catch-up still runs, but cannot overwrite an earlier PAPER block. Two failed cancellation
@@ -1799,3 +1847,18 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
   halt and stdout logging tests added.
 - No timeframe-alignment or strategy/risk/economy changes, dependencies, trading-DB schema changes,
   flags, Render, activation, merge or deploy. No staging, commit or push.
+
+## Integración de main en dashboard luxury (2026-10-13)
+
+Merge autorizado por el owner en `v2/dashboard-luxury`: dashboard luxury, Process y Setups
+conservados bajo `ui/views`; imports de aplicación, email y tests migrados. Se conserva
+el hardening de auth (rate limit, lockout y TTL), Twelve Data por cabecera, email con
+remitente/destinatario explícitos, candle cache y cycle records de main. Plotly==7.1.0
+y Streamlit==1.65.0 coinciden con requirements-ci.txt y sus hashes; PNG usa
+matplotlib==3.10.7/Agg, sin requisito Kaleido. Fixture de email actualizado para el
+contrato env-required. Ambas historias de CHANGELOG/STATUS/fase 09 preservadas.
+REAL OFF, NAS100 bloqueado; sin activación, deploy ni merge del PR.
+
+Validación del merge: `TMPDIR=/tmp /workspace/venv/bin/python -m pytest -q` →
+1721 passed, 2 skipped, 1 xfailed, 1181 subtests passed (222.50 s).
+`git diff --check` PASS; conflictos resueltos. Ruff no instalado en el entorno.

@@ -1,3 +1,4 @@
+from ui.tables import dataframe
 def render(st, vm, durable_rows=()):
     st.header("JOURNAL")
     st.caption("In-memory snapshot only · durable persistence deferred")
@@ -24,4 +25,4 @@ def render(st, vm, durable_rows=()):
         if date and str(date) not in row["timestamp"]:
             continue
         rows.append(row)
-    st.dataframe(rows, use_container_width=True, hide_index=True) if rows else st.info("NO_DATA — no journal events in this snapshot.")
+    dataframe(st, rows, width="stretch", hide_index=True) if rows else st.info("NO_DATA — no journal events in this snapshot.")

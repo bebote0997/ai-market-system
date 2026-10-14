@@ -1,7 +1,9 @@
 """Read-only Command Center views of published evidence, never runtime actions."""
+from ui.tables import dataframe
 import json
 import os
 import sqlite3
+from itertools import groupby
 from pathlib import Path
 
 from ui.adapters import from_persisted_snapshot
@@ -10,7 +12,7 @@ from ui.state import dashboard_database
 
 PAGES = ("OVERVIEW", "POSITIONS", "SETUPS", "DECISIONS", "HEALTH", "ALERTS", "HISTORY", "ERRORS")
 TABLES = frozenset({"runs", "setups", "agent_decisions", "risk_decisions",
-                   "paper_accounts", "paper_orders", "paper_positions", "closed_trades",
+                   "paper_accounts", "paper_orders", "paper_fills", "paper_positions", "closed_trades",
                    "review_reports", "journal", "system_state", "ui_snapshots",
                    "notification_events", "notification_deliveries", "component_health", "alert_deliveries"})
 
@@ -46,8 +48,19 @@ def records(db, table, *, run_id="", setup_id="", offset=0, statuses=(), failed=
     if statuses:
         key = "severity" if table == "journal" else "status"
         field = f't."{key}"' if key in columns else f"json_extract(t.payload, '$.{key}')"
-        predicates.append(field + " IN (" + ",".join("?" for _ in statuses) + ")")
+        status_filter = field + " IN (" + ",".join("?" for _ in statuses) + ")"
         params.extend(statuses)
+        if table == 'setups' and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_snapshots'").fetchone():
+            # Preserve exact-cycle snapshot validation on legacy WATCH rows and
+            # their persisted plan/IDs while filtering eligible setups before LIMIT.
+            status_filter = '(' + status_filter + ' OR EXISTS (SELECT 1 FROM ui_snapshots s JOIN runs r '
+            status_filter += 'ON r.slot_key=t.slot_key WHERE s.symbol=r.symbol '
+            status_filter += "AND json_extract(s.payload,'$.symbol')=r.symbol AND json_extract(s.payload,'$.run_id')=r.run_id "
+            status_filter += "AND COALESCE(json_extract(s.payload,'$.setup_status'),json_extract(s.payload,'$.state')) IN ("
+            status_filter += ','.join('?' for _ in statuses) + ')))'
+            params.extend(statuses)
+        predicates.append(status_filter)
     if failed:
         predicates.append("(t.status='FAILED' OR COALESCE(t.error, '') <> '')")
     where = " WHERE " + " AND ".join(predicates) if predicates else ""
@@ -80,7 +93,7 @@ def history(db, run_id="", setup_id="", offset=0):
     runs = records(db, "runs", run_id=run_id, setup_id=setup_id, offset=offset)
     by_slot = {row["slot_key"]: row for row in runs}
     rows = [{"record": "runs", **row} for row in runs]
-    for table in ("setups", "review_reports", "paper_orders", "paper_positions", "closed_trades", "journal"):
+    for table in ("setups", "review_reports", "paper_orders", "paper_fills", "paper_positions", "closed_trades", "journal"):
         for original in records(db, table, run_id=run_id, setup_id=setup_id, offset=offset):
             row = dict(original)
             for key in ("payload", "plan", "evidence"):
@@ -106,10 +119,7 @@ def table(st, rows):
     if not rows:
         st.info("NO_DATA")
         return
-    # Nested evidence stays visible as JSON without mixed Arrow column types.
-    display = [{key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
-                for key, value in row.items()} for row in rows]
-    st.dataframe(display, hide_index=True, width="stretch")
+    dataframe(st, rows, hide_index=True, width="stretch")
 
 
 def render(st, page):
@@ -190,7 +200,12 @@ def render(st, page):
                 page_number = st.number_input("History page", min_value=1, value=1, step=1,
                                               key="history_page")
                 st.caption("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first.")
-                table(st, history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT))
+                rows = history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT)
+                if not rows:
+                    st.info("NO_DATA")
+                for record_type, group in groupby(rows, key=lambda row: row["record"]):
+                    st.subheader(record_type)
+                    table(st, list(group))
             elif page == "ERRORS":
                 st.subheader("Failed runs")
                 table(st, records(db, "runs", failed=True))

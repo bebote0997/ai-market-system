@@ -55,7 +55,7 @@ class GmailEmailChannel:
     def configured(self):
         return not self.missing
 
-    def message(self, event):
+    def message(self, event, attachments=()):
         msg = EmailMessage()
         msg["Subject"] = subject(event)
         msg["From"] = self.sender
@@ -70,12 +70,14 @@ class GmailEmailChannel:
         if png:
             msg.get_payload()[-1].add_related(png, maintype="image", subtype="png", cid=cid,
                                              disposition="inline", filename="chart.png")
+        for filename, content, maintype, subtype in attachments:
+            msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
         return msg
 
-    def send(self, event):
+    def send(self, event, attachments=()):
         if not self.configured:
             raise AlertChannelError("NOT_CONFIGURED")
-        msg = self.message(event)
+        msg = self.message(event, attachments=attachments)
         factory = self.smtp_factory or smtplib.SMTP_SSL
         try:
             smtp = factory(GMAIL_HOST, GMAIL_PORT, timeout=self.timeout, context=ssl.create_default_context())

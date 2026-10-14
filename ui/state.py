@@ -62,10 +62,20 @@ def current_market(st, symbol, sample_factory):
     try:
         payload = store.load_snapshot(symbol)
         vm = from_persisted_snapshot(payload) if payload else empty_market(symbol)
-        account, orders, _ = store.load_paper(store.get_state("account_id") or "paper-main")
+        # Runtime load_paper also reconstructs every historical fill/trade. Display
+        # only needs account totals, open positions and a bounded order history.
+        from storage.codec import paper_decode
+        account_row = store.db.execute('SELECT payload FROM paper_accounts WHERE account_id=?',
+                                       (store.get_state('account_id') or 'paper-main',)).fetchone()
+        account = paper_decode('PaperAccount', account_row[0]) if account_row else None
+        positions = tuple(paper_decode('PaperPosition', row[0]) for row in store.db.execute(
+            "SELECT payload FROM paper_positions WHERE json_extract(payload,'$.status')='OPEN' "
+            "AND json_extract(payload,'$.symbol')=? LIMIT 200", (symbol,)))
+        orders = tuple(paper_decode('PaperOrder', row[0]) for row in store.db.execute(
+            "SELECT payload FROM paper_orders WHERE json_extract(payload,'$.symbol')=? "
+            "ORDER BY (json_extract(payload,'$.status')='PENDING') DESC,rowid DESC LIMIT 200", (symbol,)))
         return replace(vm, account=account,
-            positions=tuple(p for p in account.open_positions.values() if p.symbol == symbol) if account else (),
-            orders=tuple(o for o in orders.values() if o.symbol == symbol))
+                       positions=positions, orders=orders)
     finally:
         store.close()
 
