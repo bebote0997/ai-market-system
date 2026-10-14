@@ -39,7 +39,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual([r["stage"] for r in gate.refused], ["read2", "admission"])
 
     def test_handler_is_one_assignment_without_io(self):
-        """I-R11 / NR21: no I/O, lock, transaction or exception; a second signal keeps the first T_h."""
+        """I-R11 / NR21: no I/O, lock, transaction or exception; escalation keeps the first T_h."""
         def calls(function):
             source = inspect.getsource(function)
             return {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(ast.parse(source.strip()))
@@ -52,7 +52,8 @@ class GateTests(unittest.TestCase):
             gate.request(15)
             first = gate.requested_at
             gate.request(2)
-        self.assertIs(gate.requested_at, first)
+        self.assertEqual(gate.requested_at[:2], first[:2])
+        self.assertEqual(gate.requested_at[2], 2)
 
     def test_allowlist(self):
         gate = HaltGate()
@@ -101,7 +102,7 @@ class StoreCase(unittest.TestCase):
         for symbol in ("XAUUSD", "EURUSD"):
             self.store.claim_slot(f"k-{symbol}", symbol, T, T, run_id=f"r-{symbol}")
         self.gate = HaltGate()
-        self.gate.request(15)
+        self.gate.request(2)
 
     def rows(self, sql):
         return self.store.db.execute(sql).fetchall()
@@ -192,6 +193,83 @@ class StartupTests(StoreCase):
                     self.assertRaises(HaltPending):
                 OperationalRuntime(self.config())
         self.assertEqual(self.digest(), before)  # no recovery, no write: no automatic resume
+
+
+
+
+class CleanShutdownTests(StoreCase):
+    def config(self):
+        return RuntimeConfig(db_path=self.db, v2_rex=True, v2_rhalt=True)
+
+    def test_mixed_signals_inside_startup_write_are_safety_halts(self):
+        import signal
+        for signals in ((signal.SIGINT, signal.SIGTERM), (signal.SIGTERM, signal.SIGINT)):
+            with self.subTest(signals=signals):
+                gate = HaltGate()
+                with halt.startup_write(gate, 'test'):
+                    for signum in signals:
+                        gate.request(signum)
+                    self.assertFalse(gate.halted)
+                    self.assertEqual(gate.deferred_signal, signal.SIGINT)
+                journal_id = halt_bookkeeping(self.store, gate)
+                row = self.store.db.execute('SELECT event_type, payload FROM journal WHERE id=?', (journal_id,)).fetchone()
+                self.assertEqual(row[0], 'HALT_OBSERVED')
+                self.assertEqual(json.loads(row[1])['signal'], signal.SIGINT)
+
+    def test_mixed_signals_before_bookkeeping_keep_barrier_and_safety_priority(self):
+        import signal
+        for signals in ((signal.SIGINT, signal.SIGTERM), (signal.SIGTERM, signal.SIGINT)):
+            with self.subTest(signals=signals):
+                gate = HaltGate()
+                gate.request(signals[0])
+                first = gate.requested_at
+                gate.request(signals[1])
+                self.assertEqual(gate.requested_at[:2], first[:2])
+                journal_id = halt_bookkeeping(self.store, gate)
+                row = self.store.db.execute('SELECT event_type, payload FROM journal WHERE id=?', (journal_id,)).fetchone()
+                self.assertEqual(row[0], 'HALT_OBSERVED')
+                self.assertEqual(json.loads(row[1])['signal'], signal.SIGINT)
+
+    def test_committed_shutdown_is_not_reclassified(self):
+        import signal
+        gate = HaltGate()
+        gate.request(signal.SIGTERM)
+        halt_bookkeeping(self.store, gate)
+        gate.request(signal.SIGINT)
+        self.assertEqual(gate.journal_event, 'CLEAN_SHUTDOWN')
+
+    def test_sigterm_bookkeeping_releases_lock_and_restart_needs_no_token(self):
+        import signal
+        gate = HaltGate()
+        gate.request(signal.SIGTERM)
+        halt_bookkeeping(self.store, gate, run_id='r-XAUUSD', slot_key='k-XAUUSD', symbol='XAUUSD')
+        self.assertEqual(self.rows("SELECT event_type FROM journal WHERE source='halt'")[0][0], 'CLEAN_SHUTDOWN')
+        self.assertEqual(self.rows("SELECT symbol FROM symbol_locks")[0][0], 'EURUSD')
+        self.assertIsNone(startup_halt_check(self.config(), {}))
+        with self.assertRaises(HaltRefused):
+            gate.admit('submit')
+
+    def test_clean_shutdown_does_not_clear_previous_safety_halt(self):
+        import signal
+        safety_id = halt_bookkeeping(self.store, self.gate)
+        gate = HaltGate()
+        gate.request(signal.SIGTERM)
+        clean_id = halt_bookkeeping(self.store, gate)
+        for token in (None, str(clean_id)):
+            with self.assertRaises(HaltPending):
+                startup_halt_check(self.config(), {} if token is None else {RESUME_ENV: token})
+        self.assertEqual(startup_halt_check(self.config(), {RESUME_ENV: str(safety_id)}), safety_id)
+
+    def test_all_other_causes_keep_the_persistent_barrier(self):
+        import signal
+        for cause in (None, signal.SIGINT, 999):
+            gate = HaltGate()
+            gate.request(cause)
+            journal_id = halt_bookkeeping(self.store, gate)
+            self.assertEqual(gate.journal_event, 'HALT_OBSERVED')
+            with self.assertRaises(HaltPending):
+                startup_halt_check(self.config(), {})
+            self.assertEqual(startup_halt_check(self.config(), {RESUME_ENV: str(journal_id)}), journal_id)
 
 
 if __name__ == "__main__":

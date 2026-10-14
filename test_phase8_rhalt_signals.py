@@ -45,7 +45,7 @@ CHILD = textwrap.dedent('''
         real = HaltGate.admit
         def admit(g, kind):
             if kind == "submit":
-                sigterm() if mode == "sigterm_before_submit" else g.request(15)  # real signal / handler body
+                sigterm() if mode == "sigterm_before_submit" else g.request(2)  # real signal / handler body
             return real(g, kind)
         patches.append(patch.object(HaltGate, "admit", admit))
     elif mode == "sigterm_between_read2_and_begin":
@@ -76,7 +76,7 @@ CHILD = textwrap.dedent('''
                 g.request(15)
             return real_admit(g, kind)
         def event(store, at, run_id, symbol, source, event_type, *a, **k):
-            if event_type == "HALT_OBSERVED":
+            if event_type in {"HALT_OBSERVED", "CLEAN_SHUTDOWN"}:
                 os._exit(19)  # killed inside the H transaction: nothing of it commits
             return real_event(store, at, run_id, symbol, source, event_type, *a, **k)
         patches += [patch.object(HaltGate, "admit", admit), patch.object(Store, "_event", event)]
@@ -159,6 +159,14 @@ class RealSignalTests(AnnotateFailures, Processes):
         self.assertEqual(self.sql("SELECT count(*) FROM paper_orders"), [(0,)])
         self.assertEqual(self.invalid_codes(), set())
 
+    def test_real_sigterm_restart_without_resume_token(self):
+        code, out, err = self.child("sigterm_before_submit", 0)
+        self.assertEqual((code, out["status"]), (0, "HALTED"), err)
+        self.assertIsNone(self.halt_id())
+        self.assertEqual(self.sql("SELECT count(*) FROM journal WHERE event_type='CLEAN_SHUTDOWN'"), [(1,)])
+        code, out, err = self.child("plain", 15)
+        self.assertEqual((code, out["start"]), (0, "OK"), err)
+
     def test_real_sigterm_between_read2_and_begin_is_the_single_residual(self):
         self.assertEqual(self.child("plain", 0)[1]["status"], "PLAN_READY")
         token = None
@@ -195,8 +203,8 @@ class CrashRestartTests(Processes):
         self.assertNotIn("VERIFIED", {report["classification"]} - {"NOT VERIFIED"})
 
     def halt_child(self):
-        """A halted process: a real SIGTERM on POSIX; elsewhere the handler body itself (same single assignment)."""
-        code, out, err = self.child("sigterm_before_submit" if POSIX else "direct_before_submit", 0)
+        """A persistent safety halt from SIGINT (normal SIGTERM is tested separately)."""
+        code, out, err = self.child("direct_before_submit", 0)
         self.assertEqual(code, 0, err)
         return out["status"]
 

@@ -51,7 +51,7 @@ class Spy:
 def allowed_post_halt(sql, residual):
     if re.search(r"INTO journal.*'rex'", sql, re.S):
         return True  # R: REX evidence rows
-    if re.search(r"INTO journal.*'halt','HALT_OBSERVED'", sql, re.S) or sql.startswith("UPDATE runs SET status='COMPLETED', final_status='HALTED'") \
+    if re.search(r"INTO journal.*'halt','(?:HALT_OBSERVED|CLEAN_SHUTDOWN)'", sql, re.S) or sql.startswith("UPDATE runs SET status='COMPLETED', final_status='HALTED'") \
             or sql.startswith("DELETE FROM symbol_locks WHERE slot_key="):
         return True  # H
     if sql.startswith("INSERT INTO system_state") and re.search(r"VALUES\('(heartbeat|scheduler|runner)'", sql):
@@ -131,10 +131,10 @@ def on_admit(kind, *, before=True, nth=1):
         if k == kind:
             seen["n"] += 1
             if seen["n"] == nth and before:
-                gate.request(15)
+                gate.request(2)
         admission = real(gate, k)
         if k == kind and seen["n"] == nth and not before:
-            gate.request(15)
+            gate.request(2)
         return admission
     return patch.object(HaltGate, "admit", admit)
 
@@ -145,7 +145,7 @@ def on_pre_save(kind):
     def pre_save(gate, admission):
         real(gate, admission)
         if admission.kind == kind:
-            gate.request(15)
+            gate.request(2)
     return patch.object(HaltGate, "pre_save", pre_save)
 
 
@@ -173,7 +173,7 @@ class InjectionTests(Harness):
         real = PaperBroker.process_next_bar
 
         def process(broker, order, bar):
-            broker_gate.request(15)
+            broker_gate.request(2)
             return real(broker, order, bar)
         broker_gate = HaltGate()
         status, gate, spy = self.cycle(15, gate=broker_gate,
@@ -203,7 +203,7 @@ class InjectionTests(Harness):
 
         def load(store, account_id):
             if state["inside"] and broker_has_fill():
-                injection_gate.request(15)
+                injection_gate.request(2)
             return real_load(store, account_id)
 
         def broker_has_fill():
@@ -221,7 +221,7 @@ class InjectionTests(Harness):
         def save(store, broker, **kwargs):
             result = real_save(store, broker, **kwargs)
             if any(a.kind == "pending_fill" for a in injection_gate.admissions):
-                injection_gate.request(15)
+                injection_gate.request(2)
             return result
         status, gate, spy = self.cycle(15, gate=injection_gate, patches=[patch.object(Store, "save_paper", save)])
         self.assert_halted(status, gate, spy, residual=1)  # T_stop measured after T_h: reported conservatively
@@ -240,7 +240,7 @@ class InjectionTests(Harness):
 
         def claim(store, *args, **kwargs):
             result = real(store, *args, **kwargs)
-            injection_gate.request(15)
+            injection_gate.request(2)
             return result
         status, gate, spy = self.cycle(0, gate=injection_gate, patches=[patch.object(Store, "claim_slot", claim)])
         self.assert_halted(status, gate, spy, residual=0)
@@ -259,7 +259,7 @@ class InjectionTests(Harness):
                 other.execute("UPDATE paper_accounts SET payload=?", (json.dumps(account, separators=(",", ":")),))
                 other.commit()
                 other.close()
-                injection_gate.request(15)
+                injection_gate.request(2)
             return real(store, broker, **kwargs)
         status, gate, _ = self.cycle(0, gate=injection_gate, patches=[patch.object(Store, "save_paper", save)])
         self.assertEqual(status, "HALTED")
@@ -271,7 +271,7 @@ class InjectionTests(Harness):
         injection_gate = HaltGate()
 
         def generate(provider, request):
-            injection_gate.request(15)
+            injection_gate.request(2)
             return real(provider, request)
         status, gate, spy = self.cycle(0, gate=injection_gate,
                                        patches=[patch.object(DeterministicAIProvider, "generate", generate)])
@@ -311,7 +311,7 @@ class InjectionTests(Harness):
 
         def run_cycle(symbol, slot):
             result = real(symbol, slot)
-            gate.request(15)
+            gate.request(2)
             return result
         runtime.run_cycle = run_cycle
         try:
@@ -329,7 +329,7 @@ class InjectionTests(Harness):
                             clock=lambda: T, halt_gate=gate)
         spy = Spy(gate)
         runner.store.db.set_trace_callback(spy)
-        gate.request(15)  # between ticks
+        gate.request(2)  # between ticks
         self.assertFalse(runner.daily_summary(T + timedelta(days=1)))  # S suppressed
         runner.close()
         writes = spy.post_halt_writes()
@@ -369,7 +369,7 @@ class RandomizedTests(Harness):
                 def tick(gate):
                     counter["n"] += 1
                     if counter["n"] == target:
-                        gate.request(15)
+                        gate.request(2)
 
                 def admit(gate, kind):
                     tick(gate)

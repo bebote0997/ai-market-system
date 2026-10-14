@@ -400,3 +400,98 @@ class SetupEmailTests(unittest.TestCase):
         self.assertIn('chart unavailable: bars not persisted', smtp.send_message.call_args.args[0].get_body(preferencelist=('plain',)).get_content())
         self.assertEqual(dispatcher.ledger.db.execute('SELECT attempts FROM alert_deliveries').fetchone()[0], 2)
         self.assertEqual(self.digest(), before)
+
+class StoredDashboardEvidenceTests(unittest.TestCase):
+    setUp = LuxuryDashboardTests.setUp
+    app = LuxuryDashboardTests.app
+    digest = LuxuryDashboardTests.digest
+    assert_rendered = LuxuryDashboardTests.assert_rendered
+
+    def test_realized_r_original_stop_and_open_mtm_render_from_storage(self):
+        from datetime import datetime, timezone
+        with sqlite3.connect(self.path) as db:
+            db.execute('INSERT INTO paper_positions VALUES(?,?)', ('old-position', json.dumps({
+                'position_id': 'old-position', 'entry_price': 100, 'stop': 100, 'initial_stop': 99,
+                'quantity': 2, 'contract_multiplier': 1, 'status': 'CLOSED'})))
+            opened = json.loads(db.execute("SELECT payload FROM paper_positions WHERE position_id='open'").fetchone()[0])
+            opened.update(last_price=102, contract_multiplier=1)
+            db.execute("UPDATE paper_positions SET payload=? WHERE position_id='open'", (json.dumps(opened),))
+        with sqlite3.connect(self.path) as db:
+            db.row_factory = sqlite3.Row
+            self.assertEqual(luxury.closed_trade_rows(db)[0]['realized_r'], 3)
+            self.assertEqual(luxury.ledger_statistics(db, datetime.now(timezone.utc))[0]['Avg R realized'], '3.00R')
+            self.assertEqual(luxury.open_position_rows(db)[0]['unrealized_pnl'], 2)
+        before = self.digest()
+        app = self.app()
+        app.radio[0].set_value('Trades').run()
+        self.assert_rendered(app)
+        content = '\n'.join(m.value for m in app.markdown)
+        self.assertIn('close reason</th>', content)
+        self.assertIn('TARGET', content)
+        self.assertIn('realized r</th>', content)
+        app.radio[0].set_value('Overview').run()
+        self.assert_rendered(app)
+        self.assertIn('3.00R', '\n'.join(m.value for m in app.markdown))
+        chart = json.loads(app.get('plotly_chart')[0].proto.spec)
+        self.assertTrue(chart['layout']['yaxis']['automargin'])
+        self.assertGreaterEqual(chart['layout']['margin']['l'], 60)
+        self.assertEqual(self.digest(), before)
+
+    def test_r_missing_identity_multiplier_or_zero_risk_is_explicit(self):
+        trade = {'position_id': 'p', 'net_pnl': -1}
+        position = {'position_id': 'p', 'entry_price': 100, 'initial_stop': 99, 'stop': 100,
+                    'quantity': 1, 'contract_multiplier': 2}
+        self.assertEqual(luxury.realized_r(trade, position), -0.5)
+        for changed in ({'position_id': 'other'}, {'contract_multiplier': None}, {'initial_stop': None},
+                        {'initial_stop': 100}, {'quantity': 0}):
+            self.assertIsNone(luxury.realized_r(trade, {**position, **changed}))
+        self.assertIsNone(luxury.realized_r(trade, {k: v for k, v in position.items() if k != 'initial_stop'}))
+        self.assertEqual(luxury.realized_r({**trade, 'quantity': 0.5}, position), -1)
+        self.assertIsNone(luxury.realized_r({**trade, 'quantity': None}, position))
+        self.assertEqual(luxury.realized_r({**trade, 'realized_r': 0.25}, {}), 0.25)
+
+    def test_decisions_use_exact_run_snapshot_and_prefer_existing_agent_fields(self):
+        with sqlite3.connect(self.path) as db:
+            db.row_factory = sqlite3.Row
+            rows = luxury.decision_rows(db)
+            agent = next(r for r in rows if r.get('run_id') == 'run-1' and r.get('agent_name') == 'Structure AI')
+            self.assertEqual((agent['bias'], agent['confidence']), ('LONG', 0.7))
+            other = next(r for r in rows if r.get('run_id') == 'run-2' and r.get('agent_name') == 'Structure AI')
+            self.assertIsNone(other['confidence'])
+            db.execute("UPDATE agent_decisions SET bias='SHORT',confidence=0.9,reasoning_summary='stored decision' WHERE slot_key='slot-1'")
+            agent = next(r for r in luxury.decision_rows(db) if r.get('run_id') == 'run-1' and r.get('agent_name') == 'Structure AI')
+            self.assertEqual((agent['bias'], agent['confidence'], agent['reasoning_summary']), ('SHORT', 0.9, 'stored decision'))
+            self.assertLessEqual(len(rows), 200)
+            db.execute("UPDATE agent_decisions SET status='ERROR',confidence=NULL WHERE slot_key='slot-1'")
+            failed = next(r for r in luxury.decision_rows(db) if r.get('run_id') == 'run-1' and r.get('agent_name') == 'Structure AI')
+            self.assertIsNone(failed['confidence'])
+            db.rollback()
+        app = self.app()
+        app.radio[0].set_value('Decisions').run()
+        self.assert_rendered(app)
+        content = '\n'.join(m.value for m in app.markdown)
+        self.assertIn('0.7', content)
+        self.assertIn('&lt;script&gt;', content)
+
+    def test_setups_render_bounded_cache_prices_without_snapshot_bars(self):
+        from datetime import timedelta
+        from storage.codec import parse_utc
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE setups SET status='VALID_SETUP' WHERE slot_key='slot-1'")
+        cache = self.path.with_name('candle_cache.db')
+        at = parse_utc(T)
+        with sqlite3.connect(cache) as db:
+            db.execute('CREATE TABLE candles(symbol TEXT,bar_start TEXT,close REAL,PRIMARY KEY(symbol,bar_start))')
+            for i in range(1, 65):
+                db.execute('INSERT INTO candles VALUES(?,?,?)', ('XAUUSD', (at-timedelta(minutes=5*i)).isoformat(), 100+i/100))
+            db.execute('INSERT INTO candles VALUES(?,?,?)', ('XAUUSD', at.isoformat(), 999))
+        before = hashlib.sha256(cache.read_bytes()).hexdigest()
+        app = self.app()
+        app.radio[0].set_value('Setups').run()
+        self.assert_rendered(app)
+        chart = json.loads(app.get('plotly_chart')[0].proto.spec)
+        self.assertEqual(len(chart['data'][0]['x']), 48)
+        self.assertEqual(chart['data'][0]['type'], 'scatter')
+        self.assertNotIn(999, chart['data'][0]['y'])
+        self.assertTrue(any('5m close prices' in c.value for c in app.caption))
+        self.assertEqual(hashlib.sha256(cache.read_bytes()).hexdigest(), before)

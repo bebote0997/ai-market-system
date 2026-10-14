@@ -228,8 +228,8 @@ class OperationalRuntime:
             LOG.error("run_id=%s symbol=%s component=halt event=HALT_UNCONFIRMED error_type=%s",
                       run_id, symbol, type(exc).__name__)
             return "HALT_UNCONFIRMED"
-        LOG.warning("run_id=%s symbol=%s component=halt event=HALT_OBSERVED refused=%s stage=%s",
-                    run_id, symbol, halt.kind, halt.stage)
+        LOG.warning("run_id=%s symbol=%s component=halt event=%s refused=%s stage=%s",
+                    run_id, symbol, self.halt_gate.journal_event, halt.kind, halt.stage)
         return "HALTED"
 
     def _broker(self, symbol):

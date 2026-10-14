@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from html import escape
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -73,7 +74,45 @@ def apply(st):
 
 
 def number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def realized_r(trade, position):
+    """Net PnL / original cash risk, using exact persisted position identity only."""
+    if number(trade.get('realized_r')):
+        return trade['realized_r']
+    if not position or trade.get('position_id') != position.get('position_id'):
+        return None
+    stop = position.get('initial_stop')
+    entry, quantity, multiplier, pnl = (position.get('entry_price'), trade.get('quantity', position.get('quantity')),
+                                      position.get('contract_multiplier'), trade.get('net_pnl'))
+    if not all(number(v) for v in (entry, stop, quantity, multiplier, pnl)):
+        return None
+    risk = abs(entry-stop) * quantity * multiplier
+    return pnl/risk if risk > 0 and quantity > 0 and multiplier > 0 else None
+
+
+def open_position_rows(db):
+    rows = payloads(db, 'paper_positions', statuses=('OPEN',))
+    for row in rows:
+        values = [row.get(k) for k in ('last_price', 'entry_price', 'quantity', 'contract_multiplier')]
+        if row.get('unrealized_pnl') is None and all(number(v) for v in values) and row.get('side') in ('LONG', 'SHORT'):
+            last, entry, quantity, multiplier = values
+            if quantity > 0 and multiplier > 0:
+                row['unrealized_pnl'] = (last-entry) * quantity * multiplier * (1 if row['side'] == 'LONG' else -1)
+    return rows
+
+
+def closed_trade_rows(db):
+    rows = payloads(db, 'closed_trades')
+    ids = [r['position_id'] for r in rows if r.get('position_id')]
+    positions = {}
+    if ids and db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_positions'").fetchone():
+        # At most 200 indexed identity lookups; do not load the position ledger.
+        for row in db.execute('SELECT position_id,payload FROM paper_positions WHERE position_id IN (' +
+                              ','.join('?' for _ in ids) + ')', ids):
+            positions[row[0]] = json.loads(row[1])
+    return [{**r, 'realized_r': realized_r(r, positions.get(r.get('position_id')))} for r in rows]
 
 
 def trade_statistics(trades, now):
@@ -108,15 +147,25 @@ def ledger_statistics(db, now):
                              'Max drawdown · realized PnL'), MISSING)
     if db is None or not db.execute("SELECT 1 FROM sqlite_master WHERE name='closed_trades'").fetchone():
         return missing, []
-    cursor = db.execute("SELECT json_extract(payload,'$.net_pnl'),json_extract(payload,'$.exited_at'),"
-                        "json_extract(payload,'$.realized_r') FROM closed_trades "
-                        "ORDER BY julianday(json_extract(payload,'$.exited_at')),rowid")
+    has_positions = db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_positions'").fetchone()
+    fields = ('position_id', 'entry_price', 'stop', 'initial_stop', 'quantity', 'contract_multiplier')
+    position = ','.join(f"json_extract(p.payload,'$.{key}')" for key in fields) if has_positions else ','.join('NULL' for _ in fields)
+    join = " LEFT JOIN paper_positions p ON p.position_id=json_extract(t.payload,'$.position_id')" if has_positions else ""
+    cursor = db.execute("SELECT json_extract(t.payload,'$.net_pnl'),json_extract(t.payload,'$.exited_at'),"
+                        "json_extract(t.payload,'$.realized_r'),json_extract(t.payload,'$.quantity'),"
+                        "json_type(t.payload,'$.quantity')," + position + " FROM closed_trades t" + join +
+                        " ORDER BY julianday(json_extract(t.payload,'$.exited_at')),t.rowid")
     count = wins = 0
     total = peak = drawdown = today_pnl = sum_r = 0.0
     known_r = valid = True
     today = now.astimezone(ZoneInfo('America/New_York')).date()
     curve = deque(maxlen=ROW_LIMIT)
-    for pnl, stamp, realized_r in cursor:
+    for pnl, stamp, stored_r, trade_quantity, quantity_type, *position_values in cursor:
+        position = dict(zip(fields, position_values))
+        trade = {'net_pnl': pnl, 'realized_r': stored_r, 'position_id': position.get('position_id')}
+        if quantity_type is not None:
+            trade['quantity'] = trade_quantity
+        r_value = realized_r(trade, position)
         count += 1
         if not number(pnl) or not stamp:
             valid = False
@@ -128,8 +177,8 @@ def ledger_statistics(db, now):
         wins += pnl > 0
         if at.astimezone(ZoneInfo('America/New_York')).date() == today:
             today_pnl += pnl
-        if number(realized_r):
-            sum_r += realized_r
+        if number(r_value):
+            sum_r += r_value
         else:
             known_r = False
         curve.append({'Closed at': at, 'Cumulative realized PnL': total})
@@ -166,9 +215,9 @@ def overview(st, db, now):
             import plotly.graph_objects as go
             fig = go.Figure(go.Scatter(x=[r['Closed at'] for r in curve], y=[r['Cumulative realized PnL'] for r in curve],
                                        mode='lines+markers', line=dict(color='#c8a96a', width=1.5)))
-            fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor='rgba(0,0,0,0)',
+            fig.update_layout(height=220, margin=dict(l=65, r=15, t=10, b=35), paper_bgcolor='rgba(0,0,0,0)',
                               plot_bgcolor='rgba(0,0,0,0)', font=dict(family='IBM Plex Sans', color='#8a877f'),
-                              xaxis=dict(gridcolor='#1c1c1f'), yaxis=dict(gridcolor='#1c1c1f'))
+                              xaxis=dict(gridcolor='#1c1c1f'), yaxis=dict(gridcolor='#1c1c1f', automargin=True))
             st.plotly_chart(fig, width='stretch', theme=None, key='equity-curve')
         else:
             card(st, 'Closed-trade curve', summary=MISSING)
@@ -187,8 +236,9 @@ def overview(st, db, now):
             card(st, key, value=value)
     left, right = st.columns([2, 1])
     with left:
-        table(st, 'Open positions', payloads(db, 'paper_positions', statuses=('OPEN',)),
-              ['symbol', 'side', 'entry_price', 'stop', 'target', 'unrealized_pnl'])
+        opened = open_position_rows(db)
+        table(st, 'Open positions', opened,
+              ['symbol', 'side', 'quantity', 'entry_price', 'stop', 'target', 'unrealized_pnl'])
     with right:
         card(st, 'Active policies', [(key, f'{display(value)} · source: {source}')
              for key in ('V2_PLANNER_POLICY', 'V2_OPPOSITE_SETUP_POLICY')
@@ -244,12 +294,12 @@ def linked_plan(db, trade):
 
 
 def trades(st, db):
-    closed = [{**r, 'record': 'closed'} for r in payloads(db, 'closed_trades')]
-    opened = [{**r, 'record': 'open'} for r in payloads(db, 'paper_positions', statuses=('OPEN',))]
+    closed = [{**r, 'record': 'closed', 'close_reason': r.get('reason')} for r in closed_trade_rows(db)]
+    opened = [{**r, 'record': 'open'} for r in open_position_rows(db)]
     rows = closed + opened
     table(st, 'Closed trades · latest published', closed, ['trade_id', 'position_id', 'symbol', 'side',
-          'entry_price', 'exit_price', 'net_pnl', 'exited_at'])
-    table(st, 'Open positions', opened, ['position_id', 'symbol', 'side', 'entry_price', 'stop', 'target'])
+          'entry_price', 'exit_price', 'net_pnl', 'realized_r', 'close_reason', 'exited_at'])
+    table(st, 'Open positions', opened, ['position_id', 'symbol', 'side', 'quantity', 'entry_price', 'stop', 'target', 'unrealized_pnl'])
     if not rows:
         return
     selected = st.selectbox('Trade detail', range(len(rows)),
@@ -278,13 +328,40 @@ def process_link(st, run_id, key):
             st.rerun(scope='app')
 
 
-def decisions(st, db):
+def decision_rows(db):
     rows = []
     for source in ('runs', 'agent_decisions', 'risk_decisions'):
-        for row in records(db, source):
-            parent = dict(db.execute('SELECT run_id,symbol,as_of FROM runs WHERE slot_key=?',
-                                    (row['slot_key'],)).fetchone() or {})
-            rows.append({**parent, **row, 'source': source})
+        page = records(db, source)
+        slots = [r['slot_key'] for r in page]
+        parents = {r['slot_key']: dict(r) for r in db.execute(
+            'SELECT slot_key,run_id,symbol,as_of FROM runs WHERE slot_key IN (' +
+            ','.join('?' for _ in slots) + ')', slots)} if slots else {}
+        for row in page:
+            rows.append({**parents.get(row['slot_key'], {}), **row, 'source': source})
+    known = {(r.get('run_id'), r.get('agent_name')): r for r in rows if r['source'] == 'agent_decisions'}
+    for snapshot in payloads(db, 'ui_snapshots'):
+        for agent in snapshot.get('agents') or ():
+            name = agent.get('name') or agent.get('agent_name')
+            if not snapshot.get('run_id') or not name:
+                continue
+            existing = known.get((snapshot['run_id'], name))
+            if existing is not None:
+                # Missing confidence on an unavailable/failed agent is intentional, not a data gap.
+                if existing.get('status') not in ('OK', 'PARTIAL') or existing.get('status') != agent.get('status') or existing.get('symbol') != snapshot.get('symbol'):
+                    continue
+                for key in ('bias', 'confidence', 'reasoning_summary'):
+                    if existing.get(key) is None and agent.get(key) is not None:
+                        existing[key] = agent[key]
+                continue
+            rows.append({**agent, 'agent_name': name, 'source': 'ui_snapshots',
+                         'run_id': snapshot.get('run_id'), 'symbol': snapshot.get('symbol'),
+                         'as_of': agent.get('timestamp') or snapshot.get('as_of')})
+    rows.sort(key=lambda r: r.get('as_of') or '', reverse=True)
+    return rows[:ROW_LIMIT]
+
+
+def decisions(st, db):
+    rows = decision_rows(db)
     if rows:
         selected = st.selectbox('Decision process', list(dict.fromkeys(r['run_id'] for r in rows if r.get('run_id'))))
         process_link(st, selected, 'decision-process')

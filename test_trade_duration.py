@@ -473,5 +473,43 @@ class FridayAndOffSessionTests(RuntimeCase):
         self.assertEqual(calls, [FRI_CLOSE])
 
 
+
+
+class BreakevenShortGapTests(unittest.TestCase):
+    def test_moved_short_stop_fills_at_gap_open_without_spread_markup(self):
+        from execution.trade_manager import TradeManager
+        p = position('SHORT', 1.11936, 1.12100, 1.11444, symbol='EURUSD')
+        p.quantity, p.contract_multiplier, p.cost_rate = 0.08921052631578948, 100000.0, 0.0
+        td.move_stop_to_entry(p)
+        # Use the durable round-trip too: the stop really is at entry.
+        p = paper_decode('PaperPosition', paper_encode(p))
+        account = PaperAccount('1.0', 'paper-main', 10000, 10000, 10000, open_positions={'EURUSD': p})
+        broker = PaperBroker(account, EUR)
+        manager = TradeManager(account, broker)
+        at = WED_CLOSE + FIVE
+        bar = {'symbol': 'EURUSD', 'timestamp': at, 'is_closed': True,
+               'open': 1.11974, 'high': 1.11990, 'low': 1.11930, 'close': 1.11950}
+        trade, = manager.process_bar(bar)
+        self.assertEqual((p.stop, p.initial_stop, trade.exit_price, trade.reason),
+                         (1.11936, 1.12100, 1.11974, 'stop'))
+        self.assertAlmostEqual(trade.net_pnl, -3.39, places=8)
+        self.assertEqual(trade.cost, 0)
+        self.assertEqual(manager.process_bar(bar), [])
+
+    def test_no_gap_crossing_fills_at_entry_and_charges_cost_once(self):
+        from execution.trade_manager import TradeManager
+        p = position('SHORT', 1.11936, 1.12100, 1.11444, symbol='EURUSD')
+        p.quantity, p.contract_multiplier, p.cost_rate = 0.1, 100000.0, 0.01
+        td.move_stop_to_entry(p)
+        account = PaperAccount('1.0', 'paper-main', 10000, 10000, 10000, open_positions={'EURUSD': p})
+        manager = TradeManager(account, PaperBroker(account, EUR))
+        trade, = manager.process_bar({'symbol': 'EURUSD', 'timestamp': WED_CLOSE + FIVE, 'is_closed': True,
+                                     'open': 1.11900, 'high': 1.11974, 'low': 1.11890, 'close': 1.11950})
+        self.assertEqual(trade.exit_price, p.entry_price)
+        self.assertEqual(trade.gross_pnl, 0)
+        self.assertEqual(trade.net_pnl, -trade.cost)
+        self.assertEqual(account.realized_pnl, -trade.cost)
+
+
 if __name__ == "__main__":
     unittest.main()
