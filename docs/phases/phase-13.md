@@ -1,6 +1,8 @@
 # Fase 13 — Long Paper Validation
 
-**Estado:** NOT STARTED.
+**Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
+
+Demo iniciado con GO del owner sobre la DB actual (sin DB nueva ni sealed genesis); ver DEC-13.1 y el runbook.
 
 PR #39, gold options 1 y 4 autorizadas por el owner (2026-10-13): fix de continuidad macro en refrescos
 de 6 h, sin backdating de fetched_at/known_at; auditoría SQLite por ciclo, acotada a 30 días / 10 000 filas,
