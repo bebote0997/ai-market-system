@@ -27,7 +27,7 @@ class ExistingExperimentPreflight(unittest.TestCase):
             "AI_FLOOR_INSTANCE_COUNT": "1", "AI_FLOOR_CLOUD_RUNNER": "0",
             "AI_FLOOR_GIT_COMMIT": FREEZE, "FXMACRODATA_API_KEY": "test",
             "OPENAI_API_KEY": "test", "TWELVE_DATA_API_KEY": "test",
-            "SLACK_WEBHOOK_URL": "test", "AI_FLOOR_DASHBOARD_PASSWORD": "test",
+            "SLACK_WEBHOOK_URL": "test", "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw",
         }
         with closing(Store(self.path)) as store:
             account = PaperAccount("1.0", "paper-main", 10000, 10000, 10000)

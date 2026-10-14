@@ -15,6 +15,7 @@ import time
 from runtime.alert_catalog import from_notification
 from runtime.alert_chart import evidence_closes
 from runtime.alert_dispatch import alerts_enabled, dispatcher_from_env
+from runtime import candle_cache
 
 LOG = logging.getLogger(__name__)
 RECOVERY_INTERVAL_SECONDS = 60.0
@@ -37,7 +38,7 @@ class AlertHook:
         self._ready = threading.Event()
         self._admission = threading.Lock()
         self._worker = None
-        if not alerts_enabled(self.environ):
+        if not alerts_enabled(self.environ) and self.environ.get('AI_FLOOR_SETUP_CHART_EMAIL', '0') != '1':
             self._ready.set()
             return
         try:
@@ -74,15 +75,20 @@ class AlertHook:
             return None
 
     def _prepare_alert(self, event):
-        if not event.kind.trade:
+        if event.event_type == 'SETUP_VALIDATED' or not event.kind.trade:
             return event
-        closes = evidence_closes(self.environ.get("AI_FLOOR_MARKET_EVIDENCE_PATH"),
-                                 event.symbol, event.occurred_at_utc)
+        # Pre-demo: the per-cycle candle cache always exists on the default route; the Evidence Store (flag ON
+        # only) is the fallback, so an absent evidence DB no longer leaves every chart empty.
+        closes = candle_cache.closes(candle_cache.path_from_env(self.environ), event.symbol, event.occurred_at_utc)
+        if not closes and self.environ.get("AI_FLOOR_MARKET_EVIDENCE_PATH"):
+            closes = evidence_closes(self.environ["AI_FLOOR_MARKET_EVIDENCE_PATH"], event.symbol,
+                                     event.occurred_at_utc)
         return replace(event, closes=closes)
 
     def _run(self):
         try:
             try:
+                self._publish_setup_charts()
                 self.dispatcher.recover_pending()
             except Exception as exc:  # noqa: BLE001
                 LOG.warning("component=alerts event=RECOVERY_FAILED error_type=%s", type(exc).__name__)
@@ -92,6 +98,7 @@ class AlertHook:
             while not self._closed.is_set() or not self._queue.empty():
                 if not self._closed.is_set() and time.monotonic() >= recovery_at:
                     try:
+                        self._publish_setup_charts()
                         self.dispatcher.recover_pending()
                     except Exception as exc:  # noqa: BLE001
                         LOG.warning("component=alerts event=RECOVERY_FAILED error_type=%s", type(exc).__name__)
@@ -101,6 +108,7 @@ class AlertHook:
                 except queue.Empty:
                     continue
                 try:
+                    self._publish_setup_charts(event.run_id)
                     alert = _to_alert(event)
                     if alert is not None:
                         self.dispatcher.dispatch(alert)
@@ -110,6 +118,11 @@ class AlertHook:
                     self._queue.task_done()
         finally:
             self.dispatcher.ledger.close()
+
+    def _publish_setup_charts(self, run_id=''):
+        if self.environ.get('AI_FLOOR_SETUP_CHART_EMAIL', '0') == '1':
+            from runtime.setup_chart_email import publish_setup_charts
+            publish_setup_charts(self.dispatcher, self.environ, run_id)
 
     def flush(self, timeout=10.0):
         """Wait at most timeout seconds for startup recovery and admitted work; True when drained."""

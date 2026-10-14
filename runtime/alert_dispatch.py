@@ -105,7 +105,7 @@ class AlertDeliveryLedger:
         with self._lock:
             self._save(event)
 
-    def pending(self, channels, at, stale_after):
+    def pending(self, channels, at, stale_after, channel_filter=None):
         """Stream pending snapshots, skipping terminal and still-owned channel claims."""
         with self._lock:
             missing = self.db.execute(
@@ -121,20 +121,31 @@ class AlertDeliveryLedger:
             if row is None:
                 return
             last_id, snapshot = row
+            try:
+                data = json.loads(snapshot)
+                event_channels = channel_filter(data, channels) if channel_filter else channels
+            except (ValueError, TypeError, KeyError) as exc:
+                LOG.warning('component=alerts event=SNAPSHOT_FAILED error_type=%s', type(exc).__name__)
+                continue
             statuses = self.status(last_id)
             with self._lock:
                 claims = dict(self.db.execute("SELECT channel,claimed_at FROM alert_deliveries "
                                               "WHERE event_id=? AND status='SENDING'", (last_id,)).fetchall())
             if not any(name not in statuses or
                        (name in claims and _age_seconds(claims[name], at) >= stale_after)
-                       for name in channels):
+                       for name in event_channels):
                 continue
             try:
                 data = json.loads(snapshot)
                 data["session"] = tuple(data["session"])
                 data["trade"] = tuple(tuple(pair) for pair in data["trade"])
                 data["closes"] = tuple(data["closes"])
-                yield AlertEvent(**data)
+                if data['event_type'] == 'SETUP_VALIDATED':
+                    from runtime.setup_chart_email import SetupChartEvent
+                    data['bars'] = tuple(data['bars'])
+                    yield SetupChartEvent(**data)
+                else:
+                    yield AlertEvent(**data)
             except (ValueError, TypeError, KeyError) as exc:
                 LOG.warning("component=alerts event=SNAPSHOT_FAILED error_type=%s", type(exc).__name__)
 
@@ -214,10 +225,19 @@ class AlertDispatcher:
         if not self.enabled:
             return
         channels = tuple(channel.name for channel in self.channels if channel.configured)
-        for event in self.ledger.pending(channels, self.clock(), self.stale_after):
+        def eligible(data, names):
+            setup = data['event_type'] == 'SETUP_VALIDATED'
+            return tuple(name for name in names if (name == 'setup_chart_email') == setup
+                         and (setup or getattr(self, 'normal_alerts_enabled', True)))
+        for event in self.ledger.pending(channels, self.clock(), self.stale_after, eligible):
             self.dispatch(event)
 
     def _deliver(self, channel, event):
+        setup = event.event_type == 'SETUP_VALIDATED'
+        if (channel.name == 'setup_chart_email') != setup:
+            return 'NOT_APPLICABLE'
+        if not setup and not getattr(self, 'normal_alerts_enabled', True):
+            return 'DISABLED'
         try:
             self.ledger.save(event)
             if not getattr(channel, "configured", True):
@@ -294,6 +314,12 @@ class AlertNotificationSink:
         self.dispatcher = dispatcher
 
     def deliver(self, event):
+        if os.environ.get('AI_FLOOR_SETUP_CHART_EMAIL', '0') == '1':
+            try:
+                from runtime.setup_chart_email import publish_setup_charts
+                publish_setup_charts(self.dispatcher, os.environ, event.run_id)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning('component=alerts event=SETUP_CHART_FAILED error_type=%s', type(exc).__name__)
         try:
             alert = from_notification(event)
         except Exception as exc:  # noqa: BLE001
@@ -307,8 +333,16 @@ class AlertNotificationSink:
 def dispatcher_from_env(*, ledger_path=":memory:", environ=None):
     """Email + Slack dispatcher configured from the environment; OFF unless AI_FLOOR_ALERTS_ENABLED=1."""
     from runtime.alert_channels import GmailEmailChannel, SlackAlertChannel
-    return AlertDispatcher((GmailEmailChannel(environ=environ), SlackAlertChannel(environ=environ)),
-                           ledger=AlertDeliveryLedger(ledger_path), environ=environ)
+    env = os.environ if environ is None else environ
+    email = GmailEmailChannel(environ=environ)
+    channels = (email, SlackAlertChannel(environ=environ))
+    if env.get('AI_FLOOR_SETUP_CHART_EMAIL', '0') != '1':
+        return AlertDispatcher(channels, ledger=AlertDeliveryLedger(ledger_path), environ=environ)
+    from runtime.setup_chart_email import SetupChartEmailChannel
+    dispatcher = AlertDispatcher(channels + (SetupChartEmailChannel(email),), enabled=True,
+                                 ledger=AlertDeliveryLedger(ledger_path), environ=environ)
+    dispatcher.normal_alerts_enabled = alerts_enabled(environ)
+    return dispatcher
 
 
 __all__ = ["AMBIGUOUS_RETRY", "AlertDeliveryLedger", "AlertDispatcher", "AlertNotificationSink", "ENABLED_ENV", "alerts_enabled",

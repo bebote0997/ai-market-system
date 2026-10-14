@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 
 from runtime.alert_hook import AlertHook
+from runtime.notification_extras import capture_ai_review_health, with_trade
 from runtime.notifications import NullNotificationSink
 from runtime.scheduler import Scheduler, slot_at, slot_key
 from runtime.service import OperationalRuntime
@@ -120,6 +121,8 @@ class DemoRunner:
     def _capture_and_deliver(self, *, run_id=None):
         try:
             events = self.store.capture_notifications(run_id=run_id)
+            # Pre-demo: order/position alerts carry durable trade data; AI review health alerts (transitions).
+            events = with_trade(self.store, events) + capture_ai_review_health(self.store, run_id=run_id)
             self._deliver(events)
         except Exception as exc:
             LOG.warning("component=notifications event=CAPTURE_OR_DELIVERY_FAILED error_type=%s",
@@ -181,6 +184,14 @@ class DemoRunner:
                 "review_durable": review is not None,
                 "journal_count": journal_count,
                 "paper_orders_enabled": not self.dry_run}
+
+    def manage_trade_duration(self, at):
+        """Out-of-session trade-duration pass (Scheduler); its closes are notified like any other."""
+        results = self.runtime.manage_trade_duration(at)
+        gate = getattr(self, "halt_gate", None)
+        if results and (gate is None or gate.allow("S")):
+            self._capture_and_deliver()
+        return results
 
     def tick(self):
         return Scheduler(self, self.clock).tick()

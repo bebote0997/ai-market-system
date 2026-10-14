@@ -1,7 +1,7 @@
 """Send ONE labelled TEST alert through the Phase 9 alert path (F09-T18). Manual owner action only.
 
     python -m runtime.alert_test --slack     # SLACK_WEBHOOK_URL
-    python -m runtime.alert_test --email     # GMAIL_APP_PASSWORD (+ AI_FLOOR_ALERT_EMAIL_FROM/_TO)
+    python -m runtime.alert_test --email     # GMAIL_APP_PASSWORD + AI_FLOOR_ALERT_EMAIL_FROM + AI_FLOOR_ALERT_EMAIL_TO (all required)
 
 Running the command is the explicit consent to send, so it does not read ``AI_FLOOR_ALERTS_ENABLED`` (the
 runtime hook stays OFF). Prints only typed statuses — never the webhook URL, password or recipients. Touches no
@@ -30,8 +30,9 @@ def main(argv=None):
     event = make_test_alert(at, nonce=uuid.uuid4().hex)
     alerts = AlertDispatcher(channels, enabled=True, max_attempts=1)
     result = alerts.dispatch(event)
-    print(json.dumps({"event_id": event.event_id, "result": result,
-                      "ledger": alerts.ledger.status(event.event_id)}, sort_keys=True))  # typed codes only
+    missing = sorted({name for channel in channels for name in getattr(channel, "missing", ())})
+    print(json.dumps({"event_id": event.event_id, "result": result, "missing_settings": missing,
+                      "ledger": alerts.ledger.status(event.event_id)}, sort_keys=True))  # typed codes / names only
     return 0 if result and set(result.values()) == {"DELIVERED"} else 1
 
 

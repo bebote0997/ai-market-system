@@ -1,5 +1,6 @@
 """Phase 10: render real navigation over immutable, offline SQLite fixtures."""
 import hashlib
+import time
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -15,7 +16,7 @@ from execution.contracts import PaperAccount
 from storage.codec import paper_encode
 from storage.database import Store
 from storage.health_store import HealthStore
-from ui.pages.dashboard import history, records, ROW_LIMIT
+from ui.views.dashboard import history, records, ROW_LIMIT
 from ui.state import dashboard_database, enabled_market_symbols
 from runtime.config import DEFAULT_ENABLED_SYMBOLS
 
@@ -82,6 +83,7 @@ class Phase10DashboardTests(unittest.TestCase):
     def app(self):
         app = AppTest.from_file(str(APP), default_timeout=15)
         app.session_state["dashboard_authenticated"] = True
+        app.session_state["dashboard_auth_expires_at"] = time.monotonic() + 3600
         app.session_state["sample_mode"] = False
         return app.run()
 
@@ -96,7 +98,7 @@ class Phase10DashboardTests(unittest.TestCase):
         before = self.digest()
         health_before = hashlib.sha256(self.health_path.read_bytes()).hexdigest()
         app = self.app()
-        for page in app.radio[0].options:
+        for page in [o.removeprefix("Legacy · ").upper() if o.startswith("Legacy · ") else o for o in app.radio[0].options]:
             with self.subTest(page=page):
                 app.radio[0].set_value(page).run()
                 self.assert_rendered(app)
@@ -128,7 +130,7 @@ class Phase10DashboardTests(unittest.TestCase):
         before = hashlib.sha256(empty.read_bytes()).hexdigest()
         with patch.dict(os.environ, {"AI_FLOOR_DB_PATH": str(empty)}):
             app = self.app()
-            for page in app.radio[0].options:
+            for page in [o.removeprefix("Legacy · ").upper() if o.startswith("Legacy · ") else o for o in app.radio[0].options]:
                 with self.subTest(page=page):
                     app.radio[0].set_value(page).run()
                     self.assert_rendered(app)
@@ -292,6 +294,50 @@ if __name__ == "__main__":
 
 
 class TestDashboardSqlFilters(unittest.TestCase):
+    def test_history_renders_every_record_type_across_pages(self):
+        from ui.views import dashboard
+        record_types = ("runs", "setups", "review_reports", "paper_orders", "paper_fills",
+                        "paper_positions", "closed_trades", "journal")
+        with sqlite3.connect(":memory:") as db:
+            db.row_factory = sqlite3.Row
+            db.execute("CREATE TABLE runs(slot_key TEXT, run_id TEXT, symbol TEXT)")
+            db.executemany("INSERT INTO runs VALUES(?,?,?)",
+                           [(f"slot-{i}", f"run-{i}", "XAUUSD") for i in range(ROW_LIMIT + 1)])
+            for record_type in record_types[1:]:
+                db.execute(f"CREATE TABLE {record_type}(slot_key TEXT, payload TEXT)")
+                db.executemany(f"INSERT INTO {record_type} VALUES(?,?)",
+                               [(f"slot-{i}", json.dumps({"setup_id": f"setup-{i}"}))
+                                for i in range(ROW_LIMIT + 1)])
+
+            def rendered(page, run_id="", setup_id=""):
+                st = MagicMock()
+                st.text_input.side_effect = [run_id, setup_id]
+                st.number_input.return_value = page
+                with patch.object(dashboard, "dashboard_database") as database:
+                    database.return_value.__enter__.return_value = db
+                    dashboard.render(st, "HISTORY")
+                st.error.assert_not_called()
+                return [call.args[0] for call in st.dataframe.call_args_list]
+
+            first, second = rendered(1), rendered(2)
+            for pages, count in ((first, ROW_LIMIT), (second, 1)):
+                self.assertEqual(len(pages), len(record_types))
+                for record_type, rows in zip(record_types, pages):
+                    self.assertEqual(len(rows), count)
+                    self.assertEqual({row["record"] for row in rows}, {record_type})
+            for first_rows, second_rows in zip(first, second):
+                first_ids = {row["run_id"] for row in first_rows}
+                second_ids = {row["run_id"] for row in second_rows}
+                self.assertFalse(first_ids & second_ids)
+                self.assertEqual(first_ids | second_ids,
+                                 {f"run-{i}" for i in range(ROW_LIMIT + 1)})
+            filtered = rendered(1, "run-0", "setup-0")
+            self.assertEqual(len(filtered), len(record_types) - 1)
+            self.assertTrue(all(len(rows) == 1 and rows[0]["run_id"] == "run-0"
+                                for rows in filtered))
+            self.assertEqual(rendered(1, "run-0", "setup-1"), [])
+            self.assertEqual(rendered(3), [])
+
     def test_status_and_error_filters_precede_limit(self):
         for name, columns, filters, expected, parameters in (
                 ("paper_positions", ("position_id", "payload"), {"statuses": ("OPEN",)},
@@ -313,7 +359,7 @@ class TestDashboardSqlFilters(unittest.TestCase):
                 self.assertEqual(params, (*parameters, ROW_LIMIT, 0))
 
     def test_t10_render_catches_database_read_error(self):
-        from ui.pages import dashboard
+        from ui.views import dashboard
         st = Mock()
         with patch.object(dashboard, "dashboard_database") as database:
             database.return_value.__enter__.return_value.execute.side_effect = sqlite3.OperationalError("read")
@@ -322,7 +368,7 @@ class TestDashboardSqlFilters(unittest.TestCase):
             "DASHBOARD_ERROR — OperationalError: persisted evidence could not be read")
 
     def test_positions_and_errors_request_sql_filters(self):
-        from ui.pages import dashboard
+        from ui.views import dashboard
         st = Mock()
         with patch.object(dashboard, "dashboard_database"), patch.object(
                 dashboard, "payloads", return_value=[]) as payloads:

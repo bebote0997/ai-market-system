@@ -31,8 +31,10 @@ class TwelveDataProviderError(RuntimeError):
         super().__init__(f"{kind}:{asset_class}")
 
 
-def _http_json(url, timeout):
-    with urlopen(Request(url), timeout=timeout) as response:
+def _http_json(url, api_key, timeout):
+    # Twelve Data accepts the key as an ``Authorization: apikey`` header, so it never appears in URLs.
+    request = Request(url, headers={"Authorization": "apikey " + api_key})
+    with urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -77,15 +79,15 @@ class TwelveDataMarketDataProvider:
         interval, _ = TIMEFRAMES[timeframe]
         if not self.api_key:
             raise TwelveDataProviderError("NOT_CONFIGURED", asset_class)
-        # The key is only in memory and is never put in error strings or logs.
+        # The key is only in memory and in the request header; never in the URL, error strings or logs.
         url = "https://api.twelvedata.com/time_series?" + urlencode({
             "symbol": ticker, "interval": interval, "outputsize": self.outputsize,
-            "timezone": "UTC", "format": "JSON", "apikey": self.api_key,
+            "timezone": "UTC", "format": "JSON",
         })
         for attempt in range(self.retries + 1):
             status = retry_after = None
             try:
-                payload = self._transport(url, self.timeout)
+                payload = self._transport(url, self.api_key, self.timeout)
                 if not isinstance(payload, dict):
                     raise TwelveDataProviderError("INVALID_RESPONSE", asset_class)
                 if payload.get("status") == "error":
@@ -100,6 +102,8 @@ class TwelveDataMarketDataProvider:
                 kind = _error_kind(status)
             except (URLError, TimeoutError, ConnectionError):
                 kind = "PROVIDER_FAILURE"
+            except ValueError:  # undecodable body; its text is never surfaced
+                kind = "INVALID_RESPONSE"
             except TwelveDataProviderError as exc:
                 kind = exc.kind
             transient = status == 429 or status is not None and 500 <= status <= 599 or (

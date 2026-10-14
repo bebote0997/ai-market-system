@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import hashlib
 import json
@@ -83,6 +83,9 @@ class RuntimeConfig:
 
     v2_opposite_setup_policy: str = "BLOCK"
     v2_opposite_setup_policy_warning: bool = False
+    # Pre-demo: bounded per-cycle 5m close cache for alert charts (runtime.candle_cache). None = not written
+    # (direct constructions); from_env always sets it (AI_FLOOR_CANDLE_CACHE_PATH, default beside the trading DB).
+    candle_cache_path: Path | None = field(default=None, compare=False)  # storage location, not behaviour
 
     def __post_init__(self):
         if self.v2_planner_policy not in ("V1", "V2_F3"):
@@ -177,6 +180,7 @@ class RuntimeConfig:
     @classmethod
     def from_env(cls):
         from runtime.env import load_local_env
+        from runtime import candle_cache
         load_local_env()
         enabled = tuple(s.strip().upper() for s in
                         os.environ.get("AI_FLOOR_ENABLED_SYMBOLS", ",".join(DEFAULT_ENABLED_SYMBOLS)).split(","))
@@ -210,7 +214,8 @@ class RuntimeConfig:
                    scheduler_enabled=os.environ.get("AI_FLOOR_SCHEDULER", "0") == "1",
                    market_provider_mode=os.environ.get("AI_FLOOR_MARKET_PROVIDER", "twelve_data"),
                    ai_provider_mode=os.environ.get("AI_FLOOR_AI_PROVIDER", "deterministic"),
-                   macro_provider_mode=os.environ.get("AI_FLOOR_MACRO_PROVIDER", "none"))
+                   macro_provider_mode=os.environ.get("AI_FLOOR_MACRO_PROVIDER", "none"),
+                   candle_cache_path=candle_cache.path_from_env())
 
 
 def persistent_write_probe(db, path):

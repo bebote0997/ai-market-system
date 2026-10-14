@@ -1,2 +1,8 @@
+# Direct runtime dependencies, pinned exactly. The fully resolved, hash-locked set is requirements-ci.txt.
+pandas==3.0.6
+yfinance==1.7.0
 # Static alert charts (Agg backend; no browser renderer).
 matplotlib==3.10.7
+
+# Setup charts share Plotly validation; PNG email rendering uses matplotlib Agg above.
+plotly==7.1.0

@@ -44,7 +44,7 @@ class TwelveDataTests(unittest.TestCase):
 
     def test_canonical_symbols_closed_bars_utc_and_no_fabricated_volume(self):
         urls = []
-        def transport(url, timeout):
+        def transport(url, key, timeout):
             urls.append(url)
             return response(url, timeout)
         provider = TwelveDataMarketDataProvider(api_key="test-secret", transport=transport)
@@ -60,7 +60,7 @@ class TwelveDataTests(unittest.TestCase):
 
     def test_cache_reuses_hour_until_next_close_and_returns_copy(self):
         calls = []
-        def transport(url, timeout):
+        def transport(url, key, timeout):
             calls.append(url)
             return response(url, timeout)
         provider = TwelveDataMarketDataProvider(api_key="dummy", transport=transport)
@@ -71,7 +71,7 @@ class TwelveDataTests(unittest.TestCase):
         self.assertEqual(second.iloc[-1]["Close"], 100.5)
 
     def test_invalid_ohlc_and_symbol_fail_closed(self):
-        def invalid(url, timeout):
+        def invalid(url, key, timeout):
             data = response(url, timeout)
             data["values"][1]["high"] = "90"
             return data
@@ -80,7 +80,7 @@ class TwelveDataTests(unittest.TestCase):
             provider._bars("XAUUSD", "5m", NOW)
         self.assertEqual(caught.exception.kind, "INVALID_BAR")
         self.assertEqual(provider.health_by_asset["METAL"], "ERROR")
-        def mismatch(url, timeout):
+        def mismatch(url, key, timeout):
             data = response(url, timeout)
             data["meta"]["symbol"] = "OTHER"
             return data
@@ -90,7 +90,7 @@ class TwelveDataTests(unittest.TestCase):
 
     def test_rate_limit_retry_after_is_bounded_and_secret_free(self):
         waits, calls = [], []
-        def limited(url, timeout):
+        def limited(url, key, timeout):
             calls.append(1)
             raise HTTPError(url, 429, "private", {"Retry-After": "2"}, io.BytesIO(b"private"))
         provider = TwelveDataMarketDataProvider(api_key="test-secret", retries=1,
@@ -111,7 +111,7 @@ class TwelveDataTests(unittest.TestCase):
             provider._bars("XAUUSD", "5m", NOW)
         self.assertEqual(caught.exception.kind, "ENTITLEMENT_ERROR")
         self.assertNotIn("private", str(caught.exception))
-        def stale(url, timeout):
+        def stale(url, key, timeout):
             data = response(url, timeout)
             data["values"] = [data["values"][-1]]
             data["values"][0]["datetime"] = (NOW - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")

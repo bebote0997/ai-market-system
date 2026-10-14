@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+.lux{--bg:#0b0b0c;--panel:#111113;--line:#26262a;--line2:#1c1c1f;--text:#e9e6df;--mute:#8a877f;--dim:#5c5a55;--gold:#c8a96a;--pos:#9fb89a;--neg:#c48a7f}.lux *{box-sizing:border-box;margin:0;padding:0}.lux{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-weight:300;font-size:13px;letter-spacing:.01em}.lux .serif{font-family:'Cormorant Garamond',serif;font-weight:400}.lux .wrap{display:grid;grid-template-columns:220px 1fr;min-height:100vh}.lux nav{border-right:1px solid var(--line2);padding:40px 28px;display:flex;flex-direction:column;gap:40px}.lux .brand{font-family:'Cormorant Garamond';font-size:22px;letter-spacing:.08em}.lux .brand small{display:block;font-family:'IBM Plex Sans';font-size:9px;letter-spacing:.35em;color:var(--gold);margin-top:6px}.lux nav ul{list-style:none;display:flex;flex-direction:column;gap:18px}.lux nav li{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}.lux nav li.on{color:var(--text)}.lux nav li.on:before{content:'';display:inline-block;width:14px;height:1px;background:var(--gold);vertical-align:middle;margin-right:10px}.lux .navfoot{margin-top:auto;font-size:10px;color:var(--dim);letter-spacing:.15em;line-height:1.9}.lux main{padding:40px 56px}.lux .top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1px solid var(--line2);padding-bottom:22px;margin-bottom:32px}.lux h1{font-family:'Cormorant Garamond';font-weight:300;font-size:40px;letter-spacing:.01em}.lux h1 em{color:var(--gold);font-style:italic}.lux .eyebrow{font-size:10px;letter-spacing:.32em;text-transform:uppercase;color:var(--mute)}.lux .ex{font-size:9px;letter-spacing:.3em;color:var(--gold);border:1px solid #c8a96a55;padding:4px 10px;text-transform:uppercase}.lux .grid{display:grid;gap:24px}.lux .card{border:1px solid var(--line);padding:24px 26px;background:linear-gradient(180deg,#121214,#0e0e10)}.lux .card h3{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--mute);font-weight:400;margin-bottom:18px}.lux .big{font-family:'Cormorant Garamond';font-size:46px;font-weight:300;line-height:1}.lux .num{font-variant-numeric:tabular-nums}.lux .pos{color:var(--pos)}.lux .neg{color:var(--neg)}.lux .gold{color:var(--gold)}.lux .mute{color:var(--mute)}.lux .dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--pos);margin-right:10px;vertical-align:middle}.lux .dot.off{background:var(--dim)}.lux .dot.g{background:var(--gold)}.lux .row{display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line2)}.lux .row:last-child{border:0}.lux table{width:100%;border-collapse:collapse}.lux th{font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--dim);font-weight:400;text-align:left;padding:0 0 12px;border-bottom:1px solid var(--line)}.lux td{padding:14px 0;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums}.lux .tag{font-size:9px;letter-spacing:.22em;text-transform:uppercase;border:1px solid var(--line);padding:3px 8px;color:var(--mute)}.lux .tag.g{border-color:#c8a96a66;color:var(--gold)}.lux .foot{margin-top:28px;font-size:9px;letter-spacing:.3em;color:var(--dim);text-transform:uppercase;text-align:center}
+
+/* Streamlit shell only: widget contents retain Streamlit's own styles. */
+.stApp {background:#0b0b0c;color:#e9e6df}
+[data-testid="stSidebar"] {background:#0e0e10;border-right:1px solid #1c1c1f}
+[data-testid="stSidebar"] [role="radiogroup"] {gap:14px;font-family:'IBM Plex Sans',sans-serif}
+[data-testid="stSidebar"] [role="radiogroup"] label {letter-spacing:.1em}
+header[data-testid="stHeader"] {background:transparent}
+[data-testid="stToolbar"],#MainMenu,footer {display:none}
+.block-container {padding:40px 56px}
+.lux {--bg:#0b0b0c;--panel:#111113;--line:#26262a;--line2:#1c1c1f;--text:#e9e6df;--mute:#8a877f;--dim:#5c5a55;--gold:#c8a96a;--pos:#9fb89a;--neg:#c48a7f;margin-bottom:24px}
+.lux .card {height:100%;overflow-wrap:anywhere}
+.lux .scroll {overflow-x:auto}
+.lux td,.lux th {padding:12px;vertical-align:top;min-width:95px}
+.lux .bubble {border:1px solid var(--line);padding:14px 16px;line-height:1.6;background:#0d0d0f}
+.lux .meta {margin-top:12px;font-size:10px;letter-spacing:.15em;color:var(--mute)}
+.lux .row {gap:20px}
+.lux .serif,.lux h1,.lux .big,.lux .brand {font-family:'Cormorant Garamond',sans-serif}
+@media(max-width:640px){
+ .block-container{padding:28px 22px}
+ [data-testid="stHorizontalBlock"]{flex-wrap:wrap}
+ [data-testid="stColumn"]{min-width:100%!important;flex:1 1 100%!important}
+ .lux h1{font-size:32px}.lux .big{font-size:40px}.lux .card{padding:20px}
+ .lux .top{align-items:flex-start;gap:14px;flex-wrap:wrap}
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] > label:nth-child(8) {border-top:1px solid #26262a;padding-top:38px;position:relative}
+[data-testid="stSidebar"] [role="radiogroup"] > label:nth-child(8)::before {content:'Legacy / Detail';position:absolute;top:10px;left:0;color:#c8a96a;font-size:10px;letter-spacing:.16em}
+[data-testid="stMetric"] {background:#111113;border:1px solid #26262a;padding:12px}
+.safety {border-left:2px solid #c8a96a;background:#111113;padding:10px 14px}
+.critical {border:1px solid #c48a7f;padding:12px}
+
+[data-testid="stSidebar"] [role="radiogroup"] label {color:#8a877f;font-size:11px;text-transform:uppercase}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {color:#c8a96a}
+
+/* Hide Streamlit's auto multipage list (ui/pages is a package, not st pages). */
+[data-testid="stSidebarNav"],[data-testid="stSidebarNavSeparator"] {display:none}
+/* Dark native widgets, gold accent. */
+[data-baseweb="select"] > div,[data-baseweb="input"] > div,.stTextInput input {background:#111113!important;border:1px solid #26262a!important;color:#e9e6df!important}
+[data-baseweb="select"] *,[data-baseweb="popover"] li {color:#e9e6df!important}
+[data-baseweb="popover"] ul,[data-baseweb="menu"] {background:#111113!important}
+.stButton > button,.stDownloadButton > button {background:transparent!important;border:1px solid #c8a96a66!important;color:#c8a96a!important;border-radius:0}
+.stButton > button:hover {border-color:#c8a96a!important}
+[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {background:transparent!important;border:1px solid #5c5a55!important;width:8px;height:8px}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) > div:first-child {background:#c8a96a!important;border-color:#c8a96a!important}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) > div:first-child > div {display:none}
+[data-testid="stCheckbox"] label,[data-testid="stWidgetLabel"] {color:#8a877f}
+@media(max-width:640px){.lux .scroll{max-width:100%}.lux td,.lux th{min-width:80px;font-size:12px}}
+.lux .json-key-fields{line-height:1.7;overflow-wrap:anywhere;margin-bottom:8px}
+.lux .json-details summary{cursor:pointer;color:var(--gold)}
+.lux .json-details pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-size:12px;line-height:1.5;padding:12px}
+@media(max-width:768px){
+ [data-testid="stHorizontalBlock"]{flex-direction:column!important;align-items:stretch!important}
+ [data-testid="stColumn"]{width:100%!important;min-width:0!important;max-width:100%!important;flex:1 1 100%!important}
+ .lux .wrap,.lux .grid{grid-template-columns:minmax(0,1fr)!important}
+ .lux .row{flex-direction:column;gap:6px}
+ .lux .card{min-width:0;padding:16px}
+ .lux .scroll{max-width:100%}
+ .block-container{padding:24px 16px}
+}

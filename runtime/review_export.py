@@ -4,12 +4,15 @@ import json
 import os
 import re
 
+from runtime.env import NAMES as ENV_NAMES
+
 
 MAX_EXPORT_BYTES = 1_000_000
 _TOKEN_PATTERN = re.compile(r"sk-[A-Za-z0-9_-]{16,}|https://hooks\.slack\.com/services/[^\s\"']+", re.IGNORECASE)
-_SECRET_NAMES = ("OPENAI_API_KEY", "TWELVE_DATA_API_KEY", "MASSIVE_API_KEY",
-                 "FINNHUB_API_KEY", "EODHD_API_KEY", "SLACK_WEBHOOK_URL",
-                 "AI_FLOOR_DASHBOARD_PASSWORD")
+# Derived from the env allowlist so a newly added credential cannot be forgotten here (audit L-5).
+_SECRET_NAMES = tuple(sorted(
+    {name for name in ENV_NAMES if name.endswith(("_API_KEY", "_PASSWORD", "_WEBHOOK_URL"))}
+    | {"EODHD_API_KEY", "GMAIL_APP_PASSWORD"}))
 
 
 def _sanitize(value):

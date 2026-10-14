@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
+_Última actualización: 2026-10-13 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 
 **Entorno:** PAPER / DEMO únicamente · `REAL_EXECUTION_ENABLED = False` · NAS100 OFF · runtime V2 y SYSTEM HEALTH INACTIVE · sin deploy V2.
 **main:** `4974408e443908ceb5723aed13c1eb15a81f3c51` (merge PR #13, Fase 8).
@@ -46,6 +46,10 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
 
+## Correcciones de seguridad (2026-10-13, draft PR `v2/security-fixes`)
+
+Fixes de la auditoría de seguridad de `main@8b11da0` (M-1, L-1..L-7, I-1..I-5): login del dashboard con rate limit, bloqueo temporal y expiración de sesión; dependencias fijadas con hashes; clave de Twelve Data en cabecera; sin email personal por defecto. Detalle en CHANGELOG_AGENT.md. **Acción del owner antes del próximo deploy:** `AI_FLOOR_DASHBOARD_PASSWORD` ≥ 12 caracteres; para email, `AI_FLOOR_ALERT_EMAIL_FROM`/`_TO`. Sin cambios en Render ni activación.
+
 ## Correcciones locales autorizadas (2026-10-11)
 
 Alertas: evidencia 5m read-only, PNG Agg/CID y recuperación cada 60 s. Dashboard: filtros SQL antes del LIMIT y captura DASHBOARD_ERROR. Detalle y validación en fases 09/10 y CHANGELOG_AGENT.md. No cambia certificación ni activa runtime; sin commit/deploy.
@@ -72,3 +76,66 @@ El Libro Maestro en Word (versión 1.9, 2026-10-07) queda **archivado/histórico
 Owner Jeferson Tejeda: `V2_PLANNER_POLICY` implementado localmente, default V1; V2_F3 planifica 3.00R y aplica piso PAPER 2.50R en ambas rutas runtime. Demo configurará `V2_PLANNER_POLICY=V2_F3` con GO operativo; independiente de la política de setups opuestos. Sin activación, merge, deploy ni cambios en Render; Fase 13 sigue NOT STARTED.
 
 Validación DEC-14.2: ruff y suite unittest completa PASS (1520 tests, 1 expected failure). Pytest completo: 1514 passed, 1 xfailed; 5 fallos previos del harness de señales de Fase 8 (`TestCaseFunction.failures`). Commit local pendiente de autorizar la corrección mínima de esos dos tests y obtener pytest verde.
+
+## PR #37 — dashboard follow-up autorizado (2026-10-13)
+
+Implementación en `v2/dashboard-luxury`: origin/main ya integrado (`8b11da0`, merge no-op).
+JSON formateado/colapsable, layout móvil hasta 768px, lecturas/tablas/caché acotadas;
+Setups y email opcional leen `candle_cache.db` en solo lectura, compatibles con el esquema
+pre-demo de cierres 5m (no OHLC inventado). PNG de email mediante Agg, flag
+`AI_FLOOR_SETUP_CHART_EMAIL` OFF por defecto. Rama pre-demo inspeccionada, no mergeada.
+Detalle/evidencia en fases 09/10 y CHANGELOG_AGENT.md. PR sigue draft; sin certificación,
+activación, merge a main, cambios en Render ni deploy.
+
+Validación PR #37: suite completa 1629 tests OK (2 skipped, 1 expected failure); 58 checks
+enfocados PASS, Chromium CSS y app móvil PASS, Ruff/diff-check PASS.
+
+PR #37 History review fix (P2, 2026-10-13): tablas separadas por tipo conservan
+las páginas SQL de 200 filas sin descartar evidencia. Regresión en memoria y
+17 tests Phase 10 PASS; baseline local con dos errores por matplotlib ausente.
+Sin cambio de certificación, activación, commit ni deploy.
+
+Validación final del fix History: 1630 tests en 190.121 s; mismos dos errores
+preexistentes por matplotlib ausente, 2 skipped, 1 expected failure; sin fallos nuevos.
+Suite enfocada: 17 PASS; git diff --check PASS. Ruff no disponible en el entorno.
+
+## Pre-demo fixes — rama `v2/pre-demo-fixes` (2026-10-13, draft PR, sin merge/deploy)
+
+Tarea asignada por el owner: regla de duración de trade (cierre NY 17:00 ET Day-1 < +0.5R / stop a entrada,
+salida Day-2 por estructura adversa, cierre forzado Day-2, viernes 17:00 ET cierra todo), macro NO_DATA con
+razón clara + alerta + un reintento (sigue NO_DATA => sin trade), sin PARTIAL_AI_FAILURE falso en ciclos WATCH,
+alertas de orden/posición con datos reales, caché de velas para gráficos (`AI_FLOOR_CANDLE_CACHE_PATH`
+opcional). REAL OFF, NAS100 bloqueado, Fase 13 sigue NOT STARTED. Limitación conocida: el oráculo REX (solo V1)
+no modela la regla de duración; los runs donde actúa salen INVALID en `replay.rex_chain`.
+Validación: ruff PASS; pytest 1624 passed, 1 skipped, 1 xfailed (baseline 1590 passed, 1 skipped, 1 xfailed).
+Revisión Codex (4 hallazgos: 1 HIGH, 3 MED) corregida en la misma rama: salida Day-2 por estructura en orden
+temporal con SL/TP (también fuera de sesión), revalidación de frontera en la escritura CAS, precios de la regla
+desde evidencia comprometida con catch-up ON, SL de la posición en alertas. pytest 1631 passed, 1 skipped, 1 xfailed.
+Seguimiento (misma rama, PR #39): órdenes PENDING canceladas por tiempo en el viernes 17:00 ET o el cierre NY Day-2
+tras su envío, lo que ocurra antes (`TIME_CANCEL_FRIDAY_NY_CLOSE` / `TIME_CANCEL_DAY2_NY_CLOSE` en `ORDER_CANCELLED`),
+en el pase fuera de sesión y en cada ciclo antes del fill. Setup ID de alertas en la ruta de setup original: se toma
+del run que envió la orden (sin registro sigue NO_DATA). pytest 1640 passed, 1 skipped, 1 xfailed (baseline 1631).
+
+Review fixes PR #39 (2026-10-13): el catch-up de posiciones conserva `STALE_PAPER_STATE` tras dos CAS fallidos
+de cancelación; no permite fills ni nuevas órdenes en ese ciclo. Signal (UTC) usa `order.as_of`, con fallback
+exclusivo al review del run que envió la orden; nunca al run posterior que la cierra. Dos regresiones reproducen
+los hallazgos antes del fix. Validación final registrada en CHANGELOG_AGENT.md; Fase 13 sigue NOT STARTED.
+
+Owner-approved gold options 1 y 4 ONLY (2026-10-13, PR #39): caché macro conserva el snapshot anterior
+en la frontera de refresco de 6 h, elige una versión por event ID visible al slot y sella evidencia nueva
+al completar el fetch (sin lookahead). Auditoría ligera de cada ciclo reclamado en `<trading-db-stem>.cycles.db`
+junto al DB: gates existentes, estado por TF, setup/rechazo, reviews AI y motivo de ejecución; retención
+30 días y límite 10 000 registros, escritura best effort con timeout 100 ms. INFO a stdout en cloud_runner.
+Sin cambios de alineación, estrategia, riesgo, economía, flags ni Render. Fase 13 sigue NOT STARTED;
+validación en CHANGELOG_AGENT.md. Cambios locales; sin staging/commit/push, merge o deploy.
+
+## PR #37 — integración de main (2026-10-13)
+
+Owner autoriza merge de origin/main en `v2/dashboard-luxury`, commit y push de la rama.
+Dashboard luxury conservado bajo `ui/views`, junto al hardening y fixes pre-demo de main.
+Dependencias directas exactas coherentes con el hash lock; email requiere FROM/TO.
+Fase 13 sigue NOT STARTED; REAL OFF, NAS100 bloqueado, sin deploy ni merge del PR.
+
+Validación del merge: `TMPDIR=/tmp /workspace/venv/bin/python -m pytest -q` →
+1721 passed, 2 skipped, 1 xfailed, 1181 subtests passed (222.50 s).
+`git diff --check` PASS; conflictos resueltos. Ruff no instalado en el entorno.

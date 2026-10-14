@@ -64,9 +64,13 @@ class FloorViewModel:
     schema_version: Optional[str] = None
 
 
-def _agent(name, response):
+NOT_REQUIRED = "NOT_REQUIRED"  # an agent that is not supposed to run in this cycle (never a failure)
+
+
+def _agent(name, response, required=True):
     if response is None:
-        return AgentView(name, "MISSING", "UNKNOWN", None, None, (), (), (), None, None, ())
+        return AgentView(name, "MISSING" if required else NOT_REQUIRED, "UNKNOWN", None, None, (), (), (), None,
+                         None, ())
     return AgentView(name, response.status, response.bias,
                      response.confidence if response.status in {"OK", "PARTIAL"} else None,
                      response.recommendation, tuple(response.supporting_evidence),
@@ -81,8 +85,10 @@ def from_ai_report(report, *, now=None, max_age_seconds=900, sample=False, bars=
     deterministic = report.deterministic_reports
     setup = deterministic["setup_assessment"]
     risk = report.risk_decision
-    agents = tuple(_agent(name, response) for name, response in zip(AGENT_NAMES,
-        (report.ai_structure, report.ai_liquidity, report.ai_macro, report.ai_setup_review, report.ai_trade_review)))
+    # The Trade Reviewer runs only on a TradePlan: without one (WATCH / NO_SETUP / ...) it is NOT_REQUIRED, not MISSING.
+    agents = tuple(_agent(name, response, required) for name, response, required in zip(AGENT_NAMES,
+        (report.ai_structure, report.ai_liquidity, report.ai_macro, report.ai_setup_review, report.ai_trade_review),
+        (True, True, True, True, report.trade_plan is not None)))
     now = now or datetime.now(timezone.utc)
     age = (now - report.as_of).total_seconds() if report.as_of else None
     freshness = "NO_DATA" if age is None else "STALE_DATA" if age > max_age_seconds else "CURRENT"
