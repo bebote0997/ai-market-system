@@ -12,7 +12,7 @@ TIME_FIELDS = {"as_of", "opened_at", "last_processed_at", "fill_timestamp", "exi
 # Additive optional V2 identity fields: omitted from the payload when None, so legacy/V1 objects keep their exact
 # serialized bytes (P5.1C risk_policy_version, Phase 6 setup_id). Absent keys decode to the dataclass default None.
 OPTIONAL_IDENTITY_FIELDS = {"PaperOrder": frozenset({"risk_policy_version", "setup_id"}),
-                            "PaperPosition": frozenset({"setup_id"})}
+                            "PaperPosition": frozenset({"setup_id", "initial_stop", "duration_stage"})}
 PUBLIC_METADATA_KEYS = {"provider", "model", "version", "model_version", "prompt_version", "schema_version", "deterministic"}
 
 

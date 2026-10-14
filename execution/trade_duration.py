@@ -1,0 +1,161 @@
+"""Pre-demo trade-duration rule for open PAPER positions. Pure functions; the runtime owns every write.
+
+- Day-1 NY close (the first 17:00 America/New_York after the fill, weekdays only, DST-correct via zoneinfo):
+  close if the unrealized result is below +0.5R, otherwise keep the position with its stop moved to entry.
+- Day 2: close early on an adverse market-structure change (a confirmed closed 15m BOS against the position
+  after the Day-1 close), decided in time order with SL/TP management (``first_adverse_structure``).
+- Day-2 NY close: force-close.
+- Friday 17:00 NY: every open position is closed, whatever its day.
+- Pending (unfilled) orders: cancelled at the first Friday 17:00 NY or the Day-2 NY close after submission, whichever
+  comes first (``order_cancel_boundary``), so no order can fill over the weekend or outlive the trade-duration rule.
+
+R is always measured against the ORIGINAL stop distance (``initial_stop`` once the stop was moved).
+Nothing here reads a wall clock: callers pass the cycle time.
+"""
+from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal
+from zoneinfo import ZoneInfo
+
+NEW_YORK = ZoneInfo("America/New_York")
+NY_CLOSE = time(17, 0)
+FRIDAY = 4
+MIN_KEEP_R = Decimal("0.5")
+STAGE_DAY2 = "DAY2_BREAKEVEN"
+
+CLOSE_DAY1_BELOW_HALF_R = "TIME_EXIT_DAY1_BELOW_0_5R"
+CLOSE_DAY2_STRUCTURE = "TIME_EXIT_DAY2_STRUCTURE_CHANGE"
+CLOSE_DAY2_NY_CLOSE = "TIME_EXIT_DAY2_NY_CLOSE"
+CLOSE_FRIDAY = "TIME_EXIT_FRIDAY_NY_CLOSE"
+CLOSE_REASONS = (CLOSE_DAY1_BELOW_HALF_R, CLOSE_DAY2_STRUCTURE, CLOSE_DAY2_NY_CLOSE, CLOSE_FRIDAY)
+STOP_MOVED_TO_ENTRY = "STOP_MOVED_TO_ENTRY"
+CANCEL_DAY2_NY_CLOSE = "TIME_CANCEL_DAY2_NY_CLOSE"
+CANCEL_FRIDAY = "TIME_CANCEL_FRIDAY_NY_CLOSE"
+CANCEL_REASONS = (CANCEL_DAY2_NY_CLOSE, CANCEL_FRIDAY)
+
+
+def _aware(value):
+    return isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
+
+
+def ny_close_after(at):
+    """The first weekday 17:00 America/New_York strictly after ``at`` (UTC)."""
+    if not _aware(at):
+        raise ValueError("timezone-aware datetime required")
+    day = at.astimezone(NEW_YORK).date()
+    while True:
+        candidate = datetime.combine(day, NY_CLOSE, tzinfo=NEW_YORK)
+        if candidate.weekday() < 5 and candidate > at:
+            return candidate.astimezone(timezone.utc)
+        day += timedelta(days=1)
+
+
+def day1_close(position):
+    return ny_close_after(position.opened_at)
+
+
+def day2_close(position):
+    return ny_close_after(day1_close(position))
+
+
+def next_boundary(position):
+    """The next NY close at which the rule acts on ``position``."""
+    return day1_close(position) if position.duration_stage is None else day2_close(position)
+
+
+def is_friday_close(boundary):
+    return boundary.astimezone(NEW_YORK).weekday() == FRIDAY
+
+
+def order_cancel_boundary(order):
+    """(boundary, reason) at which the still-PENDING ``order`` is cancelled: the Day-1 NY close after its submission
+    (``order.as_of``) if that is a Friday, else the Day-2 NY close (Friday reason when that one is a Friday)."""
+    day1 = ny_close_after(order.as_of)
+    if is_friday_close(day1):
+        return day1, CANCEL_FRIDAY
+    day2 = ny_close_after(day1)
+    return day2, CANCEL_FRIDAY if is_friday_close(day2) else CANCEL_DAY2_NY_CLOSE
+
+
+def unrealized_r(position, price):
+    """Unrealized result in R of the original stop distance (Decimal), or None if that distance is not positive."""
+    entry = Decimal(str(position.entry_price))
+    stop = Decimal(str(position.initial_stop if position.initial_stop is not None else position.stop))
+    risk = (entry - stop) if position.side == "LONG" else (stop - entry)
+    if risk <= 0:
+        return None
+    price = Decimal(str(price))
+    return ((price - entry) if position.side == "LONG" else (entry - price)) / risk
+
+
+def boundary_decision(position, boundary, price):
+    """('CLOSE', reason) or ('BREAKEVEN', None) for ``position`` at the NY close ``boundary`` and ``price``."""
+    if is_friday_close(boundary):
+        return "CLOSE", CLOSE_FRIDAY
+    if position.duration_stage is not None:
+        return "CLOSE", CLOSE_DAY2_NY_CLOSE
+    r = unrealized_r(position, price)
+    if r is None or r < MIN_KEEP_R:  # an unmeasurable R never keeps a position open
+        return "CLOSE", CLOSE_DAY1_BELOW_HALF_R
+    return "BREAKEVEN", None
+
+
+def move_stop_to_entry(position):
+    """Day-1 keep: remember the original stop, move the stop to the fill price and enter Day 2."""
+    position.initial_stop = position.stop
+    position.stop = position.entry_price
+    position.duration_stage = STAGE_DAY2
+
+
+def price_bar(bars, position, boundary):
+    """The closed 5m bar that prices ``boundary``: the last one ending in (opened_at, boundary]; else, when the
+    session had no such bar, the first closed bar ending after ``boundary`` (closing late beats never closing).
+    ``bars`` are MarketBars; returns None when no bar qualifies (NO_DATA)."""
+    closed = sorted((bar for bar in bars if bar.is_closed is True and bar.end > position.opened_at),
+                    key=lambda bar: bar.start)
+    before = [bar for bar in closed if bar.end <= boundary]
+    if before:
+        return before[-1]
+    return next(iter(closed), None)
+
+
+def adverse_structure(position, frame_15m, as_of):
+    """The confirmed closed 15m BOS against ``position`` after its Day-1 close, or None."""
+    if position.duration_stage is None:
+        return None
+    from agents.structure_agent import analizar_estructura
+    report = analizar_estructura(frame_15m, position.symbol, "15m", "trade_duration", as_of)
+    if report.status != "OK" or not report.evidence:
+        return None
+    bos = report.evidence[0].get("bos")
+    against = "bearish" if position.side == "LONG" else "bullish"
+    if not bos or bos.get("direction") != against:
+        return None
+    broken_at = bos["break_timestamp"].to_pydatetime()
+    if broken_at <= day1_close(position) or broken_at + timedelta(minutes=15) > as_of:
+        return None
+    return bos
+
+
+def first_adverse_structure(position, frame_15m, after, until):
+    """The earliest moment in [``after``, ``until``] (strictly before the Day-2 close) at which an adverse 15m BOS is
+    known, as (acted_at, bos), or None. ``after`` is the end of the last bar already managed: SL/TP and the structure
+    exit are then decided in time order. A BOS confirmed before ``after`` acts at ``after`` (never retroactively).
+    Each check only sees the 15m bars closed by that moment (no lookahead)."""
+    if position.duration_stage is None or frame_15m is None or len(frame_15m) == 0:
+        return None
+    step = timedelta(minutes=15)
+    ends = [stamp.to_pydatetime() + step for stamp in frame_15m.index]
+    boundary = next_boundary(position)
+    moments = sorted({after, *(end for end in ends if end > after)})
+    for at in (at for at in moments if at <= until and at < boundary):
+        bos = adverse_structure(position, frame_15m[[end <= at for end in ends]], at)
+        if bos is not None:
+            return max(bos["break_timestamp"].to_pydatetime() + step, after), bos
+    return None
+
+
+__all__ = ["CANCEL_DAY2_NY_CLOSE", "CANCEL_FRIDAY", "CANCEL_REASONS", "CLOSE_DAY1_BELOW_HALF_R",
+           "CLOSE_DAY2_NY_CLOSE", "CLOSE_DAY2_STRUCTURE", "CLOSE_FRIDAY", "CLOSE_REASONS", "MIN_KEEP_R", "STAGE_DAY2",
+           "STOP_MOVED_TO_ENTRY", "adverse_structure", "boundary_decision", "day1_close", "day2_close",
+           "first_adverse_structure", "is_friday_close", "move_stop_to_entry", "next_boundary", "ny_close_after",
+           "order_cancel_boundary", "price_bar", "unrealized_r"]

@@ -134,6 +134,7 @@ _NOTIFICATION_MAP = MappingProxyType({
     "AI_PROVIDER_FAILED": "PROVIDER_FAILURE", "AI_PROVIDER_RECOVERED": "RECOVERY",
     "RUN_FAILED": "SYSTEM_DEGRADED", "STATE_INCONSISTENCY": "SYSTEM_CRITICAL",
     "RECOVERY_COMPLETED": "RECOVERY",
+    "AI_REVIEW_UNHEALTHY": "SYSTEM_DEGRADED", "AI_REVIEW_RECOVERED": "RECOVERY",
 })
 
 
@@ -154,7 +155,10 @@ def from_notification(event):
              "side": execution.get("side") or risk.get("side")}
     if event.type == "STRUCTURE_REVERSE_SUBMITTED":
         trade.update({key: execution[key] for key in ("entry", "stop_loss", "take_profit", "quantity")})
-    if event.paper_order_ids:
+    # Pre-demo: the durable order/position snapshot supplied at capture (entry, SL, TP, quantity, R:R, risk, times).
+    trade.update({key: value for key, value in (getattr(event, "trade", None) or {}).items()
+                  if key in TRADE_KEYS and value is not None})
+    if event.paper_order_ids and event.type != "POSITION_OPENED":  # POSITION_OPENED carries the position id
         trade["order_id"] = trade["order_id"] or event.paper_order_ids[0]
     summary = execution.get("exit_reason") or execution.get("reason") or ("source=" + event.type)
     return alert_event(event.event_id, event_type, event.timestamp_utc, run_id=event.run_id,

@@ -24,6 +24,8 @@ class NotificationEvent:
     evidence_refs: tuple
     daily_summary: dict | None = None
     execution: dict | None = None
+    # Pre-demo: order/position alert block read from durable PAPER state (storage.database.Store.alert_trade).
+    trade: dict | None = None
 
     def payload(self):
         return asdict(self)

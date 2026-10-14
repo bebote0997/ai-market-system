@@ -53,6 +53,76 @@ class FixtureTransport:
 
 
 class FXMacroDataSafety(unittest.TestCase):
+    def test_refresh_boundary_preserves_prior_vintage_without_lookahead(self):
+        clock = [NOW]
+        transport = FixtureTransport()
+        value = [2.5]
+
+        def changing(*args):
+            payload = transport(*args)
+            if args[2].startswith("/predictions/"):
+                payload["data"][0]["predictions"][0]["predicted_value"] = value[0]
+            return payload
+
+        provider = FXMacroDataProvider(api_key="fixture", transport=changing, clock=lambda: clock[0])
+        original = provider.macro_events_at(NOW)
+        slot = NOW + timedelta(hours=6)
+        clock[0] = slot + timedelta(seconds=2)
+        value[0] = 9.0
+        at_boundary = provider.macro_events_at(slot)
+        self.assertEqual(at_boundary, original)
+        self.assertEqual(analizar_macro_news(provider, "XAUUSD", slot).status, "OK")
+        self.assertTrue(all(event.known_at == NOW for event in at_boundary))
+        visible = provider.macro_events_at(clock[0])
+        self.assertEqual(len(visible), 2)  # one latest vintage per event, not duplicates
+        self.assertTrue(all(event.consensus == 9.0 and event.known_at == clock[0] and
+                            event.fetched_at == clock[0] for event in visible))
+        self.assertEqual(provider.macro_events_at(slot), original)
+        self.assertEqual(provider.macro_events_at(NOW - timedelta(microseconds=1)), ())
+        clock[0] += timedelta(hours=6)
+        provider.macro_events_at(clock[0])
+        self.assertEqual(len(provider._previous_cache), 2)  # bounded to two snapshots
+        self.assertEqual(len(provider._cache), 2)
+
+    def test_new_events_are_known_only_after_fetch_completes(self):
+        clock = [NOW]
+        transport = FixtureTransport()
+
+        def delayed(*args):
+            result = transport(*args)
+            clock[0] += timedelta(seconds=1)
+            return result
+
+        provider = FXMacroDataProvider(api_key="fixture", transport=delayed, clock=lambda: clock[0])
+        self.assertEqual(provider.macro_events_at(NOW), ())  # no previous snapshot on cold start
+        events = provider.macro_events_at(clock[0])
+        self.assertEqual(len(events), 2)
+        self.assertTrue(all(event.fetched_at == clock[0] and event.known_at == clock[0] and
+                            event.received_at == clock[0] for event in events))
+
+    def test_exact_six_hour_refresh_and_new_event_visibility(self):
+        clock = [NOW]
+        transport = FixtureTransport()
+
+        def calendar_changes(*args):
+            result = transport(*args)
+            if args[2].startswith("/calendar/") and clock[0] >= NOW + timedelta(hours=6):
+                new = dict(result["data"][0])
+                new["calendar_event_id"] += "_new"
+                result["data"].append(new)
+            return result
+
+        provider = FXMacroDataProvider(api_key="fixture", transport=calendar_changes, clock=lambda: clock[0])
+        original = provider.macro_events_at(NOW)
+        calls = len(transport.calls)
+        clock[0] = NOW + timedelta(hours=6) - timedelta(microseconds=1)
+        self.assertEqual(provider.macro_events_at(clock[0]), original)
+        self.assertEqual(len(transport.calls), calls)
+        clock[0] += timedelta(microseconds=1)
+        self.assertEqual(provider.macro_events_at(clock[0] - timedelta(microseconds=1)), original)
+        self.assertGreater(len(transport.calls), calls)
+        self.assertEqual(len(provider.macro_events_at(clock[0])), 4)
+
     def test_future_usd_eur_events_are_utc_grounded_and_enriched(self):
         transport = FixtureTransport()
         provider = FXMacroDataProvider(api_key="fixture", transport=transport, clock=lambda: NOW)

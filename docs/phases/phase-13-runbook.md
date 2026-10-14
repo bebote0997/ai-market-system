@@ -36,6 +36,7 @@
 | `AI_FLOOR_V2_SEALED_GENESIS` | `1` (recomendado con DB nueva, requiere REX) | Sella el genesis del baseline A2. |
 | `V2_OPPOSITE_SETUP_POLICY` | `STRUCTURE_CHANGE` (previsto, aún no activado) | DEC-14.1; default `BLOCK`; requiere GO operativo. |
 | `AI_FLOOR_V2_POSITION_CATCH_UP` | **decisión del owner** (sección 3) | |
+| `AI_FLOOR_CANDLE_CACHE_PATH` | sin definir (opcional) | Pre-demo: caché acotada de velas 5m para los gráficos de alertas; por defecto `candle_cache.db` junto a `AI_FLOOR_DB_PATH` (mismo disco persistente). |
 
 ## 3. Decisión: `AI_FLOOR_V2_POSITION_CATCH_UP`
 - **Qué hace:** guarda en `market_evidence` las velas 5m cerradas (en un SQLite separado, `AI_FLOOR_MARKET_EVIDENCE_PATH`) y gestiona SL/TP de las posiciones **en orden cronológico vela a vela**, incluidas las que el sistema se perdió. Así se corrige HIGH-8.1 (antes, ponerse al día tras un hueco podía saltarse un SL o un TP).

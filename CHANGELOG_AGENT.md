@@ -1,5 +1,58 @@
 # Agent Changelog
 
+## 2026-10-13 — Pre-demo fixes: cancelación de órdenes pendientes por tiempo + Setup ID (branch `v2/pre-demo-fixes`, PR #39)
+
+- Órdenes PENDING se cancelan en el primer cierre NY (17:00 America/New_York) que sea viernes o el cierre Day-2 tras
+  su envío (`order.as_of`), lo que ocurra antes (`trade_duration.order_cancel_boundary`). Razones claras:
+  `TIME_CANCEL_FRIDAY_NY_CLOSE` / `TIME_CANCEL_DAY2_NY_CLOSE` en el evento `ORDER_CANCELLED` (con `boundary_utc`,
+  timestamp = la frontera) y en el log. Actúa en el pase fuera de sesión del Scheduler (no necesita datos de mercado)
+  y en cada ciclo antes de evaluar el fill (un pase perdido no deja que la orden se llene después). Escritura CAS
+  guardada (`order_time_cancel`); sin escritura ni admisión R-HALT si no hay nada que cancelar. `paper_broker.py` intacto.
+- Setup ID en alertas (ruta de setup original/V1, orden sin `setup_id`): se toma del run que envió la orden
+  (`execution.setup_id` de ese run si corresponde a esa orden; si no, `setup.setup_id` de su explicación), nunca del
+  run que emite la alerta (p. ej. un cierre por otro run). Sin registro sigue `NO_DATA`.
+- Tests: `test_pending_order_time_cancel.py` (fronteras, DST, viernes Day-1/Day-2, pase fuera de sesión sin
+  proveedor, idempotencia, ciclo retrasado, orden Day-1 intacta, resolución de Setup ID); `test_alert_trade_fields.py`
+  ahora exige Setup ID real en ORDER SUBMITTED / POSITION OPENED.
+- REAL OFF, NAS100 bloqueado, sin Render. pytest: baseline 1631 passed, 1 skipped, 1 xfailed; final 1640 passed, 1 skipped, 1 xfailed.
+
+## 2026-10-13 — Pre-demo fixes: revisión independiente Codex (branch `v2/pre-demo-fixes`, draft PR)
+
+- HIGH: la salida Day-2 por estructura se decide en orden temporal con SL/TP (`trade_duration.first_adverse_structure`
+  + `_enforce_trade_duration`): SL/TP se gestiona solo hasta el momento en que el BOS adverso se conoce; un stop
+  posterior ya no sustituye la salida, y un stop anterior sigue ganando. El pase fuera de sesión revisa también la
+  salida por estructura en cada cierre 15m (posiciones Day 2). Tests: ciclo retrasado (ambos órdenes) y nocturno.
+- MED: la escritura de duración revalida la frontera dentro del CAS (`MOVED` si otro runner ya movió el stop) y
+  relee la posición; ya no cierra en la frontera Day-1 como "Day-2 close". Test de runner concurrente.
+- MED: con catch-up de evidencia ON, el precio de la regla (y el 15m de estructura) sale de la evidencia
+  comprometida, no del snapshot crudo; una revisión del proveedor no cambia la decisión +0.5R ni el PnL. Test.
+- MED: alertas de posición muestran el stop de la posición (stop movido a entrada); R:R/Risk% siguen sobre el stop
+  original de la orden. Test de alerta de cierre tras break-even.
+- REAL OFF, NAS100 bloqueado. Baseline pytest 1624 passed, 1 skipped, 1 xfailed; final 1631 passed, 1 skipped,
+  1 xfailed; ruff PASS.
+
+## 2026-10-13 — Pre-demo fixes (branch `v2/pre-demo-fixes`, draft PR; no merge/deploy/Render)
+
+- Tarea asignada por el owner. REAL execution OFF, NAS100 bloqueado, sin cambios en Render/env remoto.
+- 1) Regla de duración de trade (`execution/trade_duration.py`): cierre NY 17:00 America/New_York (zoneinfo,
+  DST correcto, solo días hábiles). Day-1: < +0.5R cierra (`TIME_EXIT_DAY1_BELOW_0_5R`), si no stop a entrada
+  (`STOP_MOVED_TO_ENTRY`, `initial_stop` conservado). Day 2: BOS 15m confirmado en contra tras el cierre Day-1
+  cierra (`TIME_EXIT_DAY2_STRUCTURE_CHANGE`); cierre Day-2 fuerza salida (`TIME_EXIT_DAY2_NY_CLOSE`); viernes
+  17:00 ET cierra todo (`TIME_EXIT_FRIDAY_NY_CLOSE`). SL/TP se gestionan hasta el cierre NY antes de la regla.
+  Pase fuera de sesión en el Scheduler para actuar a las 17:00 ET (sin claim de slot). Sin entrada nueva en el
+  ciclo que cerró por tiempo. `PaperPosition.initial_stop/duration_stage` opcionales (bytes legacy intactos).
+- 2) Macro NO_DATA cuando importa (PLAN_READY o pending): `AI_REVIEW_UNHEALTHY: macro=NO_DATA` en log+journal,
+  alerta en la transición (SYSTEM_DEGRADED; RECOVERY al recuperar), un reintento en el mismo ciclo (rerun del
+  floor determinista; rerun IA solo si el macro trae evidencia). Sigue NO_DATA => sin trade
+  (`execution_reason=AI_REVIEW_UNHEALTHY`).
+- 3) Trade Reviewer `NOT_REQUIRED` (no MISSING) sin TradePlan: no más PARTIAL_AI_FAILURE falso en WATCH.
+- 4) Alertas ORDER SUBMITTED / POSITION OPENED / CLOSED con Entry/SL/TP/Quantity/R:R/Risk%/tiempos desde el
+  estado PAPER durable (`runtime/notification_extras.py`; `storage/database.py` sigue byte-congelado).
+- 5) `runtime/candle_cache.py`: cierres 5m por ciclo, SQLite junto a la DB, 288 barras/símbolo; el gráfico de
+  alerta lo lee en solo lectura (Evidence Store como respaldo). Nueva env opcional `AI_FLOOR_CANDLE_CACHE_PATH`.
+- Limitación conocida: el oráculo REX (solo V1) no modela la regla de duración; los runs donde actúa salen
+  INVALID en `replay.rex_chain` (G14/NON_ECONOMIC_EVENT_IN_WRITE). El ciclo funciona con REX/R-HALT ON.
+- Baseline pytest: 1590 passed, 1 skipped, 1 xfailed. Final: ver docs/STATUS.md.
 ## 2026-10-13 — Security audit fixes (branch `v2/security-fixes`, draft PR)
 
 - Owner-assigned fix of the read-only security audit of `main@8b11da0` (M-1, L-1..L-7, I-1..I-5). No Render/env change, no activation, REAL execution stays OFF, NAS100 stays blocked.
@@ -1708,3 +1761,41 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 ## 2026-10-11: certificación ligera de las fases 9-12 y runbook de la Fase 13 (Grok Bot)
 - Checklists en docs/phases/phase-09..12.md con enlaces a PRs, CI y revisiones; STATUS a 13/14.
 - Nuevo docs/phases/phase-13-runbook.md (no se ejecuta nada).
+
+## 2026-10-13 — PR #39: cancellation block and originating signal time (local)
+
+- Snapshot position catch-up still runs, but cannot overwrite an earlier PAPER block. Two failed cancellation
+  CAS writes retain `STALE_PAPER_STATE`, blocking pending fills and new submissions for the cycle.
+- Trade alerts use the originating order's `as_of`, falling back only to its submitting review. A later closing
+  run cannot supply the signal timestamp; absent original evidence remains NO_DATA.
+- Two regression tests failed on the original implementation (expired order FILLED; later signal timestamp)
+  and pass after the fixes. Coverage includes successful catch-up following both stale writes, order timestamp
+  priority, submitting-review fallback and missing timestamps.
+- Baseline: unittest 1642 tests OK (1 skipped, 1 expected failure). Focused suite: 39 tests OK.
+- Final full offline unittest suite: 1644 tests OK (1 skipped, 1 expected failure), 205.346 s.
+  `ruff check .` and `git diff --check`: PASS. PAPER only; no flags, dependencies, activation, merge or deploy.
+  No staging, commit or push.
+
+## 2026-10-13 — PR #39: owner-approved gold options 1 and 4 ONLY (local)
+
+- FXMacroData keeps exactly the previous and current snapshots, selecting the newest event-ID vintage
+  fetched by the slot. Refreshed received_at/known_at/fetched_at use fetch completion, never slot backdating.
+  Cold starts still return NO_DATA for slots preceding the first fetch. Two snapshots are retained,
+  not an unbounded historical archive; provider-error behavior remains unchanged.
+- Lightweight cycle summaries in `<trading-db-stem>.cycles.db` beside the trading database: symbol/UTC slot,
+  run ID, existing setup/operational gate results, each TF's structure state, setup/rejection,
+  AI statuses (including NOT_REQUIRED/NOT_EVALUATED), execution reason and risk reason.
+  One short connection per claimed cycle, 100 ms SQLite lock timeout, 30-day global retention measured
+  from newest slot and hard cap 10 000 rows. No candles/raw prompts or review prose copied.
+  Duplicate slots keep their original record; observability errors only log, and R-HALT suppresses writes.
+  In-memory test databases have no persistent sidecar. This audit is best effort, not a certified ledger.
+- cloud_runner configures INFO logging to stdout, including existing-handler startup, for RUN_COMPLETED.
+- Baseline with system python3: missing existing streamlit/yfinance/plotly dependencies (8 errors).
+  Existing repo venv baseline: 1644 tests OK (1 skipped, 1 expected failure), 200.247 s; no installs.
+- Final offline unittest suite: 1657 tests OK (1 skipped, 1 expected failure), 205.739 s.
+  Focused suite: 21 tests OK. `ruff check .` and `git diff --check`: PASS. All three new macro regressions
+  fail against the original HEAD provider, then pass with the fix. Deterministic refresh, fetch-completion,
+  alignment, success/stale/error/session cycles, duplicate slots, pruning/restart, disk/lock failures,
+  halt and stdout logging tests added.
+- No timeframe-alignment or strategy/risk/economy changes, dependencies, trading-DB schema changes,
+  flags, Render, activation, merge or deploy. No staging, commit or push.
