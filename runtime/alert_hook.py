@@ -15,6 +15,7 @@ import time
 from runtime.alert_catalog import from_notification
 from runtime.alert_chart import evidence_closes
 from runtime.alert_dispatch import alerts_enabled, dispatcher_from_env
+from runtime import candle_cache
 
 LOG = logging.getLogger(__name__)
 RECOVERY_INTERVAL_SECONDS = 60.0
@@ -76,8 +77,12 @@ class AlertHook:
     def _prepare_alert(self, event):
         if event.event_type == 'SETUP_VALIDATED' or not event.kind.trade:
             return event
-        closes = evidence_closes(self.environ.get("AI_FLOOR_MARKET_EVIDENCE_PATH"),
-                                 event.symbol, event.occurred_at_utc)
+        # Pre-demo: the per-cycle candle cache always exists on the default route; the Evidence Store (flag ON
+        # only) is the fallback, so an absent evidence DB no longer leaves every chart empty.
+        closes = candle_cache.closes(candle_cache.path_from_env(self.environ), event.symbol, event.occurred_at_utc)
+        if not closes and self.environ.get("AI_FLOOR_MARKET_EVIDENCE_PATH"):
+            closes = evidence_closes(self.environ["AI_FLOOR_MARKET_EVIDENCE_PATH"], event.symbol,
+                                     event.occurred_at_utc)
         return replace(event, closes=closes)
 
     def _run(self):

@@ -103,7 +103,7 @@ class PresentationMemoryTests(unittest.TestCase):
         self.assertEqual(len(st.dataframe.call_args.args[0]), 200)
 
     def test_full_ledger_metrics_with_bounded_curve(self):
-        from ui.pages.luxury import ledger_statistics, trade_statistics
+        from ui.views.luxury import ledger_statistics, trade_statistics
         with sqlite3.connect(':memory:') as db:
             db.execute('CREATE TABLE closed_trades(trade_id TEXT,payload TEXT)')
             at = datetime.fromisoformat(AT)
@@ -143,7 +143,8 @@ class CacheEmailTests(unittest.TestCase):
                        'PRIMARY KEY(symbol,bar_start)) WITHOUT ROWID')
             db.execute('INSERT INTO candles VALUES(?,?,?)', ('XAUUSD', '2026-10-13T14:55:00+00:00', 100.5))
         self.env = {'AI_FLOOR_DB_PATH': str(self.path), 'AI_FLOOR_SETUP_CHART_EMAIL':'1',
-                    'AI_FLOOR_ALERTS_ENABLED':'0', 'GMAIL_APP_PASSWORD':'fixture-only'}
+                    'AI_FLOOR_ALERTS_ENABLED':'0', 'AI_FLOOR_ALERT_EMAIL_FROM':'sender@example.invalid',
+                    'AI_FLOOR_ALERT_EMAIL_TO':'owner@example.invalid', 'GMAIL_APP_PASSWORD':'fixture-only'}
 
     def test_real_cache_png_smtp_dedup_and_snapshot_recovery(self):
         from runtime.alert_dispatch import dispatcher_from_env
@@ -207,7 +208,7 @@ class CacheEmailTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(self.cache.read_bytes()).hexdigest(), cache_before)
 
     def test_validated_pages_bounded_email_reconciles_all_and_old_run_links_work(self):
-        from ui.pages.setups import validated_setups, iter_validated_setups
+        from ui.views.setups import validated_setups, iter_validated_setups
         from ui.state import dashboard_database
         import test_phase10_dashboard as fixtures
         from runtime.setup_chart_email import publish_setup_charts
@@ -247,7 +248,7 @@ class CacheEmailTests(unittest.TestCase):
         self.assertEqual(vm.account.closed_trades, [])
 
     def test_exact_snapshot_validation_keeps_legacy_plan_identity_and_risk(self):
-        from ui.pages.setups import validated_setups
+        from ui.views.setups import validated_setups
         from ui.state import dashboard_database
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE setups SET status='WATCH' WHERE slot_key='slot-1'")

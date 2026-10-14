@@ -1,5 +1,6 @@
 """Phase 10: render real navigation over immutable, offline SQLite fixtures."""
 import hashlib
+import time
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ from execution.contracts import PaperAccount
 from storage.codec import paper_encode
 from storage.database import Store
 from storage.health_store import HealthStore
-from ui.pages.dashboard import history, records, ROW_LIMIT
+from ui.views.dashboard import history, records, ROW_LIMIT
 from ui.state import dashboard_database, enabled_market_symbols
 from runtime.config import DEFAULT_ENABLED_SYMBOLS
 
@@ -82,6 +83,7 @@ class Phase10DashboardTests(unittest.TestCase):
     def app(self):
         app = AppTest.from_file(str(APP), default_timeout=15)
         app.session_state["dashboard_authenticated"] = True
+        app.session_state["dashboard_auth_expires_at"] = time.monotonic() + 3600
         app.session_state["sample_mode"] = False
         return app.run()
 
@@ -293,7 +295,7 @@ if __name__ == "__main__":
 
 class TestDashboardSqlFilters(unittest.TestCase):
     def test_history_renders_every_record_type_across_pages(self):
-        from ui.pages import dashboard
+        from ui.views import dashboard
         record_types = ("runs", "setups", "review_reports", "paper_orders", "paper_fills",
                         "paper_positions", "closed_trades", "journal")
         with sqlite3.connect(":memory:") as db:
@@ -357,7 +359,7 @@ class TestDashboardSqlFilters(unittest.TestCase):
                 self.assertEqual(params, (*parameters, ROW_LIMIT, 0))
 
     def test_t10_render_catches_database_read_error(self):
-        from ui.pages import dashboard
+        from ui.views import dashboard
         st = Mock()
         with patch.object(dashboard, "dashboard_database") as database:
             database.return_value.__enter__.return_value.execute.side_effect = sqlite3.OperationalError("read")
@@ -366,7 +368,7 @@ class TestDashboardSqlFilters(unittest.TestCase):
             "DASHBOARD_ERROR — OperationalError: persisted evidence could not be read")
 
     def test_positions_and_errors_request_sql_filters(self):
-        from ui.pages import dashboard
+        from ui.views import dashboard
         st = Mock()
         with patch.object(dashboard, "dashboard_database"), patch.object(
                 dashboard, "payloads", return_value=[]) as payloads:

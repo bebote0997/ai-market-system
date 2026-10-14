@@ -1,7 +1,7 @@
 """Per-cycle evidence, joined only by persisted identities."""
 import json
 
-from ui.pages.dashboard import history, payloads, records
+from ui.views.dashboard import history, payloads, records
 
 STEPS = ('Data intake', 'Agent outputs', 'Setup reviewer + deterministic setup',
          'Conflict engine / opposite-setup policy', 'Planner R:R and plan',
@@ -62,7 +62,7 @@ def cycle_evidence(db, run):
 
 
 def render(st, db):
-    from ui.pages.luxury import card, MISSING
+    from ui.views.luxury import card, MISSING
     runs = records(db, 'runs')
     requested = st.session_state.get('process_run_id')
     if requested and requested not in {r['run_id'] for r in runs}:

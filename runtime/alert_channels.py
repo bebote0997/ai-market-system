@@ -17,10 +17,9 @@ from runtime.alert_render import render_html, render_text, subject
 from runtime.notifications import SlackNotificationError, _slack_post, send_slack
 
 LOG = logging.getLogger(__name__)
-DEFAULT_ALERT_EMAIL = "yefersontejeda@gmail.com"
 GMAIL_HOST = "smtp.gmail.com"
 GMAIL_PORT = 465
-NON_RETRYABLE = frozenset({"NOT_CONFIGURED", "AUTH_ERROR", "REJECTED"})
+NON_RETRYABLE = frozenset({"NOT_CONFIGURED", "AUTH_ERROR", "REJECTED", "INVALID_WEBHOOK_URL"})
 
 
 class AlertChannelError(RuntimeError):
@@ -37,16 +36,24 @@ class GmailEmailChannel:
                  environ=None):
         env = os.environ if environ is None else environ
         self.password = password if password is not None else env.get("GMAIL_APP_PASSWORD")
-        self.sender = sender or env.get("AI_FLOOR_ALERT_EMAIL_FROM") or DEFAULT_ALERT_EMAIL
-        self.recipient = recipient or env.get("AI_FLOOR_ALERT_EMAIL_TO") or DEFAULT_ALERT_EMAIL
+        # No built-in addresses: sender and recipient come only from arguments or the environment.
+        self.sender = sender or env.get("AI_FLOOR_ALERT_EMAIL_FROM") or None
+        self.recipient = recipient or env.get("AI_FLOOR_ALERT_EMAIL_TO") or None
         self.smtp_factory = smtp_factory  # resolved at send time so tests can patch smtplib.SMTP_SSL
         self.timeout = float(timeout)
         if not 0 < self.timeout <= 10:
             raise ValueError("invalid SMTP timeout")
 
     @property
+    def missing(self):
+        """Names (never values) of the settings still required before email can be sent."""
+        return tuple(name for name, value in (("GMAIL_APP_PASSWORD", self.password),
+                                              ("AI_FLOOR_ALERT_EMAIL_FROM", self.sender),
+                                              ("AI_FLOOR_ALERT_EMAIL_TO", self.recipient)) if not value)
+
+    @property
     def configured(self):
-        return bool(self.password)
+        return not self.missing
 
     def message(self, event, attachments=()):
         msg = EmailMessage()
@@ -136,5 +143,5 @@ class SlackAlertChannel:
             raise AlertChannelError(str(exc)) from None
 
 
-__all__ = ["AlertChannelError", "DEFAULT_ALERT_EMAIL", "GmailEmailChannel", "SlackAlertChannel",
+__all__ = ["AlertChannelError", "GmailEmailChannel", "SlackAlertChannel",
            "classify_smtp_error"]

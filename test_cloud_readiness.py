@@ -144,7 +144,7 @@ class CloudDB(unittest.TestCase):
         env = {"AI_FLOOR_DURABLE_MOUNT": str(mount), "AI_FLOOR_INSTANCE_COUNT": "1",
                "OPENAI_API_KEY": "present", "TWELVE_DATA_API_KEY": "present",
                "SLACK_WEBHOOK_URL": "present",
-               "AI_FLOOR_DASHBOARD_PASSWORD": "present"}
+               "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
         ready = cloud_preflight(config, env=env, disk_mounted=True)
         self.assertEqual(ready.status, "INFRA_READY")
         self.assertTrue(ready.infra_ready)
@@ -169,7 +169,7 @@ class CloudDB(unittest.TestCase):
                "AI_FLOOR_CLOUD_RUNNER": "0", "FXMACRODATA_API_KEY": "present",
                "OPENAI_API_KEY": "present", "TWELVE_DATA_API_KEY": "present",
                "SLACK_WEBHOOK_URL": "present",
-               "AI_FLOOR_DASHBOARD_PASSWORD": "present"}
+               "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
         ready = cloud_preflight(config, env=env, disk_mounted=True)
         self.assertEqual(ready.status, "INFRA_READY")
         self.assertTrue(ready.infra_ready)
@@ -188,7 +188,7 @@ class CloudDB(unittest.TestCase):
         env = {"AI_FLOOR_DURABLE_MOUNT": str(mount), "AI_FLOOR_INSTANCE_COUNT": "1",
                "AI_FLOOR_CLOUD_RUNNER": "0", "OPENAI_API_KEY": "present",
                "TWELVE_DATA_API_KEY": "present", "SLACK_WEBHOOK_URL": "present",
-               "AI_FLOOR_DASHBOARD_PASSWORD": "present"}
+               "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
         blocked = cloud_preflight(config, env=env, disk_mounted=True)
         self.assertEqual(blocked.status, "NOT_READY")
         self.assertFalse(blocked.infra_ready)
@@ -245,8 +245,10 @@ class CloudDB(unittest.TestCase):
             def text_input(self, *_, **__): return "wrong"
             def button(self, *_): return True
             def stop(self): raise Stop()
+            def get_option(self, name): return "127.0.0.1" if name == "server.address" else None
         with self.assertRaises(Stop):
-            require_dashboard_access(UI(), {"RENDER": "true", "AI_FLOOR_DASHBOARD_PASSWORD": "right"})
+            require_dashboard_access(UI(), {"RENDER": "true", "AI_FLOOR_DASHBOARD_PASSWORD": "right-password-long"},
+                                     sleep=lambda _: None)
         self.assertTrue(require_dashboard_access(UI(), {}))
         store = Store(self.path)
         try:

@@ -44,6 +44,9 @@ EVIDENCE_OBSERVE_SKIPPED_BUSY = "EVIDENCE_OBSERVE_SKIPPED_BUSY"
 OBSERVE_BUSY_TIMEOUT_MS = 500
 EVIDENCE_BUSY_TIMEOUT_MS = 10000  # the Evidence Store's own default (restored after every observation)
 OBSERVE_DEGRADED_AFTER = 4
+# Pre-demo: an AI review needed for this cycle returned NO_DATA (retried once; still NO_DATA => no trade).
+AI_REVIEW_UNHEALTHY = "AI_REVIEW_UNHEALTHY"
+MACRO_NO_DATA_REASON = "AI_REVIEW_UNHEALTHY: macro=NO_DATA"
 
 
 class OperationalRuntime:
@@ -419,6 +422,261 @@ class OperationalRuntime:
                 return None
         return STALE_PAPER_STATE
 
+    def _duration_write(self, symbol, key, position_id, boundary, decide, store=None, kind="trade_duration"):
+        """One guarded CAS write of the trade-duration rule on the still-open ``position_id``, revalidated inside the
+        write: if another writer already moved that position past ``boundary`` (e.g. the Day-1 stop move), nothing is
+        saved and the result is ``MOVED`` so the caller re-reads the position and its next boundary."""
+        from execution import trade_duration as td
+
+        def apply(fresh):
+            position = fresh.account.open_positions.get(symbol)
+            if position is None or position.position_id != position_id or position.status != "OPEN":
+                return False, None
+            if td.next_boundary(position) != boundary:
+                return False, "MOVED"
+            return decide(fresh, position)
+        return self._guarded_paper_write(symbol, key, apply, store, kind)
+
+    def _duration_evidence(self, symbol, snapshot, timeframe):
+        """The bars the duration rule reads, from the same source as SL/TP management: committed evidence when the
+        evidence catch-up applies (authoritative; a provider revision never re-prices a decision), else the cycle's
+        snapshot. Returns (5m MarketBars, None) or (15m DataFrame, None); (None, reason) when evidence is unreadable."""
+        if self.config.catch_up_applies(symbol) and not self._snapshot_catch_up_applies(symbol):
+            try:
+                bars = self._evidence_engine().committed(symbol, timeframe)
+            except Exception:  # noqa: BLE001 - unreadable evidence fails closed
+                return None, EVIDENCE_UNAVAILABLE
+            if timeframe == "5m":
+                return bars, None
+            import pandas as pd
+            closed = [bar for bar in bars if bar.is_closed is True]
+            return pd.DataFrame({"Open": [b.open for b in closed], "High": [b.high for b in closed],
+                                 "Low": [b.low for b in closed], "Close": [b.close for b in closed],
+                                 "is_closed": True}, index=pd.DatetimeIndex([b.start for b in closed])), None
+        if timeframe not in snapshot:
+            return None, None
+        if timeframe == "15m":
+            return snapshot[timeframe], None
+        try:
+            return bars_from_frame(snapshot[timeframe], symbol=symbol, timeframe=timeframe), None
+        except EvidenceError:
+            return (), None
+
+    def _enforce_trade_duration(self, symbol, slot, key, snapshot, store=None, observer=None, closed=None):
+        """Pre-demo trade-duration rule up to ``slot`` (execution.trade_duration): the NY closes passed by the slot and
+        the Day-2 adverse 15m structure exit, in time order with SL/TP management.
+
+        Before acting at a moment (a NY close, or the moment an adverse BOS is known), SL/TP management first runs up
+        to that moment only (the same catch-up route as the cycle): an earlier stop/target wins, and a later bar can
+        never stop out a position the rule had already closed. Returns None, or the reason PAPER economics are
+        blocked for this cycle."""
+        from execution import trade_duration as td
+        for _ in range(4):  # Day-1 close, then a structure exit or the Day-2 close; one re-read after a MOVED write
+            position = self._broker(symbol).account.open_positions.get(symbol)
+            if position is None:
+                return None
+            boundary = td.next_boundary(position)
+            structure = None
+            if position.duration_stage is not None:
+                frame, blocked = self._duration_evidence(symbol, snapshot, "15m")
+                if blocked is not None:
+                    return blocked
+                managed = (position.opened_at if position.last_processed_at is None
+                           else position.last_processed_at + timedelta(minutes=5))
+                structure = td.first_adverse_structure(position, frame, managed, slot)
+            if structure is None and boundary > slot:
+                return None
+            at = boundary if structure is None else structure[0]
+            if self._snapshot_catch_up_applies(symbol):
+                blocked = self._catch_up_positions(symbol, at, key, store, observer, snapshot["5m"])
+            elif self.config.catch_up_applies(symbol):
+                blocked = self._catch_up_positions(symbol, at, key, store, observer)
+            else:
+                blocked = None  # legacy newest-bar route (no enabled PAPER symbol uses it)
+            if blocked is not None:
+                return blocked
+            bars, blocked = self._duration_evidence(symbol, snapshot, "5m")
+            if blocked is not None:
+                return blocked
+            bar = td.price_bar((b for b in bars or () if b.closed_at(at)), position, at)
+            if bar is None:
+                LOG.warning("symbol=%s component=trade_duration event=TRADE_DURATION_NO_DATA boundary=%s",
+                            symbol, utc(at))
+                self._persist("O", lambda: self.store.event(self.clock(), position.run_id, symbol, "trade_duration",
+                                                            "TRADE_DURATION_NO_DATA", "WARNING",
+                                                            {"boundary_utc": utc(at)}))
+                return None
+
+            def decide(fresh, position, boundary=boundary, bar=bar, structure=structure):
+                if structure is not None:
+                    bos = structure[1]
+                    fresh.close_market(symbol, bar.close, bar.end, exit_reason=td.CLOSE_DAY2_STRUCTURE,
+                                       decision_run_id=position.run_id)
+                    fresh._event(bar.end, position.run_id, symbol, position.position_id, "TRADE_DURATION_EXIT",
+                                 {"exit_reason": td.CLOSE_DAY2_STRUCTURE, "price": bar.close,
+                                  "price_bar_start": utc(bar.start),
+                                  "bos_break_utc": utc(bos["break_timestamp"].to_pydatetime()),
+                                  "bos_direction": bos["direction"]})
+                    LOG.info("symbol=%s component=trade_duration event=POSITION_CLOSED reason=%s",
+                             symbol, td.CLOSE_DAY2_STRUCTURE)
+                    return True, "CLOSE"
+                action, reason = td.boundary_decision(position, boundary, bar.close)
+                details = {"boundary_utc": utc(boundary), "price": bar.close, "price_bar_start": utc(bar.start),
+                           "unrealized_r": None if (r := td.unrealized_r(position, bar.close)) is None else str(r)}
+                if action == "CLOSE":
+                    fresh.close_market(symbol, bar.close, bar.end, exit_reason=reason, decision_run_id=position.run_id)
+                    fresh._event(bar.end, position.run_id, symbol, position.position_id, "TRADE_DURATION_EXIT",
+                                 {**details, "exit_reason": reason})
+                    LOG.info("symbol=%s component=trade_duration event=POSITION_CLOSED reason=%s", symbol, reason)
+                else:
+                    td.move_stop_to_entry(position)
+                    fresh._event(bar.end, position.run_id, symbol, position.position_id, td.STOP_MOVED_TO_ENTRY,
+                                 {**details, "initial_stop": position.initial_stop, "stop": position.stop})
+                    LOG.info("symbol=%s component=trade_duration event=STOP_MOVED_TO_ENTRY", symbol)
+                return True, action
+            kind = "trade_duration" if structure is None else "trade_duration_structure"
+            fresh, action = self._duration_write(symbol, key, position.position_id, boundary, decide, store, kind)
+            if fresh is None:
+                return STALE_PAPER_STATE
+            if action == "CLOSE" and closed is not None:
+                closed.append(symbol)
+        return None
+
+    @staticmethod
+    def _due_orders(orders, symbol, slot):
+        """[(order, boundary, reason)] of ``symbol``'s PENDING orders whose time-cancel boundary is at or before
+        ``slot`` (execution.trade_duration.order_cancel_boundary)."""
+        from execution import trade_duration as td
+        due = []
+        for order in orders.values():
+            if order.symbol == symbol and order.status == "PENDING" and order.as_of is not None:
+                boundary, reason = td.order_cancel_boundary(order)
+                if boundary <= slot:
+                    due.append((order, boundary, reason))
+        return due
+
+    def _cancel_due_orders(self, symbol, slot, key, store=None):
+        """Pre-demo: cancel every PENDING order of ``symbol`` whose NY-close boundary (Friday 17:00 ET, or the Day-2
+        close after submission) is at or before ``slot``. Runs before any fill evaluation of the slot, in one guarded
+        CAS write (none when nothing is due). Returns (cancelled order ids, None), or ((), STALE_PAPER_STATE) when the
+        write lost twice (nothing cancelled)."""
+        if not self._due_orders(self._broker(symbol).orders, symbol, slot):
+            return (), None
+
+        def cancel(fresh):
+            cancelled = []
+            for order, boundary, reason in self._due_orders(fresh.orders, symbol, slot):
+                order.status = "CANCELLED"
+                fresh._event(boundary, order.run_id, symbol, order.order_id, "ORDER_CANCELLED",
+                             {"reason": reason, "boundary_utc": utc(boundary)})
+                LOG.info("symbol=%s component=trade_duration event=ORDER_CANCELLED order_id=%s reason=%s",
+                         symbol, order.order_id, reason)
+                cancelled.append(order.order_id)
+            return bool(cancelled), tuple(cancelled)
+        fresh, cancelled = self._guarded_paper_write(symbol, key, cancel, store, "order_time_cancel")
+        return ((), STALE_PAPER_STATE) if fresh is None else (cancelled, None)
+
+    def manage_trade_duration(self, at):
+        """Out-of-session pass so the NY-close rule acts at 17:00 ET and the Day-2 structure exit at every 15m close,
+        when no cycle runs. No slot claim and no run row: every write is the same guarded CAS save as in a cycle.
+        Returns {symbol: outcome}."""
+        from execution import trade_duration as td
+        results = {}
+        if not self.paper_enabled:
+            return results
+        slot = slot_at(at, self.config.cadence_minutes)
+        account, orders, _ = self.store.load_paper(self.config.account_id)
+        for symbol in self.config.enabled_symbols:
+            if self.halt_gate is not None and self.halt_gate.halted:
+                break
+            if self._due_orders(orders, symbol, slot):  # pending orders: Friday / Day-2 NY close (no data needed)
+                try:
+                    cancelled, blocked = self._cancel_due_orders(symbol, slot, None)
+                    results[symbol] = blocked or ("ORDERS_CANCELLED" if cancelled else "CHECKED")
+                except HaltRefused:
+                    break
+                except Exception as exc:  # noqa: BLE001 - retried at the next tick; a cycle also cancels
+                    LOG.warning("symbol=%s component=trade_duration event=ORDER_CANCEL_FAILED error_type=%s",
+                                symbol, type(exc).__name__)
+                    results[symbol] = "ERROR"
+            position = None if account is None else account.open_positions.get(symbol)
+            if position is None or self.market_provider is None:
+                continue
+            day2_check = position.duration_stage is not None and slot.minute % 15 == 0  # a 15m BOS needs a 15m close
+            if td.next_boundary(position) > slot and not day2_check:
+                continue
+            try:
+                snapshot = self.market_provider.load_snapshot(symbol, slot)
+                if self.config.catch_up_applies(symbol):
+                    blocked = self._ingest_evidence(symbol, snapshot, slot)
+                    if blocked is not None:
+                        results[symbol] = blocked
+                        continue
+                results[symbol] = self._enforce_trade_duration(symbol, slot, None, snapshot) or "CHECKED"
+            except HaltRefused:
+                break
+            except Exception as exc:  # noqa: BLE001 - retried at the next tick; a cycle also enforces the rule
+                LOG.warning("symbol=%s component=trade_duration event=TRADE_DURATION_FAILED error_type=%s",
+                            symbol, type(exc).__name__)
+                results[symbol] = "ERROR"
+        return results
+
+    def _macro_review_matters(self, ai, deterministic, symbol):
+        """Macro AI review NO_DATA in a cycle where it gates something: a PLAN_READY plan or a pending order."""
+        if ai.ai_macro is None or ai.ai_macro.status != "NO_DATA":
+            return False
+        if deterministic.final_status == "PLAN_READY":
+            return True
+        _, orders, _ = self.store.load_paper(self.config.account_id)
+        return any(o.symbol == symbol and o.status == "PENDING" for o in orders.values())
+
+    def _note_ai_review_health(self, run_id, symbol, payload):
+        """Journal AI_REVIEW_UNHEALTHY (``payload``) or a recovery (None). Alerts are sent on transitions only
+        (``notify``), so a long macro outage alerts once and its recovery once. Observability: never a decision."""
+        state_key = f"ai_review_health:{symbol}"
+
+        def write():
+            with self.store.transaction():
+                previous = self.store.get_state(state_key)
+                if payload is not None:
+                    self.store._event(self.clock(), run_id, symbol, "ai", AI_REVIEW_UNHEALTHY, "WARNING",
+                                      {**payload, "notify": previous != "UNHEALTHY"})
+                    if previous != "UNHEALTHY":
+                        self.store.set_state(state_key, "UNHEALTHY")
+                elif previous == "UNHEALTHY":
+                    self.store._event(self.clock(), run_id, symbol, "ai", "AI_REVIEW_RECOVERED", "INFO",
+                                      {"reason": "AI_REVIEW_RECOVERED: macro", "agent": "macro_ai"})
+                    self.store.set_state(state_key, "OK")
+        self._audit_safely(write, run_id, symbol)
+
+    def _retry_macro_review(self, deterministic, ai, audit, ai_provider, floor_once, symbol, run_id):
+        """Macro AI review NO_DATA: clear reason, alert, and ONE retry in the same cycle. The deterministic floor is
+        rerun (it re-reads the macro provider; everything else is deterministic on the same snapshot) and the AI
+        floor is rerun only if the macro evidence is now usable. Still NO_DATA => the cycle cannot trade.
+        Returns (deterministic, ai, audit, still_unhealthy)."""
+        LOG.warning("run_id=%s symbol=%s component=ai event=%s macro=NO_DATA attempt=1 action=RETRY",
+                    run_id, symbol, AI_REVIEW_UNHEALTHY)
+        self._note_ai_review_health(run_id, symbol, {"reason": MACRO_NO_DATA_REASON, "agent": "macro_ai",
+                                                     "status": "NO_DATA", "attempt": 1, "action": "RETRY",
+                                                     "final_status": ai.final_status})
+        retried = apply_paper_quantity_increment(floor_once(), self.instruments.get(symbol))
+        macro = retried.macro_news_report
+        if macro is not None and macro.status in {"OK", "PARTIAL"} and macro.evidence and any(
+                macro.evidence[0].get(k) for k in ("macro_events", "news_items")):
+            retry_audit = AuditLog()
+            retried_ai = run_ai(retried, ai_provider, retry_audit)
+            if retried_ai.ai_macro is not None and retried_ai.ai_macro.status in {"OK", "PARTIAL"}:
+                LOG.info("run_id=%s symbol=%s component=ai event=AI_REVIEW_RETRY outcome=RECOVERED", run_id, symbol)
+                self._note_ai_review_health(run_id, symbol, None)
+                return retried, retried_ai, retry_audit, False
+            deterministic, ai, audit = retried, retried_ai, retry_audit
+        LOG.warning("run_id=%s symbol=%s component=ai event=%s macro=NO_DATA attempt=2 action=NO_TRADE",
+                    run_id, symbol, AI_REVIEW_UNHEALTHY)
+        self._note_ai_review_health(run_id, symbol, {"reason": MACRO_NO_DATA_REASON, "agent": "macro_ai",
+                                                     "status": "NO_DATA", "attempt": 2, "action": "NO_TRADE",
+                                                     "final_status": ai.final_status})
+        return deterministic, ai, audit, True
+
     def _record_ai_health(self, events, run_id, symbol):
         """Observability only: journal provider health transitions; alerts only if an alerts object was supplied."""
         for event in events:
@@ -541,8 +799,14 @@ class OperationalRuntime:
 
     def run_cycle(self, symbol, scheduled_at):
         rex_holder = []  # V2 P3: the run's REX recorder, created only after the claim (flag ON)
+        cycle_context = {}
         try:
-            returned = self._run_cycle(symbol, scheduled_at, rex_holder)
+            returned = self._run_cycle(symbol, scheduled_at, rex_holder, cycle_context)
+            if cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}:
+                def record_cycle():
+                    from runtime.cycle_records import record
+                    record(self.config.db_path, cycle_context, returned, paper_enabled=self.paper_enabled)
+                self._audit_safely(record_cycle, cycle_context["run_id"], symbol)
             if rex_holder and rex_holder[0] is not None:
                 try:
                     rex_holder[0].finish(returned)
@@ -553,7 +817,7 @@ class OperationalRuntime:
                 self.halt_gate.active_run = None  # V2 P4a: no run in flight any more (R evidence closes with it)
         return returned
 
-    def _run_cycle(self, symbol, scheduled_at, rex_holder):
+    def _run_cycle(self, symbol, scheduled_at, rex_holder, cycle_context):
         if symbol not in MARKETS:
             raise ValueError("unsupported operational symbol")
         if symbol not in self.config.enabled_symbols:
@@ -595,7 +859,9 @@ class OperationalRuntime:
                     "clock_sessions": None if session_clock is None else list(session_names(session_clock))})
                 self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "scheduler", "SESSION_SKIPPED"))
                 self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA"))
+                cycle_context["session"] = "FAILED"
                 return "SESSION_SKIPPED"
+            cycle_context["session"] = "PASSED"
             if not set(session_names(slot)) & set(self.config.sessions):
                 self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "scheduler",
                                                             "DIAGNOSTIC_OUTSIDE_SESSION", "INFO"))
@@ -624,6 +890,10 @@ class OperationalRuntime:
                     symbol, slot, "NO_DATA", provider_state, run_id)))
                 self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA"))
                 return "NO_DATA"
+            if self.config.candle_cache_path is not None:  # pre-demo: alert charts; best effort, never a decision
+                from runtime import candle_cache
+                self._audit_safely(lambda: candle_cache.record(self.config.candle_cache_path, symbol,
+                                                               snapshot.get("5m"), slot), run_id, symbol)
             paper_blocked = None  # B2.3B: reason PAPER economics are blocked this cycle (in-scope symbols only).
             if self.config.v2_position_catch_up:
                 self._last_ingest = None
@@ -669,6 +939,13 @@ class OperationalRuntime:
                    "open": float(last_bar["Open"]), "high": float(last_bar["High"]),
                    "low": float(last_bar["Low"]), "close": float(last_bar["Close"]), "is_closed": True}
 
+            duration_closed = []  # Pre-demo trade-duration rule up to this slot (NY closes, Day-2 structure exit)
+            if self.paper_enabled and paper_blocked is None:
+                paper_blocked = self._enforce_trade_duration(symbol, slot, key, snapshot, rex_store,
+                                                             None if rex is None else rex.observer, duration_closed)
+            if self.paper_enabled and paper_blocked is None:  # pending orders past their Friday / Day-2 NY close
+                paper_blocked = self._cancel_due_orders(symbol, slot, key, rex_store)[1]
+
             def manage_positions(fresh):
                 had_open = bool(fresh.account.open_positions)
                 self._rex_note(rex, "ST2L_INPUT", lambda: {"had_open": had_open, "paper_enabled": self.paper_enabled,
@@ -678,8 +955,11 @@ class OperationalRuntime:
                 return self.paper_enabled and (had_open or bool(fresh.journal)), None
             if self._snapshot_catch_up_applies(symbol):
                 if self.paper_enabled:
-                    paper_blocked = self._catch_up_positions(
+                    catch_up_blocked = self._catch_up_positions(
                         symbol, slot, key, rex_store, None if rex is None else rex.observer, snapshot["5m"])
+                    # Position management cannot clear an earlier duration/cancellation failure.
+                    if paper_blocked is None:
+                        paper_blocked = catch_up_blocked
                 if paper_blocked is not None:
                     self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "market_data",
                                                                 paper_blocked, "ERROR"))
@@ -708,11 +988,13 @@ class OperationalRuntime:
                 "pending_on_symbol": [o.order_id for o in broker.orders.values()
                                       if o.symbol == symbol and o.status == "PENDING"]})
             stage = "deterministic"
-            deterministic = run_floor(snapshot, slot, symbol, self.macro_provider,
-                                      self.instruments.get(symbol), self.risk_config,
-                                      equity=decision_equity, run_id=run_id,
-                                      **({"planner_policy": POLICY_V2_F3}
-                                         if self.config.v2_planner_policy == "V2_F3" else {}))
+            def floor_once():  # the single deterministic floor call site (also used by the macro retry)
+                return run_floor(snapshot, slot, symbol, self.macro_provider,
+                                 self.instruments.get(symbol), self.risk_config,
+                                 equity=decision_equity, run_id=run_id,
+                                 **({"planner_policy": POLICY_V2_F3}
+                                    if self.config.v2_planner_policy == "V2_F3" else {}))
+            deterministic = floor_once()
             self._rex_note(rex, "ST4", lambda: self._rex_floor(deterministic, symbol, decision_equity))
             deterministic = apply_paper_quantity_increment(deterministic, self.instruments.get(symbol))
             self._rex_note(rex, "F1B", lambda: {
@@ -753,6 +1035,12 @@ class OperationalRuntime:
                     rex.fail("ai_observer", exc)
             with observing:
                 ai = run_ai(deterministic, ai_provider, audit)
+                macro_unhealthy = self._macro_review_matters(ai, deterministic, symbol)
+                if macro_unhealthy:  # pre-demo: log + alert, then ONE retry of the macro review in this cycle
+                    deterministic, ai, audit, macro_unhealthy = self._retry_macro_review(
+                        deterministic, ai, audit, ai_provider, floor_once, symbol, run_id)
+                elif ai.ai_macro is not None and ai.ai_macro.status in {"OK", "PARTIAL"}:
+                    self._note_ai_review_health(run_id, symbol, None)
             self._rex_note(rex, "ST5", lambda: self._rex_ai(ai, audit))
             if self.config.v2_ai_resilience:
                 health_events = self.ai_health.drain()
@@ -859,6 +1147,8 @@ class OperationalRuntime:
                 execution_reason = "PAPER_DIAGNOSTIC_BLOCKED"
             elif eligible and paper_blocked is not None:
                 execution_reason = paper_blocked  # B2.3B: no submission over unreconciled positions.
+            elif eligible and duration_closed:
+                execution_reason = "TRADE_DURATION_EXIT"  # no new entry in the cycle that time-closed a position
             elif (self.config.v2_opposite_setup_policy == "STRUCTURE_CHANGE"
                   and deterministic.final_status == "PLAN_READY" and self.paper_enabled
                   and paper_blocked is None
@@ -917,6 +1207,8 @@ class OperationalRuntime:
                 else:
                     position = broker.account.open_positions.get(symbol)
                     execution_reason, blocking_position_id = "EXISTING_POSITION", position.position_id
+            elif macro_unhealthy and ai.final_status == "PLAN_READY":
+                execution_reason = AI_REVIEW_UNHEALTHY  # macro review still NO_DATA after the retry: no trade
             else:
                 execution_reason = ai.final_status if ai.final_status != "PLAN_READY" else "POLICY_REVIEW_UNAVAILABLE"
             self._rex_note(rex, "ST10", lambda: {
@@ -952,3 +1244,11 @@ class OperationalRuntime:
             except HaltRefused as halt:  # T_h arrived while recording the failure: bookkeeping replaces it
                 return self._halt_run(key, run_id, symbol, halt, rex)
             return "ERROR"
+        finally:
+            # Scalar verdicts plus references to the already-built reports; no
+            # snapshots, candles or raw AI payloads enter the cycle database.
+            evidence = locals()
+            cycle_context.update({name: evidence[name] for name in (
+                "symbol", "slot", "run_id", "stage", "deterministic", "ai", "fresh", "data_state",
+                "execution_fresh", "execution_state", "session_open", "ai_healthy", "eligible",
+                "paper_blocked", "execution_status", "execution_reason") if name in evidence})

@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from runtime.scheduler import session_names
 from storage.codec import parse_utc
 from ui.adapters import from_persisted_snapshot
-from ui.pages.dashboard import ROW_LIMIT, payloads, records
+from ui.views.dashboard import ROW_LIMIT, payloads, records
 from ui.state import dashboard_database
 from ui.json_views import details, structured
 
@@ -308,10 +308,10 @@ def render(st, page, symbols):
             elif page == 'The Floor':
                 floor(st, db, symbols)
             elif page == 'Setups':
-                from ui.pages.setups import render as render_setups
+                from ui.views.setups import render as render_setups
                 render_setups(st, db)
             elif page == 'Process':
-                from ui.pages.process import render as render_process
+                from ui.views.process import render as render_process
                 render_process(st, db)
             elif page == 'Trades':
                 trades(st, db)

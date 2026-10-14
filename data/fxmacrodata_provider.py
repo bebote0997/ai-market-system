@@ -1,4 +1,5 @@
 """FXMacroData adapter with fetch-time and publication-time no-lookahead gates."""
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import gzip
 import json
@@ -79,6 +80,7 @@ class FXMacroDataProvider:
         self.transport = transport or _http
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._cache = ()
+        self._previous_cache = ()
         self._fetched_at = None
         self._retry_after = None
         self.max_indicators_per_currency = max_indicators_per_currency
@@ -239,8 +241,13 @@ class FXMacroDataProvider:
             self.health = exc.kind
             self._retry_after = now + timedelta(seconds=3600 if exc.kind == "RATE_LIMITED" else 300)
             raise
-        self._cache = tuple(events)
-        self._fetched_at = now
+        # A slot can precede the refresh's completion. Keep one prior snapshot
+        # rather than backdating newly fetched evidence to that slot.
+        fetched_at = max(now, self.clock().astimezone(timezone.utc))
+        self._previous_cache = self._cache
+        self._cache = tuple(replace(event, received_at=fetched_at, known_at=fetched_at,
+                                    fetched_at=fetched_at) for event in events)
+        self._fetched_at = fetched_at
         self._retry_after = None
         self.health = "READY" if all(v == "READY" for v in self.health_by_currency.values()) and events else "PARTIAL" if events else "EMPTY"
 
@@ -256,7 +263,13 @@ class FXMacroDataProvider:
                 self.health = "PARTIAL"
             else:
                 self._refresh(now)
-        return tuple(event for event in self._cache if event.fetched_at <= as_of)
+        visible = {}
+        for event in self._previous_cache + self._cache:
+            if event.fetched_at <= as_of:
+                prior = visible.get(event.event_id)
+                if prior is None or event.fetched_at >= prior.fetched_at:
+                    visible[event.event_id] = event
+        return tuple(visible.values())
 
     def changes(self, *, since=None):
         params = {"currencies": "USD,EUR", "payload": "full", "limit": 50}

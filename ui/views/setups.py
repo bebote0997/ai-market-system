@@ -1,7 +1,7 @@
 """Validated setups and exact-cycle persisted chart data, shared with email."""
 import json
 
-from ui.pages.dashboard import ROW_LIMIT, payloads, records
+from ui.views.dashboard import ROW_LIMIT, payloads, records
 
 
 def validated_setups(db, *, run_id='', offset=0):
@@ -68,7 +68,7 @@ def iter_validated_setups(db, *, run_id=''):
 
 def render(st, db):
     from ui.components.setup_chart import build_setup_figure
-    from ui.pages.luxury import card, process_link, MISSING
+    from ui.views.luxury import card, process_link, MISSING
     rows = validated_setups(db)[:ROW_LIMIT]
     from runtime.setup_candle_reader import cache_path
     from ui.candle_cache import cached_candles

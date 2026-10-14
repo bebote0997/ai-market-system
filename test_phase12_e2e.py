@@ -265,7 +265,7 @@ class Phase12E2ETests(unittest.TestCase):
         sent = []
         smtp = SimpleNamespace(login=lambda *a: None, send_message=lambda message: sent.append(message),
                                quit=lambda: None)
-        channel = GmailEmailChannel(password="synthetic", smtp_factory=lambda *a, **k: smtp)
+        channel = GmailEmailChannel(password="synthetic", sender="a@example.invalid", recipient="b@example.invalid", smtp_factory=lambda *a, **k: smtp)
         dispatcher = AlertDispatcher([channel], enabled=True, ledger=ledger, sleep=lambda _: None,
                                      clock=lambda: T.isoformat(), max_attempts=1)
         email = AlertNotificationSink(dispatcher)

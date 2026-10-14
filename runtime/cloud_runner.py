@@ -1,9 +1,11 @@
 """Single continuous PAPER scheduler, disabled until cloud activation."""
 from datetime import datetime, timezone
+import logging
 import os
 from pathlib import Path
 import re
 import signal
+import sys
 import time
 
 from runtime.config import RuntimeConfig
@@ -17,6 +19,7 @@ SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
     if os.environ.get("RENDER") != "true" or os.environ.get("AI_FLOOR_CLOUD_RUNNER") != "1":
         raise RuntimeError("cloud runner not activated")
     config = RuntimeConfig.from_env()

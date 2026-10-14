@@ -8,11 +8,11 @@ La selección operativa predeterminada del experimento PAPER es XAUUSD y EURUSD.
 
 ## Launch
 
-Python 3.13: `python -m pip install -r requirements-ui.txt`, then `streamlit run ui/app.py` from the repository root. The legacy `streamlit run app.py` remains separate. No API key, provider, scheduler, database, broker, or network call is required to start the floor.
+Python 3.13: `python -m pip install -r requirements-ui.txt`, then `streamlit run ui/app.py --server.address=127.0.0.1` from the repository root. Without `AI_FLOOR_DASHBOARD_PASSWORD` the dashboard opens only when bound to a loopback address (`ui/auth.py`); Streamlit's default address is unset and is refused. The legacy `streamlit run app.py` remains separate. No API key, provider, scheduler, database, broker, or network call is required to start the floor.
 
 ## Architecture
 
-`ui/app.py` is the Streamlit entry point and page composer. `ui/theme.py` holds design tokens. `ui/state.py` reads an explicit in-memory snapshot registry; a Streamlit rerun never calls `floor.orchestrator.run`, `ai.orchestrator.run`, a provider, or Paper Broker. `ui/adapters.py` is a pure adapter from completed `AIFloorReport` to immutable `FloorViewModel`. `ui/components/` renders charts and panels. `ui/pages/` contains FLOOR, MARKETS, POSITIONS, JOURNAL, EXPERIMENT, and SYSTEM. AI MEETING is an expander linked to the selected `run_id`. `ui/fixtures/demo_floor.py` contains isolated fictional sample bars and report data.
+`ui/app.py` is the Streamlit entry point and page composer. `ui/theme.py` holds design tokens. `ui/state.py` reads an explicit in-memory snapshot registry; a Streamlit rerun never calls `floor.orchestrator.run`, `ai.orchestrator.run`, a provider, or Paper Broker. `ui/adapters.py` is a pure adapter from completed `AIFloorReport` to immutable `FloorViewModel`. `ui/components/` renders charts and panels. `ui/views/` contains FLOOR, MARKETS, POSITIONS, JOURNAL, EXPERIMENT, and SYSTEM. AI MEETING is an expander linked to the selected `run_id`. `ui/fixtures/demo_floor.py` contains isolated fictional sample bars and report data.
 
 The integration boundary is `FloorRunReport → AIFloorReport → from_ai_report(...) → FloorViewModel → renderer`. The caller must publish a completed view model through `ui.state.set_snapshot`; no automatic analysis occurs on page load. `RiskDecision is None` maps to `NOT CALLED`, and only `RiskDecision.status` supplies approval or rejection. `PLAN_READY` requires an actual approved RiskDecision or maps to `STATE_INCONSISTENCY`. AI bias is context only.
 

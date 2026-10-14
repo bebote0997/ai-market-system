@@ -2,6 +2,17 @@
 
 **Estado:** NOT STARTED.
 
+PR #39, gold options 1 y 4 autorizadas por el owner (2026-10-13): fix de continuidad macro en refrescos
+de 6 h, sin backdating de fetched_at/known_at; auditoría SQLite por ciclo, acotada a 30 días / 10 000 filas,
+con gates y estados 1h/15m/5m, y logging INFO a stdout. Alineación y lógica de estrategia intactas.
+Fallos de auditoría nunca cambian el ciclo; DUPLICATE no sobrescribe el registro y R-HALT suprime escrituras.
+Sin activación ni deploy; validación y limitaciones en CHANGELOG_AGENT.md.
+
+Pre-demo PR #39, review fixes locales (2026-10-13): conservar el bloqueo PAPER de cancelación tras dos CAS
+fallidos aunque el catch-up posterior tenga éxito; señal de alertas desde la orden original o su review de envío.
+Regresiones de cancelación sin fill y cierre iniciado por otro run; validación en CHANGELOG_AGENT.md.
+Sin activación, merge ni deploy; el GO del owner sigue pendiente.
+
 **Tareas (Libro v1.9):** **30 días** (decisión del owner 2026-10-10; el Libro v1.9 decía 60 días con auditorías Day 30 y Day 60 — cambio registrado en `docs/decisions.md`). Auditoría final al Day 30. Incluye la validación en vivo diferida desde Fase 8 (DEC-8.23). Métricas: ciclos, setups, trades, wins/losses, win rate, R:R medio, PnL, drawdown, exposición, fallos API/datos/email, uptime, coste y uso de proveedor, multi-posición, duplicados, recuperación, V1 vs V2, suficiencia de evidencia (F13-T01…T21). No autoriza ejecución real.
 
 **Gate:** requiere fase anterior CERTIFIED y autorización explícita del owner.

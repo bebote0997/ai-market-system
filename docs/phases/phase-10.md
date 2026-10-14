@@ -110,3 +110,14 @@ Baseline local: 1629 tests, dos errores previos por matplotlib ausente, 2 skippe
 Validación final del fix History: 1630 tests en 190.121 s; mismos dos errores
 preexistentes por matplotlib ausente, 2 skipped, 1 expected failure; sin fallos nuevos.
 Suite enfocada: 17 PASS; git diff --check PASS. Ruff no disponible en el entorno.
+
+## PR #37 — merge de main autorizado (2026-10-13)
+
+Vistas luxury, Process y Setups migradas a `ui/views`, conservando funciones y navegación.
+Se integra auth endurecida de main y fixes pre-demo; imports y fixture de email adaptados
+al contrato vigente. Dependencias exactas alineadas con requirements-ci.txt.
+No cambia certificación ni activa runtime; sin deploy ni merge del PR.
+
+Validación del merge: `TMPDIR=/tmp /workspace/venv/bin/python -m pytest -q` →
+1721 passed, 2 skipped, 1 xfailed, 1181 subtests passed (222.50 s).
+`git diff --check` PASS; conflictos resueltos. Ruff no instalado en el entorno.

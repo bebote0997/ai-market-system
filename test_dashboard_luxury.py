@@ -11,7 +11,7 @@ from streamlit.testing.v1 import AppTest
 import test_phase10_dashboard as fixtures
 
 APP, T = fixtures.APP, fixtures.T
-from ui.pages import luxury
+from ui.views import luxury
 from ui.tables import normalize_rows
 
 
@@ -152,7 +152,7 @@ class LuxuryDashboardTests(unittest.TestCase):
         next(s for s in app.selectbox if s.label == 'Cycle · newest first').set_value('run-1').run()
         self.assert_rendered(app)
         content = '\n'.join(m.value for m in app.markdown)
-        from ui.pages.process import STEPS
+        from ui.views.process import STEPS
         for step in STEPS:
             self.assertIn(step, content)
         for value in ('Structure AI', 'fixture only', 'setup-1', 'closed-1', 'twelve_data', 'OPPOSITE_POSITION_CONFLICT', 'not persisted yet', 'Gaps'):
@@ -172,7 +172,7 @@ class LuxuryDashboardTests(unittest.TestCase):
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE setups SET plan='null'")
         app = self.app()
-        from ui.pages.luxury import PAGES
+        from ui.views.luxury import PAGES
         for page in PAGES:
             with self.subTest(page=page):
                 app.radio[0].set_value(page).run()
@@ -232,7 +232,7 @@ class SetupChartTests(unittest.TestCase):
 
     def test_validated_setups_propagates_risk_multiplier(self):
         fixtures.Phase10DashboardTests.setUp(self)
-        from ui.pages.setups import validated_setups
+        from ui.views.setups import validated_setups
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE setups SET status='VALID_SETUP', plan=? WHERE slot_key='slot-1'",
                        (json.dumps({'entry':100, 'stop':99, 'target':103}),))

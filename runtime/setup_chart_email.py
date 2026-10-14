@@ -42,7 +42,7 @@ def publish_setup_charts(dispatcher, environ, run_id=''):
         from runtime.demo_runner import REAL_EXECUTION_ENABLED
         if REAL_EXECUTION_ENABLED:
             return
-        from ui.pages.setups import iter_validated_setups
+        from ui.views.setups import iter_validated_setups
         from ui.state import dashboard_database
         with dashboard_database(environ.get('AI_FLOOR_DB_PATH', 'data/runtime/trading_floor.db')) as db:
             for row in iter_validated_setups(db, run_id=run_id):
