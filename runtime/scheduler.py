@@ -65,10 +65,14 @@ class Scheduler:
                                 type(exc).__name__)
             return []
         if gate is None:
-            return [self.runtime.run_cycle(symbol, slot) for symbol in config.enabled_symbols]
-        results = []
-        for symbol in config.enabled_symbols:
-            if gate.halted:  # design 3.8 row 6: no new claim once T_h happened (non-economic check)
-                break
-            results.append(self.runtime.run_cycle(symbol, slot))
+            results = [self.runtime.run_cycle(symbol, slot) for symbol in config.enabled_symbols]
+        else:
+            results = []
+            for symbol in config.enabled_symbols:
+                if gate.halted:  # design 3.8 row 6: no new claim once T_h happened (non-economic check)
+                    break
+                results.append(self.runtime.run_cycle(symbol, slot))
+        flush = getattr(self.runtime, "flush_evidence_observations", None)
+        if flush is not None:  # Phase 13: catch-up-OFF observe-only evidence, after every cycle of the tick
+            flush()
         return results

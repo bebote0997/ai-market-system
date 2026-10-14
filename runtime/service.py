@@ -14,7 +14,7 @@ from ai.provider import DeterministicAIProvider
 from ai.runtime import AuditLog
 from core.rr_contract import POLICY_V2_F3
 from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
-from data.market_evidence import EvidenceError, bars_from_frame
+from data.market_evidence import EvidenceError, MarketEvidenceEngine, bars_from_frame
 from execution.contracts import PaperAccount
 from execution.paper_broker import PaperBroker
 from execution.pending_order_gate import (BLOCKING_FINAL_STATUSES, CurrentCycleGate, PendingGateEvidenceError,
@@ -32,6 +32,7 @@ from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
 from storage.codec import utc
 from storage.database import Store
+from storage.evidence_store import EvidenceBudgetExceeded, EvidenceStore
 from ui.adapters import MARKETS, from_ai_report
 
 LOG = logging.getLogger("ai_floor.runtime")
@@ -44,6 +45,11 @@ EVIDENCE_OBSERVE_SKIPPED_BUSY = "EVIDENCE_OBSERVE_SKIPPED_BUSY"
 OBSERVE_BUSY_TIMEOUT_MS = 500
 EVIDENCE_BUSY_TIMEOUT_MS = 10000  # the Evidence Store's own default (restored after every observation)
 OBSERVE_DEGRADED_AFTER = 4
+# Phase 13 evidence preparation (catch-up OFF, evidence path set): bounds of the end-of-tick observe-only write.
+EVIDENCE_OBSERVE_BUDGET_EXCEEDED = "EVIDENCE_OBSERVE_BUDGET_EXCEEDED"
+OFF_OBSERVE_TIMEOUT_SECONDS = 0.5
+OFF_OBSERVE_BUDGET_SECONDS = 2.0
+OFF_OBSERVE_GRACE_SECONDS = 0.5
 # Pre-demo: an AI review needed for this cycle returned NO_DATA (retried once; still NO_DATA => no trade).
 AI_REVIEW_UNHEALTHY = "AI_REVIEW_UNHEALTHY"
 MACRO_NO_DATA_REASON = "AI_REVIEW_UNHEALTHY: macro=NO_DATA"
@@ -127,6 +133,7 @@ class OperationalRuntime:
             else:
                 self.store = Store(self.config.db_path)
         self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
+        self._off_observe_pending = {}  # Phase 13: {symbol: (snapshot, slot, run_id)} until flush_evidence_observations
         try:
             if self.sealed_context is not None:
                 from runtime.genesis import GenesisSealError, identity_unchanged
@@ -312,6 +319,39 @@ class OperationalRuntime:
             LOG.warning("symbol=%s component=market_evidence event=%s error_type=%s", symbol, outcome, error_type)
         self._audit_safely(lambda: self._record_observe(symbol, run_id, outcome, error_type, elapsed_ms), run_id, symbol)
 
+    def _observe_evidence_off(self, symbol, snapshot, slot, run_id):
+        """Phase 13 evidence preparation (catch-up OFF, evidence path set): commit this snapshot's closed bars to the
+        Evidence Store observe-only, AFTER the cycle's trading/exit work. Bounded: a short-lived store with
+        OFF_OBSERVE_TIMEOUT_SECONDS lock waits, every bar in one transaction, and OFF_OBSERVE_BUDGET_SECONDS overall
+        (no new bar after it, committed so far kept; SQLite interrupted OFF_OBSERVE_GRACE_SECONDS later). Nothing is
+        written to the trading DB and every Exception (MemoryError included) is only logged."""
+        started = time.monotonic()
+        deadline = started + OFF_OBSERVE_BUDGET_SECONDS
+        outcome, error_type, store = "OK", None, None
+        try:
+            store = EvidenceStore(self.config.market_evidence_path, timeout=OFF_OBSERVE_TIMEOUT_SECONDS,
+                                  interrupt=lambda: time.monotonic() > deadline + OFF_OBSERVE_GRACE_SECONDS)
+            engine = MarketEvidenceEngine(store, enabled_symbols=self.config.enabled_symbols)
+            with store.batch(lambda: time.monotonic() > deadline):
+                engine.ingest_snapshot(symbol, snapshot, as_of=slot)
+        except EvidenceBudgetExceeded as exc:
+            outcome, error_type = EVIDENCE_OBSERVE_BUDGET_EXCEEDED, type(exc).__name__
+        except Exception as exc:  # noqa: BLE001 - observe-only: isolate every failure (MemoryError included)
+            text = f"{exc} {exc.__cause__}".lower()
+            outcome = (EVIDENCE_OBSERVE_BUDGET_EXCEEDED if "interrupted" in text else
+                       EVIDENCE_OBSERVE_SKIPPED_BUSY if "locked" in text or "busy" in text else EVIDENCE_OBSERVE_FAILED)
+            error_type = type(exc).__name__
+        finally:
+            try:
+                if store is not None:
+                    store.close()
+            except Exception:  # noqa: BLE001
+                pass
+        elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+        if outcome != "OK":
+            LOG.warning("run_id=%s symbol=%s component=market_evidence event=%s error_type=%s elapsed_ms=%s",
+                        run_id, symbol, outcome, error_type, elapsed_ms)
+
     def _discard_evidence_engine(self):
         engine, self.evidence = self.evidence, None
         try:
@@ -319,6 +359,16 @@ class OperationalRuntime:
                 engine.store.close()
         except Exception:  # noqa: BLE001
             pass
+
+    def flush_evidence_observations(self):
+        """Phase 13 evidence preparation: run the queued catch-up-OFF observe-only writes. Called by the Scheduler
+        after the tick's symbol cycles (trading, exits, alerts), so evidence never delays them. Never raises an
+        Exception; after T_h (V2 P4a) the queue is dropped (category O)."""
+        pending, self._off_observe_pending = self._off_observe_pending, {}
+        for symbol, (snapshot, slot, run_id) in pending.items():
+            if self.halt_gate is not None and not self.halt_gate.allow("O"):
+                return
+            self._observe_evidence_off(symbol, snapshot, slot, run_id)
 
     def _record_observe(self, symbol, run_id, outcome, error_type, elapsed_ms):
         """Non-economic: one WARNING event per failed observation and the per-symbol evidence_observe health state
@@ -802,6 +852,9 @@ class OperationalRuntime:
         cycle_context = {}
         try:
             returned = self._run_cycle(symbol, scheduled_at, rex_holder, cycle_context)
+            off_observe = cycle_context.pop("_off_observe", None)
+            if off_observe is not None:  # the newest per symbol only: a missed flush never accumulates snapshots
+                self._off_observe_pending[symbol] = (*off_observe, cycle_context.get("run_id"))
             if cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}:
                 def record_cycle():
                     from runtime.cycle_records import record
@@ -904,6 +957,11 @@ class OperationalRuntime:
                 if paper_blocked is None and self._last_ingest is not None:
                     # V2 P8.4 R4: REVISION visibility; observability only, never a decision
                     self._audit_safely(lambda: self._record_revisions(symbol, snapshot, run_id), run_id, symbol)
+            elif self.config.market_evidence_path is not None:
+                # Phase 13 evidence preparation: with catch-up OFF, every enabled symbol's snapshot is committed
+                # observe-only (all closed bars, so an in-session cycle back-fills the off-session window) by
+                # flush_evidence_observations after the tick. Never a decision input, never a trading-DB write.
+                cycle_context["_off_observe"] = (snapshot, slot)
             self._rex_note(rex, "ST1", lambda: {"v2_position_catch_up": self.config.v2_position_catch_up,
                                                 "catch_up_applies": self.config.catch_up_applies(symbol),
                                                 "paper_blocked": paper_blocked})
