@@ -19,8 +19,9 @@ Pasos obligatorios para todo agente, en orden:
 9. Actualizar `CHANGELOG_AGENT.md` (además de `docs/STATUS.md` y el archivo de fase si cambia el estado).
 10. No hacer `git add`, commit ni push sin autorización del owner. Solo cuando el owner o Grok Bot asignó la tarea, el agente trabaja en una rama de feature y entrega mediante PR; **nunca push directo a `main`**.
 
-Los documentos técnicos de cada fase (`V2_PHASE*.md`, `AUDIT_*.md`, `CHANGELOG_AGENT.md`) siguen siendo evidencia.
-El freeze PAPER del 2026-09-19 (`EXPERIMENT_FREEZE.md`) es histórico; el baseline económico vigente lo decide el owner (ver `docs/STATUS.md`).
+Los documentos técnicos de cada fase (`docs/archive/V2_PHASE*.md`, `docs/archive/AUDIT_*.md`, `CHANGELOG_AGENT.md`) siguen siendo evidencia.
+Los documentos históricos de la raíz se archivaron en `docs/archive/` (2026-10-13); no se actualizan más.
+El freeze PAPER del 2026-09-19 (`docs/archive/EXPERIMENT_FREEZE.md`) es histórico; el baseline económico vigente lo decide el owner (ver `docs/STATUS.md`).
 
 ## Invariantes de seguridad (no negociables)
 

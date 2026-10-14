@@ -176,7 +176,7 @@ class DocumentedLaunchTests(unittest.TestCase):
 
     def documented_commands(self):
         commands = []
-        for name in ("UI_SPEC.md", "OPERATIONAL_RUNTIME_SPEC.md", "ui/app.py"):
+        for name in ("docs/archive/UI_SPEC.md", "docs/archive/OPERATIONAL_RUNTIME_SPEC.md", "ui/app.py"):
             found = DOCUMENTED_LAUNCH.findall((ROOT / name).read_text(encoding="utf-8"))
             self.assertTrue(found, name)
             commands += [(name, command.strip()) for command in found]

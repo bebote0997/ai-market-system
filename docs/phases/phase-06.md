@@ -78,7 +78,7 @@ Todo otro byte LF-normalizado sigue fijado al SHA256 frozen V1
 Investigación replay offline: el corpus no puede regenerarse sin las barras originales.
 `replay/acquire.py` necesita red y key Twelve Data; `lab_run.py` reconstruye PKL solo a partir
 de una DB existente. El origen documentado es `data/replay/replay_twelve_data_12m.db`,
-Twelve Data Basic sin pago, 2025-10-06 → 2026-10-06 (V2_PHASE4_TRADE_PLANNER.md).
+Twelve Data Basic sin pago, 2025-10-06 → 2026-10-06 (docs/archive/V2_PHASE4_TRADE_PLANNER.md).
 No existe esa DB, market_replay.db, ni lab_*.pkl/copia de barras local; fixtures sintéticas
 no reemplazan evidencia histórica. CLI ejecutada: NO_DATA; detalle exacto en
 `docs/replay/dec14_impact.txt`, sin números fabricados.

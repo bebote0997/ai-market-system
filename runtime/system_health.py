@@ -33,7 +33,7 @@ class HealthStatus(str, Enum):
 
 
 class ProviderErrorType(str, Enum):
-    """V2 provider failure taxonomy: V2_HANDOFF_REQUIREMENTS.md P2, plus MODEL_UNAVAILABLE and
+    """V2 provider failure taxonomy: docs/archive/V2_HANDOFF_REQUIREMENTS.md P2, plus MODEL_UNAVAILABLE and
     CONNECTION_ERROR, which the Phase 1 Master requirements define as explicit canonical classes."""
     RATE_LIMITED = "RATE_LIMITED"
     BILLING_OR_QUOTA = "BILLING_OR_QUOTA"

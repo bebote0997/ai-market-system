@@ -1,7 +1,7 @@
 """V2 Phase 7 / P7.0: characterization of the CURRENT AI layer (main 405df6a). Read-only; no live provider calls.
 
 Pins what exists today — including gaps — so every P7.1 difference is an explicit, Owner-approved change.
-(The legacy V1 "Phase 7" artifacts AUDIT_PHASE7.md / PHASE7_CERTIFICATION.md / runtime/certify_phase7.py are
+(The legacy V1 "Phase 7" artifacts docs/archive/AUDIT_PHASE7.md / docs/archive/PHASE7_CERTIFICATION.md / runtime/certify_phase7.py are
 unrelated to V2 Phase 7.)
 """
 import io

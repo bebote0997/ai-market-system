@@ -16,11 +16,11 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 | DEC-5.7 | 2026-10-06 | APPROVED | Fill-money risk ≤ riesgo monetario planificado × 8/7 (política registrada) |
 | DEC-6.2 A | 2026-10-07 | APPROVED | Sin SAME_THESIS / NEW_STRUCTURE / TREND_CHANGE (T02/T04/T05 N/A) |
 | DEC-6.3/6.4 A | 2026-10-07 | APPROVED | Misma dirección → BLOCK; sin pyramiding; una exposición por símbolo |
-| DEC-8.13…8.16, 8.21 | 2026-10-08 | APPROVED POLICY | Ver `V2_PHASE8_P86_DESIGN.md` §8.4 |
+| DEC-8.13…8.16, 8.21 | 2026-10-08 | APPROVED POLICY | Ver `archive/V2_PHASE8_P86_DESIGN.md` §8.4 |
 | DEC-8.17 / 8.17b | 2026-10-08 | APPROVED POLICY | Medición G-8.INT; política de halt (Alt. 1) |
 | DEC-8.20 | 2026-10-08 | APPROVED POLICY | A2: nueva cuenta PAPER USD 10 000, DB nueva, sin posiciones heredadas, sealed genesis |
 | DEC-8.21b | 2026-10-08 | PROVISIONAL | B-STRICT pendiente de validación operativa |
-| HIGH-8.1 owner decision | 2026-10-10 | RECORDED | Ruta OFF EURUSD/XAUUSD → catch-up cronológico; PnL no comparable con baseline congelado (`HIGH81_OWNER_DECISION.md`) |
+| HIGH-8.1 owner decision | 2026-10-10 | RECORDED | Ruta OFF EURUSD/XAUUSD → catch-up cronológico; PnL no comparable con baseline congelado (`archive/HIGH81_OWNER_DECISION.md`) |
 | **DEC-8.18** | 2026-10-10 | **APPROVED** (owner Jeferson Tejeda / bebote0997) | Status-verification procedure (axes, H5), aprobado tal cual |
 | **DEC-8.19** | 2026-10-10 | **APPROVED** (owner Jeferson Tejeda / bebote0997) | Boundary handling = opción (a): precondición flat bajo A2 (sin posiciones ni órdenes heredadas) |
 | **DEC-8.23** | 2026-10-10 | **APPROVED** (owner) | Gates G-8.INT de sesión en vivo (G2/G3/G4/G5/G7/G11) se certifican con evidencia offline/replay (`replay.g8int`, fixtures deterministas, CI en el SHA exacto); validación en vivo pasa al demo de 30 días (= Fase 13), que arranca tras certificar las Fases 8–12 |
