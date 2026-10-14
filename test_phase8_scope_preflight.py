@@ -82,7 +82,7 @@ class ScopePreflightTests(unittest.TestCase):
         on = preflight(self.config(), env={})
         self.assertTrue(on.checks["catch_up_scope_valid"])
         self.assertIn("catch_up_evidence_contiguous", on.checks)
-        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.dir), "AI_FLOOR_DASHBOARD_PASSWORD": "x"}
+        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.dir), "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
         self.assertIn("catch_up_evidence_contiguous", cloud_preflight(self.config(), env=env, disk_mounted=True).checks)
 
     # Owner decision: absent or empty evidence never satisfies the check (first activation needs prior evidence)

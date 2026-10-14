@@ -12,7 +12,6 @@ V2 DEC_4_7 (actual >= 2.50). Outcomes (gross R from the actual fill, TradeManage
 Usage: python -m replay.fill_audit <store.db> <p41a_lab_out> <out.json>
 """
 import json
-import pickle
 import sys
 from collections import Counter
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
@@ -23,6 +22,7 @@ import pandas as pd
 
 from core.rr_contract import geometry, normalize
 from replay.lab import DISCOVERY_END
+from replay.safe_pickle import load_lab_chunk
 from replay.store import open_replay_store, replay_engine
 from replay.engine import load_frames
 from runtime.paper_contracts import paper_instruments
@@ -62,7 +62,7 @@ def walk(o, h, l, index, side, stop, target):
 
 
 def audit(store_path, p41a_dir):
-    records = [r for f in sorted(Path(p41a_dir).glob("lab_*.pkl")) for r in pickle.loads(f.read_bytes())["records"]
+    records = [r for f in sorted(Path(p41a_dir).glob("lab_*.pkl")) for r in load_lab_chunk(f)["records"]
                if "v1" in r]
     store = open_replay_store(store_path, readonly=True)
     frames = {s: load_frames(replay_engine(store), s)["5m"] for s in ("XAUUSD", "EURUSD")}

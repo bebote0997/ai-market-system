@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-11 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
+_Última actualización: 2026-10-13 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 
 **Entorno:** PAPER / DEMO únicamente · `REAL_EXECUTION_ENABLED = False` · NAS100 OFF · runtime V2 y SYSTEM HEALTH INACTIVE · sin deploy V2.
 **main:** `4974408e443908ceb5723aed13c1eb15a81f3c51` (merge PR #13, Fase 8).
@@ -45,6 +45,10 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 2. Fase 9 en main (PR #21). #24 (recuperación al reinicio) y #25 (worker aislado) cerrados por la PR de `v2/phase9-alert-worker`. Pendiente: prueba real F09-T18 en Render. Fase 10 en main (PR #23). Siguiente: Fase 11 (17 escenarios de fallo como tests).
 3. Owner: secretos en Render (`OPENAI_API_KEY`, `TWELVE_DATA_API_KEY`, `AI_FLOOR_DASHBOARD_PASSWORD`, opcional `SLACK_WEBHOOK_URL`) y aprobación del baseline A2.
 4. Orden acordado por el owner (2026-10-10): completar y certificar Fases 8–12 (sin ninguna ejecución en vivo), luego Fase 13 = demo PAPER de 30 días. No se toca Render, flags, scheduler ni deploy hasta entonces.
+
+## Correcciones de seguridad (2026-10-13, draft PR `v2/security-fixes`)
+
+Fixes de la auditoría de seguridad de `main@8b11da0` (M-1, L-1..L-7, I-1..I-5): login del dashboard con rate limit, bloqueo temporal y expiración de sesión; dependencias fijadas con hashes; clave de Twelve Data en cabecera; sin email personal por defecto. Detalle en CHANGELOG_AGENT.md. **Acción del owner antes del próximo deploy:** `AI_FLOOR_DASHBOARD_PASSWORD` ≥ 12 caracteres; para email, `AI_FLOOR_ALERT_EMAIL_FROM`/`_TO`. Sin cambios en Render ni activación.
 
 ## Correcciones locales autorizadas (2026-10-11)
 

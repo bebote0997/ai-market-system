@@ -85,7 +85,7 @@ class R2PreflightTests(unittest.TestCase):
 
     def test_off_adds_no_checks(self):
         self.assertEqual(catch_up_storage_checks(self.config(None, flag=False), mount=self.mount), {})
-        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "x"}
+        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
         report = cloud_preflight(self.config(None, flag=False), env=env, disk_mounted=True)
         self.assertFalse([k for k in report.checks if k.startswith("catch_up_")])
 
@@ -144,11 +144,11 @@ class R2PreflightTests(unittest.TestCase):
         self.addCleanup(os.chmod, path, stat.S_IREAD | stat.S_IWRITE)
         checks = catch_up_storage_checks(self.config(path), mount=self.mount)
         self.assertIs(checks["catch_up_evidence_writable_schema"], False)
-        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "x"}
+        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
         self.assertFalse(cloud_preflight(self.config(path), env=env, disk_mounted=True).infra_ready)
 
     def test_cloud_preflight_is_not_ready_on_any_evidence_failure(self):
-        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "x"}
+        env = {"AI_FLOOR_DURABLE_MOUNT": str(self.mount), "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
         good = cloud_preflight(self.config(self.mount / "market_evidence.db"), env=env, disk_mounted=True)
         storage = {k: v for k, v in good.checks.items()
                    if k.startswith("catch_up_") and k != "catch_up_evidence_contiguous"}
