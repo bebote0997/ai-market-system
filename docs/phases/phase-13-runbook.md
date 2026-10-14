@@ -1,6 +1,6 @@
 # Fase 13: runbook del demo PAPER de 30 días en Render
 
-**Estado:** preparado, NO ejecutado. Hace falta el **GO explícito del owner** (Jeferson). Ningún agente toca Render, los flags, el scheduler ni el deploy sin ese GO.
+**Estado:** iniciado 2026-10-14 08:29 ET bajo DEC-13.1 (opción B: DB actual, sin DB nueva/sealed genesis; catch-up 0; macro fxmacrodata).
 **Invariantes:** solo PAPER · `REAL_EXECUTION_ENABLED = False` (constante en código, no se puede cambiar por env) · NAS100 bloqueado en código · una sola instancia.
 
 ## 1. Pre-flight (antes de desplegar)

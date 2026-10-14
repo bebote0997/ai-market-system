@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-14 — Fase 13 iniciada (docs-only)
+
+- Fase 13 (demo PAPER 30 días) iniciada 2026-10-14 08:29 ET bajo DEC-13.1 (opción B: DB actual, sin DB nueva/sealed genesis; catch-up 0; macro fxmacrodata).
+- Actualizados `docs/STATUS.md` (main `1c9118c`, merge PR #41; baseline DEC-8.20 dejado de lado por DEC-13.1), `docs/phases/phase-13.md` y el estado de `docs/phases/phase-13-runbook.md`.
+- Solo documentación: sin cambios de env, runtime ni deploy. REAL OFF, NAS100 bloqueado.
+
 ## 2026-10-13 — Repo cleanup (organizational only)
 
 - Owner-assigned task on `v2/repo-cleanup`; draft PR only, no merge/Render/env/runtime/economics change. REAL execution OFF, NAS100 blocked (unchanged).

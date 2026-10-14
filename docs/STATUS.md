@@ -1,9 +1,9 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-13 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
+_Última actualización: 2026-10-14 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 
 **Entorno:** PAPER / DEMO únicamente · `REAL_EXECUTION_ENABLED = False` · NAS100 OFF · runtime V2 y SYSTEM HEALTH INACTIVE · sin deploy V2.
-**main:** `4974408e443908ceb5723aed13c1eb15a81f3c51` (merge PR #13, Fase 8).
+**main:** `1c9118c` (merge PR #41).
 
 ## Fases
 | Fase | Nombre | Estado | PR | SHA (merge) |
@@ -21,7 +21,7 @@ _Última actualización: 2026-10-13 (America/New_York). Esta es la única fuente
 | 10 | Command Center / Display V2 | **CERTIFIED** (ligera, 2026-10-11; capturas móviles diferidas a la Fase 13) | #23, #31 | `7acf384` |
 | 11 | Chaos / Failure Testing | **CERTIFIED** (ligera, 2026-10-11) | #29 | `d6c8ebe` |
 | 12 | E2E replay determinista | **CERTIFIED** (ligera, 2026-10-11; NOT VERIFIED del verificador es por diseño) | #32 | `22af2e9` |
-| 13 | Demo PAPER 30 días | NOT STARTED: requiere el GO del owner; ver `docs/phases/phase-13-runbook.md` | — | — |
+| 13 | Demo PAPER 30 días | **STARTED** 2026-10-14 08:29 ET (GO del owner; día 1/30, opción B, ver DEC-13.1) | — | main `1c9118c` |
 
 Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación ligera bajo control delegado a Grok Bot, pendiente de confirmación del owner. Detalle: `docs/phases/`.
 
@@ -33,7 +33,7 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 ## Decisiones pendientes del owner (ver `docs/decisions.md`)
 - [x] DEC-8.18 — APPROVED 2026-10-10 (owner): procedimiento de verificación de estado tal cual (ejes, H5).
 - [x] DEC-8.19 — APPROVED 2026-10-10 (owner): opción (a), precondición flat bajo A2.
-- [ ] Nuevo baseline económico/freeze tras HIGH-8.1 (A2: cuenta PAPER nueva USD 10 000, DB nueva, sealed genesis — DEC-8.20 aprobado como política).
+- [x] Nuevo baseline económico/freeze tras HIGH-8.1 (A2: cuenta PAPER nueva USD 10 000, DB nueva, sealed genesis — DEC-8.20 aprobado como política) — dejado de lado por DEC-13.1 (opción B, 2026-10-14).
 - [x] DEC-8.23 — APPROVED 2026-10-10: gates en vivo de Fase 8 → evidencia offline/replay; nada en vivo antes de la Fase 13; la validación en vivo diferida (G2–G5, G8, G11, G15) se hace durante el demo de 30 días de la Fase 13, tras certificar las Fases 8–12 y con aprobación operativa explícita.
 - [x] DEC-8.24 — APPROVED 2026-10-10 (Grok Bot, control total delegado): G8/G15 diferidos a Fase 13 (se informa al owner).
 - [x] DEC-8.18a — 2026-10-10 (Grok Bot, control delegado): sin firma H5; Q1–Q8 automatizadas (`replay/status_verifier.py`).
@@ -158,3 +158,14 @@ por identidad exacta; gráficos Setups desde caché ya existente, y márgenes de
 Legacy conservado tras inspección; trade EURUSD exacto NO_DATA, comportamiento gap caracterizado sin
 cambiar economía. Hallazgos en `/tmp/legacy_findings.md` y `/tmp/eurusd_findings.md`.
 Sin cambio de certificación/activación; Fase 13 sigue NOT STARTED. Validación en CHANGELOG_AGENT.md.
+
+## Fase 13 — demo PAPER iniciado (2026-10-14 08:29 ET)
+
+GO explícito del owner Jeferson Tejeda (DEC-13.1). Opción B: el día 1/30 arranca en la DB actual
+(`data/runtime/trial/trading_floor.db`), sin DB nueva ni reinicio. Incluye la posición XAUUSD SHORT
+abierta (entrada 4139.45, SL 4216.21, TP 3907.85, abierta 2026-10-14 07:40 ET) y el +USD 9.32
+realizado del trial (equity 10 009.32). La desviación de DEC-8.20/DEC-8.19 (DB nueva, flat, sealed
+genesis) queda aceptada por el owner. El marcador `EXPERIMENT_STARTED` del trial (freeze `8b11da0`)
+se conserva; el inicio del demo queda registrado aquí. `AI_FLOOR_V2_POSITION_CATCH_UP=0` se mantiene;
+`AI_FLOOR_MACRO_PROVIDER=fxmacrodata` sin cambios. Sin cambios de env/runtime/deploy.
+`REAL_EXECUTION_ENABLED=False`, NAS100 bloqueado, solo PAPER. Día 30 aprox. 2026-11-12.
