@@ -126,7 +126,7 @@ class OperationalRuntime:
                 self.store = SealedStore(self.config.db_path)
             else:
                 self.store = Store(self.config.db_path)
-        self.evidence = None  # B2.3B: opened lazily, only when v2_position_catch_up is ON.
+        self.evidence = None  # B2.3B: opened lazily (catch-up ON, or OFF observe-only with an evidence path).
         try:
             if self.sealed_context is not None:
                 from runtime.genesis import GenesisSealError, identity_unchanged
@@ -283,11 +283,14 @@ class OperationalRuntime:
                         symbol, EVIDENCE_UNAVAILABLE, type(exc).__name__)
             return EVIDENCE_UNAVAILABLE
 
-    def _observe_evidence(self, symbol, snapshot, slot, run_id):
+    def _observe_evidence(self, symbol, snapshot, slot, run_id, journal=True):
         """P1-B (DEC-8.14): observe-only ingestion for an enabled symbol OUTSIDE the catch-up scope. It never returns a
         blocking reason and never raises an Exception: the cycle continues on the legacy path with the same inputs as
         with the flag OFF. The lock wait is bounded (OBSERVE_BUSY_TIMEOUT_MS) and the store's own timeout is always
-        restored; if it cannot be restored, the engine is closed so the next use reopens with the default."""
+        restored; if it cannot be restored, the engine is closed so the next use reopens with the default.
+
+        ``journal=False`` (catch-up OFF, evidence path set): the trading journal is untouched (a failure is a log
+        warning plus the non-economic ``evidence_observe`` health state) and the connection is closed afterwards."""
         started = time.monotonic()
         outcome, error_type = "OK", None
         try:
@@ -310,7 +313,11 @@ class OperationalRuntime:
         if outcome != "OK":
             self._last_ingest = None
             LOG.warning("symbol=%s component=market_evidence event=%s error_type=%s", symbol, outcome, error_type)
-        self._audit_safely(lambda: self._record_observe(symbol, run_id, outcome, error_type, elapsed_ms), run_id, symbol)
+        if not journal:
+            self._last_ingest = None
+            self._discard_evidence_engine()  # short connection: nothing held between OFF cycles
+        self._audit_safely(lambda: self._record_observe(symbol, run_id, outcome, error_type, elapsed_ms, journal),
+                           run_id, symbol)
 
     def _discard_evidence_engine(self):
         engine, self.evidence = self.evidence, None
@@ -320,7 +327,7 @@ class OperationalRuntime:
         except Exception:  # noqa: BLE001
             pass
 
-    def _record_observe(self, symbol, run_id, outcome, error_type, elapsed_ms):
+    def _record_observe(self, symbol, run_id, outcome, error_type, elapsed_ms, journal=True):
         """Non-economic: one WARNING event per failed observation and the per-symbol evidence_observe health state
         (DEGRADED after OBSERVE_DEGRADED_AFTER consecutive failures; a success resets it). Never changes trading."""
         with self.store.transaction():
@@ -332,7 +339,7 @@ class OperationalRuntime:
                              "state": "DEGRADED" if failures >= OBSERVE_DEGRADED_AFTER else "OK",
                              "last_outcome": outcome, "last_elapsed_ms": elapsed_ms}
             self.store.set_state("evidence_observe", json.dumps(state, sort_keys=True))
-            if outcome != "OK":
+            if outcome != "OK" and journal:
                 self.store._event(self.clock(), run_id, symbol, "market_evidence", outcome, "WARNING",
                                   {"error_type": error_type, "elapsed_ms": elapsed_ms,
                                    "consecutive_failures": failures})
@@ -904,6 +911,11 @@ class OperationalRuntime:
                 if paper_blocked is None and self._last_ingest is not None:
                     # V2 P8.4 R4: REVISION visibility; observability only, never a decision
                     self._audit_safely(lambda: self._record_revisions(symbol, snapshot, run_id), run_id, symbol)
+            elif self.config.market_evidence_path is not None:
+                # Phase 13 evidence preparation: with catch-up OFF, every enabled symbol's snapshot is committed
+                # observe-only (all closed bars, so an in-session cycle back-fills the off-session window). Never a
+                # decision input, never a journal row; a failure is only logged.
+                self._persist("O", lambda: self._observe_evidence(symbol, snapshot, slot, run_id, journal=False))
             self._rex_note(rex, "ST1", lambda: {"v2_position_catch_up": self.config.v2_position_catch_up,
                                                 "catch_up_applies": self.config.catch_up_applies(symbol),
                                                 "paper_blocked": paper_blocked})

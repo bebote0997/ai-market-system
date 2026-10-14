@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-10-14 — Evidence Store observe-only con catch-up OFF (branch `v2/evidence-observe-only`)
+
+- `runtime/service.py`: con `AI_FLOOR_V2_POSITION_CATCH_UP=0` y `AI_FLOOR_MARKET_EVIDENCE_PATH` definido, cada ciclo guarda el snapshot de todos los símbolos habilitados en `market_evidence.db` reutilizando `_observe_evidence` (P1-B) con `journal=False`: sin filas de journal, conexión cerrada tras cada observación, fallo = WARNING en log + estado `evidence_observe`. Nunca se lee en OFF; ON sin cambios (fail-closed).
+- `runtime/config.py`: la lógica de `catch_up_evidence_contiguous` se extrae a `evidence_contiguity_report` / `newest_closed_5m` (mismo veredicto; reporte OFF del preflight sin cambios).
+- Nuevo CLI READ-ONLY `python -m replay.evidence_readiness` (ambas DB `mode=ro`): vela más reciente, velas faltantes desde el watermark de cada posición OPEN, anomalías GAP/LATE y READY/NOT_READY.
+- Sesiones: fuera de LONDON/NEW_YORK no hay ciclo ni fetch; el snapshot (500 velas 5m) rellena la noche y el fin de semana en el primer ciclo en sesión. Riesgo: el check es estricto 24/7 (fin de semana / pausa diaria de XAUUSD dentro de la ventana de una posición = NOT_READY); no se debilita.
+- Tests: `test_evidence_observe_off.py` (12); `test_runtime_catch_up` / `test_runtime_pending_gate` actualizados (OFF con ruta ahora escribe evidencia, nunca la lee). REAL OFF, NAS100 bloqueado, sin Render ni push.
+
 ## 2026-10-14 — Fase 13 iniciada (docs-only)
 
 - Fase 13 (demo PAPER 30 días) iniciada 2026-10-14 08:29 ET bajo DEC-13.1 (opción B: DB actual, sin DB nueva/sealed genesis; catch-up 0; macro fxmacrodata).
