@@ -156,13 +156,18 @@ class TestRender(NoNetwork):
 class TestEmailChannel(NoNetwork):
     def channel(self, **kwargs):
         kwargs.setdefault("password", "abcd efgh ijkl mnop")
+        kwargs.setdefault("sender", "sender@example.invalid")
+        kwargs.setdefault("recipient", "owner@example.invalid")
         kwargs.setdefault("environ", {})
         return GmailEmailChannel(**kwargs)
 
     def test_defaults_and_env_overrides(self):
         channel = GmailEmailChannel(environ={})
-        self.assertEqual((channel.sender, channel.recipient), ("yefersontejeda@gmail.com",) * 2)
+        self.assertEqual((channel.sender, channel.recipient), (None, None))  # no built-in address
         self.assertFalse(channel.configured)
+        self.assertEqual(channel.missing, ("GMAIL_APP_PASSWORD", "AI_FLOOR_ALERT_EMAIL_FROM",
+                                           "AI_FLOOR_ALERT_EMAIL_TO"))
+        self.assertFalse(GmailEmailChannel(environ={"GMAIL_APP_PASSWORD": "pw"}).configured)
         env = {"GMAIL_APP_PASSWORD": "pw", "AI_FLOOR_ALERT_EMAIL_FROM": "a@example.invalid",
                "AI_FLOOR_ALERT_EMAIL_TO": "b@example.invalid"}
         channel = GmailEmailChannel(environ=env)
@@ -176,9 +181,9 @@ class TestEmailChannel(NoNetwork):
         self.assertEqual(args, ("smtp.gmail.com", 465))
         self.assertIn("context", kwargs)
         smtp = smtp_ssl.return_value
-        smtp.login.assert_called_once_with("yefersontejeda@gmail.com", "abcdefghijklmnop")
+        smtp.login.assert_called_once_with("sender@example.invalid", "abcdefghijklmnop")
         message = smtp.send_message.call_args[0][0]
-        self.assertEqual(message["To"], "yefersontejeda@gmail.com")
+        self.assertEqual(message["To"], "owner@example.invalid")
         self.assertEqual(message["X-AI-Floor-Event-ID"], "evt-1")
         parsed = email.message_from_bytes(message.as_bytes())
         types = [part.get_content_type() for part in parsed.walk()]
@@ -212,9 +217,9 @@ class TestSlackChannel(NoNetwork):
         response = mock.MagicMock(status=200)
         with mock.patch("runtime.notifications.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value = response
-            SlackAlertChannel(webhook_url="https://hooks.slack.invalid/x", environ={}).send(trade_event())
+            SlackAlertChannel(webhook_url="https://hooks.slack.com/services/T0/B0/x", environ={}).send(trade_event())
         request = urlopen.call_args[0][0]
-        self.assertEqual(request.full_url, "https://hooks.slack.invalid/x")
+        self.assertEqual(request.full_url, "https://hooks.slack.com/services/T0/B0/x")
         self.assertIn(b"Risk %: 1.0", request.data)
 
     def test_errors_typed(self):
@@ -224,7 +229,7 @@ class TestSlackChannel(NoNetwork):
         for error, code in cases:
             with self.subTest(code=code), mock.patch("runtime.notifications.urlopen", side_effect=error), \
                     self.assertRaises(AlertChannelError) as ctx:
-                SlackAlertChannel(webhook_url="https://hooks.slack.invalid/secret", environ={}).send(trade_event())
+                SlackAlertChannel(webhook_url="https://hooks.slack.com/services/T0/B0/secret", environ={}).send(trade_event())
             self.assertEqual(ctx.exception.code, code)
             self.assertNotIn("secret", str(ctx.exception))
         with mock.patch("runtime.notifications.urlopen") as urlopen, self.assertRaises(AlertChannelError) as ctx:
@@ -245,7 +250,7 @@ class TestDispatcher(NoNetwork):
         self.assertEqual(channel.sent, [])
         with mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl, \
                 mock.patch("runtime.notifications.urlopen") as urlopen:
-            env = {"GMAIL_APP_PASSWORD": "pw", "SLACK_WEBHOOK_URL": "https://hooks.slack.invalid/x"}
+            env = {"GMAIL_APP_PASSWORD": "pw", "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T0/B0/x"}
             self.assertEqual(dispatcher_from_env(environ=env).dispatch(trade_event()), {"_": "DISABLED"})
         smtp_ssl.assert_not_called()
         urlopen.assert_not_called()
@@ -259,7 +264,8 @@ class TestDispatcher(NoNetwork):
 
     def test_enabled_from_env_sends_both_channels_mocked(self):
         env = {"AI_FLOOR_ALERTS_ENABLED": "1", "GMAIL_APP_PASSWORD": "pw",
-               "SLACK_WEBHOOK_URL": "https://hooks.slack.invalid/x"}
+               "AI_FLOOR_ALERT_EMAIL_FROM": "a@example.invalid", "AI_FLOOR_ALERT_EMAIL_TO": "b@example.invalid",
+               "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T0/B0/x"}
         with mock.patch.object(smtplib, "SMTP_SSL") as smtp_ssl, \
                 mock.patch("runtime.notifications.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value = mock.MagicMock(status=200)
@@ -408,8 +414,8 @@ class TestTradingIsolation(NoNetwork):
                     RecordingChannel("b", failures=[AlertChannelError("AUTH_ERROR")]))
         with mock.patch.object(smtplib, "SMTP_SSL", side_effect=OSError("down")), \
                 mock.patch("runtime.notifications.urlopen", side_effect=URLError("down")):
-            email_slack = (GmailEmailChannel(password="pw", environ={}),
-                           SlackAlertChannel(webhook_url="https://hooks.slack.invalid/x", environ={}))
+            email_slack = (GmailEmailChannel(password="pw", sender="a@example.invalid", recipient="b@example.invalid", environ={}),
+                           SlackAlertChannel(webhook_url="https://hooks.slack.com/services/T0/B0/x", environ={}))
             result = dispatcher(*channels, *email_slack).dispatch(event)
             AlertNotificationSink(dispatcher(*email_slack)).deliver(
                 NotificationEvent("1.0", "n-1", "run-1", AT, "INFO", "POSITION_OPENED", "TEST", (), (), None,
@@ -448,7 +454,7 @@ class TestSmtpCleanupAndClassification(NoNetwork):
     """Codex M1 (QUIT/close after a successful send never retries) and M2 (4xx temporary, 5xx permanent)."""
 
     def channel(self):
-        return GmailEmailChannel(password="pw", environ={})
+        return GmailEmailChannel(password="pw", sender="a@example.invalid", recipient="b@example.invalid", environ={})
 
     def test_m1_quit_failure_after_send_is_delivered_once_without_retry(self):
         for cleanup_error in (smtplib.SMTPServerDisconnected("gone"), TimeoutError(), OSError("reset")):
@@ -601,7 +607,7 @@ class TestChart(NoNetwork):
 
     def test_f09_t12_png_inline_cid_and_svg_fallback(self):
         event = alert_event("evt-g", "POSITION_OPENED", AT, closes=[1, 2])
-        channel = GmailEmailChannel(password="pw", environ={})
+        channel = GmailEmailChannel(password="pw", sender="a@example.invalid", recipient="b@example.invalid", environ={})
         with mock.patch.object(alert_channels, "chart_png", return_value=b"\x89PNG fake") as png:
             message = channel.message(event)
         png.assert_called_once_with((1.0, 2.0))

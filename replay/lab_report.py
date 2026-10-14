@@ -4,7 +4,6 @@ variant only; 4) full-12-month descriptive numbers. Gross only; no probabilities
 Usage: python -m replay.lab_report <lab_out_dir> [store.db]
 """
 import json
-import pickle
 import sys
 from collections import Counter
 from decimal import Decimal
@@ -13,6 +12,7 @@ from statistics import mean, median
 
 from replay.compare import MIN_OBSERVATIONS_PER_BAND, MIN_TRADES_PER_SYMBOL
 from replay.lab import DISCOVERY_END
+from replay.safe_pickle import load_lab_chunk
 
 ORDER = ("D1", "D2", "D3")
 ALL = ("D0",) + ORDER
@@ -119,7 +119,7 @@ def slot_counts(store_path):
 
 def main(out_dir, store_path=None):
     out = Path(out_dir)
-    chunks = [pickle.loads(p.read_bytes()) for p in sorted(out.glob("lab_*.pkl"))]
+    chunks = [load_lab_chunk(p) for p in sorted(out.glob("lab_*.pkl"))]
     records = [r for c in chunks for r in c["records"]]
     disc = [r for r in records if r["slot"] < DISCOVERY_END.to_pydatetime()]
     hold = [r for r in records if r["slot"] >= DISCOVERY_END.to_pydatetime()]

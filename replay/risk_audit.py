@@ -14,7 +14,6 @@ Usage: python -m replay.risk_audit <store.db> <p41a_lab_out> <out.json>
 """
 import heapq
 import json
-import pickle
 import sys
 from collections import Counter, defaultdict
 from decimal import Decimal
@@ -32,6 +31,7 @@ from execution.risk_engine_v2 import evaluate
 from replay.engine import load_frames
 from replay.fill_audit import FIVE, planned
 from replay.lab import DISCOVERY_END
+from replay.safe_pickle import load_lab_chunk
 from replay.store import open_replay_store, replay_engine
 from runtime.paper_contracts import paper_instruments
 
@@ -58,7 +58,7 @@ def exit_of(o, h, l, index, side, stop, target):
 class Cohort:
     def __init__(self, store_path, p41a_dir):
         self.records = sorted((r for f in sorted(Path(p41a_dir).glob("lab_*.pkl"))
-                               for r in pickle.loads(f.read_bytes())["records"] if "v1" in r),
+                               for r in load_lab_chunk(f)["records"] if "v1" in r),
                               key=lambda r: (pd.Timestamp(r["slot"]), r["symbol"]))
         store = open_replay_store(store_path, readonly=True)
         frames = {s: load_frames(replay_engine(store), s)["5m"] for s in ("XAUUSD", "EURUSD")}

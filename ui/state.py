@@ -7,7 +7,7 @@ from pathlib import Path
 from dataclasses import replace
 
 from ui.adapters import MARKETS, empty_market, from_persisted_snapshot
-from runtime.config import DEFAULT_ENABLED_SYMBOLS
+from runtime.config import BLOCKED_SYMBOLS, DEFAULT_ENABLED_SYMBOLS
 
 
 @contextmanager
@@ -42,7 +42,10 @@ def enabled_market_symbols():
         row = db.execute("SELECT value FROM system_state WHERE key='enabled_symbols'").fetchone()
         raw = row[0] if row else None
         enabled = tuple(json.loads(raw)) if raw else DEFAULT_ENABLED_SYMBOLS
-        return enabled if enabled and set(enabled) <= set(MARKETS) else DEFAULT_ENABLED_SYMBOLS
+        if not enabled or not set(enabled) <= set(MARKETS):
+            return DEFAULT_ENABLED_SYMBOLS
+        # Hard-blocked symbols (NAS100) are never shown as enabled, whatever the database says.
+        return tuple(symbol for symbol in enabled if symbol not in BLOCKED_SYMBOLS) or DEFAULT_ENABLED_SYMBOLS
 
 
 def current_market(st, symbol, sample_factory):

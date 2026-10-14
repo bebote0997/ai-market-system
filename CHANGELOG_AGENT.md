@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-10-13 — Security audit fixes (branch `v2/security-fixes`, draft PR)
+
+- Owner-assigned fix of the read-only security audit of `main@8b11da0` (M-1, L-1..L-7, I-1..I-5). No Render/env change, no activation, REAL execution stays OFF, NAS100 stays blocked.
+- M-1/L-1/L-3 `ui/auth.py`: bytes `hmac.compare_digest` (non-ASCII safe); per-session lockout (5 failures → 300 s) plus process-wide budget (20 failures/15 min → 900 s lockout); 1 s delay and a log line per failure without the input; session expiry (`AI_FLOOR_DASHBOARD_SESSION_TTL_SECONDS`, default 8 h); password ≥ 12 chars (UI gate, cloud preflight `dashboard_auth` and `runtime.cloud.serve`); no-password access only when Streamlit is bound to loopback. Cloud Streamlit starts with `--client.showErrorDetails=none`.
+- L-2: `ui/pages/` renamed to `ui/views/` so Streamlit no longer auto-routes unauthenticated page URLs.
+- L-4: direct deps pinned exactly (Streamlit 1.65.0); `requirements-ci.txt` (installed by CI and Render) is now a uv-compiled lock with sha256 hashes. I-4: GitHub Actions pinned to commit SHAs.
+- L-5: review export redaction list derived from `runtime/env.py:NAMES` (+ `GMAIL_APP_PASSWORD`, `EODHD_API_KEY`).
+- L-6: Twelve Data key sent as `Authorization: apikey …` header, never in the URL; undecodable bodies map to `INVALID_RESPONSE`.
+- L-7/I-3: Slack text escapes `& < >`; the real transport only opens `https://hooks.slack.com/` URLs (`INVALID_WEBHOOK_URL`, non-retryable).
+- I-1: no hardcoded alert email; `AI_FLOOR_ALERT_EMAIL_FROM`/`_TO` required, else `NOT_CONFIGURED` (`runtime.alert_test` prints missing setting names only).
+- I-2: `replay/safe_pickle.py` restricted unpickler for `lab_*.pkl` in fill_audit/risk_audit/lab_report.
+- I-5: dashboard never lists a blocked symbol (NAS100) as enabled.
+- Tests: new `test_security_hardening.py`; fixtures updated for the 12-char password, explicit email addresses and the `ui.views` rename.
+- Codex review MED: Streamlit's default `server.address` is unset, so the documented `streamlit run ui/app.py` hit the no-password loopback gate. Launch docs (`UI_SPEC.md`, `OPERATIONAL_RUNTIME_SPEC.md`, `ui/app.py`) and the gate message now use `--server.address=127.0.0.1`; `DocumentedLaunchTests` parses each documented command through Streamlit's own CLI/config and asserts the gate opens (bare launch still refused).
+
 ## 2026-10-11 — DEC-14.2: planner policy runtime flag
 
 - Owner Jeferson Tejeda approved 2026-10-11 11:33 ET; local feature branch only, no activation/Render/push/merge.

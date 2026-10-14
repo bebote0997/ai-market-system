@@ -51,7 +51,22 @@ class SlackNotificationError(RuntimeError):
     """Safe delivery error; never carries webhook URL or response body."""
 
 
+SLACK_WEBHOOK_PREFIX = "https://hooks.slack.com/"
+
+
+def valid_slack_webhook(url):
+    """Only HTTPS Slack incoming-webhook URLs are ever opened (no file://, http:// or other hosts)."""
+    return isinstance(url, str) and url.startswith(SLACK_WEBHOOK_PREFIX)
+
+
+def slack_escape(text):
+    """Escape Slack control characters so text cannot form mentions (<!channel>) or disguised links."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _slack_post(url, payload, timeout):
+    if not valid_slack_webhook(url):
+        raise SlackNotificationError("INVALID_WEBHOOK_URL")
     request = Request(url, data=json.dumps(payload).encode("utf-8"),
                       headers={"Content-Type": "application/json"}, method="POST")
     with urlopen(request, timeout=timeout) as response:
@@ -107,6 +122,8 @@ class SlackNotificationSink:
 
 def send_slack(transport, url, payload, timeout):
     """Post one Slack payload; failures surface only as typed SlackNotificationError codes."""
+    if isinstance(payload.get("text"), str):
+        payload = {**payload, "text": slack_escape(payload["text"])}
     try:
         transport(url, payload, timeout)
     except HTTPError as exc:

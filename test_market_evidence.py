@@ -228,7 +228,7 @@ class ClosedBarTests(EvidenceCase):
         values = [{"datetime": (T0 + i * timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"),
                    "open": "100", "high": "101", "low": "99", "close": "100.5"} for i in range(7)][::-1]
 
-        def transport(url, timeout):
+        def transport(url, key, timeout):
             interval = "15min" if "15min" in url else "5min" if "5min" in url else "1h"
             return {"status": "ok", "meta": {"symbol": "XAU/USD", "interval": interval}, "values": values}
         provider = TwelveDataMarketDataProvider(api_key="dummy", transport=transport, sleep=lambda _: None)

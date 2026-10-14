@@ -206,7 +206,7 @@ class Phase11ChaosTests(ChaosHarness):
         before = self.state(runner)
         ledger = AlertDeliveryLedger(Path(self.path.parent) / "alerts.db")
         self.addCleanup(ledger.close)
-        channel = GmailEmailChannel(password="synthetic", smtp_factory=lambda *a, **k: (_ for _ in ()).throw(
+        channel = GmailEmailChannel(password="synthetic", sender="a@example.invalid", recipient="b@example.invalid", smtp_factory=lambda *a, **k: (_ for _ in ()).throw(
             OSError("SMTP offline")))
         dispatcher = AlertDispatcher([channel], enabled=True, ledger=ledger, sleep=lambda _: None,
                                      clock=lambda: T.isoformat(), max_attempts=1)

@@ -18,7 +18,7 @@ from runtime.demo_runner import REAL_EXECUTION_ENABLED, preflight
 from storage.database import SCHEMA_VERSION, Store
 
 ENV = {"AI_FLOOR_INSTANCE_COUNT": "1", "OPENAI_API_KEY": "present", "TWELVE_DATA_API_KEY": "present",
-       "SLACK_WEBHOOK_URL": "present", "AI_FLOOR_DASHBOARD_PASSWORD": "present"}
+       "SLACK_WEBHOOK_URL": "present", "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-dashboard-pw"}
 
 
 class TradingDbPreflightTests(unittest.TestCase):
