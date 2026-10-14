@@ -101,7 +101,7 @@ class StoreCase(unittest.TestCase):
         for symbol in ("XAUUSD", "EURUSD"):
             self.store.claim_slot(f"k-{symbol}", symbol, T, T, run_id=f"r-{symbol}")
         self.gate = HaltGate()
-        self.gate.request(15)
+        self.gate.request(2)
 
     def rows(self, sql):
         return self.store.db.execute(sql).fetchall()
@@ -192,6 +192,46 @@ class StartupTests(StoreCase):
                     self.assertRaises(HaltPending):
                 OperationalRuntime(self.config())
         self.assertEqual(self.digest(), before)  # no recovery, no write: no automatic resume
+
+
+
+
+class CleanShutdownTests(StoreCase):
+    def config(self):
+        return RuntimeConfig(db_path=self.db, v2_rex=True, v2_rhalt=True)
+
+    def test_sigterm_bookkeeping_releases_lock_and_restart_needs_no_token(self):
+        import signal
+        gate = HaltGate()
+        gate.request(signal.SIGTERM)
+        halt_bookkeeping(self.store, gate, run_id='r-XAUUSD', slot_key='k-XAUUSD', symbol='XAUUSD')
+        self.assertEqual(self.rows("SELECT event_type FROM journal WHERE source='halt'")[0][0], 'CLEAN_SHUTDOWN')
+        self.assertEqual(self.rows("SELECT symbol FROM symbol_locks")[0][0], 'EURUSD')
+        self.assertIsNone(startup_halt_check(self.config(), {}))
+        with self.assertRaises(HaltRefused):
+            gate.admit('submit')
+
+    def test_clean_shutdown_does_not_clear_previous_safety_halt(self):
+        import signal
+        safety_id = halt_bookkeeping(self.store, self.gate)
+        gate = HaltGate()
+        gate.request(signal.SIGTERM)
+        clean_id = halt_bookkeeping(self.store, gate)
+        for token in (None, str(clean_id)):
+            with self.assertRaises(HaltPending):
+                startup_halt_check(self.config(), {} if token is None else {RESUME_ENV: token})
+        self.assertEqual(startup_halt_check(self.config(), {RESUME_ENV: str(safety_id)}), safety_id)
+
+    def test_all_other_causes_keep_the_persistent_barrier(self):
+        import signal
+        for cause in (None, signal.SIGINT, 999):
+            gate = HaltGate()
+            gate.request(cause)
+            journal_id = halt_bookkeeping(self.store, gate)
+            self.assertEqual(gate.journal_event, 'HALT_OBSERVED')
+            with self.assertRaises(HaltPending):
+                startup_halt_check(self.config(), {})
+            self.assertEqual(startup_halt_check(self.config(), {RESUME_ENV: str(journal_id)}), journal_id)
 
 
 if __name__ == "__main__":

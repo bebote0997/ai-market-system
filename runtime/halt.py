@@ -35,6 +35,9 @@ D-1 (Owner, 2026-10-09): the H transaction also deletes the ``symbol_locks`` row
 If the transaction fails, nothing is committed and the halt is NOT confirmed (``HALT_UNCONFIRMED``): the run stays
 RUNNING and is recovered only by the next authorized start.
 
+SIGTERM records CLEAN_SHUTDOWN with the same admission/bookkeeping guarantees and does not block startup.
+Other causes remain persistent safety halts. A clean shutdown never clears an earlier safety halt.
+
 Persistent halt and no automatic resume: the committed ``HALT_OBSERVED`` row is the persistent state.
 ``startup_halt_check`` (read-only, before any write, including ``recover()``) refuses to start while the latest
 ``HALT_OBSERVED`` journal id is not exactly the value of ``AI_FLOOR_V2_RHALT_RESUME``. A resume writes nothing (I-R1d);
@@ -47,6 +50,7 @@ import json
 import logging
 from pathlib import Path
 import sqlite3
+import signal
 import time
 import uuid
 
@@ -54,6 +58,7 @@ LOG = logging.getLogger("ai_floor.halt")
 RESUME_ENV = "AI_FLOOR_V2_RHALT_RESUME"
 HALT_SOURCE = "halt"
 HALT_EVENT = "HALT_OBSERVED"
+CLEAN_SHUTDOWN_EVENT = "CLEAN_SHUTDOWN"
 HALT_VERSION = "V2_P4A_RHALT/1"
 ALLOWED_AFTER_HALT = frozenset({"H", "P", "R"})
 CATEGORIES = {"E": "economic", "D": "decision records", "O": "observability", "L": "run lifecycle",
@@ -122,7 +127,7 @@ class HaltGate:
         self.admissions = []
         self.current = None
         self.refused = []
-        self.recorded_journal_id = None  # HALT_OBSERVED of this process, once committed
+        self.recorded_journal_id = None  # halt/shutdown journal row of this process, once committed
         self.active_run = None  # the run in flight (set after its claim, cleared when it returns)
         self.startup_depth = 0  # > 0 inside a startup check + write section (MEDIUM-1)
         self.deferred_signal = None  # a halt requested inside such a section, applied when the section ends
@@ -161,6 +166,11 @@ class HaltGate:
     @property
     def halted(self):
         return self.requested_at is not None
+
+    @property
+    def journal_event(self):
+        """Only normal SIGTERM is restartable; all other requests remain safety halts."""
+        return CLEAN_SHUTDOWN_EVENT if self.requested_at[2] == signal.SIGTERM else HALT_EVENT
 
     # -- admission (Alternative 1) ------------------------------------------------------------------------------------
     def admit(self, kind):
@@ -259,7 +269,7 @@ def startup_write(gate, site):
 
 def halt_bookkeeping(store, gate, *, run_id=None, slot_key=None, symbol=None, refused_kind=None, refused_stage=None):
     """The H transaction (one ``BEGIN IMMEDIATE``): the halted run's status fields, the release of THAT run's symbol
-    lock (D-1) and one HALT_OBSERVED row; or, with no run in flight, the HALT_OBSERVED row alone. Returns the journal
+    lock (D-1) and one HALT_OBSERVED or CLEAN_SHUTDOWN row; without a run, the journal row alone. Returns the journal
     id. Any failure rolls the whole transaction back and propagates (the halt is then NOT confirmed)."""
     payload = gate.halt_payload(refused_kind=refused_kind, refused_stage=refused_stage, run_id=run_id,
                                 slot_key=slot_key, symbol=symbol)
@@ -277,7 +287,7 @@ def halt_bookkeeping(store, gate, *, run_id=None, slot_key=None, symbol=None, re
         else:
             payload["t_ack_ns"] = gate.now_ns()
             payload["symbol_lock_released"] = None
-        store._event(_utc_now(), run_id, symbol, HALT_SOURCE, HALT_EVENT, "WARNING", payload)
+        store._event(_utc_now(), run_id, symbol, HALT_SOURCE, gate.journal_event, "WARNING", payload)
         journal_id = store.db.execute("SELECT last_insert_rowid()").fetchone()[0]
     gate.recorded_journal_id = journal_id
     return journal_id

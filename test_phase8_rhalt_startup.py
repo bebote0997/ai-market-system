@@ -98,7 +98,7 @@ class Traced(unittest.TestCase):
 
         def wrapper(*args, **kwargs):
             result = real(*args, **kwargs)
-            gate.request(15)
+            gate.request(2)
             return result
         return patch.object(owner, name, wrapper)
 
@@ -109,7 +109,7 @@ class Traced(unittest.TestCase):
 
 class StartupBarrierTests(Traced):
     def test_halt_before_the_constructor_on_a_new_database(self):
-        self.gate.request(15)
+        self.gate.request(2)
         with self.assertRaises(HaltRefused):
             self.start()
         self.assert_stopped("store_open")
@@ -118,7 +118,7 @@ class StartupBarrierTests(Traced):
     def test_halt_before_the_constructor_on_an_existing_database(self):
         self.existing()
         before = self.db.read_bytes()
-        self.gate.request(15)
+        self.gate.request(2)
         with self.assertRaises(HaltRefused):
             self.start()
         self.assert_stopped("store_open")
@@ -167,7 +167,7 @@ class StartupBarrierTests(Traced):
         gate = self.gate
 
         def wrapper(*args, **kwargs):
-            gate.request(15)
+            gate.request(2)
             return real(*args, **kwargs)
         return patch.object(owner, name, wrapper)
 
@@ -337,7 +337,7 @@ class RestrictedEvidenceTests(unittest.TestCase):
         admitted = gate.admit("pending_fill")
         gate.pre_save(admitted)
         late = gate.admit("submit")  # admitted, but its read 2 never happened before T_h
-        gate.request(15)
+        gate.request(2)
         return gate, admitted, late
 
     def test_only_the_halted_runs_evidence_of_this_process(self):

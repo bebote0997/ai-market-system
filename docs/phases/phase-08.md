@@ -34,3 +34,11 @@
 PARTIAL aceptados: T11 (una exposición por símbolo por diseño, DEC-6.3/6.4; multi-símbolo cubierto); T16 (reinicio real de servicio se prueba en Fase 11, F11-T11/T12).
 
 Detalle técnico: `docs/archive/V2_PHASE8_EXECUTION.md`, `docs/archive/V2_PHASE8_P86_DESIGN.md`, `docs/archive/V2_PHASE8_P86_HANDOFF.md`, `docs/archive/V2_PHASE8_CERTIFICATION_CHECKLIST.md`.
+
+## Fix local autorizado — SIGTERM (2026-10-13)
+
+SIGTERM usa `CLEAN_SHUTDOWN`; admisión/read2, residual, transacción H y release del lock conservados.
+REX verifica también el shutdown. El barrier de startup sigue consultando solo `HALT_OBSERVED`;
+ningún shutdown elimina un halt previo ni acepta su ID como token de resume. Tests con señales reales,
+otras causas, rollback/restart y residual. EURUSD: gap a open tras stop a entrada caracterizado;
+trade histórico NO_DATA, sin cambios de ejecución/economía. No cambia certificación ni activa runtime.

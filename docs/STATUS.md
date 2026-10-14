@@ -139,3 +139,14 @@ Fase 13 sigue NOT STARTED; REAL OFF, NAS100 bloqueado, sin deploy ni merge del P
 Validación del merge: `TMPDIR=/tmp /workspace/venv/bin/python -m pytest -q` →
 1721 passed, 2 skipped, 1 xfailed, 1181 subtests passed (222.50 s).
 `git diff --check` PASS; conflictos resueltos. Ruff no instalado en el entorno.
+
+## Halt/shutdown + dashboard fixes locales (2026-10-13)
+
+Owner autoriza implementación y commits en `v2/halt-shutdown-dashboard-fixes`, sin push/merge/deploy.
+SIGTERM registra `CLEAN_SHUTDOWN` con las mismas barreras de escritura y bookkeeping atómico;
+otras causas conservan `HALT_OBSERVED` y el token exacto. Un shutdown no borra halts de seguridad previos.
+Dashboard: razón de cierre, R neto desde riesgo original persistido, MTM de posiciones y evidencia AI
+por identidad exacta; gráficos Setups desde caché ya existente, y márgenes del eje Overview corregidos.
+Legacy conservado tras inspección; trade EURUSD exacto NO_DATA, comportamiento gap caracterizado sin
+cambiar economía. Hallazgos en `/tmp/legacy_findings.md` y `/tmp/eurusd_findings.md`.
+Sin cambio de certificación/activación; Fase 13 sigue NOT STARTED. Validación en CHANGELOG_AGENT.md.

@@ -369,7 +369,7 @@ class Checks(unittest.TestCase):
             self.assertEqual(out["recorded_journal_id"], None)  # outside any run: recorded by DemoRunner.close
         if name not in ("f", "g"):
             self.assertEqual(self.sql(db, "SELECT count(*) FROM symbol_locks"), [(0,)])  # D-1
-            self.assertEqual(self.sql(db, "SELECT count(*) FROM journal WHERE event_type='HALT_OBSERVED'"), [(1,)])
+            self.assertEqual(self.sql(db, "SELECT count(*) FROM journal WHERE event_type IN ('HALT_OBSERVED','CLEAN_SHUTDOWN')"), [(1,)])
 
 
 # name -> (scenario, (event, kind, nth))

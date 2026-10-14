@@ -121,3 +121,15 @@ No cambia certificación ni activa runtime; sin deploy ni merge del PR.
 Validación del merge: `TMPDIR=/tmp /workspace/venv/bin/python -m pytest -q` →
 1721 passed, 2 skipped, 1 xfailed, 1181 subtests passed (222.50 s).
 `git diff --check` PASS; conflictos resueltos. Ruff no instalado en el entorno.
+
+## Fix local autorizado — datos luxury (2026-10-13)
+
+Trades muestra reason y realized_r. R neto usa la posición persistida por ID, initial_stop si existe,
+entry_price, quantity y contract_multiplier; sin denominador comprobable sigue ausente.
+Avg R conserva población completa y streaming con join por PK; páginas limitadas a 200.
+Open positions muestra quantity y MTM desde last_price persistido. Decisions usa campos existentes y
+fallback del snapshot del mismo run/agente, sin sobrescribir valores disponibles; joins de padres acotados.
+Overview reserva margen y automargin para labels. Setups ya usa ui/candle_cache.py (48 cierres 5m
+anteriores al setup, solo lectura); regresión render confirma caché sin OHLC inventado.
+Legacy no eliminado: funciones distintas/documentadas en /tmp/legacy_findings.md.
+No cambia certificación/activación; sin push/merge/deploy.

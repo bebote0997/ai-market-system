@@ -1868,3 +1868,29 @@ REAL OFF, NAS100 bloqueado; sin activación, deploy ni merge del PR.
 Validación del merge: `TMPDIR=/tmp /workspace/venv/bin/python -m pytest -q` →
 1721 passed, 2 skipped, 1 xfailed, 1181 subtests passed (222.50 s).
 `git diff --check` PASS; conflictos resueltos. Ruff no instalado en el entorno.
+
+## 2026-10-13 — owner-authorized halt/shutdown and dashboard fixes
+
+Branch: v2/halt-shutdown-dashboard-fixes. Scope: normal SIGTERM -> CLEAN_SHUTDOWN; all other causes
+retain exact-token safety barrier. Atomic bookkeeping, economic write gates, residual REX verification
+and startup fail-closed behavior preserved. Existing safety fixtures now inject SIGINT; new real SIGTERM
+restart tests require no token and show that CLEAN_SHUTDOWN cannot clear a prior safety halt.
+
+Luxury: close reason and realized R from exact persisted position/original stop; full-ledger Avg R via
+streamed indexed join, bounded trade rows, open-position MTM from stored marks; exact-run snapshot
+fallback for missing agent fields and batched parent lookup. Overview axis margins fixed. Setups cache
+path already implemented: added read-only bounded render regression. Legacy views retained following
+inspection. EURUSD historical trade absent; tests characterize adverse bar-open gap after moving the
+stop to entry, intrabar stop at entry and one cost charge; no economic execution change.
+
+Baseline: prescribed unittest suite ran 1729 tests (2 skipped, 1 expected failure), one preexisting failure
+from ignored ui/pages/__pycache__ only. Moved stale directory to /tmp/halt-dashboard-stale-pages-cache;
+no source page removed. Interpreter: /workspace/venv/bin/python (python absent from initial PATH).
+Final validation: python -m pytest -q via PATH=/workspace/venv/bin:$PATH, offline deterministic
+providers and PYTHONDONTWRITEBYTECODE=1: 1736 passed, 2 skipped, 1 xfailed, 1197 subtests passed
+(211.83 s). Prior full run also green (215.31 s). Focused UI/startup: 46 passed, 16 subtests;
+final luxury labels: 26 passed, 7 subtests. git diff --check PASS; Ruff unavailable.
+No dependencies/env/Render/AI_FLOOR_GIT_COMMIT/freeze checks changed.
+
+Commit attempt after green validation blocked by environment: .git is read-only; git add and git commit
+cannot create .git/index.lock. No files staged, no commit/push/merge/deploy performed.

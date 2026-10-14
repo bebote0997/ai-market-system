@@ -152,7 +152,7 @@ def analyze(conn, store, *, account_id="paper-main", edg_start=None, since_journ
             continue
         journal_index.append((journal_id, source, event_type, run_id))
         genesis_rows.append((journal_id, source, event_type, run_id, payload))
-        if source == "halt" and event_type == "HALT_OBSERVED":
+        if source == "halt" and event_type in {"HALT_OBSERVED", "CLEAN_SHUTDOWN"}:
             halts.append((journal_id, payload))
             continue
         if source == "rex":
