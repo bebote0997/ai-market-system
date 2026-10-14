@@ -412,7 +412,7 @@ class StoredDashboardEvidenceTests(unittest.TestCase):
         with sqlite3.connect(self.path) as db:
             db.execute('INSERT INTO paper_positions VALUES(?,?)', ('old-position', json.dumps({
                 'position_id': 'old-position', 'entry_price': 100, 'stop': 100, 'initial_stop': 99,
-                'quantity': 1, 'contract_multiplier': 1, 'status': 'CLOSED'})))
+                'quantity': 2, 'contract_multiplier': 1, 'status': 'CLOSED'})))
             opened = json.loads(db.execute("SELECT payload FROM paper_positions WHERE position_id='open'").fetchone()[0])
             opened.update(last_price=102, contract_multiplier=1)
             db.execute("UPDATE paper_positions SET payload=? WHERE position_id='open'", (json.dumps(opened),))
@@ -439,10 +439,15 @@ class StoredDashboardEvidenceTests(unittest.TestCase):
 
     def test_r_missing_identity_multiplier_or_zero_risk_is_explicit(self):
         trade = {'position_id': 'p', 'net_pnl': -1}
-        position = {'position_id': 'p', 'entry_price': 100, 'stop': 99, 'quantity': 1, 'contract_multiplier': 2}
+        position = {'position_id': 'p', 'entry_price': 100, 'initial_stop': 99, 'stop': 100,
+                    'quantity': 1, 'contract_multiplier': 2}
         self.assertEqual(luxury.realized_r(trade, position), -0.5)
-        for changed in ({'position_id': 'other'}, {'contract_multiplier': None}, {'stop': 100}, {'quantity': 0}):
+        for changed in ({'position_id': 'other'}, {'contract_multiplier': None}, {'initial_stop': None},
+                        {'initial_stop': 100}, {'quantity': 0}):
             self.assertIsNone(luxury.realized_r(trade, {**position, **changed}))
+        self.assertIsNone(luxury.realized_r(trade, {k: v for k, v in position.items() if k != 'initial_stop'}))
+        self.assertEqual(luxury.realized_r({**trade, 'quantity': 0.5}, position), -1)
+        self.assertIsNone(luxury.realized_r({**trade, 'quantity': None}, position))
         self.assertEqual(luxury.realized_r({**trade, 'realized_r': 0.25}, {}), 0.25)
 
     def test_decisions_use_exact_run_snapshot_and_prefer_existing_agent_fields(self):

@@ -159,9 +159,14 @@ class HaltGate:
     def request(self, signum=None, frame=None):  # noqa: ARG002 - signal handler signature
         if self.requested_at is None:
             if self.startup_depth:  # inside a startup check + write: T_h is set when that write has completed
-                self.deferred_signal = 0 if signum is None else signum
+                if self.deferred_signal is None or self.deferred_signal == signal.SIGTERM:
+                    self.deferred_signal = 0 if signum is None else signum
             else:  # reads the gate clock, never writes it (it may have interrupted ``now_ns``)
                 self.requested_at = (max(time.monotonic_ns(), self._last_ns + 1), _utc_now(), signum)
+        elif (self.recorded_journal_id is None and self.requested_at[2] == signal.SIGTERM
+              and signum != signal.SIGTERM):
+            # Escalate without moving the original write barrier T_h.
+            self.requested_at = (self.requested_at[0], self.requested_at[1], signum)
 
     @property
     def halted(self):

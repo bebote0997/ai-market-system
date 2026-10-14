@@ -1894,3 +1894,18 @@ No dependencies/env/Render/AI_FLOOR_GIT_COMMIT/freeze checks changed.
 
 Commit attempt after green validation blocked by environment: .git is read-only; git add and git commit
 cannot create .git/index.lock. No files staged, no commit/push/merge/deploy performed.
+
+## 2026-10-13 — review fixes: signal priority and original trade risk
+
+Owner-authorized corrections on the current branch: deferred startup requests retain safety priority;
+non-SIGTERM requests upgrade pending SIGTERM before bookkeeping is recorded, preserving the original
+T_h. Later SIGTERM cannot downgrade a safety request. Regression tests cover both signal orders inside
+startup_write and before bookkeeping, plus immutable committed shutdown classification.
+Luxury realized R requires persisted initial_stop and uses the trade's stored quantity, including the
+streamed full-ledger calculation; missing original risk remains NO_DATA. Tests cover moved/missing
+stops, trade/position quantity differences and invalid stored quantities.
+Baseline: prescribed unittest suite PASS, 1739 tests (2 skipped, 1 expected failure).
+Final validation: `/workspace/venv/bin/python -m pytest -q` PASS: 1739 passed, 2 skipped,
+1 xfailed, 1201 subtests passed in 215.78 s. Focused gate/dashboard suite: 45 passed,
+18 subtests passed. `git diff --check` PASS.
+No staging/commit/push/deploy or AI_FLOOR_GIT_COMMIT/freeze changes.

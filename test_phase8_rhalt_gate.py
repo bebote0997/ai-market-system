@@ -39,7 +39,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual([r["stage"] for r in gate.refused], ["read2", "admission"])
 
     def test_handler_is_one_assignment_without_io(self):
-        """I-R11 / NR21: no I/O, lock, transaction or exception; a second signal keeps the first T_h."""
+        """I-R11 / NR21: no I/O, lock, transaction or exception; escalation keeps the first T_h."""
         def calls(function):
             source = inspect.getsource(function)
             return {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(ast.parse(source.strip()))
@@ -52,7 +52,8 @@ class GateTests(unittest.TestCase):
             gate.request(15)
             first = gate.requested_at
             gate.request(2)
-        self.assertIs(gate.requested_at, first)
+        self.assertEqual(gate.requested_at[:2], first[:2])
+        self.assertEqual(gate.requested_at[2], 2)
 
     def test_allowlist(self):
         gate = HaltGate()
@@ -199,6 +200,43 @@ class StartupTests(StoreCase):
 class CleanShutdownTests(StoreCase):
     def config(self):
         return RuntimeConfig(db_path=self.db, v2_rex=True, v2_rhalt=True)
+
+    def test_mixed_signals_inside_startup_write_are_safety_halts(self):
+        import signal
+        for signals in ((signal.SIGINT, signal.SIGTERM), (signal.SIGTERM, signal.SIGINT)):
+            with self.subTest(signals=signals):
+                gate = HaltGate()
+                with halt.startup_write(gate, 'test'):
+                    for signum in signals:
+                        gate.request(signum)
+                    self.assertFalse(gate.halted)
+                    self.assertEqual(gate.deferred_signal, signal.SIGINT)
+                journal_id = halt_bookkeeping(self.store, gate)
+                row = self.store.db.execute('SELECT event_type, payload FROM journal WHERE id=?', (journal_id,)).fetchone()
+                self.assertEqual(row[0], 'HALT_OBSERVED')
+                self.assertEqual(json.loads(row[1])['signal'], signal.SIGINT)
+
+    def test_mixed_signals_before_bookkeeping_keep_barrier_and_safety_priority(self):
+        import signal
+        for signals in ((signal.SIGINT, signal.SIGTERM), (signal.SIGTERM, signal.SIGINT)):
+            with self.subTest(signals=signals):
+                gate = HaltGate()
+                gate.request(signals[0])
+                first = gate.requested_at
+                gate.request(signals[1])
+                self.assertEqual(gate.requested_at[:2], first[:2])
+                journal_id = halt_bookkeeping(self.store, gate)
+                row = self.store.db.execute('SELECT event_type, payload FROM journal WHERE id=?', (journal_id,)).fetchone()
+                self.assertEqual(row[0], 'HALT_OBSERVED')
+                self.assertEqual(json.loads(row[1])['signal'], signal.SIGINT)
+
+    def test_committed_shutdown_is_not_reclassified(self):
+        import signal
+        gate = HaltGate()
+        gate.request(signal.SIGTERM)
+        halt_bookkeeping(self.store, gate)
+        gate.request(signal.SIGINT)
+        self.assertEqual(gate.journal_event, 'CLEAN_SHUTDOWN')
 
     def test_sigterm_bookkeeping_releases_lock_and_restart_needs_no_token(self):
         import signal

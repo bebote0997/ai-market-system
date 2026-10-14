@@ -84,9 +84,7 @@ def realized_r(trade, position):
     if not position or trade.get('position_id') != position.get('position_id'):
         return None
     stop = position.get('initial_stop')
-    if stop is None:
-        stop = position.get('stop')
-    entry, quantity, multiplier, pnl = (position.get('entry_price'), position.get('quantity'),
+    entry, quantity, multiplier, pnl = (position.get('entry_price'), trade.get('quantity', position.get('quantity')),
                                       position.get('contract_multiplier'), trade.get('net_pnl'))
     if not all(number(v) for v in (entry, stop, quantity, multiplier, pnl)):
         return None
@@ -154,17 +152,20 @@ def ledger_statistics(db, now):
     position = ','.join(f"json_extract(p.payload,'$.{key}')" for key in fields) if has_positions else ','.join('NULL' for _ in fields)
     join = " LEFT JOIN paper_positions p ON p.position_id=json_extract(t.payload,'$.position_id')" if has_positions else ""
     cursor = db.execute("SELECT json_extract(t.payload,'$.net_pnl'),json_extract(t.payload,'$.exited_at'),"
-                        "json_extract(t.payload,'$.realized_r')," + position + " FROM closed_trades t" + join +
+                        "json_extract(t.payload,'$.realized_r'),json_extract(t.payload,'$.quantity'),"
+                        "json_type(t.payload,'$.quantity')," + position + " FROM closed_trades t" + join +
                         " ORDER BY julianday(json_extract(t.payload,'$.exited_at')),t.rowid")
     count = wins = 0
     total = peak = drawdown = today_pnl = sum_r = 0.0
     known_r = valid = True
     today = now.astimezone(ZoneInfo('America/New_York')).date()
     curve = deque(maxlen=ROW_LIMIT)
-    for pnl, stamp, stored_r, *position_values in cursor:
+    for pnl, stamp, stored_r, trade_quantity, quantity_type, *position_values in cursor:
         position = dict(zip(fields, position_values))
-        r_value = realized_r({'net_pnl': pnl, 'realized_r': stored_r,
-                              'position_id': position.get('position_id')}, position)
+        trade = {'net_pnl': pnl, 'realized_r': stored_r, 'position_id': position.get('position_id')}
+        if quantity_type is not None:
+            trade['quantity'] = trade_quantity
+        r_value = realized_r(trade, position)
         count += 1
         if not number(pnl) or not stamp:
             valid = False

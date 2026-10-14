@@ -145,6 +145,14 @@ Validación del merge: `TMPDIR=/tmp /workspace/venv/bin/python -m pytest -q` →
 Owner autoriza implementación y commits en `v2/halt-shutdown-dashboard-fixes`, sin push/merge/deploy.
 SIGTERM registra `CLEAN_SHUTDOWN` con las mismas barreras de escritura y bookkeeping atómico;
 otras causas conservan `HALT_OBSERVED` y el token exacto. Un shutdown no borra halts de seguridad previos.
+Review fix: SIGTERM es un cierre limpio (`CLEAN_SHUTDOWN`); las señales no-SIGTERM son halts
+de seguridad (`HALT_OBSERVED`). En startup y antes de comprometer bookkeeping, la causa de
+seguridad tiene prioridad independientemente del orden de señales: SIGTERM nunca la degrada,
+y una señal no-SIGTERM eleva un SIGTERM pendiente sin cambiar la barrera temporal original.
+R realizado requiere `initial_stop` persistido (sin él, NO_DATA) y usa la cantidad propia del trade
+cuando está guardada. Correcciones locales sin commit/push/deploy ni cambios de freeze.
+Validación de review fixes: `/workspace/venv/bin/python -m pytest -q` → 1739 passed,
+2 skipped, 1 xfailed, 1201 subtests passed (215.78 s); `git diff --check` PASS.
 Dashboard: razón de cierre, R neto desde riesgo original persistido, MTM de posiciones y evidencia AI
 por identidad exacta; gráficos Setups desde caché ya existente, y márgenes del eje Overview corregidos.
 Legacy conservado tras inspección; trade EURUSD exacto NO_DATA, comportamiento gap caracterizado sin
