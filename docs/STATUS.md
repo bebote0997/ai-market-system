@@ -94,3 +94,11 @@ Review fixes PR #39 (2026-10-13): el catch-up de posiciones conserva `STALE_PAPE
 de cancelación; no permite fills ni nuevas órdenes en ese ciclo. Signal (UTC) usa `order.as_of`, con fallback
 exclusivo al review del run que envió la orden; nunca al run posterior que la cierra. Dos regresiones reproducen
 los hallazgos antes del fix. Validación final registrada en CHANGELOG_AGENT.md; Fase 13 sigue NOT STARTED.
+
+Owner-approved gold options 1 y 4 ONLY (2026-10-13, PR #39): caché macro conserva el snapshot anterior
+en la frontera de refresco de 6 h, elige una versión por event ID visible al slot y sella evidencia nueva
+al completar el fetch (sin lookahead). Auditoría ligera de cada ciclo reclamado en `<trading-db-stem>.cycles.db`
+junto al DB: gates existentes, estado por TF, setup/rechazo, reviews AI y motivo de ejecución; retención
+30 días y límite 10 000 registros, escritura best effort con timeout 100 ms. INFO a stdout en cloud_runner.
+Sin cambios de alineación, estrategia, riesgo, economía, flags ni Render. Fase 13 sigue NOT STARTED;
+validación en CHANGELOG_AGENT.md. Cambios locales; sin staging/commit/push, merge o deploy.

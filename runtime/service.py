@@ -799,8 +799,14 @@ class OperationalRuntime:
 
     def run_cycle(self, symbol, scheduled_at):
         rex_holder = []  # V2 P3: the run's REX recorder, created only after the claim (flag ON)
+        cycle_context = {}
         try:
-            returned = self._run_cycle(symbol, scheduled_at, rex_holder)
+            returned = self._run_cycle(symbol, scheduled_at, rex_holder, cycle_context)
+            if cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}:
+                def record_cycle():
+                    from runtime.cycle_records import record
+                    record(self.config.db_path, cycle_context, returned, paper_enabled=self.paper_enabled)
+                self._audit_safely(record_cycle, cycle_context["run_id"], symbol)
             if rex_holder and rex_holder[0] is not None:
                 try:
                     rex_holder[0].finish(returned)
@@ -811,7 +817,7 @@ class OperationalRuntime:
                 self.halt_gate.active_run = None  # V2 P4a: no run in flight any more (R evidence closes with it)
         return returned
 
-    def _run_cycle(self, symbol, scheduled_at, rex_holder):
+    def _run_cycle(self, symbol, scheduled_at, rex_holder, cycle_context):
         if symbol not in MARKETS:
             raise ValueError("unsupported operational symbol")
         if symbol not in self.config.enabled_symbols:
@@ -853,7 +859,9 @@ class OperationalRuntime:
                     "clock_sessions": None if session_clock is None else list(session_names(session_clock))})
                 self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "scheduler", "SESSION_SKIPPED"))
                 self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", "NO_DATA"))
+                cycle_context["session"] = "FAILED"
                 return "SESSION_SKIPPED"
+            cycle_context["session"] = "PASSED"
             if not set(session_names(slot)) & set(self.config.sessions):
                 self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "scheduler",
                                                             "DIAGNOSTIC_OUTSIDE_SESSION", "INFO"))
@@ -1236,3 +1244,11 @@ class OperationalRuntime:
             except HaltRefused as halt:  # T_h arrived while recording the failure: bookkeeping replaces it
                 return self._halt_run(key, run_id, symbol, halt, rex)
             return "ERROR"
+        finally:
+            # Scalar verdicts plus references to the already-built reports; no
+            # snapshots, candles or raw AI payloads enter the cycle database.
+            evidence = locals()
+            cycle_context.update({name: evidence[name] for name in (
+                "symbol", "slot", "run_id", "stage", "deterministic", "ai", "fresh", "data_state",
+                "execution_fresh", "execution_state", "session_open", "ai_healthy", "eligible",
+                "paper_blocked", "execution_status", "execution_reason") if name in evidence})

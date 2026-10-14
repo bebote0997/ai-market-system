@@ -1761,3 +1761,27 @@ Branch `v2/phase1-system-health` from `main` @ `2075e7f`. Test counts are Phase 
 - Final full offline unittest suite: 1644 tests OK (1 skipped, 1 expected failure), 205.346 s.
   `ruff check .` and `git diff --check`: PASS. PAPER only; no flags, dependencies, activation, merge or deploy.
   No staging, commit or push.
+
+## 2026-10-13 — PR #39: owner-approved gold options 1 and 4 ONLY (local)
+
+- FXMacroData keeps exactly the previous and current snapshots, selecting the newest event-ID vintage
+  fetched by the slot. Refreshed received_at/known_at/fetched_at use fetch completion, never slot backdating.
+  Cold starts still return NO_DATA for slots preceding the first fetch. Two snapshots are retained,
+  not an unbounded historical archive; provider-error behavior remains unchanged.
+- Lightweight cycle summaries in `<trading-db-stem>.cycles.db` beside the trading database: symbol/UTC slot,
+  run ID, existing setup/operational gate results, each TF's structure state, setup/rejection,
+  AI statuses (including NOT_REQUIRED/NOT_EVALUATED), execution reason and risk reason.
+  One short connection per claimed cycle, 100 ms SQLite lock timeout, 30-day global retention measured
+  from newest slot and hard cap 10 000 rows. No candles/raw prompts or review prose copied.
+  Duplicate slots keep their original record; observability errors only log, and R-HALT suppresses writes.
+  In-memory test databases have no persistent sidecar. This audit is best effort, not a certified ledger.
+- cloud_runner configures INFO logging to stdout, including existing-handler startup, for RUN_COMPLETED.
+- Baseline with system python3: missing existing streamlit/yfinance/plotly dependencies (8 errors).
+  Existing repo venv baseline: 1644 tests OK (1 skipped, 1 expected failure), 200.247 s; no installs.
+- Final offline unittest suite: 1657 tests OK (1 skipped, 1 expected failure), 205.739 s.
+  Focused suite: 21 tests OK. `ruff check .` and `git diff --check`: PASS. All three new macro regressions
+  fail against the original HEAD provider, then pass with the fix. Deterministic refresh, fetch-completion,
+  alignment, success/stale/error/session cycles, duplicate slots, pruning/restart, disk/lock failures,
+  halt and stdout logging tests added.
+- No timeframe-alignment or strategy/risk/economy changes, dependencies, trading-DB schema changes,
+  flags, Render, activation, merge or deploy. No staging, commit or push.
