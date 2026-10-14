@@ -25,6 +25,7 @@ def main():
         if args.once:
             from runtime.scheduler import slot_at
             print(runtime.run_cycle(args.once, slot_at(runtime.clock(), runtime.config.cadence_minutes)))
+            runtime.flush_evidence_observations()
             return
         scheduler = Scheduler(runtime, runtime.clock)
         try:

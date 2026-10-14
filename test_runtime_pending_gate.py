@@ -152,7 +152,7 @@ class WiringTests(GateCase):
             self.cycle(flag=False, overrides=MISMATCH)
         self.assertEqual(seen, [(T4, 101.0)])  # V1 path: the snapshot bar it was given, unchanged.
         self.assertEqual(self.journal("PENDING_NOT_EVALUATED"), [])
-        self.assertTrue(self.ev.exists())  # Phase 13: OFF observe-only evidence is written, never read (seen above).
+        self.assertFalse(self.ev.exists())  # Phase 13: OFF observe-only evidence is written after the cycle, never read.
 
     def test_7_order_as_of_protection(self):
         seed(self.db, as_of=T4)

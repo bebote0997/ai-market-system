@@ -2,11 +2,12 @@
 
 ## 2026-10-14 — Evidence Store observe-only con catch-up OFF (branch `v2/evidence-observe-only`)
 
-- `runtime/service.py`: con `AI_FLOOR_V2_POSITION_CATCH_UP=0` y `AI_FLOOR_MARKET_EVIDENCE_PATH` definido, cada ciclo guarda el snapshot de todos los símbolos habilitados en `market_evidence.db` reutilizando `_observe_evidence` (P1-B) con `journal=False`: sin filas de journal, conexión cerrada tras cada observación, fallo = WARNING en log + estado `evidence_observe`. Nunca se lee en OFF; ON sin cambios (fail-closed).
-- `runtime/config.py`: la lógica de `catch_up_evidence_contiguous` se extrae a `evidence_contiguity_report` / `newest_closed_5m` (mismo veredicto; reporte OFF del preflight sin cambios).
-- Nuevo CLI READ-ONLY `python -m replay.evidence_readiness` (ambas DB `mode=ro`): vela más reciente, velas faltantes desde el watermark de cada posición OPEN, anomalías GAP/LATE y READY/NOT_READY.
+- `runtime/service.py`: con `AI_FLOOR_V2_POSITION_CATCH_UP=0` y `AI_FLOOR_MARKET_EVIDENCE_PATH` definido, cada ciclo encola (el más reciente por símbolo) su snapshot y `Scheduler.tick` lo escribe en `market_evidence.db` con `flush_evidence_observations` DESPUÉS de todos los ciclos del tick (trading, salidas, alertas). Acotado: store de vida corta con timeouts SQLite de 0,5 s, todas las velas en una sola transacción (`EvidenceStore.batch`), presupuesto de 2 s (no empieza más velas; lo hecho se confirma) e interrupción SQLite 0,5 s después. Ninguna escritura en la DB de trading (sin journal ni estado `evidence_observe`): cualquier Exception (MemoryError incluida) = solo WARNING en log. Nunca se lee en OFF; ON y `_observe_evidence` (P1-B) sin cambios. (Revisión Codex 2026-10-14, MEDIUM 1.)
+- `storage/evidence_store.py`: `timeout` / `interrupt` opcionales en el constructor y `batch(expired)`; el store sigue sin leer reloj (predicados del llamador). Valores por defecto sin cambios.
+- `runtime/config.py`: sin cambios (`catch_up_scope_checks` corta en la primera vela faltante, como antes; revisión Codex, MEDIUM 2).
+- Nuevo CLI READ-ONLY `python -m replay.evidence_readiness` (ambas DB `mode=ro`, mismo criterio que el preflight): vela más reciente, velas faltantes desde el watermark de cada posición OPEN (conteo aritmético, máx. 50 listadas, consultas limitadas a la ventana), anomalías GAP/LATE (máx. 50) y READY/NOT_READY; una ventana > 14 días = NOT_READY sin enumerar.
 - Sesiones: fuera de LONDON/NEW_YORK no hay ciclo ni fetch; el snapshot (500 velas 5m) rellena la noche y el fin de semana en el primer ciclo en sesión. Riesgo: el check es estricto 24/7 (fin de semana / pausa diaria de XAUUSD dentro de la ventana de una posición = NOT_READY); no se debilita.
-- Tests: `test_evidence_observe_off.py` (12); `test_runtime_catch_up` / `test_runtime_pending_gate` actualizados (OFF con ruta ahora escribe evidencia, nunca la lee). REAL OFF, NAS100 bloqueado, sin Render ni push.
+- Tests: `test_evidence_observe_off.py` (24: diferido tras el tick, cola acotada, presupuesto, lock, MemoryError, halt, batch, CLI acotado); `test_runtime_catch_up` / `test_runtime_pending_gate` actualizados (OFF con ruta escribe evidencia solo en el flush, nunca la lee). REAL OFF, NAS100 bloqueado, sin Render ni push.
 
 ## 2026-10-14 — Fase 13 iniciada (docs-only)
 

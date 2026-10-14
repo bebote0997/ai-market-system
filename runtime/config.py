@@ -243,68 +243,6 @@ def persistent_write_probe(db, path):
     return schema() == before
 
 
-def newest_closed_5m(as_of):
-    """The start of the newest 5m bar closed at ``as_of`` (UTC)."""
-    from datetime import timedelta, timezone
-    as_of = as_of.astimezone(timezone.utc)
-    return as_of.replace(minute=as_of.minute - as_of.minute % 5, second=0, microsecond=0) - timedelta(minutes=5)
-
-
-def evidence_contiguity_report(trading_db, evidence_db, symbols, *, newest):
-    """READ-ONLY detail behind ``catch_up_evidence_contiguous`` (both databases opened ``mode=ro``; nothing is created).
-    Per symbol: the newest committed 5m bar, whether ``newest`` (the newest closed bar) is committed, for every OPEN
-    position its watermark (``last_processed_at`` or ``opened_at``) and the uncommitted 5m bars after it up to
-    ``newest``, the GAP / uncommitted LATE anomalies in that window, and ``ready`` (all of it clean). An absent trading
-    DB means no open positions; SQLite / parse errors propagate (callers fail closed)."""
-    import sqlite3
-    from datetime import timedelta
-    from storage.codec import parse_utc, utc
-    five = timedelta(minutes=5)
-    positions = {}
-    trading = Path(trading_db)
-    if trading.is_file():
-        db = sqlite3.connect(trading.resolve().as_uri() + "?mode=ro", uri=True)
-        try:
-            for (payload,) in db.execute("SELECT payload FROM paper_positions "
-                                         "WHERE json_extract(payload,'$.status')='OPEN'"):
-                data = json.loads(payload)
-                watermark = data.get("last_processed_at") or data.get("opened_at")
-                positions.setdefault(data.get("symbol"), []).append((data.get("position_id"), parse_utc(watermark)))
-        finally:
-            db.close()
-    report = {}
-    ev = sqlite3.connect(Path(evidence_db).resolve().as_uri() + "?mode=ro", uri=True)
-    try:
-        for symbol in symbols:
-            committed = {parse_utc(b) for (b,) in ev.execute(
-                "SELECT bar_start FROM market_evidence WHERE symbol=? AND timeframe='5m'", (symbol,))}
-            anomalies = [(kind, parse_utc(b)) for kind, b in ev.execute(
-                "SELECT kind, bar_start FROM evidence_anomalies WHERE symbol=? AND timeframe='5m' "
-                "AND kind IN ('GAP','LATE')", (symbol,))]
-            entry = {"newest_closed": utc(newest), "newest_committed": utc(max(committed)) if committed else None,
-                     "newest_present": newest in committed, "positions": []}
-            ready = entry["newest_present"]  # a trailing gap / stale / empty evidence is never ready
-            for position_id, watermark in positions.get(symbol, []):
-                start = watermark.replace(second=0, microsecond=0)
-                start = start.replace(minute=start.minute - start.minute % 5)
-                stamp = start + five if start <= watermark else start
-                missing = []
-                while stamp <= newest:
-                    if stamp not in committed:
-                        missing.append(utc(stamp))
-                    stamp += five
-                blocking = sorted((kind, utc(bar_start)) for kind, bar_start in anomalies
-                                  if watermark < bar_start <= newest and (kind == "GAP" or bar_start not in committed))
-                entry["positions"].append({"position_id": position_id, "watermark": utc(watermark),
-                                           "missing": missing, "anomalies": blocking})
-                ready = ready and not missing and not blocking
-            entry["ready"] = ready
-            report[symbol] = entry
-    finally:
-        ev.close()
-    return report
-
-
 def catch_up_scope_checks(config, *, as_of=None):
     """V2 Phase 8 / P1-B (DEC-8.14 / 8.16, P8.6 design 1.4 and 1.7): preflight checks of the per-symbol catch-up
     scope, ONLY when the flag is ON ({} otherwise, so the OFF report is unchanged). READ-ONLY.
@@ -318,25 +256,60 @@ def catch_up_scope_checks(config, *, as_of=None):
     if not config.v2_position_catch_up:
         return {}
     import sqlite3
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
+    from storage.codec import parse_utc
     scope, enabled = tuple(config.v2_position_catch_up_symbols), tuple(config.enabled_symbols)
     checks = {"catch_up_scope_valid": False, "catch_up_evidence_contiguous": False}
     try:
         checks["catch_up_scope_valid"] = bool(scope) and parse_catch_up_symbols(",".join(scope), enabled) == scope
     except ValueError:
         pass
+    five = timedelta(minutes=5)
     now = datetime.now(timezone.utc)
     as_of = (as_of or now).astimezone(timezone.utc)
     if as_of > now:
         return checks  # NE6: a future as-of is never accepted
+    newest = as_of.replace(minute=as_of.minute - as_of.minute % 5, second=0, microsecond=0) - five
     evidence_path = config.market_evidence_path
     if evidence_path is None or not Path(evidence_path).is_file():
         return checks
+    positions = {}
+    trading = Path(config.db_path)
     try:
-        report = evidence_contiguity_report(config.db_path, evidence_path, scope, newest=newest_closed_5m(as_of))
+        if trading.is_file():
+            db = sqlite3.connect(trading.resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                for (payload,) in db.execute("SELECT payload FROM paper_positions "
+                                             "WHERE json_extract(payload,'$.status')='OPEN'"):
+                    data = json.loads(payload)
+                    watermark = data.get("last_processed_at") or data.get("opened_at")
+                    positions.setdefault(data.get("symbol"), []).append(parse_utc(watermark))
+            finally:
+                db.close()
+        ev = sqlite3.connect(Path(evidence_path).resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            for symbol in scope:
+                committed = {parse_utc(b) for (b,) in ev.execute(
+                    "SELECT bar_start FROM market_evidence WHERE symbol=? AND timeframe='5m'", (symbol,))}
+                if newest not in committed:
+                    return checks  # trailing gap / stale / empty evidence
+                anomalies = [(kind, parse_utc(b)) for kind, b in ev.execute(
+                    "SELECT kind, bar_start FROM evidence_anomalies WHERE symbol=? AND timeframe='5m' "
+                    "AND kind IN ('GAP','LATE')", (symbol,))]
+                for watermark in positions.get(symbol, []):
+                    start = watermark.replace(second=0, microsecond=0)
+                    start = start.replace(minute=start.minute - start.minute % 5)
+                    stamp = start + five if start <= watermark else start
+                    while stamp <= newest:
+                        if stamp not in committed:
+                            return checks
+                        stamp += five
+                    for kind, bar_start in anomalies:
+                        if watermark < bar_start <= newest and (kind == "GAP" or bar_start not in committed):
+                            return checks
+        finally:
+            ev.close()
     except (OSError, ValueError, TypeError, sqlite3.Error):
-        return checks
-    if not all(entry["ready"] for entry in report.values()):
         return checks
     checks["catch_up_evidence_contiguous"] = True
     return checks

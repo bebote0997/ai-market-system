@@ -196,6 +196,9 @@ class DemoRunner:
     def tick(self):
         return Scheduler(self, self.clock).tick()
 
+    def flush_evidence_observations(self):
+        self.runtime.flush_evidence_observations()
+
     def daily_summary(self, at=None):
         """Persist the previous complete UTC day, then attempt notification once."""
         gate = getattr(self, "halt_gate", None)  # None on legacy-built runners (flag OFF)

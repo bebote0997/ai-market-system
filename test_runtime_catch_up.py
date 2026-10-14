@@ -183,9 +183,12 @@ class FlagTests(CatchUpCase):
         self.assertEqual(seen, [("XAUUSD", T1), ("XAUUSD", T2)])
         self.assertNotIn("XAUUSD", self.paper()[0].open_positions)
         self.assertEqual(self.paper()[0].closed_trades[0].exited_at, T2)
-        # Phase 13 evidence preparation: with an evidence path set, OFF commits the snapshot observe-only (never read
-        # by the catch-up above, which used the snapshot bars) and keeps no connection open.
+        # Phase 13 evidence preparation: with an evidence path set, OFF commits the snapshot observe-only only when
+        # the queue is flushed after the cycle (never read by the catch-up above, which used the snapshot bars).
         self.assertIsNone(runtime.evidence)
+        self.assertFalse(self.ev.exists())  # nothing opened or created during the cycle
+        runtime.flush_evidence_observations()
+        self.assertIsNone(runtime.evidence)  # short-lived store: no connection kept
         self.assertEqual(self.evidence_watermark(), (SLOT - FIVE).isoformat())
 
 

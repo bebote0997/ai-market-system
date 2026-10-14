@@ -45,6 +45,10 @@ class EvidenceStoreError(RuntimeError):
     """The sidecar is missing, incompatible or corrupt. Nothing is repaired or recreated."""
 
 
+class EvidenceBudgetExceeded(EvidenceStoreError):
+    """A ``batch`` ran out of time before a unit started; the units already done are committed."""
+
+
 def _target(path):
     """The single filesystem object that is both validated and opened."""
     try:
@@ -150,9 +154,12 @@ EXPECTED_CONTRACT = _expected_contract()
 
 
 class EvidenceStore:
-    def __init__(self, path, *, readonly=False):
+    def __init__(self, path, *, readonly=False, timeout=10.0, interrupt=None):
+        """``timeout`` (seconds) bounds every lock wait. ``interrupt`` (a caller predicate; the store reads no clock) is
+        a hard bound for observe-only callers: a SQLite statement running once it is true is interrupted (an error)."""
         self.path = Path(path)
         self.readonly = readonly
+        self._batch_expired = None
         target = _target(self.path)
         if _is_trading_db_name(self.path, target) or _shares_file_with_trading_db(target):
             raise EvidenceStoreError("refusing to use the trading DB path as a MARKET EVIDENCE database")
@@ -160,16 +167,18 @@ class EvidenceStore:
             raise EvidenceStoreError("MARKET EVIDENCE database missing")
         try:
             if readonly:  # mode=ro requires a URI; pathlib percent-encodes the target.
-                self.db = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True, timeout=10,
+                self.db = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True, timeout=timeout,
                                           isolation_level=None)
             else:  # A plain filename: no URI parsing of the path at all.
                 target.parent.mkdir(parents=True, exist_ok=True)
-                self.db = sqlite3.connect(str(target), uri=False, timeout=10, isolation_level=None)
+                self.db = sqlite3.connect(str(target), uri=False, timeout=timeout, isolation_level=None)
         except (sqlite3.Error, OSError) as exc:
             raise EvidenceStoreError("MARKET EVIDENCE database cannot be opened") from exc
+        if interrupt is not None:
+            self.db.set_progress_handler(interrupt, 100)
         try:
             self._verify_target(target)
-            self.db.execute("PRAGMA busy_timeout=10000")
+            self.db.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
             self._open()
         except BaseException:
             self.db.close()
@@ -218,6 +227,11 @@ class EvidenceStore:
 
     @contextmanager
     def transaction(self):
+        if self._batch_expired is not None:  # one unit of a batch: no transaction of its own
+            if self._batch_expired():
+                raise EvidenceBudgetExceeded("MARKET EVIDENCE batch time budget exhausted")
+            yield
+            return
         if self.readonly:
             raise EvidenceStoreError("MARKET EVIDENCE database opened read-only")
         self.db.execute("BEGIN IMMEDIATE")
@@ -227,6 +241,29 @@ class EvidenceStore:
         except BaseException:
             self.db.execute("ROLLBACK")
             raise
+
+    @contextmanager
+    def batch(self, expired):
+        """Every ``transaction()`` unit inside runs in ONE transaction (observe-only bulk writes). A unit starting once
+        ``expired()`` (a caller predicate) is true raises EvidenceBudgetExceeded before touching anything and the units
+        already done are committed; any other error rolls the whole batch back."""
+        if self.readonly:
+            raise EvidenceStoreError("MARKET EVIDENCE database opened read-only")
+        self.db.execute("BEGIN IMMEDIATE")
+        self._batch_expired = expired
+        try:
+            yield
+        except EvidenceBudgetExceeded:
+            self._batch_expired = None
+            self.db.execute("COMMIT")
+            raise
+        except BaseException:
+            self._batch_expired = None
+            if self.db.in_transaction:  # an interrupted statement may already have rolled it back
+                self.db.execute("ROLLBACK")
+            raise
+        self._batch_expired = None
+        self.db.execute("COMMIT")
 
     def close(self):
         self.db.close()
