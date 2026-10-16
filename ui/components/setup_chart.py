@@ -73,3 +73,52 @@ def build_setup_figure(bars, plan, symbol):
         yaxis=dict(gridcolor=GRID, side='right'), height=600,
         margin=dict(l=30, r=40, t=110, b=45), showlegend=False)
     return fig
+
+
+# Dashboard-only light restyle. build_setup_figure (shared with the setup e-mail PNG) is left unchanged.
+LIGHT = {'bg': '#ffffff', 'grid': '#eef2f6', 'text': '#334155', 'entry': '#2459d6', 'up': '#16a34a', 'down': '#dc2626'}
+LABELS_ES = (('TAKE PROFIT', 'META (TP)'), ('STOP LOSS', 'STOP LOSS'), ('ENTRY', 'ENTRADA'),
+             ('price distance', 'de distancia de precio'), (' risk', ' en riesgo'), (' reward', ' de ganancia posible'),
+             ('R:R unavailable', 'R:R no disponible'), ('Plan levels not persisted', 'Niveles del plan no guardados'),
+             ('5m closes · no OHLC', 'cierres de 5 min · sin velas completas'), ('Last:', 'Último:'),
+             ('5m close', 'cierre 5 min'))
+
+
+MONTHS_ES = dict(zip(('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'),
+                     ('ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic')))
+
+
+def _es(text):
+    import re
+    for old, new in LABELS_ES:
+        text = text.replace(old, new)
+    return re.sub(r'\b(' + '|'.join(MONTHS_ES) + r')\b', lambda m: MONTHS_ES[m.group(1)], text)
+
+
+def light_setup_figure(fig):
+    colors = {GOLD: LIGHT['entry'], UP: LIGHT['up'], DOWN: LIGHT['down']}
+    trace = fig.data[0]
+    if trace.type == 'scatter':
+        trace.line.color = LIGHT['entry']
+        trace.name = _es(trace.name)
+    else:
+        for side, color in ((trace.increasing, LIGHT['up']), (trace.decreasing, LIGHT['down'])):
+            side.line.color = color
+            side.fillcolor = color
+    for shape in fig.layout.shapes:
+        if shape.type == 'line':
+            shape.line.color = colors.get(shape.line.color, shape.line.color)
+        elif shape.type == 'rect':
+            shape.fillcolor = colors.get(shape.fillcolor, shape.fillcolor)
+            shape.opacity = 0.08
+    for annotation in fig.layout.annotations:
+        annotation.text = _es(annotation.text)
+        if annotation.font.color in colors:
+            annotation.font.color = colors[annotation.font.color]
+    fig.update_layout(title=dict(text=_es(fig.layout.title.text),
+                                 font=dict(family='Inter, Segoe UI, system-ui, sans-serif', size=17, color='#172033')),
+                      paper_bgcolor=LIGHT['bg'], plot_bgcolor=LIGHT['bg'],
+                      font=dict(family='Inter, Segoe UI, system-ui, sans-serif', color=LIGHT['text']),
+                      xaxis=dict(gridcolor=LIGHT['grid'], title='Hora de Nueva York (ET)', tickformat='%d/%m %H:%M'),
+                      yaxis=dict(gridcolor=LIGHT['grid']))
+    return fig

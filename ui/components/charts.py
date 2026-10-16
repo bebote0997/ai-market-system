@@ -17,7 +17,7 @@ def price_action_figure(bars, annotations=()):
         if kind not in ALLOWED_ANNOTATIONS or source not in ALLOWED_SOURCES or price is None:
             continue
         prospective = item.get("prospective", False)
-        label = f"{kind} · {source} · {'POTENTIAL' if prospective else 'PAPER PLAN' if source == 'PLAN' else 'OBSERVED'}"
+        label = f"{kind} · {source} · {'POTENCIAL' if prospective else 'PLAN DE PRÁCTICA' if source == 'PLAN' else 'OBSERVADO'}"
         fig.add_hline(y=price, line_dash="dash" if prospective else "solid",
                       line_color=TOKENS["caution"] if prospective else TOKENS["info"],
                       annotation_text=label, annotation_font_color=TOKENS["text-secondary"])

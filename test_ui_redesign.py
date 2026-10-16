@@ -1,0 +1,259 @@
+"""Light/Spanish dashboard: realized R original-stop fix, plain-language phrases, Control skeleton (read-only)."""
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+import sys
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+from ui import i18n_es as es
+from ui.views import control, luxury
+
+T = '2026-10-14T21:00:00+00:00'
+
+
+def ledger(path, trades, positions):
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE closed_trades(trade_id TEXT PRIMARY KEY,payload TEXT)')
+        db.execute('CREATE TABLE paper_positions(position_id TEXT PRIMARY KEY,payload TEXT)')
+        db.executemany('INSERT INTO closed_trades VALUES(?,?)', [(t['trade_id'], json.dumps(t)) for t in trades])
+        db.executemany('INSERT INTO paper_positions VALUES(?,?)', [(p['position_id'], json.dumps(p)) for p in positions])
+
+
+def trade(n, position_id, pnl, reason, quantity=1):
+    return {'trade_id': f't{n}', 'position_id': position_id, 'symbol': 'XAUUSD', 'side': 'LONG', 'entry_price': 100,
+            'exit_price': 100, 'quantity': quantity, 'net_pnl': pnl, 'exited_at': T, 'reason': reason}
+
+
+def position(position_id, **extra):
+    return {'position_id': position_id, 'entry_price': 100, 'stop': 98, 'quantity': 1, 'contract_multiplier': 10,
+            'status': 'CLOSED', **extra}
+
+
+class RealizedRTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / 'ledger.db'
+
+    def rows(self):
+        with sqlite3.connect(self.path) as db:
+            db.row_factory = sqlite3.Row
+            return luxury.closed_trade_rows(db), luxury.ledger_statistics(db, datetime.now(timezone.utc))[0]
+
+    def test_day1_close_uses_the_never_moved_stop(self):
+        # Day-1 time exit: initial_stop is absent because the stop never moved; risk = |100-98| * 1 * 10 = 20.
+        ledger(self.path, [trade(1, 'p1', 8, 'TIME_EXIT_DAY1_BELOW_0_5R')], [position('p1')])
+        rows, stats = self.rows()
+        self.assertAlmostEqual(rows[0]['realized_r'], 0.4)
+        self.assertIsNone(rows[0]['realized_r_reason'])
+        self.assertAlmostEqual(stats['avg_r'], 0.4)
+        self.assertEqual(es.r_phrase(rows[0]['realized_r']), 'ganaste 0.4 veces lo que arriesgabas')
+
+    def test_day2_uses_initial_stop_not_breakeven_stop(self):
+        ledger(self.path, [trade(1, 'p1', -20, 'stop')],
+               [position('p1', stop=100, initial_stop=98, duration_stage='DAY2_BREAKEVEN')])
+        rows, stats = self.rows()
+        self.assertEqual(rows[0]['realized_r'], -1)
+        self.assertEqual(stats['avg_r'], -1)
+        self.assertEqual(es.r_phrase(-1), 'perdiste 1 vez lo que arriesgabas')
+
+    def test_moved_stop_without_initial_stop_has_spanish_reason(self):
+        ledger(self.path, [trade(1, 'p1', 5, 'TIME_EXIT_DAY2_NY_CLOSE'), trade(2, 'p2', 8, 'target')],
+               [position('p1', stop=100, duration_stage='DAY2_BREAKEVEN'), position('p2')])
+        rows, stats = self.rows()
+        by_id = {r['trade_id']: r for r in rows}
+        self.assertIsNone(by_id['t1']['realized_r'])
+        self.assertEqual(by_id['t1']['realized_r_reason'], 'sin datos del stop original')
+        self.assertAlmostEqual(by_id['t2']['realized_r'], 0.4)
+        self.assertIsNone(stats['avg_r'])
+        self.assertEqual(stats['avg_r_reason'], 'sin datos del stop original en 1 de 2 operaciones')
+
+    def test_missing_position_and_bad_numbers_are_explicit(self):
+        self.assertEqual(luxury.realized_r_with_reason({'position_id': 'x', 'net_pnl': 1}, None),
+                         (None, 'sin datos de la posición original'))
+        base = position('p')
+        for changed in ({'stop': None}, {'stop': True}, {'stop': float('nan')}):
+            self.assertEqual(luxury.realized_r_with_reason({'position_id': 'p', 'net_pnl': 1}, {**base, **changed})[1],
+                             es.STOP_UNKNOWN)
+        self.assertIn('multiplicador', luxury.realized_r_with_reason(
+            {'position_id': 'p', 'net_pnl': 1}, {**base, 'contract_multiplier': None})[1])
+        self.assertEqual(luxury.realized_r({'position_id': 'p', 'net_pnl': 1, 'realized_r': 0.25}, None), 0.25)
+
+    def test_ledger_without_positions_table(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute('CREATE TABLE closed_trades(trade_id TEXT,payload TEXT)')
+            db.execute('INSERT INTO closed_trades VALUES(?,?)', ('t', json.dumps(trade(1, 'p', 3, 'target'))))
+            stats = luxury.ledger_statistics(db, datetime.now(timezone.utc))[0]
+        self.assertEqual((stats['trades'], stats['wins'], stats['total_pnl']), (1, 1, 3))
+        self.assertIn('sin datos de la posición original', stats['avg_r_reason'])
+
+
+class SpanishPresentationTests(unittest.TestCase):
+    def test_plain_phrases(self):
+        self.assertEqual(es.pnl_since_start(47.05), 'Ganaste $47.05 desde el inicio del historial')
+        self.assertEqual(es.pnl_since_start(-3.5), 'Perdiste $3.50 desde el inicio del historial')
+        self.assertEqual(es.wins_phrase(3, 4), 'De 4 operaciones, 3 ganaron')
+        self.assertEqual(es.wins_phrase(0, 0), 'Aún no hay operaciones cerradas')
+        self.assertEqual(es.drawdown_phrase(3.39), 'La mayor caída del resultado de operaciones cerradas: $3.39')
+        self.assertEqual(es.money(-2, signed=True), '−$2.00')
+        self.assertEqual(es.tone(-1), 'neg')
+        self.assertEqual(es.datetime_et(datetime(2026, 10, 14, 14, 15, tzinfo=timezone.utc)), '14 oct 2026 10:15 ET')
+
+    def test_close_reasons_states_and_fallbacks(self):
+        self.assertEqual(es.close_reason_text('stop'), 'Tocó el stop loss (límite de pérdida)')
+        self.assertEqual(es.close_reason_text('target'), 'Llegó a la meta de ganancia')
+        self.assertEqual(es.close_reason_text('TIME_EXIT_DAY1_BELOW_0_5R'),
+                         'Se cerró al final del primer día porque avanzó menos de media vez el riesgo')
+        from execution.trade_duration import CLOSE_REASONS
+        for reason in CLOSE_REASONS:
+            self.assertNotEqual(es.close_reason_text(reason), reason)
+        self.assertEqual(es.close_reason_text('SOMETHING_NEW'), 'SOMETHING_NEW')
+        self.assertEqual(es.status_text('NO_DATA'), 'Sin datos')
+        self.assertEqual(es.status_text('LONG'), 'Compra (LONG)')
+        self.assertEqual(es.status_text('ODD'), 'ODD')
+        self.assertEqual(luxury.MISSING, 'no disponible aún')
+
+    def test_navigation_labels_round_trip(self):
+        from ui.views.dashboard import PAGES as LEGACY
+        for key in luxury.PAGES + LEGACY + ('FLOOR', 'MARKETS', 'JOURNAL', 'EXPERIMENT', 'SYSTEM'):
+            self.assertEqual(es.page_key(es.page_label(key)), key)
+        self.assertIn('Control', luxury.PAGES)
+
+    def test_state_chip_keeps_original_as_tooltip(self):
+        chip = luxury.state_chip('REJECTED')
+        self.assertIn('Rechazada', chip)
+        self.assertIn('title="REJECTED"', chip)
+
+    def test_phrases_do_not_overclaim_scope(self):
+        self.assertEqual(es.pnl_since_start(None), f'Ganancia desde el inicio del historial: {es.MISSING}')
+        self.assertNotIn('demo', es.pnl_since_start(1))
+        self.assertNotIn('cuenta', es.drawdown_phrase(1))
+        self.assertEqual(es.drawdown_phrase(None), f'La mayor caída del resultado de operaciones cerradas: {es.MISSING}')
+
+    def test_card_trusts_values_not_labels(self):
+        markdown = []
+        st = types.SimpleNamespace(markdown=lambda body, **_: markdown.append(body))
+        label = es.COMPONENTS['last_run']
+        attack = '<img src=x onerror=alert(1)>'
+        luxury.card(st, 'Sistema', [(label, luxury.health_dot('OK')), (label, attack),
+                                    ('Estado', attack), ('Estado', luxury.state_chip('REJECTED'))])
+        body = markdown[0]
+        self.assertNotIn('<img', body)
+        self.assertEqual(body.count('&lt;img src=x onerror=alert(1)&gt;'), 2)
+        self.assertIn('<span class="dot ">', body)
+        self.assertIn('<span class="chip neg" title="REJECTED">', body)
+        self.assertIsInstance(luxury.state_chip(None), luxury.Trusted)
+        self.assertNotIsInstance(luxury.display(attack), luxury.Trusted)
+
+    def test_slippage_plan_vs_fill(self):
+        rows = dict(luxury.slippage({'symbol': 'EURUSD', 'side': 'LONG', 'entry_price': 1.1002,
+                                     'planned_entry': 1.1}, {}))
+        self.assertIn('+2.0 pips', rows['Diferencia'])
+        self.assertIn('en contra', rows['Diferencia'])
+        rows = dict(luxury.slippage({'symbol': 'XAUUSD', 'side': 'SHORT', 'entry_price': 2000.5}, {'entry': 2000}))
+        self.assertIn('a favor', rows['Diferencia'])
+        self.assertNotIn('pips', rows['Diferencia'])
+        rows = dict(luxury.slippage({'symbol': 'XAUUSD', 'entry_price': 1}, {}))
+        self.assertEqual(rows['Diferencia'], 'sin entrada planeada guardada')
+
+    def test_ui_stylesheet_is_light_and_offline(self):
+        css = Path('ui/static/theme.css').read_text()
+        self.assertFalse(Path('ui/static/luxury.css').exists())
+        self.assertNotIn('@import', css)
+        self.assertNotIn('http', css)
+        self.assertIn('#f3f6fb', css)
+
+
+class ControlViewTests(unittest.TestCase):
+    def test_missing_registry_falls_back_to_all_off(self):
+        with patch.dict(sys.modules, {'execution.account_registry': None}):
+            snapshot = control.control_snapshot()
+        self.assertEqual(snapshot, control.default_snapshot())
+        self.assertFalse(snapshot['readable'])
+        self.assertFalse(any(a['enabled'] for a in snapshot['accounts']))
+
+    def test_registry_snapshot_and_raising_registry(self):
+        module = types.ModuleType('execution.account_registry')
+        module.read_control_snapshot = lambda: {'readable': True, 'emergency_stop': False, 'connected': False,
+            'accounts': [{'key': 'real', 'mode': 'REAL', 'enabled': False, 'label': 'Real', 'locked': True},
+                         {'key': 'bogus', 'enabled': True}]}
+        with patch.dict(sys.modules, {'execution.account_registry': module}):
+            snapshot = control.control_snapshot()
+        self.assertTrue(snapshot['readable'])
+        self.assertEqual([a['key'] for a in snapshot['accounts']], list(control.ACCOUNT_KEYS))
+        real = snapshot['accounts'][2]
+        self.assertEqual(control.account_status(real, snapshot), ('Real: bloqueado por seguridad', 'neg'))
+        self.assertEqual(control.account_status(snapshot['accounts'][1], snapshot)[0], 'Aún no conectado')
+
+        def boom():
+            raise RuntimeError('registry down')
+        module.read_control_snapshot = boom
+        with patch.dict(sys.modules, {'execution.account_registry': module}):
+            self.assertEqual(control.control_snapshot(), control.default_snapshot())
+
+    def registry(self, snapshot):
+        module = types.ModuleType('execution.account_registry')
+        module.read_control_snapshot = lambda: snapshot
+        with patch.dict(sys.modules, {'execution.account_registry': module}):
+            return control.control_snapshot()
+
+    def test_unreadable_registry_is_all_off_regardless_of_content(self):
+        on = [{'key': key, 'mode': 'LIVE', 'enabled': True, 'locked': False} for key in control.ACCOUNT_KEYS]
+        for readable in (False, None, 'true', 1, 'yes'):
+            with self.subTest(readable=readable):
+                snapshot = self.registry({'readable': readable, 'emergency_stop': True, 'connected': True,
+                                          'accounts': on})
+                self.assertEqual(snapshot, control.default_snapshot())
+
+    def test_account_flags_are_strict_booleans_and_real_never_enabled(self):
+        snapshot = self.registry({'readable': True, 'emergency_stop': 'yes', 'connected': 1, 'accounts': [
+            {'key': 'paper', 'enabled': 'true', 'mode': 7, 'label': None},
+            {'key': 'broker_demo', 'enabled': True, 'mode': 'DEMO', 'locked': 'no'},
+            {'key': 'real', 'enabled': True, 'mode': 'REAL', 'locked': False}]})
+        self.assertTrue(snapshot['readable'])
+        self.assertIs(snapshot['emergency_stop'], False)
+        self.assertIs(snapshot['connected'], False)
+        paper, demo, real = snapshot['accounts']
+        self.assertEqual((paper['enabled'], paper['mode'], paper['label']), (False, 'OFF', control.LABELS['paper']))
+        self.assertEqual((demo['enabled'], demo['mode'], demo['locked']), (True, 'DEMO', False))
+        self.assertEqual((real['enabled'], real['locked']), (False, True))
+        connected = self.registry({'readable': True, 'connected': True,
+                                   'accounts': [{'key': 'real', 'enabled': True, 'locked': False}]})
+        self.assertEqual(control.account_status(connected['accounts'][2], connected),
+                         ('Real: bloqueado por seguridad', 'neg'))
+
+    def test_control_page_widgets_are_disabled_and_read_only(self):
+        import test_phase10_dashboard as fixtures
+        case = fixtures.Phase10DashboardTests('test_sqlite_connection_rejects_writes')
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        before = hashlib.sha256(case.path.read_bytes()).hexdigest()
+        with patch.dict(sys.modules, {'execution.account_registry': None}):
+            app = fixtures.Phase10DashboardTests.app(case)
+            app.radio[0].set_value('Control').run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        toggles = [t for t in app.toggle if t.key and t.key.startswith('control-')]
+        self.assertEqual(len(toggles), 2)
+        self.assertTrue(all(t.disabled and t.value is False for t in toggles))
+        stop = next(b for b in app.button if b.key == 'control-emergency-stop')
+        self.assertTrue(stop.disabled)
+        self.assertIn('PARADA DE EMERGENCIA', stop.label)
+        content = '\n'.join(m.value for m in app.markdown)
+        self.assertIn('Aún no conectado', content)
+        self.assertIn('Real: bloqueado por seguridad', content)
+        self.assertEqual(hashlib.sha256(case.path.read_bytes()).hexdigest(), before)
+
+    def test_control_source_never_writes_or_reads_environment(self):
+        source = Path('ui/views/control.py').read_text()
+        for forbidden in ('os.environ', 'getenv', 'INSERT', 'UPDATE ', 'DELETE', '.write', 'on_click', 'on_change'):
+            self.assertNotIn(forbidden, source)
+
+
+if __name__ == '__main__':
+    unittest.main()

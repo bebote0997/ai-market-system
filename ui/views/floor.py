@@ -1,3 +1,4 @@
+from ui.i18n_es import NO_DATA, tr
 from ui.tables import dataframe
 from ui.components import panels
 
@@ -17,16 +18,16 @@ def render(st, vm):
     with position_col:
         panels.positions(st, vm)
     panels.pipeline(st, vm)
-    with st.expander("MACRO / NEWS · FACT vs AI INTERPRETATION"):
-        st.caption("FACT")
+    with st.expander(tr("MACRO / NEWS · FACT vs AI INTERPRETATION")):
+        st.caption(tr("FACT"))
         if vm.macro_facts:
             dataframe(st, vm.macro_facts, width="stretch")
         else:
-            st.write("NO_DATA — no sourced event facts in this snapshot.")
-        st.caption("AI INTERPRETATION")
+            st.write(tr("NO_DATA — no sourced event facts in this snapshot."))
+        st.caption(tr("AI INTERPRETATION"))
         macro = vm.agents[2]
-        st.write(macro.reasoning_summary or "NO_DATA")
-        st.write("Confidence:", macro.confidence if macro.confidence is not None else "—")
-        st.write("Linked evidence:", macro.evidence or "—")
-    st.subheader("JOURNAL PREVIEW")
-    st.write("No journal events in this snapshot." if not vm.journal else vm.journal[-3:])
+        st.write(macro.reasoning_summary or NO_DATA)
+        st.write("Confianza:", macro.confidence if macro.confidence is not None else "—")
+        st.write("Evidencia relacionada:", macro.evidence or "—")
+    st.subheader(tr("JOURNAL PREVIEW"))
+    st.write(tr("No journal events in this snapshot.") if not vm.journal else vm.journal[-3:])

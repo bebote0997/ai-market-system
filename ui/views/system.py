@@ -1,29 +1,32 @@
+from ui.i18n_es import COLUMNS, NO_DATA, column, status_text, tr
 from ui.tables import dataframe
 from ui.json_views import ordered
 def render(st, vm, operational_health=None, review=None, notifications=(), evidence_json=None,
            store=None):
-    st.header("SYSTEM")
-    st.caption("Read-only service inventory")
+    st.header(tr("SYSTEM"))
+    st.caption(tr("Read-only service inventory"))
+    S, E = column("service"), column("status")
     rows = [
-        {"service": "Supported symbols", "status": "XAUUSD, NAS100, EURUSD"},
-        {"service": "Enabled symbols", "status": "XAUUSD, EURUSD"},
-        {"service": "Market data provider", "status": "Twelve Data configured for PAPER"},
-        {"service": "Massive adapter", "status": "SUPPORTED / NOT ACTIVE"},
-        {"service": "AI provider", "status": "NOT STARTED"},
-        {"service": "Scheduler", "status": "NOT CONFIGURED"},
-        {"service": "Paper broker", "status": "NOT STARTED"},
-        {"service": "Persistence", "status": "NOT CONFIGURED"},
-        {"service": "Last successful run", "status": "NO_DATA"},
-        {"service": "Freshness", "status": vm.freshness},
+        {S: "Símbolos soportados", E: "XAUUSD, NAS100, EURUSD"},
+        {S: "Símbolos activos", E: "XAUUSD, EURUSD"},
+        {S: "Proveedor de precios", E: "Twelve Data configurado para PAPER"},
+        {S: "Adaptador Massive", E: "Soportado / no activo"},
+        {S: "Proveedor de IA", E: "No iniciado"},
+        {S: "Programador", E: "No configurado"},
+        {S: "Broker de práctica", E: "No iniciado"},
+        {S: "Persistencia", E: "No configurada"},
+        {S: "Último ciclo exitoso", E: NO_DATA},
+        {S: "Actualidad de datos", E: status_text(vm.freshness)},
     ]
     if operational_health and not vm.sample:
-        rows = [{"service": key.replace("_", " ").title(), "status": value} for key, value in operational_health.items()]
+        rows = [{S: column(key) if key in COLUMNS else key.replace("_", " ").title(), E: value}
+                for key, value in operational_health.items()]
     dataframe(st, rows, hide_index=True, width="stretch")
-    st.write("Warnings:", vm.warnings or "—")
-    st.write("Prompt versions:", dict(vm.prompt_versions) if vm.prompt_versions else "NO_DATA")
-    st.write("Schema version:", vm.schema_version or "NO_DATA")
+    st.write("Avisos:", vm.warnings or "—")
+    st.write("Versiones de prompts:", dict(vm.prompt_versions) if vm.prompt_versions else NO_DATA)
+    st.write("Versión del esquema:", vm.schema_version or NO_DATA)
     if operational_health and not vm.sample:
-        st.subheader("Latest review")
+        st.subheader(tr("Latest review"))
         if review:
             st.json(ordered({"run_id": review["run_id"], "final_status": review["final_status"],
                      "setup_status": review["setup_status"], "agents": review["agents"],
@@ -31,28 +34,28 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
                      "paper": review["paper"],
                      "error": review["error"]}), expanded=False)
         else:
-            st.write("NO_DATA")
+            st.write(NO_DATA)
         if store is not None:
-            st.subheader("Audit by run ID")
-            run_id = st.text_input("Run ID", key="system_audit_run_id").strip()
+            st.subheader(tr("Audit by run ID"))
+            run_id = st.text_input(tr("Run ID"), key="system_audit_run_id").strip()
             if run_id:
                 from runtime.review_export import run_evidence_json
                 record = store.review_report(run_id)
                 if record is None:
-                    st.info("Run ID not found")
+                    st.info(tr("Run ID not found"))
                 else:
                     st.json(ordered({key: record.get(key) for key in ("run_id", "symbol", "as_of",
                             "final_status", "setup_status", "risk_decision", "execution",
                             "paper", "error")}), expanded=False)
                     dataframe(st, store.journal(run_id=run_id, limit=500),
                                  hide_index=True, width="stretch")
-                    st.download_button("Download run evidence (JSON)",
+                    st.download_button(tr("Download run evidence (JSON)"),
                                        run_evidence_json(store, run_id),
                                        file_name="paper-run-evidence.json", mime="application/json")
-        st.subheader("Notifications")
-        dataframe(st, [{"timestamp_utc": e["timestamp_utc"], "type": e["type"],
-                       "severity": e["severity"], "run_id": e["run_id"]}
+        st.subheader(tr("Notifications"))
+        dataframe(st, [{column("timestamp_utc"): e["timestamp_utc"], column("type"): e["type"],
+                       column("severity"): e["severity"], column("run_id"): e["run_id"]}
                       for e in notifications[-20:]], hide_index=True, width="stretch")
         if evidence_json is not None:
-            st.download_button("Download review evidence (JSON)", evidence_json,
+            st.download_button(tr("Download review evidence (JSON)"), evidence_json,
                                file_name="paper-review-evidence.json", mime="application/json")

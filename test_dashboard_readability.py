@@ -203,7 +203,7 @@ class CacheEmailTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertFalse(app.error)
         self.assertEqual(len(app.get('plotly_chart')), 1)
-        self.assertTrue(any('5m close prices' in c.value for c in app.caption))
+        self.assertTrue(any('precios de cierre de 5 min' in c.value for c in app.caption))
         self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), before)
         self.assertEqual(hashlib.sha256(self.cache.read_bytes()).hexdigest(), cache_before)
 
@@ -231,7 +231,7 @@ class CacheEmailTests(unittest.TestCase):
         app.radio[0].set_value('Process').run()
         self.assertFalse(app.exception)
         self.assertFalse(app.error)
-        choices = next(s for s in app.selectbox if s.label == 'Cycle · newest first')
+        choices = next(s for s in app.selectbox if s.label == 'Ciclo · el más reciente primero')
         self.assertEqual(len(choices.options), 200)
         self.assertEqual(choices.value, 'run-1')
 
