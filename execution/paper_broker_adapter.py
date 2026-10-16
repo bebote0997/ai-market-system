@@ -32,6 +32,17 @@ def _matches(plan, floor_report):
             and plan.target == _dec(getattr(decision, "target", None)))
 
 
+def _order_matches(plan, order):
+    # PaperBroker deduplicates by run_id and may return an earlier order; it must still be the approved plan.
+    return (plan.source_run_id == getattr(order, "run_id", None)
+            and plan.symbol == getattr(order, "symbol", None)
+            and plan.side == getattr(order, "side", None)
+            and plan.quantity == _dec(getattr(order, "quantity", None))
+            and plan.planned_entry == _dec(getattr(order, "planned_entry", None))
+            and plan.stop == _dec(getattr(order, "stop", None))
+            and plan.target == _dec(getattr(order, "target", None)))
+
+
 class PaperBrokerAdapter:
     """``floor_report_for(plan) -> report | None``; ``clock() -> datetime``; ``price_for(symbol) -> price | None``;
     optional ``market_context() -> dict`` (default ``{}``)."""
@@ -59,6 +70,8 @@ class PaperBrokerAdapter:
         order = self._broker.submit_plan(floor_report, self._market_context() or {}, self._clock())
         if order is None:
             return SubmitResult(REJECTED, plan.client_id, reason="paper_broker_refused")
+        if not _order_matches(plan, order):
+            return SubmitResult(REJECTED, plan.client_id, reason="paper_order_conflicts_with_plan")
         return SubmitResult(ACCEPTED, plan.client_id, broker_ref=order.order_id)
 
     def close_market(self, position_ref, *, reason: str, client_id: str) -> CloseResult:

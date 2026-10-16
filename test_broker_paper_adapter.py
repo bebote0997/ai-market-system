@@ -73,6 +73,18 @@ class PaperBrokerAdapterContractTests(unittest.TestCase):
         self.assertEqual(again.broker_ref, result.broker_ref)  # PaperBroker's own run_id idempotency
         self.assertEqual(len(self.paper.orders), 1)
 
+    def test_repeated_run_id_with_different_plan_is_rejected(self):
+        plan = order_plan()
+        first = self.port.submit_plan(plan, approval(plan))
+        self.assertEqual(first.status, ACCEPTED)
+        self.context.reports["run-1"].risk_decision.quantity = 2.0
+        bigger = order_plan(quantity="2.0")
+        conflict = self.port.submit_plan(bigger, approval(bigger))
+        self.assertEqual((conflict.status, conflict.reason, conflict.broker_ref),
+                         (REJECTED, "paper_order_conflicts_with_plan", None))
+        self.assertEqual(len(self.paper.orders), 1)
+        self.assertEqual(next(iter(self.paper.orders.values())).quantity, 1.0)
+
     def test_submit_without_approval_or_report_never_creates_orders(self):
         plan = order_plan()
         with patch.object(PaperBroker, "submit_plan", autospec=True, side_effect=PaperBroker.submit_plan) as spy:
