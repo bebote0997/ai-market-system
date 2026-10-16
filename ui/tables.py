@@ -27,6 +27,6 @@ def dataframe(st, rows, **kwargs):
     rows = [ordered(dict(row)) for row in islice(rows, TABLE_ROW_LIMIT)]
     result = st.dataframe(normalize_rows(rows), **kwargs)
     if any(isinstance(structured(value), (dict, list)) for row in rows for value in row.values()):
-        with st.expander('Formatted JSON · first 20 displayed records', expanded=False):
+        with st.expander('Ver datos técnicos (JSON) · primeros 20 registros', expanded=False):
             st.json(rows[:20], expanded=False)
     return result

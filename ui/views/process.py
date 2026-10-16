@@ -61,29 +61,39 @@ def cycle_evidence(db, run):
     return result, gaps
 
 
+def gap_label(gap):
+    from ui.i18n_es import STEPS as LABELS
+    if gap.endswith(' timestamp'):
+        return LABELS.get(gap[:-len(' timestamp')], gap[:-len(' timestamp')]) + ' (hora)'
+    return LABELS.get(gap, gap)
+
+
 def render(st, db):
-    from ui.views.luxury import card, MISSING
+    from ui.views.luxury import card, MISSING, state_chip, tr
+    from ui.i18n_es import STEPS as LABELS, AGENTS, status_text
     runs = records(db, 'runs')
     requested = st.session_state.get('process_run_id')
     if requested and requested not in {r['run_id'] for r in runs}:
         runs = records(db, 'runs', run_id=requested) + runs[:199]
-    st.caption('Latest 200 cycles; exact run links can open older cycles.')
-    symbol = st.selectbox('Process symbol', ['All'] + sorted({r['symbol'] for r in runs}))
+    st.caption(tr('Latest 200 cycles; exact run links can open older cycles.'))
+    symbol = st.selectbox(tr('Process symbol'), ['All'] + sorted({r['symbol'] for r in runs}),
+                          format_func=lambda value: 'Todos' if value == 'All' else value)
     runs = [r for r in runs if symbol == 'All' or r['symbol'] == symbol]
     runs.sort(key=lambda r: (r['as_of'], r['started_at']), reverse=True)
+    pending = tr('not persisted yet')
     if not runs:
-        card(st, 'Process', summary=f'{MISSING} · not persisted yet')
+        card(st, tr('Process'), summary=f'{MISSING} · {pending}')
         for step in STEPS:
-            card(st, step, summary='not persisted yet')
-        card(st, 'Gaps', summary=', '.join(STEPS))
+            card(st, LABELS[step], summary=pending)
+        card(st, tr('Gaps'), summary=', '.join(LABELS[step] for step in STEPS))
         return
     ids = [r['run_id'] for r in runs]
     requested = st.session_state.get('process_run_id')
-    selected = st.selectbox('Cycle · newest first', ids,
+    selected = st.selectbox(tr('Cycle · newest first'), ids,
                             index=ids.index(requested) if requested in ids else 0)
     st.session_state['process_run_id'] = selected
     evidence, gaps = cycle_evidence(db, runs[ids.index(selected)])
-    st.caption('Timestamps below are persisted record timestamps; absent step timestamps are not inferred.')
+    st.caption(tr('Timestamps below are persisted record timestamps; absent step timestamps are not inferred.'))
     for index, (step, rows) in enumerate(evidence.items(), 1):
         timestamps = []
         for row in rows:
@@ -97,13 +107,17 @@ def render(st, db):
         for row in rows:
             value = {**row, **row['payload']} if isinstance(row.get('payload'), dict) else row
             statuses.extend(str(value[k]) for k in ('status', 'final_status', 'decision', 'execution_status') if value.get(k))
-        status = ', '.join(dict.fromkeys(statuses)) or ('Persisted evidence' if rows else 'not persisted yet')
-        card(st, f'{index}. {step}', [('Status', status),
-             ('Timestamp', ', '.join(dict.fromkeys(timestamps)) or 'not persisted yet')],
-             summary=rows or 'not persisted yet')
+        status = ', '.join(status_text(s) for s in dict.fromkeys(statuses)) or (tr('Persisted evidence') if rows else pending)
+        from ui.views.luxury import display
+        card(st, f'{index}. {LABELS[step]}', [('Estado', status),
+             ('Hora', ', '.join(dict.fromkeys(display(t) for t in timestamps)) or pending)],
+             summary=rows or pending)
         if step == 'Agent outputs':
             for agent in rows:
-                card(st, agent.get('agent_name') or agent.get('name') or agent.get('agent'),
-                     [(k, agent.get(k)) for k in ('status', 'bias', 'confidence', 'as_of', 'timestamp',
-                      'reasoning_summary', 'evidence', 'conflicts')])
-    card(st, 'Gaps · not persisted yet', summary=', '.join(gaps) or 'None')
+                name = agent.get('agent_name') or agent.get('name') or agent.get('agent')
+                card(st, AGENTS.get(name, name),
+                     [('Estado', state_chip(agent.get('status'))), ('Tendencia', state_chip(agent.get('bias')))]
+                     + [(label, agent.get(k)) for label, k in (('Confianza', 'confidence'), ('Hora', 'as_of'),
+                        ('Hora del agente', 'timestamp'), ('Resumen', 'reasoning_summary'), ('Evidencia', 'evidence'),
+                        ('Conflictos', 'conflicts'))])
+    card(st, tr('Gaps · not persisted yet'), summary=', '.join(dict.fromkeys(gap_label(g) for g in gaps)) or tr('None'))

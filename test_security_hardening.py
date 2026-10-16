@@ -99,7 +99,7 @@ class DashboardLoginTests(unittest.TestCase):
         ui.supplied, ui.inputs = PASSWORD, 0
         self.assertEqual(self.attempt(ui), "STOP")
         self.assertEqual(ui.inputs, 0)
-        self.assertIn("Too many failed sign-in attempts", ui.errors[-1])
+        self.assertIn("Demasiados intentos fallidos", ui.errors[-1])
         self.clock.now += auth.SESSION_LOCKOUT_SECONDS
         self.assertEqual(self.attempt(ui), "RERUN")
 

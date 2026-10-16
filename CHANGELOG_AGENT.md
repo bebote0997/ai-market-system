@@ -6,6 +6,15 @@
 - Ningún módulo de runtime/floor/ui/entrypoints los importa; `PaperBroker`, `render.yaml` y `docs/STATUS.md` intactos; `.env.example` solo con nombres. REAL OFF (`AI_FLOOR_BROKER_REAL_ENABLED` se ignora), NAS100 bloqueado, sin red en tests.
 - Tests: `test_broker_paper_adapter.py`, `test_broker_dxtrade.py`, `test_broker_registry.py`, `test_broker_wiring.py`. `test_safety_invariants.py`: `SUBMIT_PLAN_CALLERS` incluye el adaptador (solo reenvía el floor report a `PaperBroker.submit_plan`).
 
+## 2026-10-15 — Dashboard: tema claro, español simple, R realizada y vista Control (branch `wip/ui-redesign`)
+
+- Solo visualización (`ui/`, `.streamlit/config.toml`): tema claro (`ui/static/theme.css` reemplaza `luxury.css`; fuentes del sistema, sin descargas), tarjetas grandes con frases simples y tooltip «¿Qué significa?», todo el texto de interfaz en español centralizado en `ui/i18n_es.py` (glosario: `docs/ui_glosario_es.md`). Valores guardados sin traducir (mapeo de presentación, original como tooltip).
+- Arreglo R realizada (`ui/views/luxury.py`): stop original = `initial_stop` o, si el stop nunca se movió (`duration_stage` vacío), `stop` (igual que `execution/trade_duration.py`); razón en español si faltan datos («sin datos del stop original»). Aplica a la tabla de operaciones y al promedio R.
+- Detalle de operación con plan (entrada/stop/meta) y diferencia entrada planeada vs fill (pips solo en EURUSD).
+- Nueva vista «Control» (`ui/views/control.py`): solo lectura, interruptores y PARADA DE EMERGENCIA deshabilitados; lee `execution.account_registry.read_control_snapshot()` si existe, si no todo apagado.
+- `build_setup_figure` (compartido con el PNG del correo) sin cambios; el dashboard aplica `light_setup_figure`.
+- Tests: nuevo `test_ui_redesign.py`; actualizados asserts de textos/estilos viejos en `test_dashboard_luxury.py`, `test_phase10_dashboard.py`, `test_dashboard_readability.py`, `test_dashboard_mobile.py`, `test_security_hardening.py`. Sin cambios de runtime/estrategia/riesgo; REAL OFF, NAS100 bloqueado.
+
 ## 2026-10-14 — Evidence Store observe-only con catch-up OFF (branch `v2/evidence-observe-only`)
 
 - `runtime/service.py`: con `AI_FLOOR_V2_POSITION_CATCH_UP=0` y `AI_FLOOR_MARKET_EVIDENCE_PATH` definido, cada ciclo encola (el más reciente por símbolo) su snapshot y `Scheduler.tick` lo escribe en `market_evidence.db` con `flush_evidence_observations` DESPUÉS de todos los ciclos del tick (trading, salidas, alertas). Acotado: store de vida corta con timeouts SQLite de 0,5 s, todas las velas en una sola transacción (`EvidenceStore.batch`), presupuesto de 2 s (no empieza más velas; lo hecho se confirma) e interrupción SQLite 0,5 s después. Ninguna escritura en la DB de trading (sin journal ni estado `evidence_observe`): cualquier Exception (MemoryError incluida) = solo WARNING en log. Nunca se lee en OFF; ON y `_observe_evidence` (P1-B) sin cambios. (Revisión Codex 2026-10-14, MEDIUM 1.)

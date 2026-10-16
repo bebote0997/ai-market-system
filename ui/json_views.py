@@ -35,5 +35,5 @@ def details(value):
                        and not isinstance(fields[key], (dict, list)))
     pretty = json.dumps(value, indent=2, ensure_ascii=False, default=str)
     return (f'<div class="json-key-fields">{escape(first, quote=True)}</div>'
-            '<details class="json-details"><summary>Formatted JSON</summary>'
+            '<details class="json-details"><summary>Ver datos técnicos (JSON)</summary>'
             f'<pre>{escape(pretty, quote=True)}</pre></details>')

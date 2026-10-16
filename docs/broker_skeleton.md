@@ -17,7 +17,8 @@ Tests: `test_broker_paper_adapter.py`, `test_broker_dxtrade.py`, `test_broker_re
 
 ## Qué NO está conectado
 
-- Nada en `runtime/`, `floor/`, `ui/`, `ejecutar_*`, `servicio.py`, `app.py` ni `main.py` importa estos módulos (lo verifica `test_broker_wiring.py`).
+- Nada en `runtime/`, `floor/`, `ejecutar_*`, `servicio.py`, `app.py` ni `main.py` importa estos módulos (lo verifica `test_broker_wiring.py`).
+- Única excepción (rama combinada): `ui/views/control.py` importa de forma perezosa y protegida solo `read_control_snapshot` (solo lectura; si falla, todo se muestra apagado). Lo fija `test_broker_wiring.py`.
 - `PaperBroker`, `render.yaml` y la DB del experimento no se tocan. `REAL_EXECUTION_ENABLED` sigue `False`.
 - No hay modo sombra, write-ahead (`broker_intents`), conciliación, tamaño demo ni traducción Day-1.
 - Rutas y formatos DXtrade (`orders/group`, `metrics`, campos `version`, `positionCode`, `errorCode`) **sin confirmar** hasta el spike de solo lectura.

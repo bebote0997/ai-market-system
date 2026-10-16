@@ -8,6 +8,9 @@ NEW_MODULES = {"execution.broker_port", "execution.paper_broker_adapter", "execu
                "execution.dxtrade_broker", "execution.broker_config", "execution.account_registry"}
 GUARDED_DIRS = ("runtime", "floor", "ui")
 GUARDED_FILES = ("servicio.py", "app.py", "main.py")
+# The only allowed reference: the read-only Control screen reads the account registry snapshot through a lazy,
+# guarded import (any failure => everything shown OFF). Nothing else may import the skeleton.
+ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/views/control.py", "account_registry")}
 
 
 def guarded_sources():
@@ -37,7 +40,14 @@ class BrokerSkeletonNotWiredTests(unittest.TestCase):
             offenders += [(path.relative_to(ROOT).as_posix(), short) for short in
                           ("broker_port", "paper_broker_adapter", "dxtrade_client", "dxtrade_broker",
                            "broker_config", "account_registry") if short in text]
-        self.assertEqual(offenders, [])
+        self.assertEqual([o for o in offenders if o not in ALLOWED_READONLY], [])
+
+    def test_control_screen_only_imports_read_control_snapshot_lazily(self):
+        tree = ast.parse((ROOT / "ui/views/control.py").read_text(encoding="utf-8"))
+        top_level = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+        self.assertFalse([n for n in top_level if "account_registry" in ast.dump(n)])
+        imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "execution.account_registry"]
+        self.assertEqual([[a.name for a in n.names] for n in imports], [["read_control_snapshot"]])
 
     def test_guarded_sources_exist(self):
         found = {path.relative_to(ROOT).parts[0] for path in guarded_sources()}

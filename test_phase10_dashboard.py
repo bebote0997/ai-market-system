@@ -19,6 +19,7 @@ from storage.health_store import HealthStore
 from ui.views.dashboard import history, records, ROW_LIMIT
 from ui.state import dashboard_database, enabled_market_symbols
 from runtime.config import DEFAULT_ENABLED_SYMBOLS
+from ui.i18n_es import NO_DATA, page_key
 
 APP = Path(__file__).parent / "ui" / "app.py"
 # Relative to the real clock so the fixture never ages into STALE_DATA (fixed timestamp broke on 2026-10-11).
@@ -98,7 +99,7 @@ class Phase10DashboardTests(unittest.TestCase):
         before = self.digest()
         health_before = hashlib.sha256(self.health_path.read_bytes()).hexdigest()
         app = self.app()
-        for page in [o.removeprefix("Legacy · ").upper() if o.startswith("Legacy · ") else o for o in app.radio[0].options]:
+        for page in [page_key(o) for o in app.radio[0].options]:
             with self.subTest(page=page):
                 app.radio[0].set_value(page).run()
                 self.assert_rendered(app)
@@ -113,7 +114,7 @@ class Phase10DashboardTests(unittest.TestCase):
         self.assertEqual(app.dataframe[0].value.iloc[0]["status"], "FAILED")
         app.radio[0].set_value("HEALTH").run()
         self.assertEqual(app.dataframe[0].value.iloc[0]["status"], "DEGRADED")
-        services = app.dataframe[1].value.set_index("service")["status"]
+        services = app.dataframe[1].value.set_index("Servicio")["Estado"]
         self.assertEqual(services["scheduler"], "DISABLED")
         self.assertEqual(services["api_status"], "NO_DATA")
         app.radio[0].set_value("SETUPS").run()
@@ -130,7 +131,7 @@ class Phase10DashboardTests(unittest.TestCase):
         before = hashlib.sha256(empty.read_bytes()).hexdigest()
         with patch.dict(os.environ, {"AI_FLOOR_DB_PATH": str(empty)}):
             app = self.app()
-            for page in [o.removeprefix("Legacy · ").upper() if o.startswith("Legacy · ") else o for o in app.radio[0].options]:
+            for page in [page_key(o) for o in app.radio[0].options]:
                 with self.subTest(page=page):
                     app.radio[0].set_value(page).run()
                     self.assert_rendered(app)
@@ -142,7 +143,7 @@ class Phase10DashboardTests(unittest.TestCase):
         self.assertIn("@media(max-width:640px)", inspect.getsource(theme.apply))
         with patch.dict(os.environ, {"AI_FLOOR_REMOTE_DASHBOARD": "0"}):
             app = AppTest.from_file(str(APP)).run()
-            self.assertEqual(app.text_input[0].label, "Password")
+            self.assertEqual(app.text_input[0].label, "Contraseña")
             self.assertFalse(app.radio)
 
     def test_search_run_id_setup_id_and_combination(self):
@@ -156,7 +157,7 @@ class Phase10DashboardTests(unittest.TestCase):
         app.text_input(key="history_setup_id").set_value("setup-2").run()
         self.assertTrue((app.dataframe[0].value["run_id"] == "run-2").all())
         app.text_input(key="history_run_id").set_value("run-1").run()
-        self.assertTrue(any(item.value == "NO_DATA" for item in app.info))
+        self.assertTrue(any(item.value == NO_DATA for item in app.info))
         with dashboard_database() as db:
             self.assertFalse(history(db, "run-1' OR 1=1 --"))
         self.assertEqual(self.digest(), before)
@@ -168,7 +169,7 @@ class Phase10DashboardTests(unittest.TestCase):
         app = self.app()
         app.radio[0].set_value("ALERTS").run()
         self.assert_rendered(app)
-        self.assertTrue(any(item.value == "NO_DATA" for item in app.info))
+        self.assertTrue(any(item.value == NO_DATA for item in app.info))
         self.assertEqual(self.digest(), before)
         missing = Path(self.tmp.name) / "missing.db"
         with patch.dict(os.environ, {"AI_FLOOR_DB_PATH": str(missing)}):
@@ -183,7 +184,7 @@ class Phase10DashboardTests(unittest.TestCase):
         with patch("ui.state.sqlite3.connect", side_effect=AssertionError("DB read before authentication")):
             app = AppTest.from_file(str(APP)).run()
             self.assertFalse(app.exception)
-            self.assertEqual(app.text_input[0].label, "Password")
+            self.assertEqual(app.text_input[0].label, "Contraseña")
             app.text_input[0].set_value("wrong-password").run()
             app.button[0].click().run()
             self.assertFalse(app.exception)
@@ -226,7 +227,7 @@ class Phase10DashboardTests(unittest.TestCase):
                 app = self.app()
                 app.radio[0].set_value("ALERTS").run()
                 self.assert_rendered(app)
-                self.assertTrue(any(item.value == "NO_DATA" for item in app.info))
+                self.assertTrue(any(item.value == NO_DATA for item in app.info))
                 self.assertEqual(app.dataframe[0].value.iloc[0]["event_id"], "alert-1")
         self.assertFalse(missing.exists())
 
@@ -365,7 +366,7 @@ class TestDashboardSqlFilters(unittest.TestCase):
             database.return_value.__enter__.return_value.execute.side_effect = sqlite3.OperationalError("read")
             dashboard.render(st, "POSITIONS")
         st.error.assert_called_once_with(
-            "DASHBOARD_ERROR — OperationalError: persisted evidence could not be read")
+            "No se pudieron leer los datos guardados (OperationalError).")
 
     def test_positions_and_errors_request_sql_filters(self):
         from ui.views import dashboard
