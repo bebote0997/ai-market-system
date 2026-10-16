@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-15 — BORRADOR / NO ACTIVADO: esqueleto inactivo de broker (branch `wip/broker-structure`)
+
+- Nuevos módulos aditivos, sin cablear: `execution/broker_port.py`, `paper_broker_adapter.py`, `dxtrade_client.py`, `dxtrade_broker.py`, `broker_config.py`, `account_registry.py` (DB propia `broker_state.db`, interruptores OFF por defecto, emergency stop, `read_control_snapshot()`). Ver `docs/broker_skeleton.md`.
+- Ningún módulo de runtime/floor/ui/entrypoints los importa; `PaperBroker`, `render.yaml` y `docs/STATUS.md` intactos; `.env.example` solo con nombres. REAL OFF (`AI_FLOOR_BROKER_REAL_ENABLED` se ignora), NAS100 bloqueado, sin red en tests.
+- Tests: `test_broker_paper_adapter.py`, `test_broker_dxtrade.py`, `test_broker_registry.py`, `test_broker_wiring.py`. `test_safety_invariants.py`: `SUBMIT_PLAN_CALLERS` incluye el adaptador (solo reenvía el floor report a `PaperBroker.submit_plan`).
+
 ## 2026-10-14 — Evidence Store observe-only con catch-up OFF (branch `v2/evidence-observe-only`)
 
 - `runtime/service.py`: con `AI_FLOOR_V2_POSITION_CATCH_UP=0` y `AI_FLOOR_MARKET_EVIDENCE_PATH` definido, cada ciclo encola (el más reciente por símbolo) su snapshot y `Scheduler.tick` lo escribe en `market_evidence.db` con `flush_evidence_observations` DESPUÉS de todos los ciclos del tick (trading, salidas, alertas). Acotado: store de vida corta con timeouts SQLite de 0,5 s, todas las velas en una sola transacción (`EvidenceStore.batch`), presupuesto de 2 s (no empieza más velas; lo hecho se confirma) e interrupción SQLite 0,5 s después. Ninguna escritura en la DB de trading (sin journal ni estado `evidence_observe`): cualquier Exception (MemoryError incluida) = solo WARNING en log. Nunca se lee en OFF; ON y `_observe_evidence` (P1-B) sin cambios. (Revisión Codex 2026-10-14, MEDIUM 1.)

@@ -21,8 +21,10 @@ ROOT = Path(__file__).resolve().parent
 SKIP_DIRS = {".git", ".venv", "venv", "env", "node_modules", "__pycache__", ".ruff_cache"}
 BROKER_SDKS = {"oanda", "oandapyV20", "MetaTrader5", "alpaca", "alpaca_trade_api", "ib_insync", "ccxt", "ibapi"}
 # Every module allowed to call ``.submit_plan(``; each one reaches it only after an APPROVED Risk decision.
+# execution/paper_broker_adapter.py (broker skeleton, not wired) only forwards the floor report from its injected
+# context provider to PaperBroker.submit_plan, which keeps refusing anything not APPROVED (test_broker_paper_adapter).
 SUBMIT_PLAN_CALLERS = {"runtime/service.py", "execution/risk_reservation.py",
-                       "replay/conflict_audit.py", "replay/risk_audit.py"}
+                       "replay/conflict_audit.py", "replay/risk_audit.py", "execution/paper_broker_adapter.py"}
 
 
 def python_sources():
