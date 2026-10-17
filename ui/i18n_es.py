@@ -45,7 +45,7 @@ TEXT = {
     "SAMPLE / DEMO": "DATOS DE EJEMPLO",
     "Paper trading only · observation only": "Solo práctica (paper trading) · solo observación",
     "Legacy / Detail": "Vistas detalladas (técnicas)",
-    "Trading Floor": "Mesa de Trading",
+    "Trading Floor": "AI Trading Floor",
     "PAPER · V2": "Práctica · PAPER · V2",
     # Overview
     "Equity · PAPER": "Capital de la cuenta",
@@ -124,7 +124,7 @@ TEXT = {
         "IDs exactos; si llenas ambos se combinan. Hasta 200 filas por tabla y página, lo más reciente primero.",
     "Failed runs": "Ciclos fallidos",
     "Error journal": "Bitácora de errores",
-    "AI TRADING FLOOR": "MESA DE TRADING CON IA",
+    "AI TRADING FLOOR": "AI TRADING FLOOR",
     "SAMPLE / DEMO — NOT CURRENT PRICES": "DATOS DE EJEMPLO — NO SON PRECIOS ACTUALES",
     "CRITICAL — STALE DATA": "CRÍTICO — DATOS VIEJOS",
     "NEXT ANALYSIS: NOT SCHEDULED · AI INTERPRETS. PYTHON VALIDATES. RISK ENGINE AUTHORIZES. PAPER BROKER EXECUTES.":
