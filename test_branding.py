@@ -23,3 +23,20 @@ class BrandingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrokerLabelTests(unittest.TestCase):
+    def test_user_visible_broker_label_is_oanda_only(self):
+        from execution.account_registry import LABELS, PROVIDER_LABELS, read_control_snapshot
+        from ui.views import control
+        self.assertEqual(LABELS["broker_demo"], "Broker demo (OANDA)")
+        self.assertEqual(set(PROVIDER_LABELS.values()), {"Broker demo (OANDA)"})
+        self.assertEqual(control.LABELS["broker_demo"], "Broker demo (OANDA)")
+        snapshot = read_control_snapshot("/nonexistent/broker_state.db", env={})
+        shown = " ".join(a["label"] for a in snapshot["accounts"]) + " " + " ".join(control.LABELS.values())
+        self.assertNotIn("DXtrade", shown)
+        self.assertNotIn("DXTRADE", shown.upper())
+
+    def test_ui_sources_have_no_dxtrade_text(self):
+        for path in sorted((ROOT / "ui").rglob("*.py")):
+            self.assertNotIn("dxtrade", path.read_text(encoding="utf-8").lower(), path.name)

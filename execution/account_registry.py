@@ -24,9 +24,9 @@ from execution.fs_security import private_state_dir, secure_sqlite_files
 
 LOG = logging.getLogger("ai_floor.broker.registry")
 ACCOUNT_KEYS = ("paper", "broker_demo", "real")
-LABELS = {"paper": "PAPER", "broker_demo": "DEMO broker (DXtrade)", "real": "REAL (bloqueada)"}
-# broker_demo label per AI_FLOOR_BROKER_DEMO_PROVIDER (default dxtrade keeps LABELS["broker_demo"]).
-PROVIDER_LABELS = {"dxtrade": LABELS["broker_demo"], "oanda": "DEMO broker (OANDA practice)"}
+LABELS = {"paper": "PAPER", "broker_demo": "Broker demo (OANDA)", "real": "REAL (bloqueada)"}
+# broker_demo label per AI_FLOOR_BROKER_DEMO_PROVIDER (every provider shows the OANDA label).
+PROVIDER_LABELS = {"dxtrade": LABELS["broker_demo"], "oanda": LABELS["broker_demo"]}  # user-visible: OANDA only
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS broker_accounts (
     account_key TEXT PRIMARY KEY,

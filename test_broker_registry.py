@@ -273,8 +273,8 @@ class SnapshotTests(TempDbCase):
 
     def test_provider_default_dxtrade_and_oanda_opt_in(self):
         self.registry.initialize()
-        cases = {None: ("dxtrade", "DEMO broker (DXtrade)"), "oanda": ("oanda", "DEMO broker (OANDA practice)"),
-                 " OANDA ": ("oanda", "DEMO broker (OANDA practice)"), "fxtrade": ("dxtrade", "DEMO broker (DXtrade)")}
+        cases = {None: ("dxtrade", "Broker demo (OANDA)"), "oanda": ("oanda", "Broker demo (OANDA)"),
+                 " OANDA ": ("oanda", "Broker demo (OANDA)"), "fxtrade": ("dxtrade", "Broker demo (OANDA)")}
         for raw, (provider, label) in cases.items():
             env = {} if raw is None else {"AI_FLOOR_BROKER_DEMO_PROVIDER": raw}
             with self.subTest(raw=raw):
