@@ -14,6 +14,11 @@ def main():
     parser.add_argument("--recover-only", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    try:
+        from execution.log_redaction import install_log_redaction
+        install_log_redaction()
+    except Exception:  # noqa: BLE001 - log hardening never blocks startup
+        pass
     config = RuntimeConfig.from_env()
     if args.once and args.once not in config.enabled_symbols:
         parser.error(f"{args.once} is supported but disabled by AI_FLOOR_ENABLED_SYMBOLS")

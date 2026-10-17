@@ -27,7 +27,10 @@ def _sanitize(value):
             secret = os.environ.get(name)
             if secret and len(secret) >= 8:
                 result = result.replace(secret, "[REDACTED]")
-        return _TOKEN_PATTERN.sub("[REDACTED]", result)[:2000]
+        result = _TOKEN_PATTERN.sub("[REDACTED]", result)
+        # Shared redaction: every secret-named env value (e.g. OANDA tokens), token shapes and account ids.
+        from execution.log_redaction import env_secrets, redact
+        return redact(result, env_secrets())[:2000]
     return value
 
 

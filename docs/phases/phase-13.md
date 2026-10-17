@@ -27,3 +27,6 @@ Jeferson Tejeda, 2026-10-11 10:00 ET). **No está habilitado todavía**: default
 cambio de env, Render, scheduler ni deploy. GO operativo y evidencia/certificación siguen pendientes.
 Pre-flight: tests de DEC-14.1, replay con corpus original disponible, warning fail-closed para valores
 inválidos y verificación del cierre/reverse/abandono en journal y alertas. Diseño/restart en fase-06.
+
+## 2026-10-17 · Demo de broker OANDA (fuera de las fases certificadas)
+Ver `docs/oanda_adapter.md` y `docs/security_audit.md`. Sin cambios en el estado de las fases 0–13.

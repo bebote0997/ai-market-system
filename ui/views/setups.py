@@ -67,32 +67,36 @@ def iter_validated_setups(db, *, run_id=''):
 
 
 def render(st, db):
-    from ui.components.setup_chart import build_setup_figure
-    from ui.views.luxury import card, process_link, MISSING
+    from ui.components.setup_chart import build_setup_figure, light_setup_figure
+    from ui.views.luxury import card, process_link, MISSING, tr, state_chip
     rows = validated_setups(db)[:ROW_LIMIT]
     from runtime.setup_candle_reader import cache_path
     from ui.candle_cache import cached_candles
-    st.caption('Latest 200 setups · cache: closed 5m prices as of setup; OHLC only when persisted.')
+    st.caption(tr('Latest 200 setups · cache: closed 5m prices as of setup; OHLC only when persisted.'))
     if not rows:
-        card(st, 'Validated setups', summary=f'{MISSING} · not persisted yet')
+        card(st, tr('Validated setups'), summary=f'{MISSING} · {tr("not persisted yet")}')
         return
-    symbol = st.selectbox('Setups symbol', ['All'] + sorted({r['symbol'] for r in rows}))
+    symbol = st.selectbox(tr('Setups symbol'), ['All'] + sorted({r['symbol'] for r in rows}),
+                          format_func=lambda value: 'Todos' if value == 'All' else value)
     visible = [row for row in rows if symbol == 'All' or row['symbol'] == symbol]
-    selected = st.selectbox('Setup · newest first', range(len(visible)),
-                            format_func=lambda i: f"{visible[i]['symbol']} · {visible[i]['setup_id'] or visible[i]['run_id']} · {visible[i]['as_of']}")
+    from ui.views.luxury import display
+    selected = st.selectbox(tr('Setup · newest first'), range(len(visible)),
+                            format_func=lambda i: f"{visible[i]['symbol']} · {display(visible[i]['as_of'])} · {visible[i]['setup_id'] or visible[i]['run_id']}")
     for index, row in enumerate([visible[selected]]):
         row['bars'] = cached_candles(str(cache_path()), row['symbol'], row['as_of']) or row['bars'][-48:]
-        card(st, row['symbol'] + ' · ' + row['setup_status'],
-             [('Run ID', row['run_id']), ('Setup ID', row['setup_id']), ('As of', row['as_of'])], summary=row['setup'])
+        card(st, row['symbol'], [('Estado', state_chip(row['setup_status'])), ('Hora', display(row['as_of'])),
+             (tr('Setup ID'), row['setup_id'] or MISSING), (tr('Run ID'), row['run_id'])],
+             summary=row['setup'])
         process_link(st, row['run_id'], f'setup-process-{index}')
         if not row['setup_id']:
-            card(st, 'Gaps', summary='Setup ID not persisted; setup email dedup unavailable')
+            card(st, tr('Gaps'), summary=tr('Setup ID not persisted; setup email dedup unavailable'))
         if not row['bars']:
-            card(st, 'Chart', summary='chart unavailable: bars not persisted')
-            card(st, 'Gaps', summary='Exact-cycle 15m OHLC bars not persisted')
+            card(st, tr('Chart'), summary=tr('chart unavailable: bars not persisted'))
+            card(st, tr('Gaps'), summary=tr('Exact-cycle 15m OHLC bars not persisted'))
         else:
             try:
-                st.caption('5m close prices · candle_cache · no OHLC available' if row['bars'][0].get('source') == 'candle_cache' else 'Persisted 15m OHLC')
-                st.plotly_chart(build_setup_figure(row['bars'], row['plan'], row['symbol']), width='stretch', key=f'setup-chart-{index}')
+                st.caption(tr('5m close prices · candle_cache · no OHLC available') if row['bars'][0].get('source') == 'candle_cache' else tr('Persisted 15m OHLC'))
+                st.plotly_chart(light_setup_figure(build_setup_figure(row['bars'], row['plan'], row['symbol'])),
+                                width='stretch', theme=None, key=f'setup-chart-{index}')
             except (ValueError, KeyError, TypeError):
-                card(st, 'Chart', summary='chart unavailable: persisted bars invalid')
+                card(st, tr('Chart'), summary=tr('chart unavailable: persisted bars invalid'))

@@ -99,7 +99,7 @@ class DashboardLoginTests(unittest.TestCase):
         ui.supplied, ui.inputs = PASSWORD, 0
         self.assertEqual(self.attempt(ui), "STOP")
         self.assertEqual(ui.inputs, 0)
-        self.assertIn("Too many failed sign-in attempts", ui.errors[-1])
+        self.assertIn("Demasiados intentos fallidos", ui.errors[-1])
         self.clock.now += auth.SESSION_LOCKOUT_SECONDS
         self.assertEqual(self.attempt(ui), "RERUN")
 
@@ -196,6 +196,11 @@ class DocumentedLaunchTests(unittest.TestCase):
 
 
 class CloudStartupTests(unittest.TestCase):
+    def setUp(self):
+        install = patch("execution.log_redaction.install_log_redaction")  # keep the test process logging untouched
+        install.start()
+        self.addCleanup(install.stop)
+
     def test_weak_or_misconfigured_dashboard_settings_stop_startup(self):
         from runtime import cloud
         base = {"RENDER": "true", "PORT": "10000"}

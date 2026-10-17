@@ -20,6 +20,11 @@ SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
 
 def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
+    try:
+        from execution.log_redaction import install_log_redaction
+        install_log_redaction()
+    except Exception:  # noqa: BLE001 - log hardening never blocks startup
+        pass
     if os.environ.get("RENDER") != "true" or os.environ.get("AI_FLOOR_CLOUD_RUNNER") != "1":
         raise RuntimeError("cloud runner not activated")
     config = RuntimeConfig.from_env()

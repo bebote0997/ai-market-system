@@ -9,6 +9,8 @@ from pathlib import Path
 from ui.adapters import from_persisted_snapshot
 from ui.components import panels
 from ui.state import dashboard_database
+from ui import i18n_es as es
+from ui.i18n_es import tr
 
 PAGES = ("OVERVIEW", "POSITIONS", "SETUPS", "DECISIONS", "HEALTH", "ALERTS", "HISTORY", "ERRORS")
 TABLES = frozenset({"runs", "setups", "agent_decisions", "risk_decisions",
@@ -117,39 +119,39 @@ def history(db, run_id="", setup_id="", offset=0):
 
 def table(st, rows):
     if not rows:
-        st.info("NO_DATA")
+        st.info(es.NO_DATA)
         return
     dataframe(st, rows, hide_index=True, width="stretch")
 
 
 def render(st, page):
-    st.header(page)
-    st.caption("Persisted PAPER evidence · SQLite read-only · missing evidence = NO_DATA")
+    st.header(es.LEGACY_PAGES.get(page, page))
+    st.caption(tr("Persisted PAPER evidence · SQLite read-only · missing evidence = NO_DATA"))
     try:
         with dashboard_database() as db:
             if page == "OVERVIEW":
                 accounts = payloads(db, "paper_accounts")
                 if not accounts:
-                    st.info("NO_DATA")
+                    st.info(es.NO_DATA)
                 for account in accounts:
                     st.subheader(account["account_id"])
                     for col, key in zip(st.columns(3), ("equity", "realized_pnl", "unrealized_pnl")):
-                        col.metric(key.replace("_", " ").title(), account.get(key, "NO_DATA"))
-                st.subheader("Market state / charts")
+                        col.metric(es.column(key), account.get(key, es.NO_DATA))
+                st.subheader(tr("Market state / charts"))
                 snapshots = payloads(db, "ui_snapshots")
                 for snapshot in snapshots:
                     vm = from_persisted_snapshot(snapshot)
-                    st.write(vm.symbol, vm.state, vm.freshness)
+                    st.write(vm.symbol, es.status_text(vm.state), es.status_text(vm.freshness))
                     panels.chart(st, vm)
                 if not snapshots:
-                    st.info("NO_DATA")
+                    st.info(es.NO_DATA)
             elif page == "POSITIONS":
-                st.subheader("Open positions · all symbols")
+                st.subheader(tr("Open positions · all symbols"))
                 table(st, payloads(db, "paper_positions", statuses=("OPEN",)))
-                st.subheader("Pending orders · all symbols")
+                st.subheader(tr("Pending orders · all symbols"))
                 table(st, payloads(db, "paper_orders", statuses=("PENDING",)))
             elif page == "SETUPS":
-                st.subheader("Latest setup per symbol")
+                st.subheader(tr("Latest setup per symbol"))
                 runs = {row["slot_key"]: row for row in records(db, "runs")}
                 latest = {}
                 for row in records(db, "setups"):
@@ -159,57 +161,57 @@ def render(st, page):
                                                    "symbol": run["symbol"], "as_of": run["as_of"]}
                 table(st, list(latest.values()))
             elif page == "DECISIONS":
-                st.subheader("AI decisions · interpretation")
+                st.subheader(tr("AI decisions · interpretation"))
                 table(st, records(db, "agent_decisions"))
-                st.subheader("Risk decisions · deterministic authority")
+                st.subheader(tr("Risk decisions · deterministic authority"))
                 table(st, records(db, "risk_decisions"))
             elif page == "HEALTH":
-                st.subheader("System Health observations")
+                st.subheader(tr("System Health observations"))
                 trading_path = Path(os.environ.get("AI_FLOOR_DB_PATH", "data/runtime/trading_floor.db"))
                 health_path = os.environ.get("AI_FLOOR_HEALTH_DB_PATH", str(trading_path.with_name("system_health.db")))
                 with dashboard_database(health_path) as health_db:
                     table(st, payloads(health_db, "component_health"))
-                st.caption("Persisted component observations; no probes or health policy changes are performed.")
+                st.caption(tr("Persisted component observations; no probes or health policy changes are performed."))
                 states = {row["key"]: row["value"] for row in records(db, "system_state")}
-                table(st, [{"service": key, "status": states.get(key, "NO_DATA")} for key in
+                table(st, [{es.column("service"): key, es.column("status"): states.get(key, es.NO_DATA)} for key in
                            ("scheduler", "heartbeat", "scheduler_slot", "market_data_provider",
                             "market_provider_mode", "ai_provider", "macro_provider", "api_status",
                             "last_run", "last_success", "phase7_readiness")])
-                st.caption("Provider configuration is not proof of API health. Statuses are persisted observations.")
-                st.subheader("Provider / API run evidence")
+                st.caption(tr("Provider configuration is not proof of API health. Statuses are persisted observations."))
+                st.subheader(tr("Provider / API run evidence"))
                 table(st, [{key: row.get(key) for key in
                             ("run_id", "symbol", "as_of", "status", "provider_metadata", "error")}
                            for row in records(db, "runs")[:20]])
             elif page == "ALERTS":
-                st.subheader("Phase 9 alert deliveries")
+                st.subheader(tr("Phase 9 alert deliveries"))
                 ledger_path = os.environ.get("AI_FLOOR_ALERTS_LEDGER_PATH")
                 if ledger_path:
                     with dashboard_database(ledger_path) as ledger_db:
                         table(st, records(ledger_db, "alert_deliveries"))
                 else:
-                    st.info("NO_DATA")
-                st.subheader("V1 notification deliveries")
+                    st.info(es.NO_DATA)
+                st.subheader(tr("V1 notification deliveries"))
                 events = {row["event_id"]: json.loads(row["payload"])
                           for row in records(db, "notification_events")}
                 rows = [{**events.get(row["event_id"], {}), **row}
                         for row in records(db, "notification_deliveries")]
                 table(st, sorted(rows, key=lambda row: row["attempted_at"], reverse=True)[:50])
             elif page == "HISTORY":
-                run_id = st.text_input("Run ID", key="history_run_id").strip()
-                setup_id = st.text_input("Setup ID", key="history_setup_id").strip()
-                page_number = st.number_input("History page", min_value=1, value=1, step=1,
+                run_id = st.text_input(tr("Run ID"), key="history_run_id").strip()
+                setup_id = st.text_input(tr("Setup ID"), key="history_setup_id").strip()
+                page_number = st.number_input(tr("History page"), min_value=1, value=1, step=1,
                                               key="history_page")
-                st.caption("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first.")
+                st.caption(tr("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first."))
                 rows = history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT)
                 if not rows:
-                    st.info("NO_DATA")
+                    st.info(es.NO_DATA)
                 for record_type, group in groupby(rows, key=lambda row: row["record"]):
                     st.subheader(record_type)
                     table(st, list(group))
             elif page == "ERRORS":
-                st.subheader("Failed runs")
+                st.subheader(tr("Failed runs"))
                 table(st, records(db, "runs", failed=True))
-                st.subheader("Error journal")
+                st.subheader(tr("Error journal"))
                 table(st, records(db, "journal", statuses=("ERROR", "CRITICAL")))
     except (sqlite3.DatabaseError, ValueError, TypeError, KeyError) as exc:
-        st.error(f"DASHBOARD_ERROR — {type(exc).__name__}: persisted evidence could not be read")
+        st.error(f"{tr('DASHBOARD_ERROR')} ({type(exc).__name__}).")

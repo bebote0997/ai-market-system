@@ -1,4 +1,4 @@
-"""Luxury screens share the Phase 10 offline fixture and remain read-only."""
+"""Main (light, Spanish) screens share the Phase 10 offline fixture and remain read-only."""
 import json
 import os
 from pathlib import Path
@@ -13,6 +13,19 @@ import test_phase10_dashboard as fixtures
 APP, T = fixtures.APP, fixtures.T
 from ui.views import luxury
 from ui.tables import normalize_rows
+
+
+# The Control page reads the OANDA balance (GET summary) when a token is in the environment: never in tests.
+_NO_BALANCE_NETWORK = patch("execution.oanda_readonly.urllib_transport",
+                            side_effect=AssertionError("network must not be touched"))
+
+
+def setUpModule():
+    _NO_BALANCE_NETWORK.start()
+
+
+def tearDownModule():
+    _NO_BALANCE_NETWORK.stop()
 
 
 class LuxuryDashboardTests(unittest.TestCase):
@@ -46,7 +59,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             self.assert_rendered(app)
             self.assertEqual(self.digest(), before)
             self.assertEqual(hashlib.sha256(self.health_path.read_bytes()).hexdigest(), health_before)
-            self.assertTrue(any('PAPER · REAL EXECUTION DISABLED' in m.value for m in app.markdown))
+            self.assertTrue(any('ejecución real desactivada' in m.value for m in app.markdown))
         app.radio[0].set_value('The Floor').run()
         content = '\n'.join(m.value for m in app.markdown)
         self.assertIn('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;', content)
@@ -54,9 +67,10 @@ class LuxuryDashboardTests(unittest.TestCase):
         self.assertIn('0.7', content)
         app.radio[0].set_value('Trades').run()
         content = '\n'.join(m.value for m in app.markdown)
-        self.assertIn('3', content)
-        self.assertIn('Net PnL', content)
-        self.assertIn('not available yet', content)
+        self.assertIn('+$3.00', content)
+        self.assertIn('Resultado', content)
+        self.assertIn('Llegó a la meta de ganancia', content)
+        self.assertIn('sin datos de la posición original', content)
         self.assertTrue(app.selectbox)
 
     def test_empty_new_screens(self):
@@ -67,8 +81,8 @@ class LuxuryDashboardTests(unittest.TestCase):
                 app.radio[0].set_value(page).run()
                 self.assert_rendered(app)
                 content = '\n'.join(m.value for m in app.markdown)
-                if page != 'Analysts · soon':
-                    self.assertIn('not available yet', content)
+                if page not in ('Analysts · soon', 'Control'):
+                    self.assertIn('no disponible aún', content)
             self.assertFalse((Path(self.tmp.name)/'missing.db').exists())
 
     def test_all_dataframes_use_shared_normalization_and_modern_width(self):
@@ -88,7 +102,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             app = self.app()
             app.radio[0].set_value('SYSTEM').run()
             self.assert_rendered(app)
-            self.assertEqual(app.dataframe[0].value.iloc[0]['status'], '["A", "B"]')
+            self.assertEqual(app.dataframe[0].value.iloc[0]['Estado'], '["A", "B"]')
 
     def test_auth_gate_is_first_and_unchanged(self):
         with patch('ui.state.sqlite3.connect', side_effect=AssertionError('unauthenticated read')):
@@ -103,9 +117,12 @@ class LuxuryDashboardTests(unittest.TestCase):
         from datetime import datetime, timezone
         rows = [{'net_pnl': 10, 'exited_at': T}, {'net_pnl': -4, 'exited_at': T}]
         stats, curve = luxury.trade_statistics(rows, datetime.now(timezone.utc))
-        self.assertEqual(stats['Win rate · closed trades'], '50.0%')
-        self.assertEqual(stats['Max drawdown · realized PnL'], '4.00 (cash)')
-        self.assertEqual(stats['Avg R realized'], luxury.MISSING)
+        self.assertEqual((stats['trades'], stats['wins']), (2, 1))
+        self.assertEqual(stats['max_drawdown'], 4)
+        self.assertIsNone(stats['avg_r'])
+        from ui import i18n_es as es
+        self.assertEqual(es.wins_phrase(stats['wins'], stats['trades']), 'De 2 operaciones, 1 ganó')
+        self.assertEqual(es.drawdown_phrase(stats['max_drawdown']), 'La mayor caída del resultado de operaciones cerradas: $4.00')
         self.assertEqual(curve[-1]['Cumulative realized PnL'], 6)
         self.assertEqual(luxury.trade_statistics([], datetime.now(timezone.utc))[1], [])
 
@@ -115,17 +132,22 @@ class LuxuryDashboardTests(unittest.TestCase):
             app = self.app()
             content = '\n'.join(m.value for m in app.markdown)
             self.assertIn('&lt;b&gt;V2_F3&lt;/b&gt;', content)
-            self.assertIn('source: env', content)
+            self.assertIn('origen: env', content)
             self.assertNotIn('never-display-this', content)
             self.assertEqual(luxury.policy_value({'V2_PLANNER_POLICY': 'V1'}, 'V2_PLANNER_POLICY'),
                              ('V1', 'system_state'))
 
-    def test_styles_scoped_and_injected_once(self):
+    def test_styles_scoped_light_and_injected_once(self):
         app = self.app()
-        styles = [m.value for m in app.markdown if 'Cormorant+Garamond' in m.value]
+        styles = [m.value for m in app.markdown if '<style>' in m.value and '.tf table' in m.value]
         self.assertEqual(len(styles), 1)
         self.assertIn('@media(max-width:640px)', styles[0])
-        self.assertIn('.lux table', styles[0])
+        self.assertIn("'Inter','Segoe UI',system-ui", styles[0])
+        self.assertNotIn('@import', styles[0])
+        for dark in ('#0b0b0c', '#c8a96a', 'Cormorant'):
+            self.assertNotIn(dark, styles[0])
+        config = Path('.streamlit/config.toml').read_text()
+        self.assertIn('base = "light"', config)
 
     def test_empty_database_screens_are_read_only(self):
         path = Path(self.tmp.name)/'empty.db'
@@ -147,25 +169,26 @@ class LuxuryDashboardTests(unittest.TestCase):
                         json.dumps({'decision':'BLOCK', 'reason':'OPPOSITE_POSITION_CONFLICT'})))
         before = self.digest()
         app = self.app()
-        self.assertTrue(any(t.label == 'Auto-refresh · every 60s' and t.value for t in app.toggle))
+        self.assertTrue(any(t.label == 'Actualizar solo · cada 60 s' and t.value for t in app.toggle))
         app.radio[0].set_value('Process').run()
-        next(s for s in app.selectbox if s.label == 'Cycle · newest first').set_value('run-1').run()
+        next(s for s in app.selectbox if s.label == 'Ciclo · el más reciente primero').set_value('run-1').run()
         self.assert_rendered(app)
         content = '\n'.join(m.value for m in app.markdown)
         from ui.views.process import STEPS
+        from ui.i18n_es import STEPS as LABELS
         for step in STEPS:
-            self.assertIn(step, content)
-        for value in ('Structure AI', 'fixture only', 'setup-1', 'closed-1', 'twelve_data', 'OPPOSITE_POSITION_CONFLICT', 'not persisted yet', 'Gaps'):
+            self.assertIn(LABELS[step], content)
+        for value in ('IA de estructura', 'fixture only', 'setup-1', 'closed-1', 'twelve_data', 'OPPOSITE_POSITION_CONFLICT', 'aún no guardado', 'Datos que faltan'):
             self.assertIn(value, content)
         self.assertEqual(self.digest(), before)
-        next(t for t in app.toggle if t.label == 'Auto-refresh · every 60s').set_value(False).run()
+        next(t for t in app.toggle if t.label == 'Actualizar solo · cada 60 s').set_value(False).run()
         self.assert_rendered(app)
-        self.assertFalse(next(t for t in app.toggle if t.label == 'Auto-refresh · every 60s').value)
+        self.assertFalse(next(t for t in app.toggle if t.label == 'Actualizar solo · cada 60 s').value)
         self.assertEqual(self.digest(), before)
         app.radio[0].set_value('Trades').run()
         next(b for b in app.button if b.key == 'trade-process').click().run()
         self.assertEqual(app.radio[0].value, 'Process')
-        self.assertEqual(next(s for s in app.selectbox if s.label == 'Cycle · newest first').value, 'run-1')
+        self.assertEqual(next(s for s in app.selectbox if s.label == 'Ciclo · el más reciente primero').value, 'run-1')
 
     def test_null_plan_and_payload_render_every_screen(self):
         """Regression: a setup row whose plan is JSON null crashed Process (demo DB QA)."""
@@ -184,7 +207,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             app = self.app()
             app.radio[0].set_value('Process').run()
             self.assert_rendered(app)
-            self.assertIn('not persisted yet', '\n'.join(m.value for m in app.markdown))
+            self.assertIn('aún no guardado', '\n'.join(m.value for m in app.markdown))
 
     def test_setups_real_bars_and_missing_bars(self):
         with sqlite3.connect(self.path) as db:
@@ -192,7 +215,7 @@ class LuxuryDashboardTests(unittest.TestCase):
         app = self.app()
         app.radio[0].set_value('Setups').run()
         self.assert_rendered(app)
-        self.assertIn('chart unavailable: bars not persisted', '\n'.join(m.value for m in app.markdown))
+        self.assertIn('gráfico no disponible: no hay velas guardadas', '\n'.join(m.value for m in app.markdown))
         with sqlite3.connect(self.path) as db:
             snap = json.loads(db.execute('SELECT payload FROM ui_snapshots').fetchone()[0])
             snap['bars'] = {'15m': CHART_BARS}
@@ -207,7 +230,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             snap['run_id'] = 'other-run'
             db.execute('UPDATE ui_snapshots SET payload=?', (json.dumps(snap),))
         app.run()
-        self.assertIn('chart unavailable: bars not persisted', '\n'.join(m.value for m in app.markdown))
+        self.assertIn('gráfico no disponible: no hay velas guardadas', '\n'.join(m.value for m in app.markdown))
 
 
 CHART_BARS = [
@@ -419,19 +442,21 @@ class StoredDashboardEvidenceTests(unittest.TestCase):
         with sqlite3.connect(self.path) as db:
             db.row_factory = sqlite3.Row
             self.assertEqual(luxury.closed_trade_rows(db)[0]['realized_r'], 3)
-            self.assertEqual(luxury.ledger_statistics(db, datetime.now(timezone.utc))[0]['Avg R realized'], '3.00R')
+            self.assertEqual(luxury.ledger_statistics(db, datetime.now(timezone.utc))[0]['avg_r'], 3)
             self.assertEqual(luxury.open_position_rows(db)[0]['unrealized_pnl'], 2)
         before = self.digest()
         app = self.app()
         app.radio[0].set_value('Trades').run()
         self.assert_rendered(app)
         content = '\n'.join(m.value for m in app.markdown)
-        self.assertIn('close reason</th>', content)
-        self.assertIn('TARGET', content)
-        self.assertIn('realized r</th>', content)
+        self.assertIn('Por qué se cerró</th>', content)
+        self.assertIn('Llegó a la meta de ganancia', content)
+        self.assertIn('title="TARGET"', content)
+        self.assertIn('Resultado vs riesgo</th>', content)
+        self.assertIn('ganaste 3 veces lo que arriesgabas', content)
         app.radio[0].set_value('Overview').run()
         self.assert_rendered(app)
-        self.assertIn('3.00R', '\n'.join(m.value for m in app.markdown))
+        self.assertIn('+3.00 R', '\n'.join(m.value for m in app.markdown))
         chart = json.loads(app.get('plotly_chart')[0].proto.spec)
         self.assertTrue(chart['layout']['yaxis']['automargin'])
         self.assertGreaterEqual(chart['layout']['margin']['l'], 60)
@@ -493,5 +518,5 @@ class StoredDashboardEvidenceTests(unittest.TestCase):
         self.assertEqual(len(chart['data'][0]['x']), 48)
         self.assertEqual(chart['data'][0]['type'], 'scatter')
         self.assertNotIn(999, chart['data'][0]['y'])
-        self.assertTrue(any('5m close prices' in c.value for c in app.caption))
+        self.assertTrue(any('precios de cierre de 5 min' in c.value for c in app.caption))
         self.assertEqual(hashlib.sha256(cache.read_bytes()).hexdigest(), before)

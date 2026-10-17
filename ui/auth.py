@@ -126,15 +126,15 @@ def require_dashboard_access(st, env=None, *, clock=time.monotonic, sleep=time.s
     if expired:
         LOG.info("component=dashboard event=SESSION_EXPIRED")
 
-    st.title("AI Trading Floor · private PAPER dashboard")
+    st.title("Mesa de Trading · panel privado de práctica (PAPER)")
     if expired:
-        st.info("Session expired; sign in again.")
+        st.info("La sesión expiró; vuelve a entrar.")
     locked_until = max(limiter.locked_until(now), state.get(LOCKED_UNTIL) or 0.0)
     if now < locked_until:
-        return _deny(st, "Too many failed sign-in attempts. Try again in "
+        return _deny(st, "Demasiados intentos fallidos. Intenta de nuevo en "
                          f"{math.ceil(locked_until - now)} s.")
-    supplied = st.text_input("Password", type="password") or ""
-    if st.button("Sign in"):
+    supplied = st.text_input("Contraseña", type="password") or ""
+    if st.button("Entrar"):
         if hmac.compare_digest(supplied.encode("utf-8"), password.encode("utf-8")):
             state[FAILURES] = 0
             state.pop(LOCKED_UNTIL, None)
@@ -152,6 +152,6 @@ def require_dashboard_access(st, env=None, *, clock=time.monotonic, sleep=time.s
                 state[LOCKED_UNTIL] = now + SESSION_LOCKOUT_SECONDS
             state[FAILURES] = failures
             sleep(FAILURE_DELAY_SECONDS)
-            st.error("Invalid password")
+            st.error("Contraseña incorrecta")
     st.stop()
     return False

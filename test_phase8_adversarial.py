@@ -260,9 +260,15 @@ class PaperSafetyTests(Case):
                 runtime.run_cycle("NAS100", T)
         finally:
             runtime.close()
+        # OandaBroker (PRACTICE-only demo adapter, owner decision 2026-10-17) is allowed ONLY in execution/oanda_broker.py;
+        # real/live broker classes stay forbidden everywhere.
+        oanda_module = ROOT / "execution" / "oanda_broker.py"
         brokers = [p for p in ROOT.rglob("*.py") if "test_" not in p.name and ".claude" not in str(p)
                    and "class " in p.read_text(encoding="utf-8")
-                   and any(f"class {n}" in p.read_text(encoding="utf-8") for n in ("LiveBroker", "RealBroker", "OandaBroker"))]
+                   and any(f"class {n}" in p.read_text(encoding="utf-8")
+                           for n in ("LiveBroker", "RealBroker", "OandaBroker"))
+                   and not (p == oanda_module and "class LiveBroker" not in p.read_text(encoding="utf-8")
+                            and "class RealBroker" not in p.read_text(encoding="utf-8"))]
         self.assertEqual(brokers, [])
         for flag in ("v2_position_catch_up", "v2_ai_call_audit", "v2_ai_resilience"):
             self.assertIs(getattr(RuntimeConfig.from_env(), flag), False)

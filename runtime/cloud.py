@@ -132,6 +132,11 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
 
 def serve():
     """Start read-only web; optionally supervise one runner after future activation."""
+    try:
+        from execution.log_redaction import install_log_redaction
+        install_log_redaction()
+    except Exception:  # noqa: BLE001 - log hardening never blocks startup
+        pass
     if os.environ.get("RENDER") != "true":
         raise RuntimeError("cloud entry point requires Render")
     port = os.environ.get("PORT", "10000")
@@ -142,6 +147,14 @@ def serve():
     if not password_strong_enough(os.environ.get("AI_FLOOR_DASHBOARD_PASSWORD")):
         raise RuntimeError(f"AI_FLOOR_DASHBOARD_PASSWORD must have at least {MIN_PASSWORD_LENGTH} characters")
     session_ttl_seconds()  # invalid AI_FLOOR_DASHBOARD_SESSION_TTL_SECONDS fails startup, not the first login
+    # Owner-only files for everything created from here on (trading DB, candle cache, ledgers), inherited by children.
+    os.umask(0o077)
+    try:  # Existing files keep their old mode: tighten the trading DB (and sidecars) and the broker state DB.
+        from execution.fs_security import secure_sqlite_files
+        secure_sqlite_files(RuntimeConfig.from_env().db_path)
+        secure_sqlite_files(os.environ.get("AI_FLOOR_BROKER_STATE_DB_PATH") or "data/runtime/broker_state.db")
+    except Exception:  # noqa: BLE001 - hardening never blocks startup
+        pass
     children = []
     stop = False
 
@@ -171,11 +184,17 @@ def serve():
         doctor = cloud_preflight(RuntimeConfig.from_env())
         if not doctor.infra_ready:
             raise RuntimeError("cloud infrastructure preflight not ready")
+    # Default entry adds HSTS/CSP/X-Frame-Options/nosniff/Referrer-Policy (ui/security_headers.py via st.App).
+    # AI_FLOOR_SECURITY_HEADERS=0 is the rollback lever: plain ``ui/app.py`` without the middleware.
+    entry = "ui/app.py" if os.environ.get("AI_FLOOR_SECURITY_HEADERS") == "0" else "ui/asgi_app.py"
     children.append(subprocess.Popen([
-        sys.executable, "-m", "streamlit", "run", "ui/app.py", "--server.headless=true",
+        sys.executable, "-m", "streamlit", "run", entry, "--server.headless=true",
         "--server.address=0.0.0.0", f"--server.port={port}",
         # Never show tracebacks or exception messages to remote visitors.
-        "--client.showErrorDetails=none"]))
+        "--client.showErrorDetails=none",
+        # Explicit hardening (do not rely on Streamlit defaults); viewer toolbar hides the developer menu.
+        "--server.enableXsrfProtection=true", "--server.enableCORS=true", "--browser.gatherUsageStats=false",
+        "--server.enableStaticServing=false", "--client.toolbarMode=viewer"]))
     started = time.monotonic()
     last_health_check = 0.0
     try:
