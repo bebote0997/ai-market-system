@@ -132,6 +132,38 @@ def read_control_snapshot(path=None, *, env=None):
             "provider": provider}
 
 
+def ensure_registry_initialized(path=None, *, env=None):
+    """Create the state DB with EVERY switch OFF and no emergency when (and only when) it does not exist yet.
+
+    Used by the dashboard so a fresh disk shows "all off" instead of "unreadable". Never touches an existing file,
+    never refuses on the experiment DB path (it returns False), never raises. Returns True only if THIS call created it."""
+    try:
+        config = load_broker_config(env)
+        target = Path(path) if path is not None else Path(config.state_db_path)
+        if os.path.lexists(target) or _is_experiment_db(target, config):  # lexists: a dangling symlink counts as present
+            return False
+        created_dir = private_state_dir(target.parent)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            os.close(os.open(target, flags, 0o600))  # exclusive + owner-only from the first byte; we own this file
+        except FileExistsError:
+            return False  # someone else created it meanwhile: leave it alone
+        try:
+            AccountRegistry(target, env=env).initialize()
+            secure_sqlite_files(target, created_dir=created_dir)
+        except BaseException:
+            try:
+                if target.stat().st_size == 0:
+                    target.unlink()  # our own empty shell only; never remove a populated file
+            except OSError:
+                pass
+            raise
+        return True
+    except Exception:  # noqa: BLE001 - fail closed: the reader keeps showing "off"
+        return False
+
+
 @dataclass(frozen=True)
 class EmergencyResult:
     persisted: bool

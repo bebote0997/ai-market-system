@@ -242,3 +242,14 @@ nada lo use. El router, su estado y `trade_duration.py` no cambian.
 7. Cerrar: `--close <TRADE_ID> --confirm I-APPROVE-PRACTICE-TEST-ORDER`.
 8. Verificar `--status` sin trades abiertos antes de activar `AI_FLOOR_BROKER_DEMO_ROUTING=1` (un trade del script
    abierto se vería como drift y bloquearía el enrutado).
+
+## Dashboard notes (env + registry)
+
+* **Env changes need a DEPLOY, not a restart.** On Render a "restart" re-runs the last deploy with the env snapshot taken
+  at that deploy. After adding/changing `OANDA_*` variables (per-key PUT) trigger a deploy of the same commit
+  (`POST /v1/services/{id}/deploys` with `commitId`) so the dashboard process sees them. The Demo/Real balance panel
+  names the missing variable (name only, never a value) when it shows "sin token" / "sin cuenta".
+* **Registry on a fresh disk.** The Control view creates `broker_state.db` (every switch OFF, no emergency, no audit
+  rows) via `execution.account_registry.ensure_registry_initialized` only when the file does not exist (exclusive,
+  `0600`, no symlinks). It never touches an existing file and never enables anything.
+* Balance reads are independent of the routing flag and of the `broker_demo` switch (GET summary only).

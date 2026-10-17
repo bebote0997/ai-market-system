@@ -24,7 +24,7 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     ("ui/views/control.py", "execution.broker_demo_state"), ("ui/views/control.py", "broker_demo_state"),
                     ("ui/views/control.py", "execution.oanda_readonly"), ("ui/views/control.py", "oanda_readonly"),
                     ("runtime/service.py", "execution.broker_demo_router"), ("runtime/service.py", "broker_demo_router")}
-LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"]],
+LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
                                         "execution.broker_demo_state": [["read_router_status"]],
                                         "execution.oanda_readonly": [["cached_account_view"]]},
                 "runtime/service.py": {"execution.broker_demo_router": [["router_from_env"]]}}
