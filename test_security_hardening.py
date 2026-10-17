@@ -196,6 +196,11 @@ class DocumentedLaunchTests(unittest.TestCase):
 
 
 class CloudStartupTests(unittest.TestCase):
+    def setUp(self):
+        install = patch("execution.log_redaction.install_log_redaction")  # keep the test process logging untouched
+        install.start()
+        self.addCleanup(install.stop)
+
     def test_weak_or_misconfigured_dashboard_settings_stop_startup(self):
         from runtime import cloud
         base = {"RENDER": "true", "PORT": "10000"}

@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -32,6 +33,19 @@ def trade(n, position_id, pnl, reason, quantity=1):
 def position(position_id, **extra):
     return {'position_id': position_id, 'entry_price': 100, 'stop': 98, 'quantity': 1, 'contract_multiplier': 10,
             'status': 'CLOSED', **extra}
+
+
+# The Control page reads the OANDA balance (GET summary) when a token is in the environment: never in tests.
+_NO_BALANCE_NETWORK = patch("execution.oanda_readonly.urllib_transport",
+                            side_effect=AssertionError("network must not be touched"))
+
+
+def setUpModule():
+    _NO_BALANCE_NETWORK.start()
+
+
+def tearDownModule():
+    _NO_BALANCE_NETWORK.stop()
 
 
 class RealizedRTests(unittest.TestCase):
@@ -253,6 +267,104 @@ class ControlViewTests(unittest.TestCase):
         source = Path('ui/views/control.py').read_text()
         for forbidden in ('os.environ', 'getenv', 'INSERT', 'UPDATE ', 'DELETE', '.write', 'on_click', 'on_change'):
             self.assertNotIn(forbidden, source)
+
+
+
+class ControlBrokerViewTests(unittest.TestCase):
+    """Router chip, Demo/Real balance VIEW (read-only) and the Historial (baseline) placeholder."""
+
+    def setUp(self):
+        from execution import oanda_readonly
+        self.addCleanup(patch.stopall)
+        patch.object(oanda_readonly, '_VIEWS', oanda_readonly.CachedAccountViews()).start()
+        env = {k: v for k, v in os.environ.items() if not k.startswith('OANDA_')}
+        patch.dict(os.environ, env, clear=True).start()
+
+    def app(self):
+        import test_phase10_dashboard as fixtures
+        case = fixtures.Phase10DashboardTests('test_sqlite_connection_rejects_writes')
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        app = fixtures.Phase10DashboardTests.app(case)
+        app.radio[0].set_value('Control').run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        return app
+
+    @staticmethod
+    def content(app):
+        return '\n'.join(m.value for m in app.markdown)
+
+    def test_history_placeholder_is_separate_and_has_no_numbers(self):
+        content = self.content(self.app())
+        start = content.index('📚 Historial (referencia / baseline)')
+        section = content[start:content.index('</div></div>', start)]
+        self.assertIn('separados de las estadísticas de la demo en vivo', section)
+        self.assertIn('Se cargarán más adelante', section)
+        import re
+        self.assertNotRegex(re.sub(r'<[^>]+>', ' ', section), r'\d')  # visible text only (tags like <h3> aside)
+        self.assertNotIn('<table', section)
+
+    def test_routing_chip_defaults_to_off(self):
+        self.assertIn('Enrutado a broker demo: apagado', self.content(self.app()))
+        with patch('execution.broker_demo_state.read_router_status', side_effect=RuntimeError('boom')):
+            self.assertEqual(control.router_status()['state'], 'off')
+        for status in (None, [], {'readable': True, 'routing': 'yes'}, {'readable': False, 'routing': True}):
+            with patch('execution.broker_demo_state.read_router_status', return_value=status):
+                self.assertEqual(control.routing_chip(control.router_status())[0], 'Enrutado a broker demo: apagado')
+        on = {'readable': True, 'routing': True, 'dry_run': True, 'blocked_reason': 'drift',
+              'open_trade': {'trade_id': '6397', 'side': 'LONG'}, 'last_events': [{'ts': 't', 'kind': 'DRIFT'}]}
+        with patch('execution.broker_demo_state.read_router_status', return_value=on):
+            self.assertEqual(control.router_status()['state'], 'dry_run')
+            self.assertEqual(control.router_status()['blocked_reason'], 'drift')
+
+    def test_demo_is_default_and_real_is_display_only(self):
+        app = self.app()
+        content = self.content(app)
+        self.assertIn('Demo · cuenta practice OANDA', content)
+        self.assertIn('sin token', content)
+        self.assertNotIn('Real · solo lectura', content)
+        view = next(t for t in app.toggle if t.key == 'account-view-real')
+        self.assertIs(view.value, False)
+        view.set_value(True).run()
+        self.assertFalse(app.exception)
+        content = self.content(app)
+        self.assertIn('Real · solo lectura (operar bloqueado)', content)
+        self.assertIn('sin token', content)  # no OANDA_LIVE_TOKEN
+        self.assertTrue(all(b.disabled for b in app.button))  # no enabled order control anywhere
+        self.assertEqual([b.key for b in app.button], ['control-emergency-stop'])
+        toggles = [t for t in app.toggle if t.key and t.key.startswith('control-')]
+        self.assertTrue(all(t.disabled and t.value is False for t in toggles))
+
+    def test_balance_uses_the_cached_summary(self):
+        from datetime import timedelta
+        from decimal import Decimal
+        from execution import oanda_readonly as ro
+        calls = []
+
+        def fetch(environment, env):
+            calls.append(environment)
+            return ro.AccountView('OK', environment, '101-…0579-001', 'USD', Decimal('100000.5'), Decimal('100010.25'),
+                                  Decimal('0'), 0, Decimal('9.75'), datetime.now(timezone.utc) - timedelta(seconds=3))
+
+        patch.object(ro, '_VIEWS', ro.CachedAccountViews(fetch=fetch)).start()
+        app = self.app()
+        app.run()  # a refresh inside the TTL reuses the cached summary
+        content = self.content(app)
+        self.assertIn('100,000.50 USD', content)
+        self.assertIn('actualizado hace', content)
+        self.assertEqual(calls, ['practice'])
+
+    def test_balance_lines_fallbacks(self):
+        self.assertEqual(control.balance_lines(None), [('Estado', 'error de lectura')])
+        from execution.oanda_readonly import AccountView
+        lines = dict(control.balance_lines(AccountView('SIN_CUENTA', 'live')))
+        self.assertEqual((lines['Estado'], lines['Balance'], lines['Actualizado']), ('sin cuenta', '—', '—'))
+
+    def test_refresh_without_env_does_not_crash(self):
+        from execution.oanda_readonly import cached_account_view
+        self.assertEqual(cached_account_view('live').status, 'SIN_TOKEN')
+        self.assertEqual(cached_account_view('practice').status, 'SIN_TOKEN')
 
 
 if __name__ == '__main__':

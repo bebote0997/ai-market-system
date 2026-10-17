@@ -26,6 +26,19 @@ APP = Path(__file__).parent / "ui" / "app.py"
 T = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(microsecond=0).isoformat()
 
 
+# The Control page reads the OANDA balance (GET summary) when a token is in the environment: never in tests.
+_NO_BALANCE_NETWORK = patch("execution.oanda_readonly.urllib_transport",
+                            side_effect=AssertionError("network must not be touched"))
+
+
+def setUpModule():
+    _NO_BALANCE_NETWORK.start()
+
+
+def tearDownModule():
+    _NO_BALANCE_NETWORK.stop()
+
+
 class Phase10DashboardTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

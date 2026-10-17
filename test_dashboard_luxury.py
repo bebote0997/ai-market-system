@@ -15,6 +15,19 @@ from ui.views import luxury
 from ui.tables import normalize_rows
 
 
+# The Control page reads the OANDA balance (GET summary) when a token is in the environment: never in tests.
+_NO_BALANCE_NETWORK = patch("execution.oanda_readonly.urllib_transport",
+                            side_effect=AssertionError("network must not be touched"))
+
+
+def setUpModule():
+    _NO_BALANCE_NETWORK.start()
+
+
+def tearDownModule():
+    _NO_BALANCE_NETWORK.stop()
+
+
 class LuxuryDashboardTests(unittest.TestCase):
     app = fixtures.Phase10DashboardTests.app
     digest = fixtures.Phase10DashboardTests.digest

@@ -5,6 +5,12 @@ from pathlib import Path
 # Streamlit executes this file directly, so expose the repository root for imports.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+try:  # Redact secrets from every log record of this process (idempotent across Streamlit reruns).
+    from execution.log_redaction import install_log_redaction
+    install_log_redaction()
+except Exception:  # noqa: BLE001 - log hardening never blocks the dashboard
+    pass
+
 import streamlit as st
 from ui.auth import remote_dashboard_enabled, require_dashboard_access
 

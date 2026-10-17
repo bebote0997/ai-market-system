@@ -47,6 +47,14 @@ Tests: `test_broker_paper_adapter.py`, `test_broker_dxtrade.py`, `test_broker_re
 
 `read_control_snapshot(path=None)`: solo lectura (`mode=ro`, no crea el archivo), nunca lanza; devuelve `readable`, `emergency_stop`, `connected` (siempre `False`) y las tres cuentas (`real` bloqueada). DB ausente/ilegible ⇒ `readable=False`, `emergency_stop=True`, todo apagado. `enabled` es el valor efectivo (con emergencia activa, `False`).
 
+## Adaptador OANDA practice (EURUSD)
+
+Segundo proveedor demo, igual de inactivo: `execution/oanda_client.py` y `execution/oanda_broker.py` (host practice fijo,
+sin flag live, solo `EURUSD`, compuerta de idempotencia/no-hedging, sizing por unidades). Se elige con
+`AI_FLOOR_BROKER_DEMO_PROVIDER=oanda` (default `dxtrade`; el snapshot de control expone `provider`). Detalle, guardas y
+plan de la primera orden de prueba: [`docs/oanda_adapter.md`](oanda_adapter.md). Tests: `test_broker_oanda_client.py`,
+`test_broker_oanda.py`.
+
 ## Qué falta
 
 Spike de solo lectura (confirmar endpoints, `domain`, tamaños, netting/hedging, idempotencia), decisión del owner (DEC) para ejecución en demo de broker, decisión D-1 (dónde corre el espejo), modo sombra y uso de `shadow_only`, write-ahead + conciliación, tamaño demo, traducción Day-1, ping periódico, hook real de cierre en emergencia, controles de UI con reautenticación.

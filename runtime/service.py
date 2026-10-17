@@ -53,10 +53,12 @@ OFF_OBSERVE_GRACE_SECONDS = 0.5
 # Pre-demo: an AI review needed for this cycle returned NO_DATA (retried once; still NO_DATA => no trade).
 AI_REVIEW_UNHEALTHY = "AI_REVIEW_UNHEALTHY"
 MACRO_NO_DATA_REASON = "AI_REVIEW_UNHEALTHY: macro=NO_DATA"
+_AUTO = object()  # broker_router default: built from the environment (None unless AI_FLOOR_BROKER_DEMO_ROUTING=1)
 
 
 class OperationalRuntime:
     halt_gate = None  # V2 P4a R-HALT: the process HaltGate when v2_rhalt is ON; None = legacy
+    broker_router = None  # OANDA practice demo routing (execution/broker_demo_router.py); None = OFF
 
     def _audit_safely(self, action, run_id, symbol, category="O"):
         if self.halt_gate is not None and not self.halt_gate.allow(category):
@@ -76,7 +78,7 @@ class OperationalRuntime:
                  instruments=None, clock=None, risk_config=None, paper_enabled=True,
                  diagnostic_outside_session=False, recovery_stale_after_seconds=120, ai_pricing=None,
                  ai_soft_budget=None, ai_cycle_budget_seconds=120.0, ai_alerts=None, halt_gate=None,
-                 sealed_context=None):
+                 sealed_context=None, broker_router=_AUTO):
         self.config = config or RuntimeConfig.from_env()
         # V2 P4a R-HALT (flag OFF -> None: every guard below is a no-op and the legacy path is unchanged).
         self.halt_gate = None
@@ -145,6 +147,15 @@ class OperationalRuntime:
             if isinstance(exc, (HaltRefused, GenesisSealError)):
                 self.store.close()  # V2 P4a / P2b: the constructor stops without any further write
             raise
+        if broker_router is _AUTO:  # Broker demo routing: OFF unless the flag is exactly 1; never affects paper.
+            broker_router = None
+            if os.environ.get("AI_FLOOR_BROKER_DEMO_ROUTING") == "1":
+                try:
+                    from execution.broker_demo_router import router_from_env
+                    broker_router = router_from_env(os.environ)
+                except Exception as exc:  # noqa: BLE001
+                    LOG.warning("component=broker_demo event=ROUTER_UNAVAILABLE error_type=%s", type(exc).__name__)
+        self.broker_router = broker_router
 
     def _startup(self, market_provider, recovery_stale_after_seconds):
         """Process start. With the halt gate every write is a STARTUP site (``startup_write``): refused after T_h,
@@ -631,6 +642,11 @@ class OperationalRuntime:
         when no cycle runs. No slot claim and no run row: every write is the same guarded CAS save as in a cycle.
         Returns {symbol: outcome}."""
         from execution import trade_duration as td
+        if self.broker_router is not None and not (self.halt_gate is not None and self.halt_gate.halted):
+            try:  # Broker demo trades are managed even with paper disabled; never changes the paper results.
+                self.broker_router.manage(at)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("component=broker_demo event=MANAGE_FAILED error_type=%s", type(exc).__name__)
         results = {}
         if not self.paper_enabled:
             return results
@@ -860,6 +876,11 @@ class OperationalRuntime:
                     from runtime.cycle_records import record
                     record(self.config.db_path, cycle_context, returned, paper_enabled=self.paper_enabled)
                 self._audit_safely(record_cycle, cycle_context["run_id"], symbol)
+            router = self.broker_router
+            if (router is not None and cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}
+                    and not (self.halt_gate is not None and self.halt_gate.halted)):
+                self._audit_safely(lambda: router.on_cycle(cycle_context, returned, self.clock()),
+                                   cycle_context.get("run_id"), symbol)  # never raises, never changes `returned`
             if rex_holder and rex_holder[0] is not None:
                 try:
                     rex_holder[0].finish(returned)

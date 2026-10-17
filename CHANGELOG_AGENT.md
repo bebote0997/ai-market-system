@@ -1,5 +1,29 @@
 # Agent Changelog
 
+## 2026-10-17 — BORRADOR: fixes revisión Codex ronda 3 del router demo OANDA (branch `wip/oanda-adapter`)
+
+- `emergency_close_all` respeta dry-run: solo eventos `DRY_RUN` de vista previa, ningún PUT/POST (HIGH).
+- Acción UNKNOWN (cierre/breakeven) ya no se libera porque el trade siga abierto: solo con evidencia (trade ausente / SL del broker en la entrada a 5 decimales); mientras, `blocked_reason="unresolved_action"` y sin reintentos hasta `clear_unresolved(actor, motivo)` (MED).
+- Gestión de duración: toda acción exige cotización válida y `tradeable is True`; si no, nada ese tick, se reintenta y se registra `MANAGE_SKIPPED` una vez por tick (MED).
+- Tests nuevos/ajustados en `test_broker_demo_router.py`; `docs/oanda_adapter.md` actualizado. Sin commit.
+
+## 2026-10-17 — BORRADOR / flag OFF: enrutado demo OANDA practice, script de orden de prueba, vista Demo/Real (branch `wip/oanda-adapter`)
+
+- Nuevo `execution/broker_demo_router.py` (`router_from_env` ⇒ `None` salvo `AI_FLOOR_BROKER_DEMO_ROUTING=1` exacto): deriva su env (demo ON, provider oanda, sin mutar `os.environ`), enciende `broker_demo` solo en la primera construcción (auditado `router_from_env`/`routing_flag`), solo EURUSD con `eligible` + Risk APPROVED, idempotente por `aif-<run_id>`, intent write-ahead, UNKNOWN bloquea hasta conciliar, una posición neta, sizing NAV×risk_fraction (tope 1%, `AI_FLOOR_BROKER_DEMO_MAX_UNITS`), dry-run opt-in (`AI_FLOOR_BROKER_DEMO_DRY_RUN=1`), regla de duración vía `trade_duration.py`, drift, `emergency_close_all`. Estado en `execution/broker_demo_state.py` (tablas propias en `broker_state.db`).
+- `runtime/service.py`: hooks mínimos y protegidos (`broker_router=_AUTO`, `on_cycle` tras el registro del ciclo, `manage` al inicio de `manage_trade_duration`); con el flag OFF no se importa nada y paper es idéntico.
+- `execution/oanda_broker.py`: lecturas públicas `open_trades()`, `get_quote()`, `trade_id_for_client()` y `openTime` en `OpenTrade`.
+- Nuevo `execution/oanda_readonly.py` (solo `GET /v3/accounts/{id}/summary`, practice/live, tokens aislados) y pantalla Control: chip de enrutado, vista Demo | Real (Real solo lectura, operar bloqueado) con auto-refresco, sección «Historial (baseline)» vacía.
+- Nuevo `scripts/oanda_first_test_order.py` (dry-run por defecto; envío solo con `--send --confirm I-APPROVE-PRACTICE-TEST-ORDER` + guardas; máx. 100 unidades). **No se ejecutó; ninguna orden colocada.**
+- Tests: nuevos `test_broker_demo_router.py`, `test_oanda_readonly.py`, `test_oanda_first_test_order.py`, clases nuevas en `test_ui_redesign.py`; actualizados `test_broker_wiring.py` (import perezoso permitido en service.py/control.py), `test_safety_invariants.py` (`SUBMIT_PLAN_CALLERS` + router y script), bloqueo de red del saldo en `test_phase10_dashboard.py`/`test_dashboard_luxury.py`. Docs: `docs/oanda_adapter.md`, `.env.example` (solo nombres). REAL OFF, NAS100/XAUUSD nunca enrutados, `render.yaml` intacto.
+
+## 2026-10-17 — BORRADOR / NO ACTIVADO: adaptador OANDA v20 PRACTICE, solo EURUSD (branch `wip/oanda-adapter`)
+
+- Nuevos módulos sin cablear: `execution/oanda_client.py` (host `api-fxpractice.oanda.com/v3` fijo, live/http/userinfo/puerto/punto final rechazados, sin redirecciones, token/cuenta redactados, 429 y 5xx de lectura con backoff acotado, trading nunca reintentado) y `execution/oanda_broker.py` (`OandaBroker`, `size_units`, `client_extension_id`, `reconcile`, `unsupported_open_trades`). Ver `docs/oanda_adapter.md`.
+- Compuerta previa de solo lectura (idempotencia por `@clientId`, sin hedging/netting, `tradeable`); timeout/5xx en POST ⇒ una lectura de conciliación y `UNKNOWN` si no se prueba, nunca re-post.
+- `broker_config`: `AI_FLOOR_BROKER_DEMO_PROVIDER` (`dxtrade` por defecto | `oanda`); `read_control_snapshot()` añade `provider` (etiqueta DXtrade por defecto sin cambios). `.env.example` solo nombres.
+- Revisión Codex (mismo día): latch en memoria de client ids con resultado `UNKNOWN` (`unresolved_client_ids()`; reintento ⇒ solo lectura `@clientId`, `previous_submission_unresolved`, nunca segundo POST); re-chequeo de interruptor/emergencia justo antes del POST/PUT; `RLock` por instancia en `submit_plan`/`modify_stop`/`close_market` (propiedad exclusiva de la cuenta, un proceso); evidencia de éxito validada (`malformed_fill_evidence`, `malformed_stop_evidence`); `tradeable` debe ser booleano (`pricing_malformed`).
+- Tests: nuevos `test_broker_oanda_client.py`, `test_broker_oanda.py`; `test_broker_registry.py` (clave `provider`) y `test_broker_wiring.py` (módulos OANDA, `OANDA_` fuera de `render.yaml`). Sin red; REAL OFF; nada importado por runtime/floor/ui.
+
 ## 2026-10-15 — BORRADOR / NO ACTIVADO: esqueleto inactivo de broker (branch `wip/broker-structure`)
 
 - Nuevos módulos aditivos, sin cablear: `execution/broker_port.py`, `paper_broker_adapter.py`, `dxtrade_client.py`, `dxtrade_broker.py`, `broker_config.py`, `account_registry.py` (DB propia `broker_state.db`, interruptores OFF por defecto, emergency stop, `read_control_snapshot()`). Ver `docs/broker_skeleton.md`.

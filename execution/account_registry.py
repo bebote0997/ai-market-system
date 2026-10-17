@@ -17,13 +17,16 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Optional
 
-from execution.broker_config import emergency_flag, load_broker_config
+from execution.broker_config import DEFAULT_DEMO_PROVIDER, emergency_flag, load_broker_config
 from execution.broker_port import BrokerGuardError
+from execution.fs_security import private_state_dir, secure_sqlite_files
 
 
 LOG = logging.getLogger("ai_floor.broker.registry")
 ACCOUNT_KEYS = ("paper", "broker_demo", "real")
 LABELS = {"paper": "PAPER", "broker_demo": "DEMO broker (DXtrade)", "real": "REAL (bloqueada)"}
+# broker_demo label per AI_FLOOR_BROKER_DEMO_PROVIDER (default dxtrade keeps LABELS["broker_demo"]).
+PROVIDER_LABELS = {"dxtrade": LABELS["broker_demo"], "oanda": "DEMO broker (OANDA practice)"}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS broker_accounts (
     account_key TEXT PRIMARY KEY,
@@ -108,10 +111,11 @@ def _read_state(path):
 
 def read_control_snapshot(path=None, *, env=None):
     """Read-only control view for the dashboard. NEVER raises and never creates the DB file."""
-    state, env_emergency = None, True
+    state, env_emergency, provider = None, True, DEFAULT_DEMO_PROVIDER
     try:
         config = load_broker_config(env)
         env_emergency = config.emergency_stop
+        provider = config.demo_provider
         target = Path(path) if path is not None else Path(config.state_db_path)
         state = None if _is_experiment_db(target, config) else _read_state(target)
     except Exception:
@@ -121,9 +125,11 @@ def read_control_snapshot(path=None, *, env=None):
     accounts = []
     for key in ACCOUNT_KEYS:
         stored = readable and state["accounts"].get(key, {}).get("enabled", False)
-        accounts.append({"key": key, "mode": key, "label": LABELS[key], "locked": key == "real",
+        label = PROVIDER_LABELS.get(provider, LABELS[key]) if key == "broker_demo" else LABELS[key]
+        accounts.append({"key": key, "mode": key, "label": label, "locked": key == "real",
                          "enabled": bool(stored and not emergency and key != "real")})
-    return {"readable": readable, "emergency_stop": bool(emergency), "connected": False, "accounts": accounts}
+    return {"readable": readable, "emergency_stop": bool(emergency), "connected": False, "accounts": accounts,
+            "provider": provider}
 
 
 @dataclass(frozen=True)
@@ -181,10 +187,12 @@ class AccountRegistry:
 
     # -- writes ------------------------------------------------------------------------------------------------------
     def _connect(self):
+        created_dir = private_state_dir(self.path.parent)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(self.path, timeout=5.0, isolation_level=None)
         try:
             con.executescript(SCHEMA)
+            secure_sqlite_files(self.path, created_dir=created_dir)
             now = self._clock()
             con.executemany("INSERT OR IGNORE INTO broker_accounts(account_key, mode, enabled, shadow_only, "
                             "updated_at) VALUES (?, ?, 0, 1, ?)", [(key, key, now) for key in ACCOUNT_KEYS])

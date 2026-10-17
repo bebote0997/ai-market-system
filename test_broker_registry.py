@@ -11,7 +11,7 @@ from execution.broker_config import BrokerConfig, load_broker_config, mask_accou
 from execution.broker_port import BrokerGuardError
 
 ENV = {}
-SNAPSHOT_KEYS = {"readable", "emergency_stop", "connected", "accounts"}
+SNAPSHOT_KEYS = {"readable", "emergency_stop", "connected", "accounts", "provider"}
 ACCOUNT_FIELDS = {"key", "mode", "enabled", "label", "locked"}
 
 
@@ -271,6 +271,20 @@ class SnapshotTests(TempDbCase):
         self.assertEqual(self.db.read_bytes(), before)
         self.assertEqual(sorted(p.name for p in self.db.parent.iterdir()), ["broker_state.db"])
 
+    def test_provider_default_dxtrade_and_oanda_opt_in(self):
+        self.registry.initialize()
+        cases = {None: ("dxtrade", "DEMO broker (DXtrade)"), "oanda": ("oanda", "DEMO broker (OANDA practice)"),
+                 " OANDA ": ("oanda", "DEMO broker (OANDA practice)"), "fxtrade": ("dxtrade", "DEMO broker (DXtrade)")}
+        for raw, (provider, label) in cases.items():
+            env = {} if raw is None else {"AI_FLOOR_BROKER_DEMO_PROVIDER": raw}
+            with self.subTest(raw=raw):
+                snapshot = read_control_snapshot(self.db, env=env)
+                self.assertShape(snapshot)
+                self.assertEqual(snapshot["provider"], provider)
+                self.assertEqual(snapshot["accounts"][1]["label"], label)
+                self.assertFalse(snapshot["accounts"][1]["enabled"])  # provider never enables anything
+        self.assertEqual(read_control_snapshot(self.db, env=object())["provider"], "dxtrade")
+
 
 class ConfigTests(unittest.TestCase):
     def test_safe_defaults(self):
@@ -278,6 +292,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual((config.demo_enabled, config.emergency_stop, config.real_enabled), (False, False, False))
         self.assertEqual(config.base_url, "https://api.liquidcharts.com/dxsca-web/")
         self.assertEqual(config.state_db_path, Path("data/runtime/broker_state.db"))
+        self.assertEqual(config.demo_provider, "dxtrade")
+        self.assertEqual(load_broker_config({"AI_FLOOR_BROKER_DEMO_PROVIDER": "oanda"}).demo_provider, "oanda")
+        self.assertEqual(load_broker_config({"AI_FLOOR_BROKER_DEMO_PROVIDER": "live"}).demo_provider, "dxtrade")
 
     def test_repr_redacts(self):
         config = load_broker_config({"DXTRADE_USERNAME": "u-123", "DXTRADE_PASSWORD": "p-456",

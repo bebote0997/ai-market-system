@@ -15,6 +15,8 @@ DEFAULT_STATE_DB_PATH = Path("data/runtime/broker_state.db")
 EXPERIMENT_DB_DEFAULT = Path("data/runtime/trading_floor.db")
 _ON = {"1", "true", "yes", "on"}
 _OFF = {"", "0", "false", "no", "off"}
+DEMO_PROVIDERS = ("dxtrade", "oanda")
+DEFAULT_DEMO_PROVIDER = "dxtrade"
 
 
 def mask_account(code):
@@ -67,6 +69,14 @@ def emergency_flag(raw):
     return value not in _OFF
 
 
+def demo_provider(raw):
+    """``AI_FLOOR_BROKER_DEMO_PROVIDER``: only ``dxtrade``/``oanda``; unset or anything else -> ``dxtrade``.
+
+    The OANDA adapter requires exactly ``oanda``, so a typo never enables it."""
+    value = str(raw if raw is not None else "").strip().lower()
+    return value if value in DEMO_PROVIDERS else DEFAULT_DEMO_PROVIDER
+
+
 @dataclass(frozen=True)
 class BrokerConfig:
     demo_enabled: bool = False
@@ -79,6 +89,7 @@ class BrokerConfig:
     state_db_path: Path = DEFAULT_STATE_DB_PATH
     experiment_db_path: Path = EXPERIMENT_DB_DEFAULT
     real_requested: bool = False  # Raw AI_FLOOR_BROKER_REAL_ENABLED, informational only.
+    demo_provider: str = DEFAULT_DEMO_PROVIDER
 
     @property
     def real_enabled(self):
@@ -92,7 +103,8 @@ class BrokerConfig:
         return (f"BrokerConfig(demo_enabled={self.demo_enabled}, base_url={display_base_url(self.base_url)!r}, "
                 f"username={'***' if self.username else ''!r}, password={'***' if self.password else ''!r}, "
                 f"domain={'***' if self.domain else ''!r}, account={self.account_masked!r}, emergency_stop={self.emergency_stop}, "
-                f"state_db_path={str(self.state_db_path)!r}, real_enabled=False)")
+                f"state_db_path={str(self.state_db_path)!r}, demo_provider={self.demo_provider!r}, "
+                f"real_enabled=False)")
 
     __str__ = __repr__
 
@@ -110,4 +122,5 @@ def load_broker_config(env=None):
         state_db_path=Path((env.get("AI_FLOOR_BROKER_STATE_DB_PATH") or "").strip() or DEFAULT_STATE_DB_PATH),
         experiment_db_path=Path((env.get("AI_FLOOR_DB_PATH") or "").strip() or EXPERIMENT_DB_DEFAULT),
         real_requested=(env.get("AI_FLOOR_BROKER_REAL_ENABLED") or "").strip().lower() in _ON,
+        demo_provider=demo_provider(env.get("AI_FLOOR_BROKER_DEMO_PROVIDER")),
     )
