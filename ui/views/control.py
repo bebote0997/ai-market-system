@@ -19,7 +19,7 @@ VIEW_STATUS = {"SIN_TOKEN": "sin token", "SIN_CUENTA": "sin cuenta", "ERROR": "e
 ROUTING_CHIPS = {"off": ("Enrutado a broker demo: apagado", ""), "dry_run": ("Enrutado a broker demo: dry-run", "warn"),
                  "on": ("Enrutado a broker demo: activo (cuenta practice)", "pos")}
 DASH = "—"
-LABELS = {"paper": "Cuenta de práctica interna (PAPER)", "broker_demo": "Broker demo", "real": "Cuenta real"}
+LABELS = {"paper": "Cuenta de práctica interna (PAPER)", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
 
 
 def default_snapshot():
