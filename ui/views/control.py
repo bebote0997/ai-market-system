@@ -13,6 +13,8 @@ from ui.i18n_es import status_text
 ACCOUNT_KEYS = ("paper", "broker_demo", "real")
 BALANCE_REFRESH = "10s"  # the read-only summary itself is cached >= 5 s (execution/oanda_readonly.py)
 VIEW_LABELS = {"practice": "Demo · cuenta practice OANDA", "live": "Real · solo lectura (operar bloqueado)"}
+MISSING_ENV_NAMES = {"practice": ("OANDA_PRACTICE_TOKEN", "OANDA_ACCOUNT_ID"),  # variable NAMES only
+                     "live": ("OANDA_LIVE_TOKEN", "OANDA_LIVE_ACCOUNT_ID")}
 VIEW_STATUS = {"SIN_TOKEN": "sin token", "SIN_CUENTA": "sin cuenta", "ERROR": "error de lectura"}
 ROUTING_CHIPS = {"off": ("Enrutado a broker demo: apagado", ""), "dry_run": ("Enrutado a broker demo: dry-run", "warn"),
                  "on": ("Enrutado a broker demo: activo (cuenta practice)", "pos")}
@@ -31,6 +33,11 @@ def control_snapshot():
     try:
         from execution.account_registry import read_control_snapshot
         snapshot = read_control_snapshot()
+        if isinstance(snapshot, dict) and snapshot.get("readable") is not True:
+            # Fresh disk: create the registry with every switch OFF (never touches an existing file), then re-read.
+            from execution.account_registry import ensure_registry_initialized
+            if ensure_registry_initialized():
+                snapshot = read_control_snapshot()
     except Exception:  # The registry is optional: any import/read failure means "not readable -> off".
         return default_snapshot()
     if (not isinstance(snapshot, dict) or snapshot.get("readable") is not True
@@ -96,6 +103,16 @@ def money(value, currency=None):
     return f"{value:,.2f}" + (f" {currency}" if isinstance(currency, str) and currency else "")
 
 
+def _missing_env_name(view, status):
+    """Name of the env var the view needs (never its value) when the view says token/account is missing."""
+    if status not in ("SIN_TOKEN", "SIN_CUENTA"):
+        return None
+    names = MISSING_ENV_NAMES.get(getattr(view, "environment", None))
+    if not names:
+        return None
+    return names[0] if status == "SIN_TOKEN" else names[1]
+
+
 def balance_lines(view, now=None):
     """(label, text) pairs for one account view; missing values => "—"."""
     status = getattr(view, "status", None)
@@ -104,6 +121,9 @@ def balance_lines(view, now=None):
     currency = getattr(view, "currency", None)
     stale = " (datos anteriores)" if getattr(view, "stale", False) is True else ""
     lines = [("Estado", ("conectado" if status == "OK" else VIEW_STATUS[status]) + stale)]
+    missing = _missing_env_name(view, status)
+    if missing:
+        lines.append(("Falta en el entorno", missing))  # variable NAME only, never a value
     account = getattr(view, "account_masked", None)
     lines.append(("Cuenta", account if isinstance(account, str) and account else DASH))
     for label, name in (("Balance", "balance"), ("NAV (valor neto)", "nav"), ("Margen usado", "margin_used"),
