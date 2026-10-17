@@ -1963,3 +1963,9 @@ Final validation: `/workspace/venv/bin/python -m pytest -q` PASS: 1739 passed, 2
 1 xfailed, 1201 subtests passed in 215.78 s. Focused gate/dashboard suite: 45 passed,
 18 subtests passed. `git diff --check` PASS.
 No staging/commit/push/deploy or AI_FLOOR_GIT_COMMIT/freeze changes.
+
+## 2026-10-17 · Security headers via ASGI middleware (OANDA draft branch)
+`ui/security_headers.py` (HSTS, CSP, X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy, COOP) wrapped by
+`ui/asgi_app.py` (`st.App`); `runtime/cloud.py` starts `ui/asgi_app.py` (rollback: `AI_FLOOR_SECURITY_HEADERS=0` -> `ui/app.py`).
+Tests: `test_security_headers.py`; login, navigation and the Control view verified in headless Chrome with zero CSP violations.
+No Render/env change; no deploy.

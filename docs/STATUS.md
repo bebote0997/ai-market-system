@@ -25,6 +25,11 @@ _Última actualización: 2026-10-14 (America/New_York). Esta es la única fuente
 
 Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación ligera bajo control delegado a Grok Bot, pendiente de confirmación del owner. Detalle: `docs/phases/`.
 
+## Demo de broker OANDA (2026-10-17, borrador → PR)
+- Conector OANDA practice (solo EURUSD) + `BrokerDemoRouter` detrás de `AI_FLOOR_BROKER_DEMO_ROUTING` (**apagado por defecto**; dry-run opt-in, script de una sola orden de prueba con confirmación explícita). `REAL_EXECUTION_ENABLED = False`; el host live es inalcanzable para órdenes; la vista Real del dashboard es solo lectura (GET summary). Detalle: `docs/oanda_adapter.md`.
+- Seguridad: cabeceras (HSTS/CSP/X-Frame-Options/nosniff/Referrer-Policy) vía middleware ASGI, redacción de logs, ficheros SQLite 0600, sin IDs/tokens en el repo. Detalle: `docs/security_audit.md`.
+- El paper trading sigue intacto y es la única ruta activa hasta que el owner active la demo de broker.
+
 ## Abierto (ver `docs/issues.md`)
 - ISSUE-008 / ISSUE-009 (bloquean activación de SYSTEM HEALTH).
 - Fase 8 cerrada: HIGH-8.1 y M-5 CLOSED. Seguimientos: ISSUE-012 (vela no cerrada en fill pendiente; adaptadores reales la filtran), ISSUE-013 (notas MEDIUM del status_verifier).

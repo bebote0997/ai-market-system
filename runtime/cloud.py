@@ -184,8 +184,11 @@ def serve():
         doctor = cloud_preflight(RuntimeConfig.from_env())
         if not doctor.infra_ready:
             raise RuntimeError("cloud infrastructure preflight not ready")
+    # Default entry adds HSTS/CSP/X-Frame-Options/nosniff/Referrer-Policy (ui/security_headers.py via st.App).
+    # AI_FLOOR_SECURITY_HEADERS=0 is the rollback lever: plain ``ui/app.py`` without the middleware.
+    entry = "ui/app.py" if os.environ.get("AI_FLOOR_SECURITY_HEADERS") == "0" else "ui/asgi_app.py"
     children.append(subprocess.Popen([
-        sys.executable, "-m", "streamlit", "run", "ui/app.py", "--server.headless=true",
+        sys.executable, "-m", "streamlit", "run", entry, "--server.headless=true",
         "--server.address=0.0.0.0", f"--server.port={port}",
         # Never show tracebacks or exception messages to remote visitors.
         "--client.showErrorDetails=none",

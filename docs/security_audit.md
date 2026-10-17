@@ -1,4 +1,4 @@
-# Auditoría de seguridad (2026-10-17) · rama `wip/oanda-adapter`
+# Auditoría de seguridad (2026-10-17) · rama `wip/oanda-adapter-clean`
 
 Alcance: dashboard Streamlit en Render, conector OANDA (demo + vista Real de solo lectura), estado SQLite, logs, dependencias e historial git.
 Nada de esto cambia Render ni despliega. «Corregido» = cambio de código con prueba en `test_security_audit.py`.
@@ -7,9 +7,9 @@ Nada de esto cambia Render ni despliega. «Corregido» = cambio de código con p
 
 | # | Hallazgo | Severidad | Estado |
 |---|---|---|---|
-| 1 | El repositorio GitHub es **público** (estrategia, docs y código visibles). Secret scanning y push protection: ON; Dependabot security updates: OFF | Alta (exposición) | **Requiere acción**: volver el repo privado y activar Dependabot security updates |
-| 2 | ID de cuenta de práctica OANDA estaba como valor por defecto en el código (repo público) | Media | **Corregido**: sin valor por defecto, `OANDA_ACCOUNT_ID` solo por entorno; sin cuenta → «sin cuenta», el constructor falla cerrado. ⚠️ El ID sigue en commits locales antiguos de la rama `wip/oanda-adapter`: usar la rama limpia `wip/oanda-adapter-clean` (historial sin el ID) para cualquier push |
-| 3 | Sin HSTS, CSP, X-Frame-Options, `nosniff` ni Referrer-Policy en las respuestas reales (verificado con `curl -I`: solo cabeceras de Cloudflare/Render) | Media | **Requiere acción**: Streamlit no puede añadirlas y Render no permite cabeceras personalizadas en web services. Poner una Transform Rule/Response Header Modification en Cloudflare (o proxy propio) con: `Strict-Transport-Security: max-age=31536000; includeSubDomains`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, y un CSP compatible con Streamlit |
+| 1 | Repositorio GitHub **público** por decisión del propietario (supervisión). Secret scanning y push protection: ON | Info | Aceptado: el repo no contiene secretos, tokens ni IDs de cuenta (escaneo del árbol y del historial publicado); todo valor sensible va solo por variables de entorno. Recomendado: activar Dependabot security updates |
+| 2 | ID de cuenta de práctica OANDA como valor por defecto en el código | Media | **Corregido**: sin valor por defecto; `OANDA_ACCOUNT_ID` solo por entorno; sin cuenta → «sin cuenta» y el constructor falla cerrado. Pruebas: solo IDs sintéticos en todo el árbol |
+| 3 | HSTS, CSP, X-Frame-Options, `nosniff` y Referrer-Policy no estaban en las respuestas (Streamlit no las pone y Render no permite cabeceras personalizadas) | Media | **Corregido**: `ui/security_headers.py` (middleware ASGI vía `st.App`, entrada `ui/asgi_app.py`) añade HSTS (1 año, includeSubDomains), CSP (frame-ancestors none, object-src none, base-uri/form-action self…), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, Permissions-Policy y COOP; verificado en un navegador headless (login, navegación y vista Control sin violaciones CSP). Palanca de vuelta atrás: `AI_FLOOR_SECURITY_HEADERS=0` en Render (arranca `ui/app.py` sin middleware) |
 | 4 | Cookie XSRF de Streamlit sin `Secure` detrás del proxy TLS de Render (Streamlit solo la marca con `sslCertFile`) | Baja | **Requiere acción/aceptar**: la sesión de login es estado del servidor (no cookie de autenticación), impacto bajo. Opcional: fijar `STREAMLIT_SERVER_COOKIE_SECRET` estable en Render |
 | 5 | HTTPS: el puerto 80 no responde (no hay downgrade); HTTPS con HTTP/2 vía Cloudflare | Info | OK; verificar «Redirect HTTP→HTTPS» en Cloudflare |
 | 6 | Autenticación del dashboard: `hmac.compare_digest`, contraseña ≥12, retraso por fallo, bloqueo por sesión (5 intentos/300 s) y global (20/900 s), sesión caduca a 8 h, nada se renderiza antes de `require_dashboard_access` | — | OK; añadidas pruebas estáticas (orden de la compuerta, nada al importar, router y balances inalcanzables sin login) |
@@ -23,14 +23,12 @@ Nada de esto cambia Render ni despliega. «Corregido» = cambio de código con p
 | 14 | Escaneo de historial git (278 commits, todas las ramas) y árbol: sin claves reales; solo valores falsos en tests. Único dato sensible: el ID de práctica (ver #2, no pusheado) | — | OK |
 | 15 | Dependencias: `pip-audit -r requirements-ci.txt` → sin vulnerabilidades conocidas (2026-10-17); versiones fijadas con hashes | — | OK; activar Dependabot (ver #1) |
 | 16 | Integridad del kill switch y guarda de host live: orden solo a `api-fxpractice.oanda.com` (sin flag para live), cliente de solo lectura con GET `/accounts/{id}/summary` únicamente, aislado del camino de órdenes (escaneo de imports), token live solo de `OANDA_LIVE_TOKEN`, `REAL_EXECUTION_ENABLED=False`, cuenta real nunca habilitable | — | OK, con pruebas |
-| 17 | Token OANDA **real** generado antes por Jeferson | Alta si sigue activo | **Requiere acción del usuario**: revocarlo en OANDA Hub (no se usa en ningún sitio) |
+| 17 | Tokens OANDA no usados | Media | **Requiere acción del usuario**: revocar en OANDA Hub cualquier token que ya no se use (ninguno está en el código) |
 | 18 | Validación de entradas: cantidades enteras, símbolos en lista cerrada (solo EURUSD), formatos de id de trade/cliente, `OANDA_ACCOUNT_ID` por patrón, límites de unidades y del script de prueba (≤100) | — | OK |
 
 ## Acciones que necesitan a Jeferson / Render (no hechas)
 
-1. Volver privado el repositorio; activar Dependabot security updates.
-2. Cabeceras de seguridad y HSTS vía Cloudflare (hallazgo #3); confirmar «Always Use HTTPS».
-3. Revocar el token OANDA de la cuenta real generado antes; si quiere la vista Real, crear un token **de solo lectura/alcance mínimo si OANDA lo permite** y ponerlo como `OANDA_LIVE_TOKEN` y `OANDA_LIVE_ACCOUNT_ID` en Render (formulario seguro, nunca en chat ni en git). Solo se usa para GET summary.
-4. Poner en Render (solo cuando él decida): `OANDA_PRACTICE_TOKEN`, `OANDA_ACCOUNT_ID`, y para activar el broker demo `AI_FLOOR_BROKER_DEMO_ROUTING=1` (apagado por defecto).
-5. Usar la rama limpia (sin ID de cuenta en el historial) para cualquier push/PR.
-6. Rotar la contraseña del dashboard periódicamente (≥12 caracteres, aleatoria).
+1. Activar Dependabot security updates en GitHub (opcional pero recomendado).
+2. Revocar en OANDA Hub los tokens que ya no se usen; para la vista Real crear un token **de solo lectura/alcance mínimo si OANDA lo permite** y cargarlo como `OANDA_LIVE_TOKEN` y `OANDA_LIVE_ACCOUNT_ID` en Render (formulario seguro, nunca en chat ni en git). Solo se usa para GET summary.
+3. Cuando decida activar la demo: `OANDA_PRACTICE_TOKEN`, `OANDA_ACCOUNT_ID` y `AI_FLOOR_BROKER_DEMO_ROUTING=1` (apagado por defecto).
+4. Opcional: `STREAMLIT_SERVER_COOKIE_SECRET` estable; rotar la contraseña del dashboard periódicamente (≥12 caracteres, aleatoria).

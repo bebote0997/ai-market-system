@@ -1,6 +1,6 @@
 # Adaptador OANDA v20 PRACTICE + enrutado demo (BORRADOR, flag OFF por defecto)
 
-_2026-10-17 · rama `wip/oanda-adapter` · solo `EURUSD` · solo cuenta practice._
+_2026-10-17 · rama `wip/oanda-adapter-clean` · solo `EURUSD` · solo cuenta practice._
 
 ## Propósito
 

@@ -347,6 +347,10 @@ class AuthGateOrderTests(unittest.TestCase):
         for path in sorted((ROOT / "ui").rglob("*.py")):
             if path.name == "app.py":
                 continue
+            if path.name == "asgi_app.py":  # builds the ASGI app only; renders nothing itself
+                kinds = [type(n).__name__ for n in ast.parse(path.read_text(encoding="utf-8")).body]
+                self.assertEqual(set(kinds) - {"Expr", "Import", "ImportFrom"}, {"Assign"})
+                continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
             top = [n for n in tree.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
             calls = [ast.unparse(n)[:60] for stmt in top for n in ast.walk(stmt) if _is_st_call(n)]
