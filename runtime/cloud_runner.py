@@ -1,5 +1,6 @@
 """Single continuous PAPER scheduler, disabled until cloud activation."""
 from datetime import datetime, timezone
+import faulthandler
 import logging
 import os
 from pathlib import Path
@@ -16,6 +17,26 @@ from runtime.paper_contracts import paper_instruments
 
 EXPERIMENT_BASELINE_SHA = "f5032baeb87766ad74905093c1b4195117995092"
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
+STALL_DUMP_SECONDS = 75  # dump all thread stacks to stderr if one tick hangs past this (before the 120 s watchdog)
+SLOW_TICK_SECONDS = 45
+LOGGER = logging.getLogger(__name__)
+
+
+def _arm_stall_dump():
+    try:
+        faulthandler.dump_traceback_later(STALL_DUMP_SECONDS, repeat=False, file=sys.stderr)
+    except Exception:  # noqa: BLE001 - diagnostics never stop the scheduler
+        pass
+
+
+def _disarm_stall_dump(started):
+    try:
+        faulthandler.cancel_dump_traceback_later()
+        seconds = time.monotonic() - started
+        if seconds > SLOW_TICK_SECONDS:
+            LOGGER.warning("component=runner event=SLOW_TICK seconds=%d", seconds)
+    except Exception:  # noqa: BLE001 - diagnostics never stop the scheduler
+        pass
 
 
 def main():
@@ -96,8 +117,13 @@ def main():
             return  # MEDIUM-1: a halt during the constructor stops it without writes; no automatic restart
         try:
             while not stop:
-                runner.tick()
-                runner.daily_summary(datetime.now(timezone.utc))
+                started = time.monotonic()
+                _arm_stall_dump()
+                try:
+                    runner.tick()
+                    runner.daily_summary(datetime.now(timezone.utc))
+                finally:
+                    _disarm_stall_dump(started)
                 for _ in range(30):
                     if stop:
                         break

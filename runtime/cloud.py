@@ -2,6 +2,7 @@
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import signal
@@ -18,6 +19,10 @@ from ui.auth import MIN_PASSWORD_LENGTH, password_strong_enough, session_ttl_sec
 
 
 DISK_MOUNT = Path("/opt/render/project/src/data/runtime")
+WATCHDOG_READ_RETRIES = 3  # an unreadable DB (transient lock) is re-read before the service is restarted
+WATCHDOG_RETRY_SECONDS = 2
+_sleep = time.sleep  # indirection so tests never really sleep
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,18 +33,45 @@ class CloudPreflight:
     experiment_ready: bool
 
 
-def scheduler_healthy(path, now=None, limit_seconds=120):
+def scheduler_health_detail(path, now=None, limit_seconds=120):
+    """Watchdog view of the heartbeat; ``error_type`` is set only when the DB could not be read."""
     now = now or datetime.now(timezone.utc)
+    detail = {"healthy": False, "scheduler": None, "heartbeat_age_seconds": None, "error_type": None}
     try:
         store = Store(path, readonly=True)
         try:
             heartbeat = store.get_state("heartbeat")
-            return bool(heartbeat and store.get_state("scheduler") == "RUNNING" and
-                        0 <= (now - parse_utc(heartbeat)).total_seconds() <= limit_seconds)
+            detail["scheduler"] = store.get_state("scheduler")
+            if heartbeat:
+                age = (now - parse_utc(heartbeat)).total_seconds()
+                detail["heartbeat_age_seconds"] = int(age)
+                detail["healthy"] = detail["scheduler"] == "RUNNING" and 0 <= age <= limit_seconds
         finally:
             store.close()
-    except (OSError, RuntimeError, ValueError, sqlite3.Error):
-        return False
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        detail.update(healthy=False, error_type=type(exc).__name__)
+    return detail
+
+
+def scheduler_healthy(path, now=None, limit_seconds=120):
+    return scheduler_health_detail(path, now=now, limit_seconds=limit_seconds)["healthy"]
+
+
+def check_scheduler_or_raise(path):
+    """Watchdog step: re-read an unreadable DB, never a readable stale heartbeat; log the evidence, then raise."""
+    detail = scheduler_health_detail(path)
+    for _ in range(WATCHDOG_READ_RETRIES):
+        if detail["healthy"] or detail["error_type"] is None:
+            break
+        _sleep(WATCHDOG_RETRY_SECONDS)
+        detail = scheduler_health_detail(path)
+    if detail["healthy"]:
+        return detail
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    LOGGER.error("component=watchdog event=SCHEDULER_STALE scheduler=%s heartbeat_age_s=%s error_type=%s",
+                 detail["scheduler"], detail["heartbeat_age_seconds"], detail["error_type"])
+    raise RuntimeError("scheduler heartbeat stale")
 
 
 def cloud_preflight(config, *, env=None, disk_mounted=None):
@@ -204,8 +236,7 @@ def serve():
             elapsed = time.monotonic() - started
             if active and elapsed > 120 and elapsed - last_health_check >= 30:
                 last_health_check = elapsed
-                if not scheduler_healthy(config.db_path):
-                    raise RuntimeError("scheduler heartbeat stale")
+                check_scheduler_or_raise(config.db_path)
             time.sleep(1)
     finally:
         shutdown()
