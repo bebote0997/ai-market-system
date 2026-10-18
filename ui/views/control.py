@@ -2,7 +2,8 @@
 
 Also shows (read-only): the broker-demo routing chip/status (``execution.broker_demo_state.read_router_status``), the
 Demo/Real account VIEW toggle with balances from ``execution.oanda_readonly`` (GET summary only; Real is display only,
-trading stays blocked) and the empty "Historial (baseline)" placeholder. Every lazy import failure => "apagado" / "—".
+trading stays blocked) and the "Historial (referencia)" EURUSD baseline cards from ``execution.historial`` (aggregated
+local files, never OANDA trades). Every lazy import failure => "apagado" / "—" / "sin datos".
 """
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -20,6 +21,12 @@ ROUTING_CHIPS = {"off": ("Enrutado a broker demo: apagado", ""), "dry_run": ("En
                  "on": ("Enrutado a broker demo: activo (cuenta practice)", "pos")}
 DASH = "—"
 LABELS = {"paper": "Cuenta de práctica interna (PAPER)", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
+# Mirrors execution.historial.SOURCES (kept here so a failed lazy import still names the expected files).
+HISTORY_SOURCES = (("v1_replay", "v1_replay_eurusd.json", "Replay estrategia V1 (velas Twelve Data)"),
+                   ("paper", "paper_closed_trades_eurusd.json", "Trades cerrados PAPER (agregado)"))
+HISTORY_TITLE = "📚 Historial (referencia) · no son trades de OANDA"
+HISTORY_CHIP = "Referencia · no son trades de OANDA"
+HISTORY_EMPTY = "sin datos todavía (se cargará con la exportación)"
 
 
 def default_snapshot():
@@ -183,12 +190,59 @@ def render_router(st, status):
              f'<div class="small">Últimos eventos:</div>{events}</div>')
 
 
+def history_baselines():
+    """[(source, filename, label, stats|None)] in the fixed order; any import/read failure => every source "sin datos"."""
+    try:
+        from execution.historial import load_baselines
+        records = load_baselines()
+        rows = [(r.source, r.filename, r.label, r.stats if r.status == "OK" and isinstance(r.stats, dict) else None)
+                for r in records]
+    except Exception:  # The baseline is optional: unreadable => "sin datos".
+        rows = []
+    known = {row[0]: row for row in rows}
+    return [known.get(source) or (source, filename, label, None) for source, filename, label in HISTORY_SOURCES]
+
+
+def r_text(value, signed=True):
+    if type(value) not in (int, float):
+        return DASH
+    return f"{value:+.2f} R" if signed else f"{value:.2f} R"
+
+
+def history_lines(stats):
+    """(label, text) pairs, money-free: counts and R-multiples only."""
+    period = stats.get("period") or {}
+    pf = stats.get("profit_factor")
+    rate = stats.get("win_rate")
+    return [("Periodo", f"{period.get('from') or DASH} → {period.get('to') or DASH}"),
+            ("Operaciones", str(stats.get("trades", DASH))),
+            ("Ganadas / perdidas", f"{stats.get('wins', DASH)} / {stats.get('losses', DASH)}"),
+            ("Tasa de acierto", f"{rate * 100:.1f} %" if type(rate) in (int, float) else DASH),
+            ("Expectativa", r_text(stats.get("expectancy_r"))),
+            ("Factor de beneficio", f"{pf:.2f}" if type(pf) in (int, float) else DASH),
+            ("Máx. drawdown", r_text(stats.get("max_drawdown_r"), signed=False)),
+            ("Media ganadora / perdedora",
+             f"{r_text(stats.get('avg_r_win'))} / {r_text(stats.get('avg_r_loss'))}"),
+            ("Generado", str(stats.get("generated_at") or DASH))]
+
+
 def render_history(st):
     from ui.views.luxury import html
-    html(st, '<div class="card"><h3>📚 Historial (referencia / baseline)</h3>'
-             '<div class="bubble">Aquí irán los datos históricos de referencia (baseline). Están separados de las '
-             'estadísticas de la demo en vivo y no se mezclan con ellas. Se cargarán más adelante.</div>'
-             '<div class="small">Sin datos todavía.</div></div>')
+    cards = []
+    for _source, filename, label, stats in history_baselines():
+        if stats is None:
+            body = (f'<div class="small">{escape(HISTORY_EMPTY)}</div>'
+                    f'<div class="small">Archivo esperado: <code>data/historial/{escape(filename)}</code></div>')
+        else:
+            body = "".join(f'<div class="small">{escape(k)}: <b>{escape(v)}</b></div>' for k, v in history_lines(stats))
+            if stats.get("notes"):
+                body += f'<div class="small">Nota: {escape(stats["notes"])}</div>'
+        cards.append(f'<div class="card"><h4>{escape(label)} · EURUSD</h4>'
+                     f'<span class="chip">{escape(HISTORY_CHIP)}</span>{body}</div>')
+    html(st, f'<div class="card"><h3>{escape(HISTORY_TITLE)}</h3>'
+             '<div class="bubble">Estadísticas de referencia (baseline) de sistemas anteriores, solo en R y conteos. '
+             'Están separadas de las estadísticas de la demo en vivo de OANDA y nunca se mezclan con ellas.</div>'
+             f'{"".join(cards)}</div>')
 
 
 def render(st, snapshot=None):
