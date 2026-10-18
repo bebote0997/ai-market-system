@@ -1969,3 +1969,8 @@ No staging/commit/push/deploy or AI_FLOOR_GIT_COMMIT/freeze changes.
 `ui/asgi_app.py` (`st.App`); `runtime/cloud.py` starts `ui/asgi_app.py` (rollback: `AI_FLOOR_SECURITY_HEADERS=0` -> `ui/app.py`).
 Tests: `test_security_headers.py`; login, navigation and the Control view verified in headless Chrome with zero CSP violations.
 No Render/env change; no deploy.
+
+## 2026-10-18 · Hardening para el arranque del demo OANDA (rama release/oct18-hardening; todo OFF salvo el botón de emergencia)
+- Límite de pérdida diaria 2 % (equity NAV, día 17:00 NY, flatten ON, gate de drawdown 5 %, transferencias vía consulta de solo lectura `TRANSFER_FUNDS`, latches persistentes): `execution/daily_loss_limit.py`, flag `AI_FLOOR_DAILY_LOSS_LIMIT=1` (OFF por defecto). DEC-5.5a.
+- Botón de parada de emergencia cableado al kill switch (confirmación escrita `PARAR TODO`, auditoría, solicitud de flatten consumida por el router, router close-only tras reinicio); drift-clear verificado por episodio (`AI_FLOOR_DRIFT_CLEAR_BUTTON=1`, OFF); cierre previo del viernes (`AI_FLOOR_FRIDAY_PREFLATTEN=1`, OFF); alertas Slack del broker (usa `AI_FLOOR_ALERTS_ENABLED` + webhook existentes).
+- Historial (referencia V1/PAPER, separado de OANDA) y textos 30 días en la UI. Sin cambios de entorno de Render; enrutado OFF.
