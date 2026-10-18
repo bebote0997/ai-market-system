@@ -17,7 +17,7 @@ from test_broker_demo_router import NOW, RouterBase, context
 
 WEBHOOK = "https://hooks.slack.com/services/T000FAKE/B000FAKE/xxxxFAKExxxx"
 FAKE_TOKEN = "tok-FAKE-practice-0123abcd"
-FAKE_ACCOUNT = "101-004-9999999-001"
+FAKE_ACCOUNT = "101-000-1234567-001"
 ENV = {"AI_FLOOR_ALERTS_ENABLED": "1", "SLACK_WEBHOOK_URL": WEBHOOK, "OANDA_PRACTICE_TOKEN": FAKE_TOKEN,
        "OANDA_ACCOUNT_ID": FAKE_ACCOUNT}
 
@@ -96,7 +96,7 @@ class MessageTests(unittest.TestCase):
         texts = [ba.build_message(kind, detail) for kind in ALERT_KINDS]
         texts.append(ba.build_message(FRIDAY_ALERT, f"open {FAKE_ACCOUNT} see {WEBHOOK} 2 trade(s)"))
         for text in texts:
-            for secret in (FAKE_TOKEN, FAKE_ACCOUNT, "9999999", "hooks.slack.com", "T000FAKE", "aif-run-secret",
+            for secret in (FAKE_TOKEN, FAKE_ACCOUNT, "1234567", "hooks.slack.com", "T000FAKE", "aif-run-secret",
                            "practice-0123abcd"):
                 self.assertNotIn(secret, text)
 
