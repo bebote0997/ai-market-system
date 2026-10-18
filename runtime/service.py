@@ -53,6 +53,20 @@ OFF_OBSERVE_GRACE_SECONDS = 0.5
 # Pre-demo: an AI review needed for this cycle returned NO_DATA (retried once; still NO_DATA => no trade).
 AI_REVIEW_UNHEALTHY = "AI_REVIEW_UNHEALTHY"
 MACRO_NO_DATA_REASON = "AI_REVIEW_UNHEALTHY: macro=NO_DATA"
+
+
+def attach_broker_alerts(router, environ):
+    """Best-effort Slack alerts for broker-demo router events: ``router.on_alert`` is set only when the sink exists
+    (AI_FLOOR_ALERTS_ENABLED=1 + SLACK_WEBHOOK_URL); never raises."""
+    try:
+        from runtime.broker_alerts import broker_alert_sink_from_env
+        sink = broker_alert_sink_from_env(environ)
+        if sink is not None:
+            router.on_alert = sink
+    except Exception as exc:  # noqa: BLE001 - alerts never affect routing or paper
+        LOG.warning("component=broker_demo event=ALERTS_UNAVAILABLE error_type=%s", type(exc).__name__)
+
+
 _AUTO = object()  # broker_router default: built from the environment (None unless AI_FLOOR_BROKER_DEMO_ROUTING=1)
 
 
@@ -155,6 +169,8 @@ class OperationalRuntime:
                     broker_router = router_from_env(os.environ)
                 except Exception as exc:  # noqa: BLE001
                     LOG.warning("component=broker_demo event=ROUTER_UNAVAILABLE error_type=%s", type(exc).__name__)
+                if broker_router is not None:
+                    attach_broker_alerts(broker_router, os.environ)
         self.broker_router = broker_router
 
     def _startup(self, market_provider, recovery_stale_after_seconds):

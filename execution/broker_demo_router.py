@@ -33,7 +33,9 @@ transaction). With an emergency active ``router_from_env`` returns None, unless 
 remain: then it builds a ``closing_only`` router on a ``close_only`` OandaBroker (entries refused ``emergency_active``,
 every routed OPEN trade closed on every tick; the switch is never turned ON). Optional Friday pre-flatten (``execution/friday_close.py``, OFF unless
 ``AI_FLOOR_FRIDAY_PREFLATTEN == "1"``) closes routed trades before the 17:00 NY Friday halt and refuses entries
-until the market reopens.
+until the market reopens. The optional ``on_alert`` hook (Slack, ``runtime/broker_alerts.py``; set by
+``runtime/service.py`` only when alerts are ON) receives the ``ALERT_KINDS`` events; it is best effort and never alters
+routing.
 
 Single process, exclusive ownership of the practice account (same assumption as OandaBroker).
 """
@@ -82,6 +84,11 @@ FRIDAY_PREFLATTEN = "FRIDAY_PREFLATTEN"
 FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
 PENDING_EVENT_CAP = 50  # FLATTEN_REQUEST_PENDING (and dry-run previews) per request: the events table is append-only
 FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(minutes=30)}
+# Events forwarded to the optional ``on_alert`` hook (best effort; FRIDAY_FLATTEN_FAILED has its own explicit call).
+ALERT_KINDS = frozenset({"ACCEPTED", REJECTED, UNKNOWN, CLOSED, "CLOSE_UNKNOWN", "CLOSE_FAILED", CLOSED_AT_BROKER,
+                         BREAKEVEN, "DRIFT", "UNRESOLVED_ACTION", "DAILY_LOSS_HALT", "DAILY_LOSS_RESUMED",
+                         "DRAWDOWN_HALT", "FLATTEN_DAILY_LOSS", "FLATTEN_DRAWDOWN", EMERGENCY_BUTTON,
+                         "FLATTEN_REQUEST_DONE", "DRIFT_CLEARED", "DRIFT_CLEAR_REFUSED"})
 CLOSE_SENT = {"CLOSED", CLOSED_AT_BROKER, "CLOSE_FAILED", "CLOSE_REJECTED", UNKNOWN, DRY_RUN}
 
 
@@ -183,14 +190,16 @@ def _not_routed(reason):
 
 class BrokerDemoRouter:
     def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None,
-                 friday_minutes=None, closing_only=False):
+                 friday_minutes=None, closing_only=False, on_alert=None):
         self._broker = broker
         self.closing_only = bool(closing_only)  # emergency restart: closes routed trades, never opens
         self._loss_limit = loss_limit
         self._friday_minutes = friday_minutes  # None: Friday pre-flatten OFF (behaviour unchanged)
         self._friday_alerted = None
         self._flatten_ticks = 0
-        self.on_alert = None  # optional callable(kind, message); never receives ids or tokens
+        self.on_alert = on_alert  # optional callable(kind, detail dict | message str); see ALERT_KINDS
+        if loss_limit is not None:
+            loss_limit.on_event = self._alert  # halt / resume events reach the same hook
         self._store = store
         self._registry = registry
         self.dry_run = bool(dry_run)
@@ -212,6 +221,16 @@ class BrokerDemoRouter:
         except Exception as exc:  # noqa: BLE001 - audit is best effort; decisions use the trade rows
             LOG.warning("component=broker_demo event=EVENT_WRITE_FAILED kind=%s error_type=%s", kind,
                         type(exc).__name__)
+        self._alert(kind, detail)
+
+    def _alert(self, kind, detail):
+        """Best-effort ``on_alert`` call for ALERT_KINDS; never raises and never changes the caller's outcome."""
+        if self.on_alert is None or kind not in ALERT_KINDS:
+            return
+        try:
+            self.on_alert(kind, dict(detail))
+        except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
+            LOG.warning("component=broker_demo event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
 
     def _heartbeat(self):
         try:  # Lets the (possibly separate) dashboard process know routing is alive; best effort.
@@ -497,12 +516,14 @@ class BrokerDemoRouter:
             if found:
                 self._store.apply(delete_flags=consumed, event=("DRIFT_CLEAR_REFUSED", None, {
                     "actor": actor, "reasons": found, "source": "dashboard"}))
+                self._alert("DRIFT_CLEAR_REFUSED", {"reasons": found})
             else:
                 self._store.apply(set_flags={BLOCKED_FLAG: None},
                                   delete_flags={**consumed, DRIFT_EPISODE_FLAG: episode},
                                   event=("DRIFT_CLEARED", None, {"actor": actor, "reason": reason,
                                                                  "source": "dashboard", "episode": episode}))
                 self.blocked_reason = None
+                self._alert("DRIFT_CLEARED", {"reason": reason})
         except Exception as exc:  # noqa: BLE001 - the transaction rolled back: nothing cleared, request kept
             LOG.warning("component=broker_demo event=DRIFT_CLEAR_FAILED error_type=%s", type(exc).__name__)
 
@@ -706,6 +727,8 @@ class BrokerDemoRouter:
             reason, suffix = (EMERGENCY_BUTTON, "ebtn") if raw else (EMERGENCY_ACTIVE, "emergency")
             implicit = {} if raw else {"implicit": True}  # closing_only: the active emergency is the request
             self._flatten_ticks += 1
+            if raw and self._flatten_ticks == 1:
+                self._alert(EMERGENCY_BUTTON, {})
             quiet = self._flatten_ticks > PENDING_EVENT_CAP
             report = self.reconcile()
             if report is None:  # nothing verified: keep the request, retry next tick

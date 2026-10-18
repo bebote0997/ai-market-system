@@ -177,6 +177,7 @@ class DailyLossLimit:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._lock = threading.RLock()
         self._latch = _latch_for(store)
+        self.on_event = None  # optional callable(kind, detail) set by the router (best-effort alerts)
 
     def __repr__(self):
         return f"DailyLossLimit(fraction={self.fraction}, flatten={self.flatten})"
@@ -188,6 +189,11 @@ class DailyLossLimit:
         except Exception as exc:  # noqa: BLE001 - audit is best effort; the decision uses the flags
             LOG.warning("component=daily_loss event=EVENT_WRITE_FAILED kind=%s error_type=%s", kind,
                         type(exc).__name__)
+        if self.on_event is not None:
+            try:
+                self.on_event(kind, detail)
+            except Exception as exc:  # noqa: BLE001 - alerting never alters a decision
+                LOG.warning("component=daily_loss event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
 
     def _state(self):
         """Persisted flags, parsed. Raises ValueError on corrupt values (callers fail closed)."""
