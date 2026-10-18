@@ -5,14 +5,17 @@
 whitelisted event kind into one Spanish line built only from a safe subset of the detail (symbol, side, units, reason,
 trade id masked to its last 4 characters, P&L / floor amounts); tokens, account ids, client ids and URLs never reach
 the message. At most one identical (kind, reason) message per minute and 20 messages per hour per process; extras are
-dropped silently and counted. Delivery uses ``runtime.notifications.send_slack`` with a 5 s timeout; the sink never
-raises and failures are logged by type only.
+dropped silently and counted. Delivery uses ``runtime.notifications.send_slack`` with a 5 s timeout from a daemon worker thread fed by a bounded
+queue (``QUEUE_MAX``; overflow is dropped and counted), so a slow Slack never delays the router (emergency / loss
+flattening); the sink never raises and failures are logged by type only.
 """
 from collections import deque
 from decimal import Decimal
 import logging
 import os
+import queue
 import re
+import threading
 import time
 
 from runtime.alert_dispatch import alerts_enabled
@@ -22,6 +25,7 @@ LOG = logging.getLogger("ai_floor.broker.alerts")
 TIMEOUT_SECONDS = 5
 DEDUP_SECONDS = 60
 HOURLY_CAP = 20
+QUEUE_MAX = 20
 PREFIX = "[OANDA demo]"
 MESSAGES = {
     "ACCEPTED": "Orden enviada",
@@ -126,8 +130,11 @@ def build_message(kind, detail):
 class BrokerAlertSink:
     """Callable ``(kind, detail)``; rate limited, never raises."""
 
-    def __init__(self, webhook_url, *, transport=None, clock=None, timeout=TIMEOUT_SECONDS):
+    def __init__(self, webhook_url, *, transport=None, clock=None, timeout=TIMEOUT_SECONDS, background=False):
         self._webhook_url = webhook_url
+        self._queue = queue.Queue(maxsize=QUEUE_MAX) if background else None
+        self._worker = None
+        self._worker_lock = threading.Lock()
         self._transport = transport or _slack_post
         self._clock = clock or time.monotonic
         self._timeout = min(float(timeout), TIMEOUT_SECONDS)
@@ -163,11 +170,52 @@ class BrokerAlertSink:
             if not self._allowed(key, self._clock()):
                 self.dropped += 1
                 return
+            if self._queue is None:
+                self._deliver(text)
+                return
+            self._ensure_worker()
+            try:
+                self._queue.put_nowait(text)
+            except queue.Full:
+                self.dropped += 1
+        except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
+            self.failed += 1
+            LOG.warning("component=broker_alerts event=SEND_FAILED error_type=%s", type(exc).__name__)
+
+    def _deliver(self, text):
+        try:
             send_slack(self._transport, self._webhook_url, {"text": text}, self._timeout)
             self.sent += 1
         except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
             self.failed += 1
             LOG.warning("component=broker_alerts event=SEND_FAILED error_type=%s", type(exc).__name__)
+
+    def _ensure_worker(self):
+        with self._worker_lock:
+            if self._worker is not None and self._worker.is_alive():
+                return
+            self._worker = threading.Thread(target=self._run, name="broker-alerts", daemon=True)
+            self._worker.start()
+
+    def _run(self):
+        while True:
+            try:
+                text = self._queue.get()
+                try:
+                    self._deliver(text)
+                finally:
+                    self._queue.task_done()
+            except Exception:  # noqa: BLE001 - the worker never dies noisily
+                continue
+
+    def flush(self, timeout=10.0):
+        """Wait until queued messages were delivered (tests / shutdown); True when drained."""
+        if self._queue is None:
+            return True
+        deadline = time.monotonic() + timeout
+        while self._queue.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return not self._queue.unfinished_tasks
 
 
 def broker_alert_sink_from_env(env=None, transport=None, clock=None):
@@ -181,7 +229,7 @@ def broker_alert_sink_from_env(env=None, transport=None, clock=None):
     if not valid_slack_webhook(url):
         LOG.warning("component=broker_alerts event=DISABLED reason=invalid_webhook_url")
         return None
-    return BrokerAlertSink(url, transport=transport, clock=clock)
+    return BrokerAlertSink(url, transport=transport, clock=clock, background=transport is None)
 
 
 __all__ = ["MESSAGES", "BrokerAlertSink", "broker_alert_sink_from_env", "build_message", "mask_id"]

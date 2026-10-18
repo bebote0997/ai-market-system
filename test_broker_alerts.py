@@ -5,6 +5,8 @@ from decimal import Decimal
 import logging
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 from urllib.error import URLError
 
@@ -139,6 +141,47 @@ class RateLimitTests(unittest.TestCase):
         alert = sink(transport)
         alert("INTENT", {"units": 5})
         self.assertEqual((transport.calls, alert.dropped), ([], 0))
+
+
+class BackgroundDeliveryTests(unittest.TestCase):
+    """A slow Slack must never delay the router (emergency / loss flatten run right after the alert)."""
+
+    def test_slow_transport_does_not_block_the_caller(self):
+        gate = threading.Event()
+        calls = []
+
+        def slow(url, payload, timeout):
+            gate.wait(5)
+            calls.append(payload["text"])
+
+        alert = ba.BrokerAlertSink(WEBHOOK, transport=slow, clock=Clock(), background=True)
+        started = time.monotonic()
+        alert("ACCEPTED", {"trade_id": "6397"})
+        alert("DAILY_LOSS_HALT", {"reason": "loss"})
+        self.assertLess(time.monotonic() - started, 1.0)
+        gate.set()
+        self.assertTrue(alert.flush(5))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(alert.sent, 2)
+
+    def test_queue_overflow_is_dropped_and_counted(self):
+        gate = threading.Event()
+        alert = ba.BrokerAlertSink(WEBHOOK, transport=lambda *_a: gate.wait(5), clock=Clock(), background=True)
+        for i in range(ba.QUEUE_MAX + 5):
+            alert("ACCEPTED", {"trade_id": str(1000 + i)})  # distinct reasons are not needed: kind-level dedup applies
+        gate.set()
+        alert.flush(5)
+        self.assertLessEqual(alert.sent, ba.QUEUE_MAX + 1)
+
+    def test_production_factory_uses_background_delivery(self):
+        self.assertIsNotNone(ba.broker_alert_sink_from_env(ENV)._queue)
+        self.assertIsNone(sink()._queue)
+
+    def test_background_failures_are_counted_not_raised(self):
+        alert = ba.BrokerAlertSink(WEBHOOK, transport=FakeTransport(TimeoutError()), clock=Clock(), background=True)
+        alert("ACCEPTED", {"trade_id": "6397"})
+        self.assertTrue(alert.flush(5))
+        self.assertEqual(alert.failed, 1)
 
 
 class FailureTests(unittest.TestCase):
