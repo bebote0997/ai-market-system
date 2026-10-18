@@ -295,14 +295,14 @@ class ControlBrokerViewTests(unittest.TestCase):
     def content(app):
         return '\n'.join(m.value for m in app.markdown)
 
-    def test_history_placeholder_is_separate_and_has_no_numbers(self):
-        content = self.content(self.app())
-        start = content.index('📚 Historial (referencia / baseline)')
-        section = content[start:content.index('</div></div>', start)]
-        self.assertIn('separados de las estadísticas de la demo en vivo', section)
-        self.assertIn('Se cargarán más adelante', section)
-        import re
-        self.assertNotRegex(re.sub(r'<[^>]+>', ' ', section), r'\d')  # visible text only (tags like <h3> aside)
+    def test_history_section_is_separate_and_empty_without_data(self):
+        with patch.dict('os.environ', {'AI_FLOOR_HISTORIAL_DIR': '/nonexistent-historial-dir'}):
+            content = self.content(self.app())
+        start = content.index('📚 Historial (referencia) · no son trades de OANDA')
+        section = content[start:]
+        self.assertIn('separadas de las estadísticas de la demo en vivo de OANDA', section)
+        self.assertIn('sin datos todavía', section)
+        self.assertIn('Referencia · no son trades de OANDA', section)
         self.assertNotIn('<table', section)
 
     def test_routing_chip_defaults_to_off(self):
