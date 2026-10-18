@@ -742,7 +742,8 @@ class FridayRouterTests(OpsBase):
         self.assertEqual(router.manage(ny(2026, 10, 17, 9, 20)), {CID: "ACTION_UNRESOLVED"})
         self.assertEqual(len(self.puts()), 2)
         self.assertEqual(self.rows()[0]["status"], "OPEN")
-        self.assertEqual(router.on_alert.call_count, 1)
+        friday = [c for c in router.on_alert.call_args_list if c.args[0] == "FRIDAY_FLATTEN_FAILED"]
+        self.assertEqual(len(friday), 1)  # other router events may also reach the hook (broker alerts)
 
     def test_dry_run_friday_sends_nothing(self):
         self.friday()
