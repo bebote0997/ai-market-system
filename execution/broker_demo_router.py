@@ -22,16 +22,25 @@ Optional daily loss limit / drawdown halt (``execution/daily_loss_limit.py``, OF
 "1"``): evaluated on every cycle, every ``manage`` tick and before every entry; a halt refuses entries and (flatten ON /
 drawdown) closes the routed OPEN trades. Independent from the kill switch: it never sets ``blocked_reason``.
 
+Operator requests from the dashboard (``execution/operator_actions.py``, another process) arrive as state-DB flags and
+are processed at the start of every ``on_cycle`` / ``manage``: ``flatten_request`` (emergency button) closes every
+routed OPEN trade until flat; ``drift_clear_request`` is honoured by ``reconcile`` only when that same pass verifies
+the broker and the local state match. Optional Friday pre-flatten (``execution/friday_close.py``, OFF unless
+``AI_FLOOR_FRIDAY_PREFLATTEN == "1"``) closes routed trades before the 17:00 NY Friday halt and refuses entries
+until the market reopens.
+
 Single process, exclusive ownership of the practice account (same assumption as OandaBroker).
 """
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import json
 import logging
 from pathlib import Path
 import sqlite3
 import threading
 
+from execution import friday_close as fc
 from execution import trade_duration as td
 from execution.account_registry import AccountRegistry
 from execution.broker_config import load_broker_config
@@ -56,6 +65,14 @@ BLOCKED_FLAG = "blocked_reason"
 CLOSE_PREFIX = "CLOSE:"
 BREAKEVEN = "BREAKEVEN"
 SL_TP_OR_EXTERNAL = "SL_TP_OR_EXTERNAL"
+FLATTEN_REQUEST_FLAG = "flatten_request"  # same keys as execution/operator_actions.py
+DRIFT_CLEAR_REQUEST_FLAG = "drift_clear_request"
+EMERGENCY_BUTTON = "EMERGENCY_BUTTON"
+FRIDAY_PREFLATTEN = "FRIDAY_PREFLATTEN"
+FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
+PENDING_EVENT_CAP = 50  # FLATTEN_REQUEST_PENDING (and dry-run previews) per request: the events table is append-only
+FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(minutes=30)}
+CLOSE_SENT = {"CLOSED", CLOSED_AT_BROKER, "CLOSE_FAILED", "CLOSE_REJECTED", UNKNOWN, DRY_RUN}
 
 
 def _dec(value):
@@ -155,9 +172,14 @@ def _not_routed(reason):
 
 
 class BrokerDemoRouter:
-    def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None):
+    def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None,
+                 friday_minutes=None):
         self._broker = broker
         self._loss_limit = loss_limit
+        self._friday_minutes = friday_minutes  # None: Friday pre-flatten OFF (behaviour unchanged)
+        self._friday_alerted = None
+        self._flatten_ticks = 0
+        self.on_alert = None  # optional callable(kind, message); never receives ids or tokens
         self._store = store
         self._registry = registry
         self.dry_run = bool(dry_run)
@@ -202,9 +224,11 @@ class BrokerDemoRouter:
         """Called post-cycle by the runtime. Returns ``(outcome, reason)``; never changes the paper cycle."""
         with self._lock:
             self._heartbeat()
-            flattened = {}
+            flattened = self._process_requests(at)
             if self._loss_limit is not None:
-                flattened = self._loss_check(at)[1]
+                flattened = {**flattened, **self._loss_check(at)[1]}
+            if self._friday_minutes is not None:
+                flattened = {**flattened, **self._friday_tick(at)}
             reconciled = None
             if not self.dry_run and self._store.trades((OPEN,)):
                 reconciled = self._manage_locked(at, skip=flattened)
@@ -253,7 +277,9 @@ class BrokerDemoRouter:
         client_id = f"aif-{run_id}"
         if self._store.trade(client_id) is not None:
             return "ALREADY_ROUTED", client_id
-        report = reconciled if reconciled is not None else self.reconcile()
+        if self._friday_minutes is not None and fc.friday_window(at, self._friday_minutes) != fc.OPEN:
+            return self._refuse(client_id, "friday_close_window")  # dry-run too; no network
+        report =reconciled if reconciled is not None else self.reconcile()
         if report is None:
             return self._refuse(client_id, "broker_read_failed")
         if self.blocked_reason:
@@ -353,6 +379,7 @@ class BrokerDemoRouter:
                 trades = self._broker.open_trades()
             except Exception as exc:  # noqa: BLE001
                 self._event("RECONCILE_READ_FAILED", None, error=type(exc).__name__)
+                self._drift_clear_request(lambda: ["broker_read_failed"])
                 return None
             by_id = {t.trade_id: t for t in trades}
             by_ext = {t.client_ext_id: t for t in trades if t.client_ext_id}
@@ -365,6 +392,7 @@ class BrokerDemoRouter:
             if drift and self.blocked_reason != DRIFT:
                 self._set_blocked(DRIFT)
                 self._event("DRIFT", None, trades=drift)
+            self._drift_clear_request(lambda: self._drift_problems(drift))
             if self.blocked_reason != DRIFT:  # drift wins; the next reconcile after clear_drift re-checks this
                 unresolved = [r["client_id"] for r in self._store.trades((OPEN,)) if r.get("action_status") == UNKNOWN]
                 if unresolved and self.blocked_reason != UNRESOLVED_ACTION:
@@ -417,6 +445,39 @@ class BrokerDemoRouter:
             self._event("RESOLVED", client_id, trade_id=trade_id, status=CLOSED_AT_BROKER)
         return None
 
+    def _drift_problems(self, drift):
+        """Why a drift block cannot be cleared now (empty list = broker and local state verified equal)."""
+        problems = ["drift_present"] if drift else []
+        if self._store.trades(UNRESOLVED_STATUSES):
+            problems.append("unresolved_submission")
+        if any(r.get("action_status") == UNKNOWN for r in self._store.trades((OPEN,))):
+            problems.append("unresolved_action")
+        return problems
+
+    def _drift_clear_request(self, problems):
+        """Honour a dashboard ``drift_clear_request`` only when this reconcile pass verified ``problems()`` empty. The
+        request is consumed either way (a refused one needs a new request); nothing is ever cleared without one."""
+        try:
+            raw = self._store.flag(DRIFT_CLEAR_REQUEST_FLAG)
+            if not raw:
+                return
+            try:
+                request = json.loads(raw)
+                actor, reason = str(request["actor"])[:64], str(request.get("reason") or "")[:120]
+                found = problems() if actor else ["request_invalid"]
+            except (TypeError, ValueError, KeyError):
+                actor, reason, found = None, "", ["request_invalid"]
+            if self.blocked_reason != DRIFT:
+                found = ["not_blocked_by_drift"]
+            if found:
+                self._event("DRIFT_CLEAR_REFUSED", None, actor=actor, reasons=found, source="dashboard")
+            else:
+                self._set_blocked(None)
+                self._event("DRIFT_CLEARED", None, actor=actor, reason=reason, source="dashboard")
+            self._store.clear_flag(DRIFT_CLEAR_REQUEST_FLAG, raw)
+        except Exception as exc:  # noqa: BLE001 - nothing cleared unless _set_blocked(None) committed
+            LOG.warning("component=broker_demo event=DRIFT_CLEAR_FAILED error_type=%s", type(exc).__name__)
+
     def clear_drift(self, actor, reason):
         """Operator acknowledgement of a drift (e.g. after closing the unknown trade). The next reconcile re-blocks if
         the drift is still there."""
@@ -462,10 +523,12 @@ class BrokerDemoRouter:
         """Trade-duration rule on LIVE routed trades (reconcile first). Returns {client_id: outcome}."""
         with self._lock:
             self._heartbeat()
-            flattened = {}
+            flattened = self._process_requests(at)
             if self._loss_limit is not None:  # a halt / flatten happens on every tick, even with paper disabled
-                flattened = self._loss_check(at)[1]
-            report = self._manage_locked(at, price_provider=price_provider, skip=flattened)
+                flattened = {**flattened, **self._loss_check(at)[1]}
+            if self._friday_minutes is not None:
+                flattened = {**flattened, **self._friday_tick(at, price_provider)}
+            report =self._manage_locked(at, price_provider=price_provider, skip=flattened)
             if flattened and report is not None:
                 self._last_manage = {**flattened, **self._last_manage}
             return self._last_manage if report is not None else {"_": "READ_FAILED"}
@@ -598,6 +661,104 @@ class BrokerDemoRouter:
                 results[row["client_id"]] = self._close(row, close_reason, f"{row['client_id']}-emergency")
             return results
 
+    # -- operator requests (dashboard emergency button) ------------------------------------------------------------
+    def _process_requests(self, at):
+        """Emergency-button ``flatten_request``: close every routed OPEN trade (UNKNOWN actions skipped; closing is
+        always allowed) on every tick until none is left, then drop the request. Dry-run: DRY_RUN events only.
+        Returns ``{client_id: outcome}``; never raises."""
+        try:
+            raw = self._store.flag(FLATTEN_REQUEST_FLAG)
+            if not raw:
+                self._flatten_ticks = 0
+                return {}
+            self._flatten_ticks += 1
+            quiet = self._flatten_ticks > PENDING_EVENT_CAP
+            results = {}
+            for row in self._store.trades((OPEN,)):
+                client_id = row["client_id"]
+                if row.get("action_status") == UNKNOWN:
+                    results[client_id] = "ACTION_UNRESOLVED"
+                elif self.dry_run:
+                    if not quiet:
+                        self._event("DRY_RUN", client_id, action="emergency_button_close", trade_id=row["trade_id"],
+                                    reason=EMERGENCY_BUTTON)
+                    results[client_id] = DRY_RUN
+                else:
+                    results[client_id] = self._close(row, EMERGENCY_BUTTON, f"{client_id}-ebtn")
+            remaining = len(self._store.trades((OPEN,)))
+            if not remaining:
+                self._store.clear_flag(FLATTEN_REQUEST_FLAG, raw)
+                self._event("FLATTEN_REQUEST_DONE", None, results=results)
+                self._flatten_ticks = 0
+            elif not quiet:
+                self._event("FLATTEN_REQUEST_PENDING", None, results=results, open_trades=remaining,
+                            tick=self._flatten_ticks)
+            return results
+        except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
+            LOG.error("component=broker_demo event=FLATTEN_REQUEST_ERROR error_type=%s", type(exc).__name__)
+            return {}
+
+    # -- Friday close (OANDA halts EUR_USD at 17:00 NY) -------------------------------------------------------------
+    def _friday_tick(self, at, price_provider=None):
+        """Pre-flatten window: close every routed OPEN trade (needs a tradeable quote; retried each tick). Closed
+        window: keep retrying closes (the broker rejects while halted). Alerts from Friday 16:55 NY while trades
+        remain. Returns ``{client_id: outcome}`` for the rows a close was sent (or previewed) for, so the duration
+        rule (the last fallback) still handles the others. Never raises."""
+        try:
+            window = fc.friday_window(at, self._friday_minutes)
+            if window == fc.OPEN:
+                self._friday_alerted = None
+                return {}
+            results = self._friday_closes(window, price_provider)
+            remaining = len(self._store.trades((OPEN,)))
+            if remaining and fc.alert_due(at):
+                self._friday_alert(at, window, remaining, results)
+            return {cid: outcome for cid, outcome in results.items() if outcome in CLOSE_SENT}
+        except Exception as exc:  # noqa: BLE001
+            LOG.error("component=broker_demo event=ALERT_FRIDAY_FLATTEN_FAILED reason=error error_type=%s",
+                      type(exc).__name__)
+            return {}
+
+    def _friday_closes(self, window, price_provider):
+        results, problems = {}, {}
+        for row in self._store.trades((OPEN,)):
+            client_id, symbol = row["client_id"], row["symbol"]
+            if row.get("action_status") == UNKNOWN:
+                results[client_id] = "ACTION_UNRESOLVED"
+                continue
+            if window == fc.PREFLATTEN:  # market still open: act only on a valid tradeable quote
+                if symbol not in problems:
+                    problems[symbol] = self._quote(symbol, price_provider)[1]
+                    if problems[symbol] is not None:  # once per tick and symbol; retried next tick
+                        self._event("FRIDAY_PREFLATTEN_SKIPPED", None, reason=problems[symbol])
+                if problems[symbol] is not None:
+                    results[client_id] = "MARKET_CLOSED" if problems[symbol] == "not_tradeable" else "NO_PRICE"
+                    continue
+            if self.dry_run:
+                self._event("DRY_RUN", client_id, action="friday_preflatten", trade_id=row["trade_id"],
+                            reason=FRIDAY_PREFLATTEN)
+                results[client_id] = DRY_RUN
+            else:
+                results[client_id] = self._close(row, FRIDAY_PREFLATTEN, f"{client_id}-fri")
+        if results:
+            self._event("FRIDAY_PREFLATTEN", None, window=window, results=results)
+        return results
+
+    def _friday_alert(self, at, window, remaining, results):
+        """LOG.error with the stable token + store event, at most every 5 min (Friday 16:55-17:00 NY) / 30 min
+        (market closed), plus the optional ``on_alert`` hook."""
+        if self._friday_alerted is not None and at - self._friday_alerted < FRIDAY_ALERT_EVERY[window]:
+            return
+        self._friday_alerted = at
+        LOG.error("component=broker_demo event=ALERT_FRIDAY_FLATTEN_FAILED window=%s open_trades=%d", window,
+                  remaining)
+        self._event(FRIDAY_ALERT, None, window=window, open_trades=remaining, results=sorted(set(results.values())))
+        if callable(self.on_alert):
+            try:
+                self.on_alert(FRIDAY_ALERT, f"Friday flatten incomplete: {remaining} routed trade(s) open ({window})")
+            except Exception as exc:  # noqa: BLE001 - alerting never breaks the tick
+                LOG.warning("component=broker_demo event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
+
     # -- daily loss limit / drawdown halt --------------------------------------------------------------------------
     def _loss_check(self, at, planned_risk=None, nav=None):
         """Evaluate the loss limit (NAV from the broker unless given) and flatten when required. Returns
@@ -693,9 +854,12 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     store.initialize()
     loss_limit = limit_from_env(env, store, clock=now)
     router = BrokerDemoRouter(broker, store, registry=registry, dry_run=dry_run_flag(env),
-                              max_units=max_units_setting(env), clock=now, loss_limit=loss_limit)
+                              max_units=max_units_setting(env), clock=now, loss_limit=loss_limit,
+                              friday_minutes=fc.minutes_from_env(env))
     router._heartbeat()
     LOG.info("component=broker_demo event=ROUTER_READY dry_run=%s broker=%r", router.dry_run, broker)
     if loss_limit is not None:
         LOG.info("component=broker_demo event=DAILY_LOSS_LIMIT_ON limit=%r", loss_limit)
+    if router._friday_minutes is not None:
+        LOG.info("component=broker_demo event=FRIDAY_PREFLATTEN_ON minutes=%d", router._friday_minutes)
     return router

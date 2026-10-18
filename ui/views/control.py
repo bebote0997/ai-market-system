@@ -1,4 +1,10 @@
-"""Control screen skeleton: read-only, every control disabled. Nothing here writes or reads broker secrets.
+"""Control screen: account switches are read-only; the emergency-stop button works. Nothing here reads broker secrets.
+
+Emergency stop (ON unless ``AI_FLOOR_EMERGENCY_BUTTON == "0"``): click, type "PARAR TODO", confirm ->
+``execution.operator_actions.request_emergency_stop`` (every account OFF + emergency latched in the state DB + a
+flatten request the router executes on its next tick). Clearing the emergency is NOT possible from here. A drift block
+shows a "Bloqueo por drift" section; its clear-request button exists only with ``AI_FLOOR_DRIFT_CLEAR_BUTTON == "1"``
+and the router clears only after verifying broker == local state. Env flags are read by ``operator_actions``.
 
 Also shows (read-only): the broker-demo routing chip/status (``execution.broker_demo_state.read_router_status``), the
 Demo/Real account VIEW toggle with balances from ``execution.oanda_readonly`` (GET summary only; Real is display only,
@@ -19,7 +25,10 @@ VIEW_STATUS = {"SIN_TOKEN": "sin token", "SIN_CUENTA": "sin cuenta", "ERROR": "e
 ROUTING_CHIPS = {"off": ("Enrutado a broker demo: apagado", ""), "dry_run": ("Enrutado a broker demo: dry-run", "warn"),
                  "on": ("Enrutado a broker demo: activo (cuenta practice)", "pos")}
 DASH = "—"
-LABELS = {"paper": "Cuenta de práctica interna (PAPER)", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
+EMERGENCY_PHRASE, DRIFT_PHRASE = "PARAR TODO", "LIMPIAR DRIFT"
+DRIFT_SENT = ("Solicitud enviada: el sistema la verificará en el próximo ciclo; se limpia solo si las posiciones del "
+              "broker y el estado local coinciden")
+LABELS ={"paper": "Cuenta de práctica interna (PAPER)", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
 
 
 def default_snapshot():
@@ -183,6 +192,89 @@ def render_router(st, status):
              f'<div class="small">Últimos eventos:</div>{events}</div>')
 
 
+def operator_api():
+    """Lazy operator actions + their read-only state; None when unavailable (=> emergency button disabled, no drift
+    button). Never raises."""
+    try:
+        from execution.operator_actions import button_flags, operator_state, request_drift_clear, request_emergency_stop
+        flags, state = button_flags(), operator_state()
+    except Exception:  # The actions are optional: unavailable => nothing can be requested from here.
+        return None
+    if not isinstance(flags, dict) or not isinstance(state, dict):
+        return None
+    return {"flags": flags, "state": state, "stop": request_emergency_stop, "drift_clear": request_drift_clear}
+
+
+def _ok(result):
+    return isinstance(result, dict) and result.get("ok") is True
+
+
+def render_emergency(st, snapshot, api):
+    """Two-step emergency stop: button -> typed phrase "PARAR TODO" -> "Confirmar parada". Never offers a clear."""
+    from ui.views.luxury import html
+    state = st.session_state
+    enabled = api is not None and api["flags"].get("emergency") is True
+    if st.button("🛑 PARADA DE EMERGENCIA", disabled=not enabled, key="control-emergency-stop", width="stretch"):
+        state["control-emergency-confirming"] = True
+        state["control-emergency-result"] = None
+    if enabled and state.get("control-emergency-confirming") is True:
+        html(st, '<div class="small">Esto apaga todas las cuentas y pide cerrar todas las posiciones del broker '
+                 f'demo. Para confirmar escribe exactamente <b>{EMERGENCY_PHRASE}</b>.</div>')
+        phrase = st.text_input("Frase de confirmación", key="control-emergency-phrase")
+        if st.button("Confirmar parada", key="control-emergency-confirm"):
+            if phrase == EMERGENCY_PHRASE:
+                result = api["stop"](actor="dashboard", reason="boton del panel")
+                state["control-emergency-result"] = "ok" if _ok(result) else "error"
+                state["control-emergency-confirming"] = False
+            else:
+                html(st, '<div class="small">La frase no coincide: no se hizo nada.</div>')
+    result = state.get("control-emergency-result")
+    if result == "ok":
+        html(st, '<span class="chip neg">Parada activada: cuentas apagadas y cierre de posiciones solicitado '
+                 '(se ejecuta en el próximo ciclo del sistema).</span>')
+    elif result == "error":
+        html(st, '<span class="chip neg">Error: la parada no se pudo guardar por completo. Revisa el sistema; como '
+                 'respaldo, el owner puede poner AI_FLOOR_EMERGENCY_STOP=1 en el entorno.</span>')
+    if api is None:
+        note = "el botón no está disponible (no se pudo cargar el módulo de acciones)"
+    elif not enabled:
+        note = "botón desactivado por configuración"
+    else:
+        note = "pide confirmación escrita antes de actuar"
+    status = "Activada: todo detenido" if snapshot["emergency_stop"] else "No activada"
+    html(st, f'<div class="stop-note">Estado: {escape(status)} · {escape(note)}. Quitar la parada no es posible desde '
+             'el panel.</div>')
+
+
+def render_drift(st, api):
+    """Shown only while the router is blocked by drift; the request button needs AI_FLOOR_DRIFT_CLEAR_BUTTON=1."""
+    from ui.views.luxury import html
+    if api is None or api["state"].get("blocked_reason") != "drift":
+        return
+    html(st, '<h3 style="margin:12px 0 4px">⚠️ Bloqueo por drift</h3><div class="bubble">El broker tiene posiciones '
+             'que no coinciden con el estado local del sistema, así que no se abren operaciones nuevas.</div>')
+    if api["flags"].get("drift_clear") is not True:
+        html(st, '<div class="small">La limpieza desde el panel está desactivada. Revisa y cierra a mano en OANDA las '
+                 'posiciones que no correspondan; el bloqueo se mantiene hasta que el owner lo limpie.</div>')
+        return
+    if api["state"].get("drift_clear_pending") is True:
+        html(st, '<div class="small">Ya hay una solicitud pendiente de verificación.</div>')
+    html(st, f'<div class="small">Para pedir la limpieza escribe exactamente <b>{DRIFT_PHRASE}</b>.</div>')
+    phrase = st.text_input("Frase de confirmación (drift)", key="control-drift-phrase")
+    if st.button("Solicitar limpieza del drift", key="control-drift-clear"):
+        if phrase != DRIFT_PHRASE:
+            html(st, '<div class="small">La frase no coincide: no se hizo nada.</div>')
+            return
+        result = api["drift_clear"](actor="dashboard", reason="boton del panel")
+        if _ok(result):
+            text = DRIFT_SENT
+        elif isinstance(result, dict) and result.get("reason") == "no_drift":
+            text = "Ya no hay bloqueo por drift: no se envió nada."
+        else:
+            text = "Error: no se pudo enviar la solicitud."
+        html(st, f'<div class="small"><b>{escape(text)}</b></div>')
+
+
 def render_history(st):
     from ui.views.luxury import html
     html(st, '<div class="card"><h3>📚 Historial (referencia / baseline)</h3>'
@@ -197,9 +289,12 @@ def render(st, snapshot=None):
     accounts = {a["key"]: a for a in snapshot["accounts"]}
     readable = ("Estado leído del registro de cuentas." if snapshot["readable"]
                 else "No se pudo leer el registro de cuentas: se muestra todo apagado por seguridad.")
-    html(st, '<div class="card"><h3>🎛️ Panel de control · solo lectura</h3>'
-             '<div class="bubble">Esta pantalla todavía no hace nada: los interruptores y el botón están '
-             'desactivados. Sirve para ver el estado. La cuenta de práctica (PAPER) sigue funcionando igual.</div>'
+    api = operator_api()
+    html(st, '<div class="card"><h3>🎛️ Panel de control</h3>'
+             '<div class="bubble">Los interruptores de las cuentas son solo de lectura: muestran el estado y no se '
+             'cambian desde aquí. El botón de parada de emergencia sí funciona: apaga todas las cuentas y pide cerrar '
+             'las posiciones del broker demo. Quitar la parada de emergencia no es posible desde el panel. La cuenta '
+             'de práctica (PAPER) sigue funcionando igual.</div>'
              f'<div class="small">{escape(readable)}</div></div>')
     left, right = st.columns([1.3, 1])
     with left:
@@ -217,9 +312,8 @@ def render(st, snapshot=None):
                  f'{"encendida" if paper.get("enabled") else "sin datos en el registro"} · no se controla desde aquí.</div>')
     with right:
         html(st, '<h3 style="margin:4px 0">Parada de emergencia</h3>')
-        st.button("🛑 PARADA DE EMERGENCIA", disabled=True, key="control-emergency-stop", width="stretch")
-        state = ("Activada: todo detenido" if snapshot["emergency_stop"] else "No activada")
-        html(st, f'<div class="stop-note">Estado: {escape(state)} · el botón aún no está conectado.</div>')
+        render_emergency(st, snapshot, api)
+    render_drift(st, api)
     html(st, '<h3 style="margin:12px 0 4px">🔀 Enrutado a broker demo</h3>')
     render_router(st, router_status())
     render_accounts_view(st)

@@ -187,6 +187,11 @@ class DemoStateStore:
                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                         (key, value, self._clock()))
 
+    def clear_flag(self, key, value=None):
+        """Delete ``key`` (only while it still holds ``value`` when given, so a newer request is never lost)."""
+        with closing(self._connect()) as con:
+            con.execute("DELETE FROM broker_demo_flags WHERE key = ? AND (? IS NULL OR value = ?)", (key, value, value))
+
 
 def _counts(rows):
     counts = {}
