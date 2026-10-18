@@ -232,10 +232,21 @@ lecturas extra de NAV ni flags escritos).
 | `AI_FLOOR_DAILY_LOSS_PCT` | `0.02` | Fracción opcional, **solo más estricta** (`0 < x ≤ 0.02`); cualquier otro valor ⇒ `0.02`. |
 | `AI_FLOOR_DAILY_LOSS_START_EQUITY` | vacío | Base opcional del drawdown 5 %; si falta, el primer NAV observado (persistido). |
 
-- **Día** = desde la frontera de las 17:00 America/New_York (con DST, todos los días del calendario). `E0` = primer NAV
-  del día, persistido en `broker_demo_flags` (`dl_day`, `dl_e0`, `dl_transfers`, `dl_halt`, `dd_start`, `dd_halt`): un
-  reinicio no lo recalcula. P&L del día = NAV − E0 − transferencias (`record_transfer(importe, actor, motivo)` para
-  depósitos/retiros ACH). NAV incluye el P&L abierto.
+- **Día** = desde la frontera de las 17:00 America/New_York (con DST, todos los días del calendario). `E0` se fija en
+  la primera evaluación del día y se persiste en `broker_demo_flags` (`dl_day`, `dl_e0`, `dl_transfers`, `dl_halt`,
+  `dd_start`, `dd_halt`, `dd_transfers`, `dl_last_nav`, `dl_last_at`, `dl_tx_id`): un reinicio no lo recalcula.
+  `E0` = último NAV válido observado (`dl_last_nav`/`dl_last_at`, escritos en cada evaluación) si tiene ≤ 7 días; si
+  no existe (primera evaluación) o es más viejo, el NAV actual. Tras una caída que cruce las 17:00, el tramo previo a la
+  frontera se atribuye al día nuevo (conservador: una pérdida ocurrida durante la caída no se borra). NAV incluye el
+  P&L abierto.
+- **Transferencias** (excluidas automáticamente): P&L del día = NAV − E0 − transferencias. Cuando cambia el
+  `lastTransactionID` del summary, el router hace una consulta **solo lectura** `GET
+  /v3/accounts/{id}/transactions/sinceid?id=<dl_tx_id>&type=TRANSFER_FUNDS` (mismo guard de host practice, sin
+  endpoints de órdenes), suma `amount` de las transacciones ≤ el id del summary y llama a `record_transfer(neto,
+  actor="broker", motivo="TRANSFER_FUNDS")`; luego guarda el id. El primer id visto solo se guarda (nunca retroactivo);
+  sin cambio de id no hay llamada extra. Si el día actual aún no tiene E0, la transferencia ajusta la base pendiente
+  (`dl_last_nav`) del próximo E0. La base del drawdown también la excluye (`dd_transfers`). Si la consulta falla ⇒
+  entradas rechazadas (`daily_loss_unavailable`) y el id no avanza; halts/flatten siguen igual.
 - **Halt diario**: P&L ≤ −2 % × E0 (el borde exacto dispara; las ganancias no suben el suelo) ⇒ evento
   `DAILY_LOSS_HALT`, sin entradas nuevas y, con flatten ON, cierre de los trades OPEN enrutados (`close_market`, id
   `…-dlimit`, motivo `DAILY_LOSS`, evento `FLATTEN_DAILY_LOSS`; reintento en cada tick; filas con acción UNKNOWN se
@@ -245,9 +256,15 @@ lecturas extra de NAV ni flags escritos).
   con `clear_daily_halt(actor, motivo)` (auditado; vuelve a dispararse si sigue en pérdida).
 - **Drawdown 5 %** (NAV ≤ base × 0,95): `DRAWDOWN_HALT`, cierre siempre (motivo `DRAWDOWN`, aunque flatten esté OFF) y
   **sin** reanudación automática: exige `clear_drawdown_halt(actor, motivo)` tras revisión escrita. Gana el más estricto.
+  Un NAV finito ≤ 0 cuenta como ruptura de drawdown (halt + cierre).
+- **Latches**: cada halt nuevo se fija primero en memoria (por tracker y por ruta del DB de estado, local al proceso,
+  como el latch de emergencia) y después se escribe el flag; si la escritura falla el halt sigue vigente (y se reintenta
+  la escritura). El latch de drawdown solo lo libera `clear_drawdown_halt`; el diario, la siguiente clave de día o
+  `clear_daily_halt`.
 - Se evalúa en cada ciclo, en cada tick de `manage` (aunque paper esté apagado) y antes de cada orden. Fallo al leer el
-  NAV, NAV inválido o estado ilegible ⇒ se rechazan entradas (`daily_loss_unavailable` / `nav_invalid` /
-  `state_unreadable`) sin tocar los trades abiertos.
+  NAV, NAV no numérico/NaN/inf o estado ilegible ⇒ se rechazan entradas (`daily_loss_unavailable` / `nav_invalid` /
+  `state_unreadable`); si ya hay un halt activo (`halt_state()`: latch o flag) el cierre obligatorio continúa en cada
+  tick (drawdown siempre; diario con flatten ON).
 - **Independiente del interruptor/emergencia**: nunca escribe `blocked_reason` ni llama al registro; limpiar el
   emergency no limpia el halt y viceversa. Cerrar siempre está permitido. Eventos solo con importes y claves de día.
 - **Activarlo es un paso separado del owner**: poner `AI_FLOOR_DAILY_LOSS_LIMIT=1` en Render con un PUT por clave

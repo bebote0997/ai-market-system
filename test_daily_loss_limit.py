@@ -117,6 +117,7 @@ class TrackerBase(unittest.TestCase):
         self.db = Path(self.tmp.name) / "broker_state.db"
         self.now = self.T0
         self.store = DemoStateStore(self.db, clock=lambda: self.now.isoformat())
+        self.addCleanup(dl._HALT_LATCHES.clear)
 
     def limit(self, **kwargs):
         return DailyLossLimit(self.store, clock=lambda: self.now, **kwargs)
@@ -151,10 +152,10 @@ class TrackerTests(TrackerBase):
         self.assertEqual(len(self.events("DAILY_LOSS_HALT")), 1)
         self.now = datetime(2026, 10, 14, 20, 59, tzinfo=UTC)  # 16:59 NY
         self.assertFalse(limit.evaluate(D("1010")).entry_allowed)
-        self.now = datetime(2026, 10, 14, 21, 0, tzinfo=UTC)  # 17:00 NY: new day
-        resumed = limit.evaluate(D("975"))
+        self.now = datetime(2026, 10, 14, 21, 0, tzinfo=UTC)  # 17:00 NY: new day, E0 = last observed NAV
+        resumed = limit.evaluate(D("1010"))
         self.assertEqual((resumed.entry_allowed, resumed.halted, resumed.daily.pnl), (True, False, D("0")))
-        self.assertEqual(self.flags()["dl_e0"], "975")
+        self.assertEqual(self.flags()["dl_e0"], "1010")
         [(_k, detail)] = self.events("DAILY_LOSS_RESUMED")
         self.assertEqual((detail["day"], detail["new_day"]), ("2026-10-13T17:00:00-04:00", "2026-10-14T17:00:00-04:00"))
 
@@ -221,15 +222,15 @@ class TrackerTests(TrackerBase):
 
     def test_transfers_recorded_for_the_day(self):
         limit = self.limit()
-        with self.assertRaises(ValueError):
-            limit.record_transfer(D("500"), "owner", "ACH")  # no day state yet
+        self.assertIsNone(limit.record_transfer(D("500"), "owner", "ACH"))  # no state yet: E0 will include it
+        self.assertEqual(self.events("TRANSFER_RECORDED")[0][1]["applied_to"], "none")
         limit.evaluate(D("1000"))
         for amount, actor in ((0, "owner"), ("x", "owner"), (D("NaN"), "owner"), (D("5"), "")):
             with self.subTest(amount=amount, actor=actor), self.assertRaises(ValueError):
                 limit.record_transfer(amount, actor, "ACH")
         self.assertEqual(limit.record_transfer(D("500"), "owner", "ACH deposit"), D("500"))
         self.assertTrue(limit.evaluate(D("1480")).halted)  # deposit does not mask the -20 loss
-        [(_k, detail)] = self.events("TRANSFER_RECORDED")
+        [_first, (_k, detail)] = self.events("TRANSFER_RECORDED")
         self.assertEqual((detail["amount"], detail["total"], detail["actor"]), ("500", "500", "owner"))
         self.now += timedelta(days=1)
         limit.evaluate(D("1480"))
@@ -238,7 +239,7 @@ class TrackerTests(TrackerBase):
 
     def test_invalid_nav_fails_closed_without_state_change(self):
         limit = self.limit()
-        for nav in (None, 0, D("-5"), D("NaN"), True, "abc"):
+        for nav in (None, D("NaN"), D("Infinity"), True, "abc"):
             with self.subTest(nav=nav):
                 decision = limit.evaluate(nav)
                 self.assertEqual((decision.entry_allowed, decision.flatten_required, decision.reason),
@@ -274,6 +275,108 @@ class TrackerTests(TrackerBase):
         self.assertEqual(self.limit(fraction=D("0.01")).fraction, D("0.01"))
         self.assertEqual(self.limit(fraction=0).fraction, D("0.02"))
 
+    def test_transfer_before_first_evaluation_of_the_day_adjusts_next_e0(self):
+        limit = self.limit()
+        limit.evaluate(D("1000"))
+        self.now += timedelta(days=1)  # new day, not evaluated yet: the deposit goes into the pending baseline
+        self.assertIsNone(limit.record_transfer(D("500"), "broker", "TRANSFER_FUNDS"))
+        self.assertEqual(self.flags()["dl_last_nav"], "1500")
+        self.assertEqual(self.events("TRANSFER_RECORDED")[-1][1]["applied_to"], "next_e0")
+        halt = limit.evaluate(D("1470"))  # E0 = 1500: the deposit does not hide the -30 (-2 %) loss
+        self.assertEqual((halt.halted, halt.daily.pnl, self.flags()["dl_e0"]), (True, D("-30"), "1500"))
+        self.now += timedelta(days=1)
+        limit.record_transfer(D("-600"), "broker", "TRANSFER_FUNDS")
+        later = limit.evaluate(D("870"))  # E0 = 870, drawdown base 1000 + 500 - 600 = 900 -> floor 855
+        self.assertEqual((later.entry_allowed, later.dd_halted, later.daily.pnl), (True, False, D("0")))
+        self.assertEqual(self.flags()["dd_transfers"], "-100")
+
+    def test_withdrawal_does_not_trigger_drawdown(self):
+        limit = self.limit()
+        limit.evaluate(D("1000"))
+        limit.record_transfer(D("-300"), "broker", "TRANSFER_FUNDS")
+        decision = limit.evaluate(D("700"))  # -30 % NAV, all of it withdrawn: no loss, no drawdown
+        self.assertEqual((decision.entry_allowed, decision.halted, decision.dd_halted), (True, False, False))
+        self.assertTrue(limit.evaluate(D("665")).dd_halted)  # 700 * 0.95: a real 5 % loss still halts
+        override = DailyLossLimit(DemoStateStore(Path(self.tmp.name) / "o.db"), clock=lambda: self.now,
+                                  start_equity_override=D("1000"))
+        override.evaluate(D("1000"))
+        override.record_transfer(D("-300"), "broker", "TRANSFER_FUNDS")
+        self.assertFalse(override.evaluate(D("700")).dd_halted)
+
+    def test_halt_write_failure_keeps_halt_and_flatten(self):
+        original = self.store.set_flag
+        failing = {"on": True}
+
+        def set_flag(key, value):
+            if failing["on"] and key in ("dl_halt", "dd_halt") and value is not None:
+                raise sqlite3.OperationalError("disk I/O error")
+            return original(key, value)
+
+        limit = self.limit(flatten=True)
+        with patch.object(self.store, "set_flag", side_effect=set_flag):
+            limit.evaluate(D("1000"))
+            self.assertTrue(limit.evaluate(D("980")).halted)
+            self.assertIsNone(self.flags()["dl_halt"])
+            recovered = limit.evaluate(D("1010"))
+            self.assertEqual((recovered.entry_allowed, recovered.flatten_required, recovered.reason),
+                             (False, True, "daily_loss_halt"))
+            other = self.limit()  # another tracker on the same state path sees the latch
+            self.assertEqual(other.evaluate(D("1010")).reason, "daily_loss_halt")
+            self.assertEqual(other.halt_state(), (True, False))
+            self.assertTrue(other.status()["daily_halted"])
+            failing["on"] = False
+            limit.evaluate(D("1010"))  # the write is retried once possible
+        self.assertEqual(self.flags()["dl_halt"], "2026-10-13T17:00:00-04:00")
+        limit.clear_daily_halt("owner", "test")
+        self.assertTrue(limit.evaluate(D("1010")).entry_allowed)
+
+    def test_drawdown_write_failure_needs_explicit_clear(self):
+        original = self.store.set_flag
+
+        def set_flag(key, value):
+            if key == "dd_halt" and value is not None:
+                raise sqlite3.OperationalError("disk I/O error")
+            return original(key, value)
+
+        limit = self.limit(flatten=False, start_equity_override=D("1000"))
+        with patch.object(self.store, "set_flag", side_effect=set_flag):
+            self.assertTrue(limit.evaluate(D("940")).dd_halted)
+            self.now += timedelta(days=2)
+            recovered = self.limit(flatten=False, start_equity_override=D("1000")).evaluate(D("1100"))
+            self.assertEqual((recovered.entry_allowed, recovered.flatten_required, recovered.reason),
+                             (False, True, "drawdown_halt"))
+            self.assertNotIn("dd_halt", self.flags())
+            limit.clear_drawdown_halt("owner", "written review")
+            self.assertTrue(limit.evaluate(D("1100")).entry_allowed)
+
+    def test_restart_across_17h_keeps_the_loss(self):
+        self.limit().evaluate(D("1000"))
+        self.now = datetime(2026, 10, 14, 20, 0, tzinfo=UTC)  # 16:00 NY, last observation before downtime
+        self.limit().evaluate(D("1000"))
+        self.now = datetime(2026, 10, 15, 13, 0, tzinfo=UTC)  # restarted next morning; lost 25 while down
+        decision = self.limit().evaluate(D("975"))
+        self.assertEqual((decision.halted, decision.daily.pnl, self.flags()["dl_e0"]), (True, D("-25"), "1000"))
+
+    def test_first_and_stale_baselines_use_current_nav(self):
+        first = self.limit().evaluate(D("1000"))
+        self.assertEqual((first.daily.pnl, self.flags()["dl_e0"]), (D("0"), "1000"))
+        self.assertEqual(self.flags()["dl_last_at"], self.T0.isoformat())
+        self.now += timedelta(days=8)  # last NAV older than 7 days: ignored
+        stale = self.limit().evaluate(D("960"))
+        self.assertEqual((stale.entry_allowed, stale.daily.pnl, self.flags()["dl_e0"]), (True, D("0"), "960"))
+
+    def test_non_positive_nav_is_a_drawdown_breach(self):
+        for n, nav in enumerate((0, D("-5"))):
+            with self.subTest(nav=nav):
+                store = DemoStateStore(Path(self.tmp.name) / f"np-{n}.db")
+                limit = DailyLossLimit(store, flatten=False, clock=lambda: self.now)
+                decision = limit.evaluate(nav)
+                self.assertEqual((decision.entry_allowed, decision.flatten_required, decision.dd_halted,
+                                  decision.reason, decision.newly_halted), (False, True, True, "drawdown_halt", True))
+                self.assertIsNotNone(store.flag("dd_halt"))
+                self.assertIsNone(store.flag("dl_e0"))
+                self.assertFalse(limit.evaluate(nav).newly_halted)
+
 
 class EnvTests(unittest.TestCase):
     def test_limit_from_env_is_none_unless_exact_1(self):
@@ -308,7 +411,25 @@ class EnvTests(unittest.TestCase):
                 self.assertEqual(limit_from_env(env, MagicMock()).start_equity_override, expected)
 
 
+def summary_tx(nav, tx):
+    return (200, {"account": {"balance": nav, "NAV": nav, "marginUsed": "0", "currency": "USD",
+                              "lastTransactionID": tx}, "lastTransactionID": tx})
+
+
+def transfers(*items, last="200"):
+    return (200, {"transactions": [{"id": i, "type": "TRANSFER_FUNDS", "amount": a} for i, a in items],
+                  "lastTransactionID": last})
+
+
+def since(tx_id):
+    return f"{A}/transactions/sinceid?id={tx_id}&type=TRANSFER_FUNDS"
+
+
 class RouterLossLimitTests(RouterBase):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(dl._HALT_LATCHES.clear)
+
     def flags(self):
         with closing(sqlite3.connect(self.db)) as con:
             return dict(con.execute("SELECT key, value FROM broker_demo_flags").fetchall())
@@ -509,6 +630,94 @@ class RouterLossLimitTests(RouterBase):
         self.assertEqual(restarted.status()["loss_limit"]["daily_halted"], True)
         decision, _ = restarted._loss_check(NOW + timedelta(minutes=2))
         self.assertEqual((decision.halted, decision.entry_allowed), (True, False))
+
+    def tx_router(self):
+        """opened() + a first summary carrying lastTransactionID 100 (stored, never queried retroactively)."""
+        router = self.opened()
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("10000", "100")]
+        self.assertTrue(router._loss_check(NOW + timedelta(minutes=1))[0].entry_allowed)
+        self.assertEqual(self.flags()["dl_tx_id"], "100")
+        self.assertFalse([p for p in self.server.paths("GET") if "/transactions" in p])
+        return router
+
+    def test_deposit_during_a_loss_day_does_not_hide_the_loss(self):
+        router = self.tx_router()
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("10300", "105")]
+        self.server.add("GET", since("100"), transfers(("104", "500"), ("106", "999"), last="106"))
+        self.server.add("PUT", CLOSE, (200, {"orderFillTransaction": close_fill()}))
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        self.assertEqual(router.manage(NOW + timedelta(minutes=2)), {CID: "CLOSED"})  # 10300 - 10000 - 500 = -2 %
+        self.assertEqual(self.flags()["dl_transfers"], "500")  # #106 is after the summary snapshot: not counted
+        self.assertEqual(self.flags()["dl_tx_id"], "105")
+        [(_k, _c, detail)] = self.events("TRANSFER_RECORDED")
+        self.assertEqual((detail["amount"], detail["actor"], detail["reason"]), ("500", "broker", "TRANSFER_FUNDS"))
+        self.assertEqual([m for m, _p in self.writes()], ["POST", "PUT"])
+        router._loss_check(NOW + timedelta(minutes=3))  # lastTransactionID unchanged: no transactions call
+        self.assertEqual(self.server.count("GET", since("100")), 1)
+        self.assertFalse([p for p in self.server.paths("GET") if "sinceid?id=105" in p])
+
+    def test_withdrawal_does_not_halt_or_drawdown(self):
+        router = self.tx_router()
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("9300", "101")]
+        self.server.add("GET", since("100"), transfers(("101", "-700"), last="101"))
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=2))  # -7 % NAV, all withdrawn
+        self.assertEqual((decision.entry_allowed, decision.halted, decision.dd_halted, flattened),
+                         (True, False, False, {}))
+        self.assertEqual(self.puts(), [])
+
+    def test_failing_transfer_query_refuses_entries_and_retries(self):
+        router = self.tx_router()
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("10000", "101")]
+        self.server.add("GET", since("100"), (500, {}))
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=2))
+        self.assertEqual((decision.entry_allowed, decision.reason, decision.flatten_required, flattened),
+                         (False, "daily_loss_unavailable", False, {}))
+        self.assertEqual(self.flags()["dl_tx_id"], "100")  # not advanced
+        self.assertTrue(self.events("DAILY_LOSS_TRANSFERS_UNAVAILABLE"))
+        self.server.routes[("GET", since("100"))] = [(200, {"transactions": [{"id": "101", "type": "TRANSFER_FUNDS",
+                                                                              "amount": "x"}],
+                                                            "lastTransactionID": "101"})]
+        self.assertEqual(router._loss_check(NOW + timedelta(minutes=3))[0].reason, "daily_loss_unavailable")
+        self.server.routes[("GET", since("100"))] = [transfers(last="101")]
+        self.assertTrue(router._loss_check(NOW + timedelta(minutes=4))[0].entry_allowed)
+        self.assertEqual(self.flags()["dl_tx_id"], "101")
+        # Halts are unaffected by a failing query: a breach still halts and flattens.
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("9800", "102")]
+        self.server.routes[("GET", since("101"))] = [(500, {})]
+        self.server.add("PUT", CLOSE, (200, {"orderFillTransaction": close_fill()}))
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=5))
+        self.assertEqual((decision.reason, flattened), ("daily_loss_halt", {CID: "CLOSED"}))
+
+    def test_flatten_retried_while_nav_unavailable(self):
+        router = self.opened()
+        self.nav("9790")
+        self.server.add("PUT", CLOSE, (400, {"errorCode": "MARKET_HALTED"}), (200, {"orderFillTransaction": close_fill()}))
+        self.assertEqual(router.manage(NOW + timedelta(minutes=1)), {CID: "CLOSE_REJECTED"})
+        self.server.routes[("GET", SUMMARY)] = [(500, {})]
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=2))
+        self.assertEqual((decision.entry_allowed, decision.flatten_required, decision.reason, flattened),
+                         (False, True, "daily_loss_unavailable", {CID: "CLOSED"}))
+        self.assertEqual(self.puts(), [CLOSE, CLOSE])
+        self.assertEqual(self.rows()[0]["status"], "CLOSED")
+
+    def test_nan_nav_keeps_flattening_an_active_drawdown(self):
+        router = self.opened(AI_FLOOR_DAILY_LOSS_FLATTEN="0", AI_FLOOR_DAILY_LOSS_START_EQUITY="10500")
+        self.nav("9970")
+        self.server.add("PUT", CLOSE, (400, {"errorCode": "MARKET_HALTED"}), (200, {"orderFillTransaction": close_fill()}))
+        self.assertEqual(router._loss_check(NOW + timedelta(minutes=1))[1], {CID: "CLOSE_REJECTED"})
+        with patch.object(router._broker, "get_balance", return_value=MagicMock(equity=D("NaN"),
+                                                                                  last_transaction_id=None)):
+            decision, flattened = router._loss_check(NOW + timedelta(minutes=2))
+        self.assertEqual((decision.reason, decision.dd_halted, flattened), ("nav_invalid", True, {CID: "CLOSED"}))
+
+    def test_zero_nav_halts_and_flattens(self):
+        router = self.opened(AI_FLOOR_DAILY_LOSS_FLATTEN="0")
+        self.nav("0")
+        self.server.add("PUT", CLOSE, (200, {"orderFillTransaction": close_fill()}))
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=1))
+        self.assertEqual((decision.dd_halted, decision.reason, flattened), (True, "drawdown_halt", {CID: "CLOSED"}))
+        self.assertIn("dd_halt", self.flags())
+        self.assertTrue(self.events("FLATTEN_DRAWDOWN"))
 
 
 if __name__ == "__main__":

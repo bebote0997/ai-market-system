@@ -613,8 +613,33 @@ class OandaBroker:
         if balance is None or equity is None:
             raise BrokerUnavailable("summary answer without balance/NAV")
         currency = account.get("currency")
+        last_id = payload.get("lastTransactionID", account.get("lastTransactionID"))
         return BrokerBalance(balance, equity, _dec(account.get("marginUsed")),
-                             currency if isinstance(currency, str) else None)
+                             currency if isinstance(currency, str) else None,
+                             last_id if isinstance(last_id, str) and _TRADE_ID_RE.match(last_id) else None)
+
+    def transfers_since(self, tx_id, upto=None):
+        """Read-only: ``(net TRANSFER_FUNDS amount after tx_id, last transaction id)``. With ``upto`` (a summary's
+        ``lastTransactionID``) only transactions ``<= upto`` count and ``upto`` is returned, so the net matches that
+        summary's NAV exactly. Malformed answers/entries raise BrokerMalformedResponse (never a guessed 0)."""
+        payload = self._client.get_transactions_since(tx_id, types=("TRANSFER_FUNDS",))
+        if not isinstance(payload, dict):
+            raise BrokerMalformedResponse("transactions answer is not an object")
+        items, last_id = payload.get("transactions"), payload.get("lastTransactionID") if upto is None else upto
+        if not isinstance(items, list) or not isinstance(last_id, str) or not _TRADE_ID_RE.match(last_id):
+            raise BrokerMalformedResponse("transactions answer without 'transactions'/'lastTransactionID'")
+        net = Decimal("0")
+        for item in items:
+            if not isinstance(item, dict):
+                raise BrokerMalformedResponse("transaction entry is not an object")
+            if item.get("type") != "TRANSFER_FUNDS":
+                continue
+            item_id, amount = item.get("id"), _dec(item.get("amount"))
+            if not isinstance(item_id, str) or not _TRADE_ID_RE.match(item_id) or amount is None:
+                raise BrokerMalformedResponse("TRANSFER_FUNDS transaction with invalid id/amount")
+            if int(item_id) <= int(last_id):
+                net += amount
+        return net, last_id
 
     def health(self) -> BrokerHealth:
         client = self._client

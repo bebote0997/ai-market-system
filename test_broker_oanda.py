@@ -527,6 +527,35 @@ class PositionsAndReconcileTests(OandaBrokerBase):
             server = FakeServer().add("GET", f"{A}/summary", (200, payload))
             with self.subTest(payload=payload), self.assertRaises(error):
                 self.broker(transport=server).get_balance()
+        self.assertIsNone(balance.last_transaction_id)
+        account = {"balance": "1", "NAV": "1", "lastTransactionID": "6356"}
+        for payload, expected in (({"account": account, "lastTransactionID": "6357"}, "6357"),
+                                  ({"account": account}, "6356"),
+                                  ({"account": {**account, "lastTransactionID": "x"}}, None),
+                                  ({"account": account, "lastTransactionID": 6357}, None)):
+            server = FakeServer().add("GET", f"{A}/summary", (200, payload))
+            with self.subTest(payload=payload):
+                self.assertEqual(self.broker(transport=server).get_balance().last_transaction_id, expected)
+
+    def test_transfers_since(self):
+        path = f"{A}/transactions/sinceid?id=100&type=TRANSFER_FUNDS"
+        items = [{"id": "101", "type": "TRANSFER_FUNDS", "amount": "500.25"},
+                 {"id": "102", "type": "ORDER_FILL", "amount": "x"},  # other types are ignored
+                 {"id": "103", "type": "TRANSFER_FUNDS", "amount": "-200"},
+                 {"id": "105", "type": "TRANSFER_FUNDS", "amount": "1000"}]
+        self.server.add("GET", path, (200, {"transactions": items, "lastTransactionID": "105"}))
+        broker = self.broker()
+        self.assertEqual(broker.transfers_since("100"), (Decimal("1300.25"), "105"))
+        self.assertEqual(broker.transfers_since("100", upto="104"), (Decimal("300.25"), "104"))
+        self.assertEqual(self.server.paths(), [path, path])
+        bad_items = ({"id": "101", "type": "TRANSFER_FUNDS", "amount": "NaN"},
+                     {"id": "101", "type": "TRANSFER_FUNDS"}, {"type": "TRANSFER_FUNDS", "amount": "1"}, "x")
+        for payload in ({}, [], {"transactions": {}, "lastTransactionID": "1"}, {"transactions": []},
+                        *({"transactions": [item], "lastTransactionID": "105"} for item in bad_items)):
+            server = FakeServer().add("GET", path, (200, payload))
+            with self.subTest(payload=payload), self.assertRaises(BrokerMalformedResponse):
+                self.broker(transport=server).transfers_since("100")
+        self.assertEqual([m for m, *_ in self.server.calls], ["GET", "GET"])
 
 
 def pricing_item(**overrides):

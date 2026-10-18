@@ -42,6 +42,7 @@ PRICE_QUANTUM = Decimal("0.00001")
 PRACTICE_ACCOUNT_RE = re.compile(r"^101-\d{3}-\d+-\d{3}$")
 _TRADE_SPECIFIER_RE = re.compile(r"^(?:\d{1,20}|@[A-Za-z0-9_.\-]{1,128})$")
 _CODE_RE = re.compile(r"^[A-Z0-9_]{1,64}$")
+_TRANSACTION_ID_RE = re.compile(r"^\d{1,20}$")
 
 
 def mask_account(account_id):
@@ -210,6 +211,14 @@ class OandaClient:
 
     def get_open_positions(self):
         return self._call(DATA, "GET", self._path("openPositions"))
+
+    def get_transactions_since(self, tx_id, types=("TRANSFER_FUNDS",)):
+        """Read-only: transactions after (excluding) ``tx_id``, filtered by ``types`` (e.g. ``TRANSFER_FUNDS``)."""
+        if not isinstance(tx_id, str) or not _TRANSACTION_ID_RE.match(tx_id):
+            raise ValueError("invalid transaction id")
+        if not types or isinstance(types, str) or any(not isinstance(t, str) or not _CODE_RE.match(t) for t in types):
+            raise ValueError("invalid transaction type filter")
+        return self._call(DATA, "GET", self._path(f"transactions/sinceid?id={tx_id}&type={','.join(types)}"))
 
     def get_trade(self, specifier):
         """``specifier`` is a tradeID or ``@<clientExtensions.id>``."""

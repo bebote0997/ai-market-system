@@ -20,7 +20,9 @@ LIVE routed trades; ``emergency_close_all`` closes every routed OPEN trade (clos
 
 Optional daily loss limit / drawdown halt (``execution/daily_loss_limit.py``, OFF unless ``AI_FLOOR_DAILY_LOSS_LIMIT ==
 "1"``): evaluated on every cycle, every ``manage`` tick and before every entry; a halt refuses entries and (flatten ON /
-drawdown) closes the routed OPEN trades. Independent from the kill switch: it never sets ``blocked_reason``.
+drawdown) closes the routed OPEN trades. Independent from the kill switch: it never sets ``blocked_reason``. Deposits /
+withdrawals are excluded via a read-only ``TRANSFER_FUNDS`` query whenever the summary's ``lastTransactionID`` moves;
+while NAV (or that query) is unavailable entries are refused but an active halt keeps flattening.
 
 Operator requests from the dashboard (``execution/operator_actions.py``, another process) arrive as state-DB flags and
 are processed at the start of every ``on_cycle`` / ``manage``: ``flatten_request`` (emergency button) closes every
@@ -49,7 +51,7 @@ from execution.broker_demo_state import (CLOSED, CLOSED_AT_BROKER, DRY_RUN, HEAR
                                          dry_run_flag, max_units_setting, routing_flag, summarize_status)
 from execution.broker_port import (ACCEPTED, APPROVED, BrokerAuthError, BrokerGuardError, BrokerMalformedResponse,
                                    BrokerRateLimited, OrderPlan, RiskApproval)
-from execution.daily_loss_limit import limit_from_env, refused
+from execution.daily_loss_limit import NAV_INVALID, STATE_UNREADABLE, UNAVAILABLE, LossDecision, limit_from_env
 from execution.dxtrade_broker import real_execution_enabled
 from execution.oanda_broker import (ACCOUNT_ENV, ALLOWED_SYMBOLS, CLIENT_TAG, DEMO_MODE, INSTRUMENTS, PROVIDER,
                                     TOKEN_ENV, OandaBroker, _comment, client_extension_id, size_units)
@@ -291,9 +293,10 @@ class BrokerDemoRouter:
         if self._store.trades(LIVE_STATUSES) or any(t.instrument == INSTRUMENTS[symbol] for t in report):
             return self._refuse(client_id, "position_already_open")
         try:
-            equity = self._broker.get_balance().equity
+            balance = self._broker.get_balance()
         except Exception as exc:  # noqa: BLE001 - nothing sent
             return self._refuse(client_id, f"balance_unavailable:{type(exc).__name__}")
+        equity = balance.equity
         entry, stop, target = (_dec(getattr(decision, n)) for n in ("entry", "stop", "target"))
         try:
             units = broker_units(equity, decision, entry, stop, self.max_units)
@@ -303,7 +306,7 @@ class BrokerDemoRouter:
             self._event("SKIPPED_ZERO_UNITS", client_id, run_id=run_id, equity=equity)
             return "SKIPPED_ZERO_UNITS", client_id
         if self._loss_limit is not None:
-            loss = self._loss_check(at, Decimal(units) * abs(entry - stop), nav=equity)[0]
+            loss = self._loss_check(at, Decimal(units) * abs(entry - stop), balance=balance)[0]
             if not loss.entry_allowed:
                 return self._refuse(client_id, loss.reason)
         try:  # A re-sized approval derived from the APPROVED decision: only the quantity differs.
@@ -760,21 +763,55 @@ class BrokerDemoRouter:
                 LOG.warning("component=broker_demo event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
 
     # -- daily loss limit / drawdown halt --------------------------------------------------------------------------
-    def _loss_check(self, at, planned_risk=None, nav=None):
-        """Evaluate the loss limit (NAV from the broker unless given) and flatten when required. Returns
-        ``(LossDecision, {client_id: close outcome})``. A NAV read failure refuses entries and touches no trade."""
-        if nav is None:
+    def _loss_check(self, at, planned_risk=None, balance=None):
+        """Evaluate the loss limit (balance from the broker unless given) and flatten when required. Returns
+        ``(LossDecision, {client_id: close outcome})``. NAV unreadable/invalid or unusable state refuses entries; an
+        active (latched or persisted) halt still flattens. A failed transfer query refuses entries only."""
+        if balance is None:
             try:
-                nav = self._broker.get_balance().equity
-            except Exception as exc:  # noqa: BLE001 - fail closed for entries only
+                balance = self._broker.get_balance()
+            except Exception as exc:  # noqa: BLE001 - fail closed for entries; halts keep flattening
                 self._event("DAILY_LOSS_UNAVAILABLE", None, error=type(exc).__name__)
-                return refused("daily_loss_unavailable"), {}
+                return self._loss_halted(at, UNAVAILABLE)
+        transfers_ok = self._loss_transfers(at, balance)
         try:
-            decision = self._loss_limit.evaluate(nav, planned_risk, now=at)
+            decision = self._loss_limit.evaluate(balance.equity, planned_risk, now=at)
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=broker_demo event=DAILY_LOSS_UNAVAILABLE error_type=%s", type(exc).__name__)
-            return refused("daily_loss_unavailable"), {}
+            return self._loss_halted(at, UNAVAILABLE)
+        if decision.reason in (NAV_INVALID, STATE_UNREADABLE):
+            return self._loss_halted(at, decision.reason)
+        if not transfers_ok and decision.entry_allowed:
+            decision = replace(decision, entry_allowed=False, reason=UNAVAILABLE)
         return decision, (self._loss_flatten(decision) if decision.flatten_required else {})
+
+    def _loss_halted(self, at, reason):
+        """No usable NAV/state: refuse entries; flatten anyway when a halt is already active."""
+        daily, dd_halted = self._loss_limit.halt_state(at)
+        decision = LossDecision(False, dd_halted or (daily and self._loss_limit.flatten), reason, daily, dd_halted,
+                                None, False)
+        return decision, (self._loss_flatten(decision) if decision.flatten_required else {})
+
+    def _loss_transfers(self, at, balance):
+        """Fold TRANSFER_FUNDS since the stored transaction id into the tracker (read-only query, only when the
+        summary's lastTransactionID moved; never retroactive: the first id seen is just stored). False on failure:
+        the id is not advanced, so the same range is retried next tick."""
+        current = balance.last_transaction_id
+        try:
+            stored = self._loss_limit.transaction_id()
+            if current == stored:
+                return True
+            if current is None:  # a summary without the marker after one was seen: cannot prove no transfer
+                raise BrokerMalformedResponse("summary without lastTransactionID")
+            if stored is not None:
+                net, current = self._broker.transfers_since(stored, upto=current)
+                if net != 0:
+                    self._loss_limit.record_transfer(net, actor="broker", reason="TRANSFER_FUNDS", now=at)
+            self._loss_limit.set_transaction_id(current)
+            return True
+        except Exception as exc:  # noqa: BLE001 - entries refused this tick
+            self._event("DAILY_LOSS_TRANSFERS_UNAVAILABLE", None, error=type(exc).__name__)
+            return False
 
     def _loss_flatten(self, decision):
         """Close every routed OPEN trade (UNKNOWN actions skipped); retried each tick while halted. Dry-run: DRY_RUN
