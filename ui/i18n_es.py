@@ -157,10 +157,10 @@ TEXT = {
     "MARKETS": "MERCADOS",
     "1H context · 15M structure · 5M timing. Bias is context, not an order.":
         "1 h contexto · 15 min estructura · 5 min momento de entrada. La tendencia es contexto, no una orden.",
-    "14-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 14 DÍAS",
-    "EXPERIMENT NOT STARTED": "EL EXPERIMENTO NO HA EMPEZADO",
-    "No scheduler, durable run history, or experiment metrics are configured. Segment analysis awaits observed data.":
-        "Aún no hay programador, historial ni métricas del experimento. El análisis espera datos reales.",
+    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS (PAPER + OANDA DEMO)",
+    "30-DAY DEMO IN PROGRESS": "DEMO DE 30 DÍAS EN CURSO: cuenta de práctica PAPER desde el 14 oct 2026; el broker demo OANDA cuenta sus propios 30 días desde su primer trade enrutado",
+    "The demo runs on the cloud scheduler with durable history. Metrics and the OANDA demo evidence report grow with observed trades.":
+        "El demo corre en el programador de la nube con historial duradero. Las métricas y el informe de evidencia del demo OANDA crecen con las operaciones observadas.",
     "SYSTEM": "SISTEMA",
     "Read-only service inventory": "Inventario de servicios · solo lectura",
     "Latest review": "Última revisión",

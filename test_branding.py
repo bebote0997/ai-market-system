@@ -40,3 +40,14 @@ class BrokerLabelTests(unittest.TestCase):
     def test_ui_sources_have_no_dxtrade_text(self):
         for path in sorted((ROOT / "ui").rglob("*.py")):
             self.assertNotIn("dxtrade", path.read_text(encoding="utf-8").lower(), path.name)
+
+
+class DemoTextTests(unittest.TestCase):
+    def test_experiment_texts_are_30_day_and_not_stale(self):
+        for key in ("30-DAY AUTONOMOUS DEMO TEST", "30-DAY DEMO IN PROGRESS"):
+            self.assertNotEqual(tr(key), key)
+        self.assertIn("30 DÍAS", tr("30-DAY AUTONOMOUS DEMO TEST"))
+        source = (ROOT / "ui/views/experiment.py").read_text(encoding="utf-8")
+        for stale in ("14-DAY", "NOT STARTED", "No scheduler"):
+            self.assertNotIn(stale, source)
+        self.assertNotIn("14 DÍAS", (ROOT / "ui/i18n_es.py").read_text(encoding="utf-8"))
