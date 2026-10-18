@@ -45,9 +45,14 @@ Conjunto exacto de claves (sin claves extra), solo conteos y múltiplos de R, si
 
 Reglas: `source` = `v1_replay` | `paper` (debe coincidir con el archivo); `symbol` solo `EURUSD`; fechas ISO;
 `period.from <= period.to`; `trades`, `wins`, `losses` enteros >= 0 con `wins + losses <= trades`; `win_rate` entre
-0 y 1 y coherente con `wins / trades`; `max_drawdown_r >= 0`; `profit_factor`, `avg_r_win`, `avg_r_loss` número o
-`null`; `notes` texto de hasta 200 caracteres. Se rechazan NaN/Infinity, booleanos usados como enteros, claves
-duplicadas, archivos de más de 64 KB y enlaces simbólicos.
+0 y 1 y coherente con `wins / trades`; `max_drawdown_r >= 0`; `profit_factor` número `>= 0` o `null`; `avg_r_win`
+número `> 0` o `null` y `avg_r_loss` número `< 0` o `null` (presentes si y solo si hay ganadas / perdidas); con
+`trades = 0`: `wins = losses = 0`, `win_rate = expectancy_r = max_drawdown_r = 0` y `profit_factor`/promedios `null`;
+si no hay trades en break-even (`wins + losses = trades`), `expectancy_r` debe coincidir con
+`win_rate * avg_r_win + (1 - win_rate) * avg_r_loss` (tolerancia 0,05 R); `notes` texto de hasta 200 caracteres
+(puede estar vacío). Se rechazan NaN/Infinity, booleanos usados como enteros, claves duplicadas, archivos de más de
+64 KB, enlaces simbólicos y rutas con enlace simbólico en cualquier componente del directorio (también con
+`AI_FLOOR_HISTORIAL_DIR`, que admite rutas absolutas).
 
 ## Cómo construirlo
 
@@ -62,4 +67,7 @@ python scripts/historial_build.py --input trades_cerrados.csv --source paper \
   (`(exit - entry) / (entry - stop)`, invertido para SELL).
 - Métricas: trades, ganadas, perdidas, tasa de acierto, expectativa (R medio), factor de beneficio, máximo drawdown
   (pico a valle del R acumulado, en orden de cierre) y R medio ganador/perdedor.
-- No sobrescribe sin `--force`; escribe con permisos `0600`; solo imprime los agregados, nunca filas.
+- No sobrescribe sin `--force`; escribe con permisos `0600`; rechaza un `--out` con cualquier componente que sea
+  enlace simbólico ("ruta con enlace simbólico"); solo imprime los agregados, nunca filas. Los errores indican solo
+  el número de fila y el campo, nunca el valor.
+- Un R que redondeado a 4 decimales vale 0 cuenta como break-even (ni ganada ni perdida).

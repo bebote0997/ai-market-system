@@ -5,6 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import socket
 import stat
 import subprocess
@@ -35,6 +37,8 @@ ROWS = [
     {"symbol": "XAUUSD", "side": "BUY", "r_multiple": "50", "opened_at": "2025-03-01T08:00:00Z",
      "closed_at": "2025-03-01T09:00:00Z"},
 ]
+SECRET = "sk-SECRET-9f8e7d6c"  # secret-looking value: must never reach stdout/stderr or an exception message
+POSIX_SYMLINKS = unittest.skipUnless(hasattr(os, "symlink") and os.name == "posix", "POSIX symlinks")
 
 
 def no_network():
@@ -44,7 +48,7 @@ def no_network():
 class HistorialSchemaTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.dir = Path(self.tmp.name)
+        self.dir = Path(self.tmp.name).resolve()  # the temp root itself may sit under a symlink (e.g. macOS /var)
         self.addCleanup(self.tmp.cleanup)
         patcher = no_network()
         patcher.start()
@@ -99,11 +103,73 @@ class HistorialSchemaTests(unittest.TestCase):
             "datetime as date": changed(period={"from": "2025-01-01T00:00:00", "to": "2025-12-31"}),
             "long notes": changed(notes="x" * 201), "notes not str": changed(notes=None),
             "negative profit factor": changed(profit_factor=-1.0), "not object": [VALID],
+            "notes control char": changed(notes="a\x00b"),
         }
         for name, data in cases.items():
             with self.subTest(name):
                 self.write(data)
                 self.assertEqual(self.paper().status, historial.NO_DATA)
+
+    def test_consistency_rules(self):
+        def changed(**kw):
+            return {**copy.deepcopy(VALID), **kw}
+        empty = {**VALID, "trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "expectancy_r": 0.0,
+                 "profit_factor": None, "max_drawdown_r": 0.0, "avg_r_win": None, "avg_r_loss": None}
+        rejected = {
+            "avg_r_win zero": changed(avg_r_win=0.0), "avg_r_win negative": changed(avg_r_win=-1.0),
+            "avg_r_loss zero": changed(avg_r_loss=0.0), "avg_r_loss positive": changed(avg_r_loss=1.0),
+            "wins without avg_r_win": changed(avg_r_win=None), "losses without avg_r_loss": changed(avg_r_loss=None),
+            "avg_r_win without wins": changed(wins=0, win_rate=0.0, avg_r_win=2.0, expectancy_r=-1.0),
+            "avg_r_loss without losses": changed(losses=0, avg_r_loss=-1.0, expectancy_r=1.0),
+            "empty with expectancy": {**empty, "expectancy_r": 0.5},
+            "empty with drawdown": {**empty, "max_drawdown_r": 1.0},
+            "empty with profit_factor": {**empty, "profit_factor": 1.0},
+            "empty with win_rate": {**empty, "win_rate": 0.5},
+            "empty with wins": {**empty, "wins": 1}, "empty with avg": {**empty, "avg_r_win": 1.0},
+            "expectancy inconsistent": changed(expectancy_r=1.0),
+            "expectancy just outside tolerance": changed(expectancy_r=0.56),
+            "negative profit factor": changed(profit_factor=-0.01),
+        }
+        for name, data in rejected.items():
+            with self.subTest(name):
+                self.write(data)
+                self.assertEqual(self.paper().status, historial.NO_DATA)
+        # expected expectancy = 0.5 * 2 + 0.5 * -1 = 0.5; break-even trades (wins + losses < trades) skip the check
+        accepted = {"empty": empty, "within tolerance": changed(expectancy_r=0.54),
+                    "break-even trades": changed(trades=5, win_rate=0.4, expectancy_r=0.4),
+                    "zero profit factor": changed(wins=0, losses=4, win_rate=0.0, avg_r_win=None, profit_factor=0.0,
+                                                  expectancy_r=-1.0),
+                    "empty notes": changed(notes="")}
+        for name, data in accepted.items():
+            with self.subTest(name):
+                self.write(data)
+                self.assertEqual(self.paper().status, historial.OK, self.paper().reason)
+
+    def test_readme_example_is_accepted(self):
+        readme = (ROOT / "data" / "historial" / "README.md").read_text(encoding="utf-8")
+        example = json.loads(re.search(r"```json\n(.*?)```", readme, re.S).group(1))
+        self.assertEqual(example["notes"], "")
+        self.write(example)
+        self.assertEqual(self.paper().status, historial.OK, self.paper().reason)
+
+    @POSIX_SYMLINKS
+    def test_symlinked_directory_or_ancestor_refused(self):
+        real = self.dir / "real" / "sub"
+        real.mkdir(parents=True)
+        (real / "paper_closed_trades_eurusd.json").write_text(json.dumps(VALID), encoding="utf-8")
+        self.assertEqual(historial.load_baselines(real)[1].status, historial.OK)
+        os.symlink(real, self.dir / "dirlink")
+        os.symlink(self.dir / "real", self.dir / "ancestor")
+        for path in (self.dir / "dirlink", self.dir / "ancestor" / "sub", self.dir / "ancestor" / "sub" / ".." / "sub"):
+            with self.subTest(path=path):
+                records = historial.load_baselines(path)
+                self.assertEqual([r.status for r in records], [historial.NO_DATA] * 2)
+                self.assertEqual({r.reason for r in records}, {"symlink_path"})
+                with mock.patch.dict(os.environ, {historial.ENV_DIR: str(path)}):
+                    self.assertEqual(historial.load_baselines()[1].reason, "symlink_path")
+        self.assertTrue(historial.has_symlink_component(self.dir / "ancestor" / "sub" / "missing"))
+        self.assertFalse(historial.has_symlink_component(real / "missing" / "deeper"))
+        self.assertFalse(historial.has_symlink_component(historial.DEFAULT_DIR, historial.DEFAULT_DIR.parents[1]))
 
     def test_non_finite_and_duplicates_rejected(self):
         text = json.dumps(VALID)
@@ -124,7 +190,7 @@ class HistorialSchemaTests(unittest.TestCase):
         self.write(json.dumps(VALID) + " " * historial.MAX_BYTES)
         self.assertEqual(self.paper().reason, "oversize")
 
-    @unittest.skipUnless(hasattr(os, "symlink") and os.name == "posix", "POSIX symlinks")
+    @POSIX_SYMLINKS
     def test_symlink_and_directory_rejected(self):
         real = self.dir / "real.json"
         real.write_text(json.dumps(VALID), encoding="utf-8")
@@ -191,11 +257,37 @@ class BuildSummaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             historial.build_summary([], "real")
 
+    def test_conversion_errors_never_include_the_value(self):
+        base = {"symbol": "EURUSD", "side": "BUY", "closed_at": "2025-01-01T00:00:00Z"}
+        cases = [("r_multiple", {**base, "r_multiple": SECRET}),
+                 ("closed_at", {**base, "r_multiple": "1", "closed_at": SECRET}),
+                 ("opened_at", {**base, "r_multiple": "1", "opened_at": SECRET}),
+                 ("pnl", {**base, "pnl": SECRET, "initial_risk": "5"}), ("entry", {**base, "entry": SECRET}),
+                 ("r_multiple", {**base, "r_multiple": {"k": SECRET}})]
+        for field, row in cases:
+            with self.subTest(field), self.assertRaises(ValueError) as ctx:
+                historial.build_summary([row], "paper", now=self.NOW)
+            self.assertEqual(str(ctx.exception), f"row 1: {field}")
+            self.assertIsNone(ctx.exception.__cause__)
+            self.assertNotIn(SECRET, repr(ctx.exception))
+
+    def test_break_even_tiny_r_and_losses_only_validate(self):
+        rows = [{"symbol": "EURUSD", "r_multiple": r, "closed_at": f"2025-01-0{i}T00:00:00Z"}
+                for i, r in enumerate(["2", "-1", "0", "0.00004", "-0.00004"], start=1)]
+        summary = historial.build_summary(rows, "paper", now=self.NOW)
+        self.assertEqual((summary["trades"], summary["wins"], summary["losses"]), (5, 1, 1))  # tiny R = break-even
+        self.assertEqual(historial.validate_baseline(summary, "paper"), summary)
+        losses = historial.build_summary(rows[1:2], "paper", now=self.NOW)
+        self.assertEqual((losses["profit_factor"], losses["avg_r_win"], losses["avg_r_loss"]), (0.0, None, -1.0))
+        self.assertEqual(historial.validate_baseline(losses, "paper"), losses)
+        flat = historial.build_summary(rows[2:3], "paper", now=self.NOW)
+        self.assertEqual(historial.validate_baseline(flat, "paper"), flat)
+
 
 class BuildCliTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.dir = Path(self.tmp.name)
+        self.dir = Path(self.tmp.name).resolve()  # the temp root itself may sit under a symlink (e.g. macOS /var)
         self.addCleanup(self.tmp.cleanup)
         self.input = self.dir / "trades.csv"
         keys = ["symbol", "side", "entry", "stop", "exit", "opened_at", "closed_at", "pnl", "r_multiple",
@@ -245,7 +337,64 @@ class BuildCliTests(unittest.TestCase):
         self.assertNotIn("ZZZ", out + err)
         self.assertFalse(self.out.exists())
 
-    @unittest.skipUnless(hasattr(os, "symlink") and os.name == "posix", "POSIX symlinks")
+    def test_default_invocation_builds_a_loadable_file(self):
+        code, _, err = self.run_cli()  # no --notes: notes == ""
+        self.assertEqual(code, 0, err)
+        record = historial.load_baselines(self.out.parent)[1]
+        self.assertEqual(record.status, historial.OK, record.reason)
+        self.assertEqual(record.stats["notes"], "")
+
+    def test_readme_command_builds_a_loadable_file(self):
+        readme = (ROOT / "data" / "historial" / "README.md").read_text(encoding="utf-8")
+        block = re.search(r"```bash\n(.*?)```", readme, re.S).group(1)
+        argv = shlex.split(block.replace("\\\n", " "))
+        self.assertEqual(argv[:2], ["python", "scripts/historial_build.py"])
+        args = dict(zip(argv[2::2], argv[3::2]))
+        work = self.dir / "work"
+        work.mkdir()
+        (work / args["--input"]).write_text(self.input.read_text(encoding="utf-8"), encoding="utf-8")
+        result = subprocess.run([sys.executable, str(ROOT / argv[1]), *argv[2:]], capture_output=True, text=True,
+                                cwd=work, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = historial.load_baselines((work / args["--out"]).parent)[1]
+        self.assertEqual(record.status, historial.OK, record.reason)
+
+    def test_secret_values_never_printed(self):
+        keys = ["symbol", "side", "r_multiple", "opened_at", "closed_at"]
+        rows = [["EURUSD", "BUY", "2", "2025-03-01T08:00:00Z", "2025-03-01T10:00:00Z"],
+                ["EURUSD", "BUY", SECRET, "2025-03-02T08:00:00Z", "2025-03-02T10:00:00Z"],
+                ["EURUSD", "BUY", "1", SECRET, "2025-03-03T10:00:00Z"],
+                ["EURUSD", "BUY", "1", "2025-03-04T08:00:00Z", SECRET]]
+        for bad, field in ((1, "r_multiple"), (2, "opened_at"), (3, "closed_at")):
+            with self.subTest(field):
+                lines = [",".join(keys), ",".join(rows[0]), ",".join(rows[bad])]
+                self.input.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                code, out, err = self.run_cli()
+                self.assertEqual(code, 2)
+                self.assertEqual(err.strip(), f"error: row 2: {field}")
+                self.assertNotIn("SECRET", out + err)
+                self.assertFalse(self.out.exists())
+        self.input = self.dir / "trades.json"
+        self.input.write_bytes(b'[{"symbol": "' + SECRET.encode() + b'\xff"}]')  # not UTF-8
+        code, out, err = self.run_cli()
+        self.assertEqual((code, err.strip()), (2, "error: input: formato no válido"))
+        self.assertNotIn("SECRET", out + err)
+
+    @POSIX_SYMLINKS
+    def test_refuses_symlinked_out_directory_or_ancestor(self):
+        real = self.dir / "real"
+        real.mkdir()
+        os.symlink(real, self.dir / "out")  # self.out = <tmp>/out/<file>: its parent directory is a symlink
+        os.symlink(real, self.dir / "ancestor")
+        for target in (self.out, self.dir / "ancestor" / "sub" / self.out.name):
+            with self.subTest(target=target):
+                self.out = target
+                code, _, err = self.run_cli("--force")
+                self.assertEqual(code, 2)
+                self.assertEqual(err.strip(), "error: out: ruta con enlace simbólico")
+                self.assertEqual(list(real.iterdir()), [])  # nothing written, no directory created
+
+    @POSIX_SYMLINKS
     def test_refuses_symlink_out(self):
         target = self.dir / "elsewhere.json"
         target.write_text("x", encoding="utf-8")
@@ -335,7 +484,7 @@ class HistorialHygieneTests(unittest.TestCase):
 
     def test_stdlib_only_imports(self):
         import ast
-        allowed = {"argparse", "csv", "dataclasses", "datetime", "io", "json", "math", "os", "pathlib", "stat", "sys",
+        allowed = {"argparse", "csv", "dataclasses", "datetime", "errno", "io", "json", "math", "os", "pathlib", "stat", "sys",
                    "tempfile", "execution", "execution.historial"}
         for rel in ("execution/historial.py", "scripts/historial_build.py"):
             tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))

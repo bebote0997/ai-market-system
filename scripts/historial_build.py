@@ -7,10 +7,12 @@ trades. No network, no broker, no secrets. Prints ONLY the aggregates, never a r
 Input: CSV with a header, or JSON (a list of objects or {"trades": [...]}). Columns/keys: symbol, side, entry, stop,
 exit, opened_at, closed_at, pnl, r_multiple (optional), initial_risk (optional, money). Only EURUSD rows are used.
 R = r_multiple when present, else pnl / initial_risk, else from prices ((exit - entry) / (entry - stop), mirrored for
-SELL). The output is written 0600 and is never overwritten without --force.
+SELL). The output is written 0600 and is never overwritten without --force; an --out path with ANY symlink component
+is refused. Error messages name only a row number and a field, never a value.
 """
 import argparse
 import csv
+import errno
 import io
 import json
 import os
@@ -21,7 +23,17 @@ import tempfile
 if __package__ in (None, ""):  # `python scripts/historial_build.py`: make the repository importable
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from execution.historial import FILENAMES, MAX_NOTES, build_summary, parse_json, validate_baseline  # noqa: E402
+from execution.historial import (  # noqa: E402
+    FILENAMES,
+    MAX_NOTES,
+    SYMLINK_PATH,
+    RowError,
+    SchemaError,
+    build_summary,
+    has_symlink_component,
+    parse_json,
+    validate_baseline,
+)
 
 MAX_INPUT_BYTES = 50 * 1024 * 1024
 FILE_MODE = 0o600
@@ -40,24 +52,24 @@ def parse_args(argv):
 def read_rows(path):
     path = Path(path)
     if path.is_symlink() or not path.is_file():
-        raise ValueError("input: no es un archivo regular")
+        raise SchemaError("input: no es un archivo regular")
     if path.stat().st_size > MAX_INPUT_BYTES:
-        raise ValueError("input: demasiado grande")
+        raise SchemaError("input: demasiado grande")
     text = path.read_text(encoding="utf-8-sig")
     if path.suffix.lower() == ".json":
         data = parse_json(text)
         rows = data.get("trades") if isinstance(data, dict) else data
         if not isinstance(rows, list):
-            raise ValueError("input: JSON sin lista de trades")
+            raise SchemaError("input: JSON sin lista de trades")
         return rows
     return list(csv.DictReader(io.StringIO(text)))
 
 
 def write_private(out, payload, force):
     """Write ``payload`` to ``out`` with mode 0600. Refuses an existing file unless ``force``; never follows symlinks."""
-    out = Path(out)
-    if out.is_symlink():
-        raise ValueError("out: es un enlace simbólico")
+    out = Path(os.path.abspath(out))
+    if has_symlink_component(out):
+        raise SchemaError(f"out: {SYMLINK_PATH}")
     if out.exists() and not force:
         raise FileExistsError("out: ya existe (usa --force para sobrescribir)")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -87,11 +99,17 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
         summary = validate_baseline(build_summary(read_rows(args.input), args.source, notes=args.notes), args.source)
         payload = json.dumps(summary, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
         target = write_private(args.out, payload, args.force)
-    except FileExistsError as exc:
-        print(f"error: {exc}", file=err)
+    except FileExistsError:
+        print("error: out: ya existe (usa --force para sobrescribir)", file=err)
         return 3
-    except (OSError, ValueError) as exc:  # messages carry a row NUMBER and field name only, never row content
+    except (RowError, SchemaError) as exc:  # fixed messages: row NUMBER and field name only, never row content
         print(f"error: {exc}", file=err)
+        return 2
+    except OSError as exc:  # never echo the OS message (it may quote paths/content); errno name only
+        print(f"error: E/S ({errno.errorcode.get(exc.errno, 'desconocido')})", file=err)
+        return 2
+    except (ValueError, csv.Error):  # e.g. not UTF-8 / not JSON: the decoder's message may quote input bytes
+        print("error: input: formato no válido", file=err)
         return 2
     if Path(args.out).name != FILENAMES[args.source]:
         print(f"aviso: el panel espera el nombre {FILENAMES[args.source]}", file=err)
