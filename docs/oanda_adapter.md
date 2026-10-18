@@ -219,6 +219,40 @@ abierto y «actualizado hace Ns», auto-refresco cada 10 s con caché ≥ 5 s. *
 `OANDA_PRACTICE_TOKEN` para live ni al revés; cuentas practice `101-`, live `001-`. Sección «📚 Historial (referencia /
 baseline)»: vacía, separada de las estadísticas de la demo en vivo; se cargará más adelante.
 
+### Límite de pérdida diaria (borrador, OFF por defecto)
+
+`execution/daily_loss_limit.py` (decisiones D2/D3 del 17 oct 2026, plan de preparación sección 4.1). Solo se construye
+si `AI_FLOOR_DAILY_LOSS_LIMIT` vale exactamente `1`; con cualquier otro valor el router es idéntico al de hoy (sin
+lecturas extra de NAV ni flags escritos).
+
+| Variable | Defecto | Significado |
+|---|---|---|
+| `AI_FLOOR_DAILY_LOSS_LIMIT` | vacío | Solo `1` exacto activa el límite diario + halt de drawdown. |
+| `AI_FLOOR_DAILY_LOSS_FLATTEN` | vacío (ON) | Al disparar el límite diario se cierra todo lo abierto; solo `0` exacto lo apaga (entonces solo se paran entradas). |
+| `AI_FLOOR_DAILY_LOSS_PCT` | `0.02` | Fracción opcional, **solo más estricta** (`0 < x ≤ 0.02`); cualquier otro valor ⇒ `0.02`. |
+| `AI_FLOOR_DAILY_LOSS_START_EQUITY` | vacío | Base opcional del drawdown 5 %; si falta, el primer NAV observado (persistido). |
+
+- **Día** = desde la frontera de las 17:00 America/New_York (con DST, todos los días del calendario). `E0` = primer NAV
+  del día, persistido en `broker_demo_flags` (`dl_day`, `dl_e0`, `dl_transfers`, `dl_halt`, `dd_start`, `dd_halt`): un
+  reinicio no lo recalcula. P&L del día = NAV − E0 − transferencias (`record_transfer(importe, actor, motivo)` para
+  depósitos/retiros ACH). NAV incluye el P&L abierto.
+- **Halt diario**: P&L ≤ −2 % × E0 (el borde exacto dispara; las ganancias no suben el suelo) ⇒ evento
+  `DAILY_LOSS_HALT`, sin entradas nuevas y, con flatten ON, cierre de los trades OPEN enrutados (`close_market`, id
+  `…-dlimit`, motivo `DAILY_LOSS`, evento `FLATTEN_DAILY_LOSS`; reintento en cada tick; filas con acción UNKNOWN se
+  saltan; en dry-run solo eventos `DRY_RUN`). Antes de cada entrada: `NOT_ROUTED daily_loss_budget` si el riesgo
+  planificado (unidades × |entrada − stop|) supera el presupuesto restante.
+- **Reanudación**: automática en la siguiente frontera de las 17:00 NY (`DAILY_LOSS_RESUMED`, nuevo E0); antes, solo
+  con `clear_daily_halt(actor, motivo)` (auditado; vuelve a dispararse si sigue en pérdida).
+- **Drawdown 5 %** (NAV ≤ base × 0,95): `DRAWDOWN_HALT`, cierre siempre (motivo `DRAWDOWN`, aunque flatten esté OFF) y
+  **sin** reanudación automática: exige `clear_drawdown_halt(actor, motivo)` tras revisión escrita. Gana el más estricto.
+- Se evalúa en cada ciclo, en cada tick de `manage` (aunque paper esté apagado) y antes de cada orden. Fallo al leer el
+  NAV, NAV inválido o estado ilegible ⇒ se rechazan entradas (`daily_loss_unavailable` / `nav_invalid` /
+  `state_unreadable`) sin tocar los trades abiertos.
+- **Independiente del interruptor/emergencia**: nunca escribe `blocked_reason` ni llama al registro; limpiar el
+  emergency no limpia el halt y viceversa. Cerrar siempre está permitido. Eventos solo con importes y claves de día.
+- **Activarlo es un paso separado del owner**: poner `AI_FLOOR_DAILY_LOSS_LIMIT=1` en Render con un PUT por clave
+  (nunca reemplazando todo el entorno) + deploy, con aprobación escrita. Este cambio no lo activa.
+
 ## Plan para retirar paper más adelante
 
 El router es independiente de `PaperBroker`: no lo importa ni lee su estado, y solo consume `cycle_context`. Para

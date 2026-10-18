@@ -195,16 +195,18 @@ def _counts(rows):
     return counts
 
 
-def summarize_status(rows, events, *, routing, dry_run, blocked_reason, max_units):
-    """Status dict shared by ``BrokerDemoRouter.status()`` and ``read_router_status``. No secrets: ids, codes, prices."""
+def summarize_status(rows, events, *, routing, dry_run, blocked_reason, max_units, extra=None):
+    """Status dict shared by ``BrokerDemoRouter.status()`` and ``read_router_status``. No secrets: ids, codes, prices.
+    ``extra`` (the loss-limit view) is added under ``loss_limit`` only when given."""
     open_rows = [r for r in rows if r["status"] in LIVE_STATUSES]
     current = open_rows[-1] if open_rows else None
     open_trade = None if current is None else {
         key: current.get(key) for key in ("client_id", "symbol", "side", "units", "entry", "stop", "target",
                                           "trade_id", "opened_at", "stage", "status")}
-    return {"routing": bool(routing), "dry_run": bool(dry_run), "blocked_reason": blocked_reason,
-            "max_units": max_units, "counts": _counts(rows), "open_trade": open_trade,
-            "last_events": [{"ts": e["ts"], "kind": e["kind"], "client_id": e["client_id"]} for e in events]}
+    out = {"routing": bool(routing), "dry_run": bool(dry_run), "blocked_reason": blocked_reason,
+           "max_units": max_units, "counts": _counts(rows), "open_trade": open_trade,
+           "last_events": [{"ts": e["ts"], "kind": e["kind"], "client_id": e["client_id"]} for e in events]}
+    return out if extra is None else {**out, "loss_limit": extra}
 
 
 def _recent(value, now):

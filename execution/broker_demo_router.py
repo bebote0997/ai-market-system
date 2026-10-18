@@ -18,6 +18,10 @@ Dry-run (``AI_FLOOR_BROKER_DEMO_DRY_RUN=1``, opt-in) records the exact order JSO
 it may read summary/pricing/openTrades. ``manage`` applies the trade-duration rule (execution/trade_duration.py) to
 LIVE routed trades; ``emergency_close_all`` closes every routed OPEN trade (closing is always allowed).
 
+Optional daily loss limit / drawdown halt (``execution/daily_loss_limit.py``, OFF unless ``AI_FLOOR_DAILY_LOSS_LIMIT ==
+"1"``): evaluated on every cycle, every ``manage`` tick and before every entry; a halt refuses entries and (flatten ON /
+drawdown) closes the routed OPEN trades. Independent from the kill switch: it never sets ``blocked_reason``.
+
 Single process, exclusive ownership of the practice account (same assumption as OandaBroker).
 """
 from dataclasses import dataclass, replace
@@ -36,6 +40,7 @@ from execution.broker_demo_state import (CLOSED, CLOSED_AT_BROKER, DRY_RUN, HEAR
                                          dry_run_flag, max_units_setting, routing_flag, summarize_status)
 from execution.broker_port import (ACCEPTED, APPROVED, BrokerAuthError, BrokerGuardError, BrokerMalformedResponse,
                                    BrokerRateLimited, OrderPlan, RiskApproval)
+from execution.daily_loss_limit import limit_from_env, refused
 from execution.dxtrade_broker import real_execution_enabled
 from execution.oanda_broker import (ACCOUNT_ENV, ALLOWED_SYMBOLS, CLIENT_TAG, DEMO_MODE, INSTRUMENTS, PROVIDER,
                                     TOKEN_ENV, OandaBroker, _comment, client_extension_id, size_units)
@@ -150,8 +155,9 @@ def _not_routed(reason):
 
 
 class BrokerDemoRouter:
-    def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None):
+    def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None):
         self._broker = broker
+        self._loss_limit = loss_limit
         self._store = store
         self._registry = registry
         self.dry_run = bool(dry_run)
@@ -196,9 +202,12 @@ class BrokerDemoRouter:
         """Called post-cycle by the runtime. Returns ``(outcome, reason)``; never changes the paper cycle."""
         with self._lock:
             self._heartbeat()
+            flattened = {}
+            if self._loss_limit is not None:
+                flattened = self._loss_check(at)[1]
             reconciled = None
             if not self.dry_run and self._store.trades((OPEN,)):
-                reconciled = self._manage_locked(at)
+                reconciled = self._manage_locked(at, skip=flattened)
             return self._route(context, status, at, reconciled)
 
     def _candidate(self, context, status):
@@ -267,6 +276,10 @@ class BrokerDemoRouter:
         if units < 1:
             self._event("SKIPPED_ZERO_UNITS", client_id, run_id=run_id, equity=equity)
             return "SKIPPED_ZERO_UNITS", client_id
+        if self._loss_limit is not None:
+            loss = self._loss_check(at, Decimal(units) * abs(entry - stop), nav=equity)[0]
+            if not loss.entry_allowed:
+                return self._refuse(client_id, loss.reason)
         try:  # A re-sized approval derived from the APPROVED decision: only the quantity differs.
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), entry, stop, target, client_id=client_id,
                                    source_run_id=run_id, risk_policy_version=getattr(plan, "policy_version", None))
@@ -449,16 +462,23 @@ class BrokerDemoRouter:
         """Trade-duration rule on LIVE routed trades (reconcile first). Returns {client_id: outcome}."""
         with self._lock:
             self._heartbeat()
-            report = self._manage_locked(at, price_provider=price_provider)
+            flattened = {}
+            if self._loss_limit is not None:  # a halt / flatten happens on every tick, even with paper disabled
+                flattened = self._loss_check(at)[1]
+            report = self._manage_locked(at, price_provider=price_provider, skip=flattened)
+            if flattened and report is not None:
+                self._last_manage = {**flattened, **self._last_manage}
             return self._last_manage if report is not None else {"_": "READ_FAILED"}
 
-    def _manage_locked(self, at, price_provider=None):
+    def _manage_locked(self, at, price_provider=None, skip=()):
         self._last_manage = {}
         report = self.reconcile()
         if report is None or self.dry_run:
             return report
         quotes = {}
         for row in self._store.trades((OPEN,)):
+            if row["client_id"] in skip:  # already acted on by the loss-limit flatten this tick
+                continue
             if row.get("action_status") == UNKNOWN:
                 self._last_manage[row["client_id"]] = "ACTION_UNRESOLVED"
                 continue
@@ -578,14 +598,50 @@ class BrokerDemoRouter:
                 results[row["client_id"]] = self._close(row, close_reason, f"{row['client_id']}-emergency")
             return results
 
+    # -- daily loss limit / drawdown halt --------------------------------------------------------------------------
+    def _loss_check(self, at, planned_risk=None, nav=None):
+        """Evaluate the loss limit (NAV from the broker unless given) and flatten when required. Returns
+        ``(LossDecision, {client_id: close outcome})``. A NAV read failure refuses entries and touches no trade."""
+        if nav is None:
+            try:
+                nav = self._broker.get_balance().equity
+            except Exception as exc:  # noqa: BLE001 - fail closed for entries only
+                self._event("DAILY_LOSS_UNAVAILABLE", None, error=type(exc).__name__)
+                return refused("daily_loss_unavailable"), {}
+        try:
+            decision = self._loss_limit.evaluate(nav, planned_risk, now=at)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("component=broker_demo event=DAILY_LOSS_UNAVAILABLE error_type=%s", type(exc).__name__)
+            return refused("daily_loss_unavailable"), {}
+        return decision, (self._loss_flatten(decision) if decision.flatten_required else {})
+
+    def _loss_flatten(self, decision):
+        """Close every routed OPEN trade (UNKNOWN actions skipped); retried each tick while halted. Dry-run: DRY_RUN
+        events only."""
+        reason = "DRAWDOWN" if decision.dd_halted else "DAILY_LOSS"
+        results = {}
+        for row in self._store.trades((OPEN,)):
+            client_id = row["client_id"]
+            if row.get("action_status") == UNKNOWN:
+                results[client_id] = "ACTION_UNRESOLVED"
+            elif self.dry_run:
+                self._event("DRY_RUN", client_id, action="daily_loss_flatten", trade_id=row["trade_id"], reason=reason)
+                results[client_id] = DRY_RUN
+            else:
+                results[client_id] = self._close(row, reason, f"{client_id}-dlimit")
+        if results:
+            self._event(f"FLATTEN_{reason}", None, results=results)
+        return results
+
     # -- read-only view --------------------------------------------------------------------------------------------
     def status(self):
         try:
             rows, events = self._store.trades(), self._store.events(5)
         except Exception:  # noqa: BLE001
             rows, events = [], []
+        extra = None if self._loss_limit is None else self._loss_limit.status()
         return summarize_status(rows, events, routing=True, dry_run=self.dry_run, blocked_reason=self.blocked_reason,
-                                max_units=self.max_units)
+                                max_units=self.max_units, extra=extra)
 
 
 def _first_construction(path):
@@ -635,8 +691,11 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     now = clock or (lambda: datetime.now(timezone.utc))
     store = DemoStateStore(registry.path, clock=lambda: now().isoformat())
     store.initialize()
+    loss_limit = limit_from_env(env, store, clock=now)
     router = BrokerDemoRouter(broker, store, registry=registry, dry_run=dry_run_flag(env),
-                              max_units=max_units_setting(env), clock=now)
+                              max_units=max_units_setting(env), clock=now, loss_limit=loss_limit)
     router._heartbeat()
     LOG.info("component=broker_demo event=ROUTER_READY dry_run=%s broker=%r", router.dry_run, broker)
+    if loss_limit is not None:
+        LOG.info("component=broker_demo event=DAILY_LOSS_LIMIT_ON limit=%r", loss_limit)
     return router
