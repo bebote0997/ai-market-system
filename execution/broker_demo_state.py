@@ -103,6 +103,16 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+_EVENT_SQL = "INSERT INTO broker_demo_events(ts, kind, client_id, detail) VALUES (?, ?, ?, ?)"
+_SET_FLAG_SQL = ("INSERT INTO broker_demo_flags(key, value, updated_at) VALUES (?, ?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+_CLEAR_FLAG_SQL = "DELETE FROM broker_demo_flags WHERE key = ? AND (? IS NULL OR value = ?)"
+
+
+def _detail(detail):
+    return None if detail is None else json.dumps(detail, sort_keys=True, default=_json_default)
+
+
 class DemoStateStore:
     """Short-lived connections per call; every write commits immediately (write-ahead for the router)."""
 
@@ -166,9 +176,26 @@ class DemoStateStore:
     # -- events / flags ----------------------------------------------------------------------------------------------
     def event(self, kind, client_id=None, detail=None):
         with closing(self._connect()) as con:
-            con.execute("INSERT INTO broker_demo_events(ts, kind, client_id, detail) VALUES (?, ?, ?, ?)",
-                        (self._clock(), kind, client_id,
-                         None if detail is None else json.dumps(detail, sort_keys=True, default=_json_default)))
+            con.execute(_EVENT_SQL, (self._clock(), kind, client_id, _detail(detail)))
+
+    def apply(self, *, set_flags=None, delete_flags=None, event=None):
+        """ONE transaction (all or nothing): upsert ``set_flags`` ({key: value}), delete ``delete_flags`` ({key: value
+        or None}, same value guard as ``clear_flag``) and append ``event`` = ``(kind, client_id, detail)``."""
+        now = self._clock()
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                for key, value in (set_flags or {}).items():
+                    con.execute(_SET_FLAG_SQL, (key, value, now))
+                for key, value in (delete_flags or {}).items():
+                    con.execute(_CLEAR_FLAG_SQL, (key, value, value))
+                if event is not None:
+                    kind, client_id, detail = event
+                    con.execute(_EVENT_SQL, (now, kind, client_id, _detail(detail)))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
 
     def events(self, limit=20):
         with closing(self._connect()) as con:
@@ -183,14 +210,12 @@ class DemoStateStore:
 
     def set_flag(self, key, value):
         with closing(self._connect()) as con:
-            con.execute("INSERT INTO broker_demo_flags(key, value, updated_at) VALUES (?, ?, ?) "
-                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                        (key, value, self._clock()))
+            con.execute(_SET_FLAG_SQL, (key, value, self._clock()))
 
     def clear_flag(self, key, value=None):
         """Delete ``key`` (only while it still holds ``value`` when given, so a newer request is never lost)."""
         with closing(self._connect()) as con:
-            con.execute("DELETE FROM broker_demo_flags WHERE key = ? AND (? IS NULL OR value = ?)", (key, value, value))
+            con.execute(_CLEAR_FLAG_SQL, (key, value, value))
 
 
 def _counts(rows):

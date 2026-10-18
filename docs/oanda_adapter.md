@@ -282,14 +282,21 @@ lecturas extra de NAV ni flags escritos).
 - **Parada de emergencia** (`execution/operator_actions.py`): el panel pide escribir `PARAR TODO` y confirmar; luego
   `request_emergency_stop` apaga todas las cuentas y deja el emergency latcheado en `broker_state.db` (auditoría con
   actor `dashboard`, origen `dashboard`) y escribe el flag `flatten_request`. El router (otro proceso) lo procesa al
-  inicio de cada `on_cycle`/`manage`: cierra los trades OPEN enrutados (id `…-ebtn`, motivo `EMERGENCY_BUTTON`; filas
-  con acción UNKNOWN se saltan; en dry-run solo eventos `DRY_RUN`), reintenta en cada tick y borra el flag
-  (`FLATTEN_REQUEST_DONE`) solo cuando no queda ninguno. **Quitar la parada no es posible desde el panel.**
+  inicio de cada `on_cycle`/`manage`: primero concilia (un envío PENDING_SEND/UNKNOWN ya ejecutado pasa a OPEN) y
+  luego cierra los trades OPEN enrutados (id `…-ebtn`, motivo `EMERGENCY_BUTTON`; filas con acción UNKNOWN se saltan;
+  en dry-run solo eventos `DRY_RUN`), reintenta en cada tick y borra el flag (`FLATTEN_REQUEST_DONE`) solo si la
+  conciliación de ese tick funcionó y no queda ninguna fila OPEN/PENDING_SEND/UNKNOWN. Lectura fallida ⇒ el flag se
+  conserva (`FLATTEN_REQUEST_PENDING` con `broker_read_failed`). **Quitar la parada no es posible desde el panel.**
 - **Drift**: con `blocked_reason = drift` el panel muestra «Bloqueo por drift». Con el botón activo, escribir
   `LIMPIAR DRIFT` crea `drift_clear_request`. `reconcile()` solo limpia si en esa misma pasada la lectura del broker
   funcionó, no hay drift (todo trade abierto en el broker casa con una fila local), no hay filas PENDING_SEND/UNKNOWN
   ni acciones UNKNOWN (evento `DRIFT_CLEARED`); si no, `DRIFT_CLEAR_REFUSED` con los motivos. La solicitud se consume
   siempre (hace falta otra). Sin solicitud nunca se limpia. `clear_drift()` en Python no cambia.
+  Cada bloqueo por drift abre un episodio nuevo (flag `drift_episode`, token aleatorio); la solicitud copia el episodio
+  vigente (sin episodio ⇒ `no_drift`) y solo vale para él: una solicitud de un episodio anterior se rechaza
+  (`stale_episode`) y se borra. Limpieza/rechazo, borrado de la solicitud y evento de auditoría van en UNA transacción
+  SQLite (`DemoStateStore.apply`): si falla no cambia nada. Un bloqueo por drift anterior a este cambio no tiene
+  episodio: se limpia con `clear_drift()`.
 - **Viernes** (`execution/friday_close.py`, America/New_York con DST): ventana `preflatten` = viernes desde 17:00 −
   N min hasta 17:00; `closed` = viernes ≥ 17:00 hasta domingo < 17:00. En `preflatten` se cierran los trades OPEN
   enrutados (id `…-fri`, motivo `FRIDAY_PREFLATTEN`) con cotización operable, reintentando en cada tick; en
@@ -297,9 +304,13 @@ lecturas extra de NAV ni flags escritos).
   queda algún trade: `LOG.error` con `event=ALERT_FRIDAY_FLATTEN_FAILED` + evento `FRIDAY_FLATTEN_FAILED` (cada 5 min;
   cada 30 min con el mercado cerrado, mientras se siguen reintentando cierres que el broker rechaza) y el hook
   opcional `router.on_alert(kind, message)`. La regla de duración (cierre del viernes 17:00) sigue como último respaldo.
-- **Límites**: si el proceso se reinicia con el emergency activo, `router_from_env` devuelve `None` y nadie procesa
-  `flatten_request`: cerrar con `scripts/oanda_first_test_order.py --close` o a mano en OANDA (el trade conserva su
-  SL/TP). La alerta del viernes solo existe mientras el router corre.
+- **Reinicio con el emergency activo** (registro o `AI_FLOOR_EMERGENCY_STOP`): si queda un `flatten_request` o filas
+  enrutadas OPEN/PENDING_SEND/UNKNOWN, `router_from_env` construye un router `closing_only` sobre un `OandaBroker`
+  `close_only=True` (mismos guards de practice/token/cuenta/REAL_EXECUTION, pero sin exigir el switch ON ni la
+  ausencia de emergency; `submit_plan`/`modify_stop` siempre lanzan `BrokerGuardError`). Ese router rechaza toda
+  entrada (`emergency_active`), concilia y cierra los trades OPEN enrutados en cada tick (sin solicitud: motivo
+  `EMERGENCY_ACTIVE`, id `…-emergency`) y nunca enciende `broker_demo`. Sin filas ni solicitud ⇒ `None`, como antes.
+  La alerta del viernes solo existe mientras el router corre.
 - **Activar** `AI_FLOOR_DRIFT_CLEAR_BUTTON` / `AI_FLOOR_FRIDAY_PREFLATTEN` (o desactivar el botón de parada) es un paso
   separado del owner (PUT por clave en Render + deploy, con aprobación escrita). Este cambio no lo activa.
 

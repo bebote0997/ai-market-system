@@ -3,10 +3,12 @@ drift-clear requests, and the Friday close pre-flatten (OANDA halts EUR_USD at 1
 (helpers from test_broker_demo_router); the UI flow runs on a minimal fake Streamlit."""
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import json
 import logging
 import os
 from pathlib import Path
+import sqlite3
 import unittest
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
@@ -16,9 +18,13 @@ from execution import friday_close as fc
 from execution import operator_actions as ops
 from execution.account_registry import AccountRegistry, read_control_snapshot
 from execution.broker_demo_state import DemoStateStore
+from execution.broker_port import BrokerGuardError
+from execution.oanda_broker import OandaBroker
 from test_broker_demo_router import (CID, NOW, OPEN_TRADES, PRICING, TRADE_AT_CID, RouterBase, context, open_trade,
                                      trades)
-from test_broker_oanda import NOT_FOUND, close_fill, pricing
+from test_broker_oanda import ENV as BROKER_ENV
+from test_broker_oanda import NOT_FOUND, approved, close_fill, pricing
+from test_broker_oanda import plan as broker_plan
 from test_broker_oanda_client import A, ACCOUNT, TOKEN, FakeServer
 from ui.views import control
 
@@ -96,7 +102,14 @@ class EmergencyRequestTests(OpsBase):
         self.assertTrue(read_control_snapshot(self.db, env=self.env)["emergency_stop"])
         state = ops.operator_state(self.db)
         self.assertEqual((state["emergency"], state["flatten_pending"]), (True, True))
-        self.assertIsNone(self.router())  # a restart builds no router while the emergency is active
+        # A restart with the flatten request still pending builds a closing-only router that drains it...
+        router = self.router()
+        self.assertTrue(router.closing_only)
+        self.server.add("GET", OPEN_TRADES, trades())
+        router.manage(NOW)
+        self.assertIsNone(self.store().flag("flatten_request"))
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.router())  # ...and once nothing is left a restart builds no router
 
     def test_never_raises_and_masks_errors(self):
         junk = Path(self.tmp.name) / "junk.db"
@@ -133,7 +146,7 @@ class EmergencyRouterTests(OpsBase):
         spy = self.spy_close(router)
         self.assertTrue(self.stop()["ok"])
         self.server.add("PUT", CLOSE, CLOSED_OK)
-        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        self.server.routes[("GET", OPEN_TRADES)] = [trades(open_trade()), trades()]  # reconcile first, then closed
         self.assertEqual(router.manage(NOW + timedelta(minutes=1)), {CID: "CLOSED"})
         self.assertEqual(spy.call_args.kwargs["client_id"], f"{CID}-ebtn")
         row = self.rows()[0]
@@ -163,7 +176,7 @@ class EmergencyRouterTests(OpsBase):
         self.assertEqual(router.manage(NOW + timedelta(minutes=1))[CID], "CLOSE_REJECTED")
         self.assertIsNotNone(self.store().flag("flatten_request"))
         self.assertEqual(len(self.events("FLATTEN_REQUEST_PENDING")), 1)
-        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        self.server.routes[("GET", OPEN_TRADES)] = [trades(open_trade()), trades()]
         self.assertEqual(router.manage(NOW + timedelta(minutes=2))[CID], "CLOSED")
         self.assertEqual(self.puts(), [CLOSE, CLOSE])
         self.assertIsNone(self.store().flag("flatten_request"))
@@ -235,7 +248,10 @@ class DriftClearTests(OpsBase):
 
     def test_verified_clear_when_broker_and_local_state_match(self):
         router = self.drifted()
+        episode = self.store().flag("drift_episode")
+        self.assertRegex(episode, r"^[0-9a-f]{32}$")
         self.assertEqual(self.request(), {"ok": True, "reason": "requested"})
+        self.assertEqual(json.loads(self.store().flag("drift_clear_request"))["episode"], episode)
         self.assertTrue(ops.operator_state(self.db)["drift_clear_pending"])
         [(_k, _c, detail)] = self.events("DRIFT_CLEAR_REQUESTED")
         self.assertEqual((detail["actor"], detail["source"]), ("dashboard", "dashboard"))
@@ -245,7 +261,9 @@ class DriftClearTests(OpsBase):
         self.assertIsNone(self.store().flag("blocked_reason"))
         self.assertIsNone(self.store().flag("drift_clear_request"))
         [(_k, _c, detail)] = self.events("DRIFT_CLEARED")
-        self.assertEqual(detail, {"actor": "dashboard", "reason": "cerrado a mano", "source": "dashboard"})
+        self.assertEqual(detail, {"actor": "dashboard", "reason": "cerrado a mano", "source": "dashboard",
+                                  "episode": episode})
+        self.assertIsNone(self.store().flag("drift_episode"))  # the episode is closed with the block
         self.assertIsNone(self.router().blocked_reason)  # persisted
 
     def assert_refused(self, router, reasons):
@@ -315,6 +333,228 @@ class DriftClearTests(OpsBase):
         router.clear_drift("operator", "manual")
         self.assertIsNone(router.blocked_reason)
         self.assertEqual(self.events("DRIFT_CLEARED")[-1][2], {"actor": "operator", "reason": "manual"})
+
+    def test_request_from_an_old_episode_never_clears_a_new_drift(self):
+        router = self.drifted()
+        old = self.store().flag("drift_episode")
+        self.request()
+        router.clear_drift("operator", "manual")  # episode closed without a reconcile; the request is still stored
+        router.reconcile()  # the manual trade is still there: a NEW drift episode
+        new = self.store().flag("drift_episode")
+        self.assertNotEqual(new, old)
+        self.assertEqual(router.blocked_reason, "drift")
+        self.assertIsNone(self.store().flag("drift_clear_request"))  # ignored AND removed
+        self.assertEqual(self.events("DRIFT_CLEAR_REFUSED")[-1][2]["reasons"], ["stale_episode"])
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        # A request without an episode (older format) is stale too.
+        self.store().set_flag("drift_clear_request", json.dumps({"actor": "dashboard", "reason": "x", "ts": "t"}))
+        router.reconcile()
+        self.assertEqual(router.blocked_reason, "drift")
+        self.assertEqual(self.events("DRIFT_CLEAR_REFUSED")[-1][2]["reasons"], ["stale_episode"])
+        self.assertEqual([d["actor"] for _k, _c, d in self.events("DRIFT_CLEARED")], ["operator"])
+
+    def fail_inserts(self, kind):
+        with sqlite3.connect(self.db) as con:
+            con.execute(f"CREATE TRIGGER fail_{kind} BEFORE INSERT ON broker_demo_events WHEN NEW.kind = '{kind}' "
+                        "BEGIN SELECT RAISE(ABORT, 'injected'); END")
+
+    def drop_trigger(self, kind):
+        with sqlite3.connect(self.db) as con:
+            con.execute(f"DROP TRIGGER fail_{kind}")
+
+    def test_clear_is_atomic_and_a_failed_one_stays_bound_to_its_episode(self):
+        router = self.drifted()
+        self.request()
+        episode, raw = self.store().flag("drift_episode"), self.store().flag("drift_clear_request")
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        self.fail_inserts("DRIFT_CLEARED")
+        with self.assertLogs("ai_floor.broker.demo_router", logging.WARNING) as logs:
+            router.reconcile()
+        self.assertIn("event=DRIFT_CLEAR_FAILED", "\n".join(logs.output))
+        # Nothing changed: block (memory + DB), request and episode exactly as before; no audit row.
+        self.assertEqual((router.blocked_reason, self.store().flag("blocked_reason")), ("drift", "drift"))
+        self.assertEqual((self.store().flag("drift_clear_request"), self.store().flag("drift_episode")), (raw, episode))
+        self.assertEqual(self.events("DRIFT_CLEARED"), [])
+        self.drop_trigger("DRIFT_CLEARED")
+        router._set_blocked("drift")  # a later drift episode: the kept request can no longer clear anything
+        router.reconcile()
+        self.assertEqual(router.blocked_reason, "drift")
+        self.assertIsNone(self.store().flag("drift_clear_request"))
+        self.assertEqual(self.events("DRIFT_CLEAR_REFUSED")[-1][2]["reasons"], ["stale_episode"])
+        self.assertEqual(self.events("DRIFT_CLEARED"), [])
+
+    def test_failed_clear_is_retried_within_the_same_episode(self):
+        router = self.drifted()
+        self.request()
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        self.fail_inserts("DRIFT_CLEARED")
+        with self.assertLogs("ai_floor.broker.demo_router", logging.WARNING):
+            router.reconcile()
+        self.drop_trigger("DRIFT_CLEARED")
+        router.reconcile()
+        self.assertIsNone(router.blocked_reason)
+        self.assertEqual(len(self.events("DRIFT_CLEARED")), 1)
+        self.assertIsNone(self.store().flag("drift_clear_request"))
+
+    def test_refusal_is_atomic_with_its_audit_event(self):
+        router = self.drifted()
+        self.request()
+        raw = self.store().flag("drift_clear_request")
+        self.fail_inserts("DRIFT_CLEAR_REFUSED")
+        with self.assertLogs("ai_floor.broker.demo_router", logging.WARNING):
+            router.reconcile()  # drift still present -> refusal, whose event insert fails
+        self.assertEqual(self.store().flag("drift_clear_request"), raw)  # not consumed without its audit row
+        self.assertEqual(router.blocked_reason, "drift")
+        self.drop_trigger("DRIFT_CLEAR_REFUSED")
+        router.reconcile()
+        self.assertIsNone(self.store().flag("drift_clear_request"))
+        self.assertEqual(self.events("DRIFT_CLEAR_REFUSED")[-1][2]["reasons"], ["drift_present"])
+
+
+# -- 1b) emergency flatten: reconcile first, never lose the request -------------------------------------------------
+class FlattenAfterReconcileTests(OpsBase):
+    def pending(self, status="PENDING_SEND"):
+        router = self.router()
+        self.store().insert_intent({"client_id": CID, "run_id": "run-1", "symbol": "EURUSD", "side": "LONG",
+                                    "units": 10000, "entry": "1.09", "stop": "1.08", "target": "1.12",
+                                    "status": status})
+        self.assertTrue(self.stop()["ok"])
+        return router
+
+    def test_filled_pending_send_is_resolved_flattened_then_cleared(self):
+        router = self.pending()
+        self.server.add("GET", OPEN_TRADES, trades(open_trade()), trades(open_trade()), trades())
+        self.server.add("PUT", CLOSE, HALTED, CLOSED_OK)
+        self.assertEqual(router.manage(NOW), {CID: "CLOSE_REJECTED"})
+        self.assertEqual(self.rows()[0]["status"], "OPEN")  # reconcile resolved the fill before the flatten ran
+        self.assertIsNotNone(self.store().flag("flatten_request"))  # not flat yet: kept
+        self.assertEqual(router.manage(NOW + timedelta(minutes=1)), {CID: "CLOSED"})
+        row = self.rows()[0]
+        self.assertEqual((row["status"], row["closed_reason"]), ("CLOSED", "EMERGENCY_BUTTON"))
+        self.assertIsNone(self.store().flag("flatten_request"))
+        kinds = [k for k, _c, _d in self.events() if k in ("RESOLVED", "CLOSED", "FLATTEN_REQUEST_DONE")]
+        self.assertEqual(kinds, ["RESOLVED", "CLOSED", "FLATTEN_REQUEST_DONE"])
+        self.assertEqual(self.posts(), [])  # the flatten never submits
+
+    def test_broker_read_failure_keeps_the_request(self):
+        router = self.router()
+        self.stop()
+        self.server.add("GET", OPEN_TRADES, (500, {}))
+        router.manage(NOW)
+        self.assertIsNotNone(self.store().flag("flatten_request"))  # no OPEN rows, but nothing was verified
+        self.assertEqual(self.events("FLATTEN_REQUEST_PENDING")[-1][2]["reason"], "broker_read_failed")
+        self.assertEqual(self.events("FLATTEN_REQUEST_DONE"), [])
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        router.manage(NOW + timedelta(minutes=1))
+        self.assertIsNone(self.store().flag("flatten_request"))
+        self.assertEqual(self.writes(), [])
+
+    def test_unknown_submission_keeps_the_request(self):
+        router = self.pending(status="UNKNOWN")
+        self.server.add("GET", OPEN_TRADES, trades())
+        self.server.add("GET", TRADE_AT_CID, NOT_FOUND)  # absence proves nothing: the row stays UNKNOWN
+        router.on_cycle(context(run_id="run-2"), "NO_SETUP", NOW)
+        self.assertEqual(self.rows()[0]["status"], "UNKNOWN")
+        self.assertIsNotNone(self.store().flag("flatten_request"))
+        self.assertEqual(self.events("FLATTEN_REQUEST_PENDING")[-1][2]["open_trades"], 1)
+        self.assertEqual(self.writes(), [])
+
+
+# -- 1c) restart with the emergency active: closing-only router ----------------------------------------------------
+class ClosingOnlyRestartTests(OpsBase):
+    def test_restart_with_emergency_and_open_row_closes_and_never_submits(self):
+        self.opened()
+        self.registry().emergency_stop(actor="operator", reason="drill")  # no flatten request: implicit flatten
+        account_registry._EMERGENCY_LATCHES.clear()  # a new process
+        audit = len(self.registry().audit_log())
+        router = self.router()
+        self.assertTrue(router.closing_only)
+        self.assertTrue(router._broker.close_only)
+        self.assertEqual(len(self.registry().audit_log()), audit)  # the switch is never turned ON
+        self.assertFalse(self.registry().is_allowed("broker_demo"))
+        self.server.routes[("GET", OPEN_TRADES)] = [trades(open_trade()), trades()]
+        self.server.add("PUT", CLOSE, CLOSED_OK)
+        self.assertEqual(router.on_cycle(context(run_id="run-2"), "PLAN_READY", NOW + timedelta(minutes=1)),
+                         ("NOT_ROUTED", "emergency_active"))
+        row = self.rows()[0]
+        self.assertEqual((row["status"], row["closed_reason"]), ("CLOSED", "EMERGENCY_ACTIVE"))
+        self.assertEqual(self.puts(), [CLOSE])
+        self.assertEqual(len(self.posts()), 1)  # only the original entry
+        self.assertEqual(self.events("FLATTEN_REQUEST_DONE")[-1][2]["implicit"], True)
+        self.assertEqual(router.on_cycle(context(run_id="run-3"), "PLAN_READY", NOW + timedelta(minutes=2)),
+                         ("NOT_ROUTED", "emergency_active"))
+        self.assertEqual(len(self.posts()), 1)
+        self.assertIsNone(self.router())  # flat and no request: a restart builds no router again
+
+    def test_restart_drains_a_button_request(self):
+        self.opened()
+        self.assertTrue(self.stop()["ok"])
+        account_registry._EMERGENCY_LATCHES.clear()
+        router = self.router()
+        self.assertTrue(router.closing_only)
+        self.server.routes[("GET", OPEN_TRADES)] = [trades(open_trade()), trades()]
+        self.server.add("PUT", CLOSE, CLOSED_OK)
+        self.assertEqual(router.manage(NOW + timedelta(minutes=1)), {CID: "CLOSED"})
+        self.assertEqual(self.rows()[0]["closed_reason"], "EMERGENCY_BUTTON")
+        self.assertIsNone(self.store().flag("flatten_request"))
+
+    def test_env_emergency_with_open_row_is_closing_only(self):
+        self.opened()
+        router = self.router(AI_FLOOR_EMERGENCY_STOP="1")
+        self.assertTrue(router.closing_only)
+        self.assertEqual(router.on_cycle(context(run_id="run-2"), "PLAN_READY", NOW), ("NOT_ROUTED", "emergency_active"))
+
+    def test_emergency_without_rows_or_request_returns_none(self):
+        self.router()
+        self.registry().emergency_stop(actor="operator", reason="drill")
+        self.assertIsNone(self.router())
+        self.assertIsNone(self.router(AI_FLOOR_EMERGENCY_STOP="1"))
+        fresh = Path(self.tmp.name) / "fresh" / "state.db"
+        self.assertIsNone(self.router(AI_FLOOR_EMERGENCY_STOP="1", AI_FLOOR_BROKER_STATE_DB_PATH=str(fresh)))
+        self.assertFalse(fresh.exists())  # env emergency: nothing created, exactly as before
+        self.assertEqual(self.server.calls, [])
+
+
+class CloseOnlyBrokerTests(OpsBase):
+    def broker(self, env=None, **kwargs):
+        return OandaBroker(env={**BROKER_ENV, **(env or {})}, mode="broker_demo", registry=self.registry(),
+                           transport=self.server, sleep=self.clock.sleep, clock=self.clock, **kwargs)
+
+    def test_close_only_skips_only_the_switch_and_emergency_checks(self):
+        self.registry().initialize()  # switch OFF
+        with self.assertRaises(BrokerGuardError):
+            self.broker()
+        self.assertTrue(self.broker(close_only=True).close_only)
+        self.registry().emergency_stop(actor="operator", reason="drill")
+        with self.assertRaises(BrokerGuardError):
+            self.broker()
+        self.assertTrue(self.broker(close_only=True).close_only)
+        self.assertTrue(self.broker({"AI_FLOOR_EMERGENCY_STOP": "1"}, close_only=True).close_only)
+        for env in ({"OANDA_PRACTICE_TOKEN": ""}, {"OANDA_ACCOUNT_ID": "001-001-12345678-001"},
+                    {"OANDA_ACCOUNT_ID": ""}, {"AI_FLOOR_BROKER_DEMO_ENABLED": "0"},
+                    {"AI_FLOOR_BROKER_DEMO_PROVIDER": "dxtrade"}):
+            with self.subTest(env=env), self.assertRaises(BrokerGuardError):
+                self.broker(env, close_only=True)
+        with self.assertRaises(BrokerGuardError):
+            OandaBroker(env=BROKER_ENV, mode="paper", registry=self.registry(), close_only=True)
+        with patch("execution.oanda_broker.real_execution_enabled", return_value=True), \
+                self.assertRaises(BrokerGuardError):
+            self.broker(close_only=True)
+        self.assertEqual(self.server.calls, [])
+
+    def test_close_only_refuses_submit_and_modify_but_closes(self):
+        self.registry().emergency_stop(actor="operator", reason="drill")
+        broker = self.broker(close_only=True)
+        p = broker_plan()
+        with self.assertRaises(BrokerGuardError):
+            broker.submit_plan(p, approved(p))
+        with self.assertRaises(BrokerGuardError):
+            broker.modify_stop("6397", Decimal("1.09"), client_id="x-be")
+        self.assertEqual(self.server.calls, [])
+        self.server.add("PUT", CLOSE, CLOSED_OK)
+        self.assertEqual(broker.close_market("6397", reason="EMERGENCY", client_id="x").status, "ACCEPTED")
+        self.server.add("GET", OPEN_TRADES, trades())
+        self.assertEqual(broker.open_trades(), ())
 
 
 # -- 3) Friday close -----------------------------------------------------------------------------------------------
