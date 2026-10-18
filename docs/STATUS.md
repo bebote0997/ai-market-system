@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-14 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
+_Última actualización: 2026-10-18 (America/New_York; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
+
+_Estado anterior: 2026-10-14 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 
 **Entorno:** PAPER / DEMO únicamente · `REAL_EXECUTION_ENABLED = False` · NAS100 OFF · runtime V2 y SYSTEM HEALTH INACTIVE · sin deploy V2.
 **main:** `1c9118c` (merge PR #41).

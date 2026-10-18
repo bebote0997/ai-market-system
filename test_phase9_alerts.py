@@ -441,8 +441,8 @@ class TestTradingIsolation(NoNetwork):
         """The only wiring is runtime.alert_hook, called by the runner after the cycle (never by the service)."""
         for path in [*ROOT.glob("runtime/*.py"), *ROOT.glob("execution/*.py"), *ROOT.glob("floor/*.py"),
                      ROOT / "app.py", ROOT / "main.py"]:
-            if path.name.startswith("alert_"):
-                continue
+            if path.name.startswith("alert_") or path.name == "broker_alerts.py":
+                continue  # broker_alerts is the sink for broker-demo router events (opt-in, same env gate); see test_broker_alerts
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("alert_dispatch", text, path.name)
             self.assertNotIn("alert_channels", text, path.name)

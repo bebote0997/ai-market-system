@@ -162,6 +162,23 @@ class EndpointTests(OandaTestBase):
             with self.subTest(specifier=bad), self.assertRaises(ValueError):
                 client.get_trade(bad)
 
+    def test_transactions_since_is_a_read_only_get(self):
+        path = f"{A}/transactions/sinceid?id=100&type=TRANSFER_FUNDS"
+        self.server.add("GET", path, (200, {"transactions": [], "lastTransactionID": "100"}))
+        client = self.client()
+        self.assertEqual(client.get_transactions_since("100"), {"transactions": [], "lastTransactionID": "100"})
+        self.assertEqual([(m, p) for m, p, _h, _b in self.server.calls], [("GET", path)])
+        for tx_id, types in (("abc", ("TRANSFER_FUNDS",)), ("1&type=ORDER_FILL", ("TRANSFER_FUNDS",)), (100, None),
+                             ("", ("TRANSFER_FUNDS",)), ("1", ()), ("1", "TRANSFER_FUNDS"), ("1", ("x&id=2",))):
+            with self.subTest(tx_id=tx_id, types=types), self.assertRaises(ValueError):
+                client.get_transactions_since(tx_id, types=types or ())
+        self.assertEqual(len(self.server.calls), 1)
+        self.server.add("GET", f"{A}/transactions/sinceid?id=101&type=TRANSFER_FUNDS", (404, {"errorMessage": TOKEN}))
+        with self.assertRaises(BrokerRejected) as ctx:
+            client.get_transactions_since("101")
+        self.assertNotIn(ACCOUNT, str(ctx.exception))
+        self.assertNotIn(TOKEN, str(ctx.exception))
+
     def test_build_market_order_and_formatting(self):
         ext = {"id": "cid-1", "tag": "aifloor", "comment": "run:r1"}
         order = OandaClient.build_market_order(instrument="EUR_USD", units=-100, stop=Decimal("1.1"),

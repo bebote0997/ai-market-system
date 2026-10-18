@@ -247,7 +247,8 @@ class ControlViewTests(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         before = hashlib.sha256(case.path.read_bytes()).hexdigest()
-        with patch.dict(sys.modules, {'execution.account_registry': None}):
+        # Operator actions unavailable too (they work by default since the emergency button was wired): fail closed.
+        with patch.dict(sys.modules, {'execution.account_registry': None, 'execution.operator_actions': None}):
             app = fixtures.Phase10DashboardTests.app(case)
             app.radio[0].set_value('Control').run()
         self.assertFalse(app.exception)
@@ -295,14 +296,14 @@ class ControlBrokerViewTests(unittest.TestCase):
     def content(app):
         return '\n'.join(m.value for m in app.markdown)
 
-    def test_history_placeholder_is_separate_and_has_no_numbers(self):
-        content = self.content(self.app())
-        start = content.index('📚 Historial (referencia / baseline)')
-        section = content[start:content.index('</div></div>', start)]
-        self.assertIn('separados de las estadísticas de la demo en vivo', section)
-        self.assertIn('Se cargarán más adelante', section)
-        import re
-        self.assertNotRegex(re.sub(r'<[^>]+>', ' ', section), r'\d')  # visible text only (tags like <h3> aside)
+    def test_history_section_is_separate_and_empty_without_data(self):
+        with patch.dict('os.environ', {'AI_FLOOR_HISTORIAL_DIR': '/nonexistent-historial-dir'}):
+            content = self.content(self.app())
+        start = content.index('📚 Historial (referencia) · no son trades de OANDA')
+        section = content[start:]
+        self.assertIn('separadas de las estadísticas de la demo en vivo de OANDA', section)
+        self.assertIn('sin datos todavía', section)
+        self.assertIn('Referencia · no son trades de OANDA', section)
         self.assertNotIn('<table', section)
 
     def test_routing_chip_defaults_to_off(self):
@@ -331,8 +332,10 @@ class ControlBrokerViewTests(unittest.TestCase):
         content = self.content(app)
         self.assertIn('Real · solo lectura (operar bloqueado)', content)
         self.assertIn('sin token', content)  # no OANDA_LIVE_TOKEN
-        self.assertTrue(all(b.disabled for b in app.button))  # no enabled order control anywhere
+        # No order control anywhere: the only button is the (now wired, enabled by default) emergency stop, which
+        # asks for a typed confirmation before doing anything.
         self.assertEqual([b.key for b in app.button], ['control-emergency-stop'])
+        self.assertTrue(all(b.disabled for b in app.button if b.key != 'control-emergency-stop'))
         toggles = [t for t in app.toggle if t.key and t.key.startswith('control-')]
         self.assertTrue(all(t.disabled and t.value is False for t in toggles))
 

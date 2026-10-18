@@ -16,6 +16,11 @@ process) and later submits with it only do the read-only lookup. The switch/emer
 each 429 backoff); ``close_market`` is never guarded. ``submit_plan``, ``modify_stop`` and ``close_market`` are serialized per instance (RLock held
 across the gate reads and the write).
 
+``close_only=True`` (used by the router only while an emergency is active and routed trades / a flatten request remain):
+the constructor still enforces REAL_EXECUTION_ENABLED False, the demo env, the mode, the token and the practice account
+(host hard-coded) but NOT the switch ON / no-emergency checks; ``submit_plan`` and ``modify_stop`` then always raise
+``BrokerGuardError`` (reads and ``close_market`` only).
+
 Single process, exclusive account ownership: a second process (or another tool) trading the same practice account is
 unsupported — the lock and the UNKNOWN latch only cover this instance.
 
@@ -85,8 +90,9 @@ def _comment(source_run_id):
     return ("run:" + _UNSAFE_COMMENT_RE.sub("_", str(source_run_id)))[:100]
 
 
-def check_oanda_guards(config, env, *, mode, registry):
-    """Raise BrokerGuardError unless every practice-only guard holds; returns ``(token, account_id)``. No network."""
+def check_oanda_guards(config, env, *, mode, registry, close_only=False):
+    """Raise BrokerGuardError unless every practice-only guard holds; returns ``(token, account_id)``. No network.
+    ``close_only`` skips only the emergency / switch checks (the instance can never open or modify)."""
     if real_execution_enabled() is not False:
         raise BrokerGuardError("REAL_EXECUTION_ENABLED must stay False")
     if not config.demo_enabled:
@@ -95,13 +101,13 @@ def check_oanda_guards(config, env, *, mode, registry):
         raise BrokerGuardError("AI_FLOOR_BROKER_DEMO_PROVIDER is not 'oanda'")
     if mode != DEMO_MODE:
         raise BrokerGuardError("only mode 'broker_demo' is accepted")
-    if config.emergency_stop:
+    if config.emergency_stop and not close_only:
         raise BrokerGuardError("emergency stop active (AI_FLOOR_EMERGENCY_STOP)")
     if registry is None:
         raise BrokerGuardError("account registry required")
-    if registry.emergency_active():
+    if not close_only and registry.emergency_active():
         raise BrokerGuardError("emergency stop active (registry)")
-    if not registry.is_allowed(DEMO_MODE):
+    if not close_only and not registry.is_allowed(DEMO_MODE):
         raise BrokerGuardError("broker_demo switch is OFF")
     token = env.get(TOKEN_ENV)
     token = token.strip() if isinstance(token, str) else ""
@@ -247,9 +253,10 @@ class OandaBroker:
     provider = PROVIDER
 
     def __init__(self, *, env, mode, registry, allow_scale_in=False, transport=None, clock=None, sleep=None,
-                 limiter=None, client_options=None):
+                 limiter=None, client_options=None, close_only=False):
         config = load_broker_config(env)
-        token, account = check_oanda_guards(config, env, mode=mode, registry=registry)
+        token, account = check_oanda_guards(config, env, mode=mode, registry=registry, close_only=bool(close_only))
+        self.close_only = bool(close_only)
         self._config = config
         self._registry = registry
         self._account_masked = mask_account(account)
@@ -268,6 +275,8 @@ class OandaBroker:
 
     def _ensure_open_allowed(self):
         """Opening/modifying needs the switch ON and no emergency. Closing is always allowed (reduces risk)."""
+        if self.close_only:
+            raise BrokerGuardError("close-only broker: opening/modifying refused")
         if self._config.emergency_stop:
             raise BrokerGuardError("emergency stop active")
         if self._registry.emergency_active() or not self._registry.is_allowed(DEMO_MODE):
@@ -294,6 +303,8 @@ class OandaBroker:
 
     # -- trading -------------------------------------------------------------------------------------------------
     def submit_plan(self, plan: OrderPlan, approval) -> SubmitResult:
+        if self.close_only:
+            raise BrokerGuardError("close-only broker: submit refused")
         if not isinstance(plan, OrderPlan):
             raise TypeError("plan must be an OrderPlan")
         with self._lock:
@@ -484,6 +495,8 @@ class OandaBroker:
         return CloseResult(REJECTED, client_id, reason="no_open_position")
 
     def modify_stop(self, position_ref, new_stop: Decimal, *, client_id: str) -> ModifyResult:
+        if self.close_only:
+            raise BrokerGuardError("close-only broker: modify refused")
         if not isinstance(new_stop, Decimal) or not new_stop.is_finite() or new_stop <= 0:
             return ModifyResult(REJECTED, client_id, reason="invalid_stop")
         if not isinstance(position_ref, str) or not _TRADE_ID_RE.match(position_ref):
@@ -613,8 +626,33 @@ class OandaBroker:
         if balance is None or equity is None:
             raise BrokerUnavailable("summary answer without balance/NAV")
         currency = account.get("currency")
+        last_id = payload.get("lastTransactionID", account.get("lastTransactionID"))
         return BrokerBalance(balance, equity, _dec(account.get("marginUsed")),
-                             currency if isinstance(currency, str) else None)
+                             currency if isinstance(currency, str) else None,
+                             last_id if isinstance(last_id, str) and _TRADE_ID_RE.match(last_id) else None)
+
+    def transfers_since(self, tx_id, upto=None):
+        """Read-only: ``(net TRANSFER_FUNDS amount after tx_id, last transaction id)``. With ``upto`` (a summary's
+        ``lastTransactionID``) only transactions ``<= upto`` count and ``upto`` is returned, so the net matches that
+        summary's NAV exactly. Malformed answers/entries raise BrokerMalformedResponse (never a guessed 0)."""
+        payload = self._client.get_transactions_since(tx_id, types=("TRANSFER_FUNDS",))
+        if not isinstance(payload, dict):
+            raise BrokerMalformedResponse("transactions answer is not an object")
+        items, last_id = payload.get("transactions"), payload.get("lastTransactionID") if upto is None else upto
+        if not isinstance(items, list) or not isinstance(last_id, str) or not _TRADE_ID_RE.match(last_id):
+            raise BrokerMalformedResponse("transactions answer without 'transactions'/'lastTransactionID'")
+        net = Decimal("0")
+        for item in items:
+            if not isinstance(item, dict):
+                raise BrokerMalformedResponse("transaction entry is not an object")
+            if item.get("type") != "TRANSFER_FUNDS":
+                continue
+            item_id, amount = item.get("id"), _dec(item.get("amount"))
+            if not isinstance(item_id, str) or not _TRADE_ID_RE.match(item_id) or amount is None:
+                raise BrokerMalformedResponse("TRANSFER_FUNDS transaction with invalid id/amount")
+            if int(item_id) <= int(last_id):
+                net += amount
+        return net, last_id
 
     def health(self) -> BrokerHealth:
         client = self._client

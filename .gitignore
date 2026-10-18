@@ -8,3 +8,5 @@ data/runtime/
 *.db-wal
 *.db-shm
 data/replay/
+data/historial/*
+!data/historial/README.md
