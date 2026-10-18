@@ -242,11 +242,14 @@ lecturas extra de NAV ni flags escritos).
 - **Transferencias** (excluidas automáticamente): P&L del día = NAV − E0 − transferencias. Cuando cambia el
   `lastTransactionID` del summary, el router hace una consulta **solo lectura** `GET
   /v3/accounts/{id}/transactions/sinceid?id=<dl_tx_id>&type=TRANSFER_FUNDS` (mismo guard de host practice, sin
-  endpoints de órdenes), suma `amount` de las transacciones ≤ el id del summary y llama a `record_transfer(neto,
-  actor="broker", motivo="TRANSFER_FUNDS")`; luego guarda el id. El primer id visto solo se guarda (nunca retroactivo);
+  endpoints de órdenes), suma `amount` de las transacciones ≤ el id del summary y llama a `apply_transfer(neto, id,
+  actor="broker", motivo="TRANSFER_FUNDS")`: ajuste + cursor `dl_tx_id` + evento `TRANSFER_RECORDED` en UNA
+  transacción sqlite (un fallo no deja ninguno ⇒ el reintento nunca duplica; `record_transfer` manual usa el mismo
+  mecanismo). El primer id visto solo se guarda (nunca retroactivo);
   sin cambio de id no hay llamada extra. Si el día actual aún no tiene E0, la transferencia ajusta la base pendiente
   (`dl_last_nav`) del próximo E0. La base del drawdown también la excluye (`dd_transfers`). Si la consulta falla ⇒
-  entradas rechazadas (`daily_loss_unavailable`) y el id no avanza; halts/flatten siguen igual.
+  entradas rechazadas (`daily_loss_unavailable`), el id no avanza y el NAV sin ajustar NO se evalúa (no crea halts
+  nuevos: un retiro no conciliado no es pérdida); los halts ya activos (latch/flags) siguen aplanando.
 - **Halt diario**: P&L ≤ −2 % × E0 (el borde exacto dispara; las ganancias no suben el suelo) ⇒ evento
   `DAILY_LOSS_HALT`, sin entradas nuevas y, con flatten ON, cierre de los trades OPEN enrutados (`close_market`, id
   `…-dlimit`, motivo `DAILY_LOSS`, evento `FLATTEN_DAILY_LOSS`; reintento en cada tick; filas con acción UNKNOWN se

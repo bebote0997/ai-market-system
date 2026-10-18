@@ -12,7 +12,8 @@ plans/real_trading_readiness_plan.md section 4.1 (owner decisions D2/D3, 2026-10
   ``P&L <= -fraction * E0`` -> DAILY_LOSS_HALT (fixed floor: gains never raise it). ``record_transfer`` adds to the
   current day's transfers when that day already has E0; otherwise it adjusts the pending baseline (``dl_last_nav``) so
   the next E0 already includes it (no baseline -> nothing to adjust: the next E0 is the current NAV, transfer included).
-  The router feeds it the broker's TRANSFER_FUNDS transactions (``dl_tx_id`` = last transaction id seen).
+  The router feeds it the broker's TRANSFER_FUNDS transactions via ``apply_transfer`` (adjustment + ``dl_tx_id`` cursor
+  + audit event in one store transaction, so a retry never double-applies).
 - Before each entry: refused when the planned risk exceeds the remaining budget (``fraction * E0 + P&L``).
 - Drawdown: NAV <= (start equity + transfers recorded since, ``dd_transfers``) * 0.95, or any finite NAV <= 0 ->
   DRAWDOWN_HALT (always flattens, never resumes by itself).
@@ -23,7 +24,7 @@ plans/real_trading_readiness_plan.md section 4.1 (owner decisions D2/D3, 2026-10
   latch + flags so the router can keep flattening while NAV is unavailable.
 - Independent from the kill switch / emergency latch: own flags in ``broker_demo_flags``, never ``blocked_reason``.
 
-Pure functions + a small tracker over a DemoStateStore-like object (``flag``/``set_flag``/``event``). Any invalid input
+Pure functions + a small tracker over a DemoStateStore-like object (``flag``/``set_flag``/``event``/``apply``). Any invalid input
 or unreadable state refuses entries (fail closed). Events carry amounts and day keys only: never tokens or account ids.
 """
 from dataclasses import dataclass
@@ -159,6 +160,10 @@ def _latch_for(store):
         return _HALT_LATCHES.setdefault(key, {"daily": None, "dd": False})
 
 
+def _audit(detail):
+    return {k: v if v is None or isinstance(v, bool) else str(v) for k, v in detail.items()}
+
+
 def _parse_at(value):
     try:
         out = datetime.fromisoformat(value)
@@ -184,11 +189,13 @@ class DailyLossLimit:
 
     def _event(self, kind, **detail):
         try:
-            self._store.event(kind, None, {k: v if v is None or isinstance(v, bool) else str(v)
-                                           for k, v in detail.items()})
+            self._store.event(kind, None, _audit(detail))
         except Exception as exc:  # noqa: BLE001 - audit is best effort; the decision uses the flags
             LOG.warning("component=daily_loss event=EVENT_WRITE_FAILED kind=%s error_type=%s", kind,
                         type(exc).__name__)
+        self._notify(kind, detail)
+
+    def _notify(self, kind, detail):
         if self.on_event is not None:
             try:
                 self.on_event(kind, detail)
@@ -341,26 +348,46 @@ class DailyLossLimit:
         amount = _dec(amount)
         if amount is None or amount == 0:
             raise ValueError("amount must be a non-zero number")
+        return self.apply_transfer(amount, None, actor, reason, now=now)
+
+    def apply_transfer(self, net, tx_id, actor, reason, now=None):
+        """Apply a net transfer (as ``record_transfer``; 0 = nothing to adjust) and advance the broker transaction
+        cursor ``dl_tx_id`` to ``tx_id`` (None = cursor untouched) in ONE store transaction together with the
+        TRANSFER_RECORDED event: a failure leaves both unchanged, so a retry never double-applies. Returns the day
+        total when the current day was adjusted, else None. Raises on invalid input / corrupt state / write failure."""
+        net = _dec(net)
+        if net is None or (net == 0 and tx_id is None):
+            raise ValueError("net must be a number (non-zero without a transaction id)")
+        if tx_id is not None and not (isinstance(tx_id, str) and tx_id.isascii() and tx_id.isdigit()):
+            raise ValueError("tx_id must be a digit string")
         if not actor:
             raise ValueError("actor required")
         with self._lock:
             now = now or self._clock()
             key = day_key(now)
-            state = self._state()
-            if self.start_equity_override or state[DD_START_FLAG] is not None:  # the drawdown base excludes it too
-                dd_total = (_dec(state[DD_TRANSFERS_FLAG]) or 0) + amount
-                self._store.set_flag(DD_TRANSFERS_FLAG, str(dd_total))
-            if state[DAY_FLAG] == key:
-                total = _dec(state[TRANSFERS_FLAG]) + amount
-                self._store.set_flag(TRANSFERS_FLAG, str(total))
-                self._event("TRANSFER_RECORDED", day=key, amount=amount, total=total, actor=actor, reason=reason)
-                return total
-            baseline = self._baseline(state, now)
-            if baseline is not None:
-                self._store.set_flag(LAST_NAV_FLAG, str(baseline + amount))
-            self._event("TRANSFER_RECORDED", day=key, amount=amount, total=None, actor=actor, reason=reason,
-                        applied_to="next_e0" if baseline is not None else "none")
-            return None
+            flags = {} if tx_id is None else {TX_FLAG: tx_id}
+            total, detail = None, None
+            if net != 0:
+                state = self._state()
+                if self.start_equity_override or state[DD_START_FLAG] is not None:  # the drawdown base excludes it
+                    flags[DD_TRANSFERS_FLAG] = str((_dec(state[DD_TRANSFERS_FLAG]) or 0) + net)
+                detail = {"day": key, "amount": net, "actor": actor, "reason": reason}
+                if state[DAY_FLAG] == key:
+                    total = _dec(state[TRANSFERS_FLAG]) + net
+                    flags[TRANSFERS_FLAG] = str(total)
+                    detail["total"] = total
+                else:
+                    baseline = self._baseline(state, now)
+                    if baseline is not None:
+                        flags[LAST_NAV_FLAG] = str(baseline + net)
+                    detail.update(total=None, applied_to="next_e0" if baseline is not None else "none")
+                if tx_id is not None:
+                    detail["tx_id"] = tx_id
+            event = None if detail is None else ("TRANSFER_RECORDED", None, _audit(detail))
+            self._store.apply(set_flags=flags, event=event)
+            if detail is not None:
+                self._notify("TRANSFER_RECORDED", detail)
+            return total
 
     def transaction_id(self):
         """Last broker transaction id seen (``dl_tx_id``) or None. Raises ValueError when corrupt."""
@@ -368,9 +395,6 @@ class DailyLossLimit:
         if value is not None and not (isinstance(value, str) and value.isascii() and value.isdigit()):
             raise ValueError(f"corrupt {TX_FLAG}")
         return value
-
-    def set_transaction_id(self, tx_id):
-        self._store.set_flag(TX_FLAG, tx_id)
 
     def clear_drawdown_halt(self, actor, reason):
         """Operator release of the drawdown halt (written review); the baseline is re-initialised on next evaluate.

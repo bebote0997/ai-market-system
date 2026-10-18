@@ -827,14 +827,16 @@ class BrokerDemoRouter:
     def _loss_check(self, at, planned_risk=None, balance=None):
         """Evaluate the loss limit (balance from the broker unless given) and flatten when required. Returns
         ``(LossDecision, {client_id: close outcome})``. NAV unreadable/invalid or unusable state refuses entries; an
-        active (latched or persisted) halt still flattens. A failed transfer query refuses entries only."""
+        active (latched or persisted) halt still flattens. A failed transfer reconciliation is handled the same way:
+        the unadjusted NAV is never evaluated, so it cannot create a new halt."""
         if balance is None:
             try:
                 balance = self._broker.get_balance()
             except Exception as exc:  # noqa: BLE001 - fail closed for entries; halts keep flattening
                 self._event("DAILY_LOSS_UNAVAILABLE", None, error=type(exc).__name__)
                 return self._loss_halted(at, UNAVAILABLE)
-        transfers_ok = self._loss_transfers(at, balance)
+        if not self._loss_transfers(at, balance):  # unreconciled NAV: no new halts from it, active ones still flatten
+            return self._loss_halted(at, UNAVAILABLE)
         try:
             decision = self._loss_limit.evaluate(balance.equity, planned_risk, now=at)
         except Exception as exc:  # noqa: BLE001
@@ -842,8 +844,6 @@ class BrokerDemoRouter:
             return self._loss_halted(at, UNAVAILABLE)
         if decision.reason in (NAV_INVALID, STATE_UNREADABLE):
             return self._loss_halted(at, decision.reason)
-        if not transfers_ok and decision.entry_allowed:
-            decision = replace(decision, entry_allowed=False, reason=UNAVAILABLE)
         return decision, (self._loss_flatten(decision) if decision.flatten_required else {})
 
     def _loss_halted(self, at, reason):
@@ -864,11 +864,11 @@ class BrokerDemoRouter:
                 return True
             if current is None:  # a summary without the marker after one was seen: cannot prove no transfer
                 raise BrokerMalformedResponse("summary without lastTransactionID")
+            net = 0
             if stored is not None:
                 net, current = self._broker.transfers_since(stored, upto=current)
-                if net != 0:
-                    self._loss_limit.record_transfer(net, actor="broker", reason="TRANSFER_FUNDS", now=at)
-            self._loss_limit.set_transaction_id(current)
+            # Adjustment + cursor + audit event in one transaction: a failure leaves both, so the retry applies once.
+            self._loss_limit.apply_transfer(net, current, actor="broker", reason="TRANSFER_FUNDS", now=at)
             return True
         except Exception as exc:  # noqa: BLE001 - entries refused this tick
             self._event("DAILY_LOSS_TRANSFERS_UNAVAILABLE", None, error=type(exc).__name__)

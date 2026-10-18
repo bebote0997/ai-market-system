@@ -237,6 +237,51 @@ class TrackerTests(TrackerBase):
         limit.record_transfer(D("-300"), "owner", "ACH withdrawal")
         self.assertTrue(limit.evaluate(D("1180")).entry_allowed)  # the withdrawal is no loss
 
+    def fail_transfer_commit(self, on=True):
+        """sqlite trigger aborting the TRANSFER_RECORDED insert, i.e. after the flag upserts of the same transaction."""
+        with closing(sqlite3.connect(self.db)) as con:
+            con.execute("DROP TRIGGER IF EXISTS test_fail_transfer")
+            if on:
+                con.execute("CREATE TRIGGER test_fail_transfer BEFORE INSERT ON broker_demo_events "
+                            "WHEN NEW.kind = 'TRANSFER_RECORDED' BEGIN SELECT RAISE(ABORT, 'injected'); END")
+            con.commit()
+
+    def test_apply_transfer_commits_adjustment_and_cursor_atomically(self):
+        limit = self.limit(start_equity_override=D("1000"))
+        limit.evaluate(D("1000"))
+        self.assertIsNone(limit.apply_transfer(0, "100", "broker", "TRANSFER_FUNDS"))  # cursor only, no event
+        self.assertEqual((self.flags()["dl_tx_id"], self.events("TRANSFER_RECORDED")), ("100", []))
+        before = self.flags()
+        self.fail_transfer_commit()
+        for call in (lambda: limit.apply_transfer(D("-100"), "101", "broker", "TRANSFER_FUNDS"),
+                     lambda: limit.record_transfer(D("-100"), "owner", "ACH")):
+            with self.assertRaises(sqlite3.DatabaseError):
+                call()
+            self.assertEqual(self.flags(), before)  # neither the adjustment nor the cursor moved
+            self.assertEqual(self.events("TRANSFER_RECORDED"), [])
+        self.fail_transfer_commit(on=False)
+        self.assertEqual(limit.apply_transfer(D("-100"), "101", "broker", "TRANSFER_FUNDS"), D("-100"))
+        after = self.flags()
+        self.assertEqual((after["dl_transfers"], after["dd_transfers"], after["dl_tx_id"]), ("-100", "-100", "101"))
+        [(_k, detail)] = self.events("TRANSFER_RECORDED")
+        self.assertEqual((detail["amount"], detail["total"], detail["tx_id"]), ("-100", "-100", "101"))
+        self.assertTrue(limit.evaluate(D("900")).entry_allowed)  # applied exactly once: no false halt
+        for net, tx_id in ((0, None), ("x", "102"), (D("1"), "abc"), (D("1"), 102)):
+            with self.subTest(net=net, tx_id=tx_id), self.assertRaises(ValueError):
+                limit.apply_transfer(net, tx_id, "broker", "TRANSFER_FUNDS")
+
+    def test_apply_transfer_before_roll_adjusts_next_e0_with_cursor(self):
+        limit = self.limit()
+        limit.evaluate(D("1000"))
+        self.now += timedelta(days=1)
+        self.fail_transfer_commit()
+        with self.assertRaises(sqlite3.DatabaseError):
+            limit.apply_transfer(D("500"), "7", "broker", "TRANSFER_FUNDS")
+        self.assertEqual((self.flags()["dl_last_nav"], self.flags().get("dl_tx_id")), ("1000", None))
+        self.fail_transfer_commit(on=False)
+        self.assertIsNone(limit.apply_transfer(D("500"), "7", "broker", "TRANSFER_FUNDS"))
+        self.assertEqual((self.flags()["dl_last_nav"], self.flags()["dl_tx_id"]), ("1500", "7"))
+
     def test_invalid_nav_fails_closed_without_state_change(self):
         limit = self.limit()
         for nav in (None, D("NaN"), D("Infinity"), True, "abc"):
@@ -681,12 +726,60 @@ class RouterLossLimitTests(RouterBase):
         self.server.routes[("GET", since("100"))] = [transfers(last="101")]
         self.assertTrue(router._loss_check(NOW + timedelta(minutes=4))[0].entry_allowed)
         self.assertEqual(self.flags()["dl_tx_id"], "101")
-        # Halts are unaffected by a failing query: a breach still halts and flattens.
+        # An already-active halt keeps flattening while the transfer read fails.
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("9800", "101")]  # id unchanged: no query, real loss
+        self.server.add("PUT", CLOSE, (400, {"errorCode": "MARKET_HALTED"}), (200, {"orderFillTransaction": close_fill()}))
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=5))
+        self.assertEqual((decision.reason, flattened), ("daily_loss_halt", {CID: "CLOSE_REJECTED"}))
         self.server.routes[("GET", SUMMARY)] = [summary_tx("9800", "102")]
         self.server.routes[("GET", since("101"))] = [(500, {})]
-        self.server.add("PUT", CLOSE, (200, {"orderFillTransaction": close_fill()}))
-        decision, flattened = router._loss_check(NOW + timedelta(minutes=5))
-        self.assertEqual((decision.reason, flattened), ("daily_loss_halt", {CID: "CLOSED"}))
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=6))
+        self.assertEqual((decision.entry_allowed, decision.reason, decision.halted, flattened),
+                         (False, "daily_loss_unavailable", True, {CID: "CLOSED"}))
+        self.assertEqual(self.flags()["dl_tx_id"], "101")
+
+    def test_unreconciled_withdrawal_never_halts(self):
+        router = self.tx_router()
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("9000", "101")]  # -10 % NAV: a withdrawal not yet read
+        self.server.routes[("GET", since("100"))] = [(500, {})]
+        with patch.object(router._loss_limit, "evaluate", wraps=router._loss_limit.evaluate) as evaluate:
+            decision, flattened = router._loss_check(NOW + timedelta(minutes=2))
+        evaluate.assert_not_called()  # the unadjusted NAV is never evaluated
+        self.assertEqual((decision.entry_allowed, decision.reason, decision.halted, decision.dd_halted,
+                          decision.flatten_required, flattened),
+                         (False, "daily_loss_unavailable", False, False, False, {}))
+        with patch.object(router._loss_limit, "transaction_id", side_effect=ValueError("corrupt dl_tx_id")):
+            self.assertEqual(router._loss_check(NOW + timedelta(minutes=3))[0].reason, "daily_loss_unavailable")
+        self.assertFalse(self.events("DAILY_LOSS_HALT") or self.events("DRAWDOWN_HALT"))
+        self.assertEqual((self.flags().get("dl_halt"), self.flags().get("dd_halt")), (None, None))
+        self.assertEqual((self.puts(), self.rows()[0]["status"], self.flags()["dl_e0"]), ([], "OPEN", "10000"))
+        self.server.routes[("GET", since("100"))] = [transfers(("101", "-1000"), last="101")]
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=4))
+        self.assertEqual((decision.entry_allowed, decision.halted, decision.dd_halted, flattened),
+                         (True, False, False, {}))
+        self.assertEqual((self.flags()["dl_transfers"], self.flags()["dd_transfers"], self.flags()["dl_tx_id"]),
+                         ("-1000", "-1000", "101"))
+
+    def test_transfer_commit_failure_is_retried_exactly_once(self):
+        router = self.tx_router()
+        self.server.routes[("GET", SUMMARY)] = [summary_tx("10500", "105")]
+        self.server.routes[("GET", since("100"))] = [transfers(("104", "500"), last="105")]
+        with closing(sqlite3.connect(self.db)) as con:  # crash after the flag upserts, inside the transaction
+            con.execute("CREATE TRIGGER test_fail_transfer BEFORE INSERT ON broker_demo_events "
+                        "WHEN NEW.kind = 'TRANSFER_RECORDED' BEGIN SELECT RAISE(ABORT, 'injected'); END")
+            con.commit()
+        decision, flattened = router._loss_check(NOW + timedelta(minutes=2))
+        self.assertEqual((decision.reason, flattened), ("daily_loss_unavailable", {}))
+        self.assertEqual((self.flags()["dl_transfers"], self.flags()["dl_tx_id"]), ("0", "100"))
+        self.assertTrue(self.events("DAILY_LOSS_TRANSFERS_UNAVAILABLE"))
+        with closing(sqlite3.connect(self.db)) as con:
+            con.execute("DROP TRIGGER test_fail_transfer")
+            con.commit()
+        for minute in (3, 4):
+            self.assertTrue(router._loss_check(NOW + timedelta(minutes=minute))[0].entry_allowed)
+            self.assertEqual((self.flags()["dl_transfers"], self.flags()["dl_tx_id"]), ("500", "105"))
+        self.assertEqual(len(self.events("TRANSFER_RECORDED")), 1)
+        self.assertEqual(self.server.count("GET", since("100")), 2)  # failed attempt + successful retry only
 
     def test_flatten_retried_while_nav_unavailable(self):
         router = self.opened()
