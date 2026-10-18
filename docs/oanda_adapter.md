@@ -219,6 +219,104 @@ abierto y «actualizado hace Ns», auto-refresco cada 10 s con caché ≥ 5 s. *
 `OANDA_PRACTICE_TOKEN` para live ni al revés; cuentas practice `101-`, live `001-`. Sección «📚 Historial (referencia /
 baseline)»: vacía, separada de las estadísticas de la demo en vivo; se cargará más adelante.
 
+### Límite de pérdida diaria (borrador, OFF por defecto)
+
+`execution/daily_loss_limit.py` (decisiones D2/D3 del 17 oct 2026, plan de preparación sección 4.1). Solo se construye
+si `AI_FLOOR_DAILY_LOSS_LIMIT` vale exactamente `1`; con cualquier otro valor el router es idéntico al de hoy (sin
+lecturas extra de NAV ni flags escritos).
+
+| Variable | Defecto | Significado |
+|---|---|---|
+| `AI_FLOOR_DAILY_LOSS_LIMIT` | vacío | Solo `1` exacto activa el límite diario + halt de drawdown. |
+| `AI_FLOOR_DAILY_LOSS_FLATTEN` | vacío (ON) | Al disparar el límite diario se cierra todo lo abierto; solo `0` exacto lo apaga (entonces solo se paran entradas). |
+| `AI_FLOOR_DAILY_LOSS_PCT` | `0.02` | Fracción opcional, **solo más estricta** (`0 < x ≤ 0.02`); cualquier otro valor ⇒ `0.02`. |
+| `AI_FLOOR_DAILY_LOSS_START_EQUITY` | vacío | Base opcional del drawdown 5 %; si falta, el primer NAV observado (persistido). |
+
+- **Día** = desde la frontera de las 17:00 America/New_York (con DST, todos los días del calendario). `E0` se fija en
+  la primera evaluación del día y se persiste en `broker_demo_flags` (`dl_day`, `dl_e0`, `dl_transfers`, `dl_halt`,
+  `dd_start`, `dd_halt`, `dd_transfers`, `dl_last_nav`, `dl_last_at`, `dl_tx_id`): un reinicio no lo recalcula.
+  `E0` = último NAV válido observado (`dl_last_nav`/`dl_last_at`, escritos en cada evaluación) si tiene ≤ 7 días; si
+  no existe (primera evaluación) o es más viejo, el NAV actual. Tras una caída que cruce las 17:00, el tramo previo a la
+  frontera se atribuye al día nuevo (conservador: una pérdida ocurrida durante la caída no se borra). NAV incluye el
+  P&L abierto.
+- **Transferencias** (excluidas automáticamente): P&L del día = NAV − E0 − transferencias. Cuando cambia el
+  `lastTransactionID` del summary, el router hace una consulta **solo lectura** `GET
+  /v3/accounts/{id}/transactions/sinceid?id=<dl_tx_id>&type=TRANSFER_FUNDS` (mismo guard de host practice, sin
+  endpoints de órdenes), suma `amount` de las transacciones ≤ el id del summary y llama a `apply_transfer(neto, id,
+  actor="broker", motivo="TRANSFER_FUNDS")`: ajuste + cursor `dl_tx_id` + evento `TRANSFER_RECORDED` en UNA
+  transacción sqlite (un fallo no deja ninguno ⇒ el reintento nunca duplica; `record_transfer` manual usa el mismo
+  mecanismo). El primer id visto solo se guarda (nunca retroactivo);
+  sin cambio de id no hay llamada extra. Si el día actual aún no tiene E0, la transferencia ajusta la base pendiente
+  (`dl_last_nav`) del próximo E0. La base del drawdown también la excluye (`dd_transfers`). Si la consulta falla ⇒
+  entradas rechazadas (`daily_loss_unavailable`), el id no avanza y el NAV sin ajustar NO se evalúa (no crea halts
+  nuevos: un retiro no conciliado no es pérdida); los halts ya activos (latch/flags) siguen aplanando.
+- **Halt diario**: P&L ≤ −2 % × E0 (el borde exacto dispara; las ganancias no suben el suelo) ⇒ evento
+  `DAILY_LOSS_HALT`, sin entradas nuevas y, con flatten ON, cierre de los trades OPEN enrutados (`close_market`, id
+  `…-dlimit`, motivo `DAILY_LOSS`, evento `FLATTEN_DAILY_LOSS`; reintento en cada tick; filas con acción UNKNOWN se
+  saltan; en dry-run solo eventos `DRY_RUN`). Antes de cada entrada: `NOT_ROUTED daily_loss_budget` si el riesgo
+  planificado (unidades × |entrada − stop|) supera el presupuesto restante.
+- **Reanudación**: automática en la siguiente frontera de las 17:00 NY (`DAILY_LOSS_RESUMED`, nuevo E0); antes, solo
+  con `clear_daily_halt(actor, motivo)` (auditado; vuelve a dispararse si sigue en pérdida).
+- **Drawdown 5 %** (NAV ≤ base × 0,95): `DRAWDOWN_HALT`, cierre siempre (motivo `DRAWDOWN`, aunque flatten esté OFF) y
+  **sin** reanudación automática: exige `clear_drawdown_halt(actor, motivo)` tras revisión escrita. Gana el más estricto.
+  Un NAV finito ≤ 0 cuenta como ruptura de drawdown (halt + cierre).
+- **Latches**: cada halt nuevo se fija primero en memoria (por tracker y por ruta del DB de estado, local al proceso,
+  como el latch de emergencia) y después se escribe el flag; si la escritura falla el halt sigue vigente (y se reintenta
+  la escritura). El latch de drawdown solo lo libera `clear_drawdown_halt`; el diario, la siguiente clave de día o
+  `clear_daily_halt`.
+- Se evalúa en cada ciclo, en cada tick de `manage` (aunque paper esté apagado) y antes de cada orden. Fallo al leer el
+  NAV, NAV no numérico/NaN/inf o estado ilegible ⇒ se rechazan entradas (`daily_loss_unavailable` / `nav_invalid` /
+  `state_unreadable`); si ya hay un halt activo (`halt_state()`: latch o flag) el cierre obligatorio continúa en cada
+  tick (drawdown siempre; diario con flatten ON).
+- **Independiente del interruptor/emergencia**: nunca escribe `blocked_reason` ni llama al registro; limpiar el
+  emergency no limpia el halt y viceversa. Cerrar siempre está permitido. Eventos solo con importes y claves de día.
+- **Activarlo es un paso separado del owner**: poner `AI_FLOOR_DAILY_LOSS_LIMIT=1` en Render con un PUT por clave
+  (nunca reemplazando todo el entorno) + deploy, con aprobación escrita. Este cambio no lo activa.
+
+### Parada de emergencia, drift y cierre del viernes (borrador)
+
+| Variable | Defecto | Significado |
+|---|---|---|
+| `AI_FLOOR_EMERGENCY_BUTTON` | vacío (ON) | Botón de parada del panel activo; solo `0` exacto lo desactiva (acción que aumenta la seguridad). |
+| `AI_FLOOR_DRIFT_CLEAR_BUTTON` | vacío (OFF) | Solo `1` exacto muestra el botón para pedir la limpieza del drift. |
+| `AI_FLOOR_FRIDAY_PREFLATTEN` | vacío (OFF) | Solo `1` exacto activa el cierre previo del viernes. OFF ⇒ router idéntico. |
+| `AI_FLOOR_FRIDAY_PREFLATTEN_MINUTES` | `30` | Minutos antes de las 17:00 NY del viernes; entero 5..240, si no ⇒ 30. |
+
+- **Parada de emergencia** (`execution/operator_actions.py`): el panel pide escribir `PARAR TODO` y confirmar; luego
+  `request_emergency_stop` apaga todas las cuentas y deja el emergency latcheado en `broker_state.db` (auditoría con
+  actor `dashboard`, origen `dashboard`) y escribe el flag `flatten_request`. El router (otro proceso) lo procesa al
+  inicio de cada `on_cycle`/`manage`: primero concilia (un envío PENDING_SEND/UNKNOWN ya ejecutado pasa a OPEN) y
+  luego cierra los trades OPEN enrutados (id `…-ebtn`, motivo `EMERGENCY_BUTTON`; filas con acción UNKNOWN se saltan;
+  en dry-run solo eventos `DRY_RUN`), reintenta en cada tick y borra el flag (`FLATTEN_REQUEST_DONE`) solo si la
+  conciliación de ese tick funcionó y no queda ninguna fila OPEN/PENDING_SEND/UNKNOWN. Lectura fallida ⇒ el flag se
+  conserva (`FLATTEN_REQUEST_PENDING` con `broker_read_failed`). **Quitar la parada no es posible desde el panel.**
+- **Drift**: con `blocked_reason = drift` el panel muestra «Bloqueo por drift». Con el botón activo, escribir
+  `LIMPIAR DRIFT` crea `drift_clear_request`. `reconcile()` solo limpia si en esa misma pasada la lectura del broker
+  funcionó, no hay drift (todo trade abierto en el broker casa con una fila local), no hay filas PENDING_SEND/UNKNOWN
+  ni acciones UNKNOWN (evento `DRIFT_CLEARED`); si no, `DRIFT_CLEAR_REFUSED` con los motivos. La solicitud se consume
+  siempre (hace falta otra). Sin solicitud nunca se limpia. `clear_drift()` en Python no cambia.
+  Cada bloqueo por drift abre un episodio nuevo (flag `drift_episode`, token aleatorio); la solicitud copia el episodio
+  vigente (sin episodio ⇒ `no_drift`) y solo vale para él: una solicitud de un episodio anterior se rechaza
+  (`stale_episode`) y se borra. Limpieza/rechazo, borrado de la solicitud y evento de auditoría van en UNA transacción
+  SQLite (`DemoStateStore.apply`): si falla no cambia nada. Un bloqueo por drift anterior a este cambio no tiene
+  episodio: se limpia con `clear_drift()`.
+- **Viernes** (`execution/friday_close.py`, America/New_York con DST): ventana `preflatten` = viernes desde 17:00 −
+  N min hasta 17:00; `closed` = viernes ≥ 17:00 hasta domingo < 17:00. En `preflatten` se cierran los trades OPEN
+  enrutados (id `…-fri`, motivo `FRIDAY_PREFLATTEN`) con cotización operable, reintentando en cada tick; en
+  `preflatten` y `closed` se rechazan entradas (`friday_close_window`, también en dry-run). Desde las 16:55 NY, si
+  queda algún trade: `LOG.error` con `event=ALERT_FRIDAY_FLATTEN_FAILED` + evento `FRIDAY_FLATTEN_FAILED` (cada 5 min;
+  cada 30 min con el mercado cerrado, mientras se siguen reintentando cierres que el broker rechaza) y el hook
+  opcional `router.on_alert(kind, message)`. La regla de duración (cierre del viernes 17:00) sigue como último respaldo.
+- **Reinicio con el emergency activo** (registro o `AI_FLOOR_EMERGENCY_STOP`): si queda un `flatten_request` o filas
+  enrutadas OPEN/PENDING_SEND/UNKNOWN, `router_from_env` construye un router `closing_only` sobre un `OandaBroker`
+  `close_only=True` (mismos guards de practice/token/cuenta/REAL_EXECUTION, pero sin exigir el switch ON ni la
+  ausencia de emergency; `submit_plan`/`modify_stop` siempre lanzan `BrokerGuardError`). Ese router rechaza toda
+  entrada (`emergency_active`), concilia y cierra los trades OPEN enrutados en cada tick (sin solicitud: motivo
+  `EMERGENCY_ACTIVE`, id `…-emergency`) y nunca enciende `broker_demo`. Sin filas ni solicitud ⇒ `None`, como antes.
+  La alerta del viernes solo existe mientras el router corre.
+- **Activar** `AI_FLOOR_DRIFT_CLEAR_BUTTON` / `AI_FLOOR_FRIDAY_PREFLATTEN` (o desactivar el botón de parada) es un paso
+  separado del owner (PUT por clave en Render + deploy, con aprobación escrita). Este cambio no lo activa.
+
 ## Plan para retirar paper más adelante
 
 El router es independiente de `PaperBroker`: no lo importa ni lee su estado, y solo consume `cycle_context`. Para

@@ -247,7 +247,8 @@ class ControlViewTests(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         before = hashlib.sha256(case.path.read_bytes()).hexdigest()
-        with patch.dict(sys.modules, {'execution.account_registry': None}):
+        # Operator actions unavailable too (they work by default since the emergency button was wired): fail closed.
+        with patch.dict(sys.modules, {'execution.account_registry': None, 'execution.operator_actions': None}):
             app = fixtures.Phase10DashboardTests.app(case)
             app.radio[0].set_value('Control').run()
         self.assertFalse(app.exception)
@@ -331,8 +332,10 @@ class ControlBrokerViewTests(unittest.TestCase):
         content = self.content(app)
         self.assertIn('Real · solo lectura (operar bloqueado)', content)
         self.assertIn('sin token', content)  # no OANDA_LIVE_TOKEN
-        self.assertTrue(all(b.disabled for b in app.button))  # no enabled order control anywhere
+        # No order control anywhere: the only button is the (now wired, enabled by default) emergency stop, which
+        # asks for a typed confirmation before doing anything.
         self.assertEqual([b.key for b in app.button], ['control-emergency-stop'])
+        self.assertTrue(all(b.disabled for b in app.button if b.key != 'control-emergency-stop'))
         toggles = [t for t in app.toggle if t.key and t.key.startswith('control-')]
         self.assertTrue(all(t.disabled and t.value is False for t in toggles))
 

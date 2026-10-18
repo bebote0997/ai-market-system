@@ -196,6 +196,7 @@ class BrokerBalance:
     equity: Decimal
     margin_used: Optional[Decimal] = None
     currency: Optional[str] = None
+    last_transaction_id: Optional[str] = None  # OANDA summary ``lastTransactionID`` (snapshot marker), when known
 
     def __post_init__(self):
         _decimal("balance", self.balance, positive=False)
