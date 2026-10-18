@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-18 — Diagnóstico de bloqueos del watchdog/runner cloud (branch `fix/watchdog-diagnostics`)
+
+- `runtime/cloud.py`: nuevo `scheduler_health_detail()` (`healthy`, `scheduler`, `heartbeat_age_seconds`, `error_type`); `scheduler_healthy()` delega con la misma firma y semántica. El watchdog de `serve()` reintenta hasta 3 veces (2 s) solo si la DB no se pudo leer; un heartbeat legible pero viejo o `scheduler != RUNNING` falla de inmediato. Antes de lanzar registra `component=watchdog event=SCHEDULER_STALE` (sin rutas ni secretos) por stdout.
+- `runtime/cloud_runner.py`: `faulthandler.dump_traceback_later(100 s)` armado alrededor de cada `tick()` + `daily_summary` y cancelado en `finally`; `component=runner event=SLOW_TICK` (WARNING) si el tick supera 90 s. Los diagnósticos nunca lanzan; cadencia sin cambios.
+- Tests: nuevo `test_watchdog_diagnostics.py`. Sin cambios de env vars, flags, execution/, ui/ ni broker.
+
 ## 2026-10-17 — BORRADOR: fixes revisión Codex ronda 3 del router demo OANDA (branch `wip/oanda-adapter`)
 
 - `emergency_close_all` respeta dry-run: solo eventos `DRY_RUN` de vista previa, ningún PUT/POST (HIGH).
