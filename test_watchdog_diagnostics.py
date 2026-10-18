@@ -177,7 +177,7 @@ class RunnerStallDiagnosticsTests(unittest.TestCase):
     def test_arms_and_cancels_stall_dump_around_each_tick(self):
         with self.assertNoLogs("runtime.cloud_runner", "WARNING"):
             fault, runner, fake_time = self.run_main([0.0, 10.0])
-        fault.dump_traceback_later.assert_called_once_with(75, repeat=False, file=cloud_runner.sys.stderr)
+        fault.dump_traceback_later.assert_called_once_with(cloud_runner.STALL_DUMP_SECONDS, repeat=False, file=cloud_runner.sys.stderr)
         fault.cancel_dump_traceback_later.assert_called_once_with()
         self.assertEqual([c[0] for c in fault.mock_calls], ["dump_traceback_later", "cancel_dump_traceback_later"])
         runner.tick.assert_called_once_with()
@@ -186,8 +186,8 @@ class RunnerStallDiagnosticsTests(unittest.TestCase):
 
     def test_slow_tick_is_logged(self):
         with self.assertLogs("runtime.cloud_runner", "WARNING") as logs:
-            self.run_main([100.0, 150.4])
-        self.assertEqual(logs.records[0].getMessage(), "component=runner event=SLOW_TICK seconds=50")
+            self.run_main([100.0, 195.4])
+        self.assertEqual(logs.records[0].getMessage(), "component=runner event=SLOW_TICK seconds=95")
 
     def test_timer_cancelled_when_tick_raises(self):
         with self.assertRaises(sqlite3.OperationalError):
