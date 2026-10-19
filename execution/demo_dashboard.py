@@ -31,12 +31,14 @@ def _risk_rows(env):
 
 
 def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
-    """Everything the demo screens need. ``stats`` is None when the OANDA trades read failed; NAV/balance are None
-    when the summary read failed. Never raises."""
+    """Everything the demo screens need. ``stats`` is None when the OANDA trades read failed (``trades_error`` is
+    ``deadline``/``incomplete`` when that was the cause: never partial totals); NAV/balance are None when the summary
+    read failed. Never raises."""
     env = os.environ if env is None else env
     epoch = demo_epoch(env)
     snapshot = {"epoch": epoch, "stats": None, "curve": [], "open_rows": [], "closed_rows": [], "nav": None,
-                "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False}
+                "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False,
+                "trades_error": None}
     try:
         if trades_reader is None or account_reader is None:
             from execution.oanda_readonly import cached_account_view, cached_demo_trades
@@ -44,7 +46,9 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
             account_reader = account_reader or cached_account_view
         risk = _risk_rows(env)
         trades = trades_reader(epoch)
-        if isinstance(trades, dict):
+        if isinstance(trades, dict) and trades.get("error") is not None:  # slow or incomplete read: no totals
+            snapshot["trades_error"] = str(trades["error"])
+        elif isinstance(trades, dict):
             listed = list(trades.get("closed") or ()) + list(trades.get("open") or ())
             stats, curve, open_rows = demo_statistics(listed, now, epoch, risk)
             snapshot.update(stats=stats, curve=curve, open_rows=open_rows,

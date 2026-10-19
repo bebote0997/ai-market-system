@@ -12,6 +12,8 @@ execution/oanda_broker.py or the router, and none of them import it (test_oanda_
 * Tokens: practice ONLY from ``OANDA_PRACTICE_TOKEN`` (+ ``OANDA_ACCOUNT_ID``, required, no default,
   prefix ``101-``); live ONLY from ``OANDA_LIVE_TOKEN`` (+ ``OANDA_LIVE_ACCOUNT_ID``, prefix ``001-``). Never crossed.
   Without an account id the view is ``SIN_CUENTA`` (account discovery via GET /v3/accounts is not allowed).
+* Trades refresh: one overall deadline for CLOSED+OPEN (``deadline`` error) and an explicit ``incomplete`` error when
+  the page cap runs out before the epoch; both are ``{"error": code}`` results, never partial totals.
 * Errors are codes only (no broker text, token or account id); the account is always masked. Trades are reduced to
   ``TRADE_FIELDS`` (no account id, no transaction ids); ``cached_demo_trades`` reads the PRACTICE account only.
 """
@@ -35,6 +37,9 @@ STATUSES = (OK, SIN_TOKEN, SIN_CUENTA, ERROR)
 TRADE_STATES = ("OPEN", "CLOSED")
 TRADES_PAGE_SIZE = 500
 TRADES_MAX_PAGES = 10  # hard cap: at most 10 GETs per state and refresh
+# CLOSED+OPEN share one budget; the summary GET (TIMEOUT_SECONDS) is separate: a refresh never exceeds ~12 s overall.
+TRADES_REFRESH_DEADLINE_SECONDS = 8.0
+TRADES_ERRORS = ("incomplete", "deadline")  # explicit non-success states of demo_trades (dashboard: "sin datos")
 TRADES_QUERY_KEYS = ("state", "count", "beforeID")
 TRADES_PATH_RE = re.compile(r"^/v3/accounts/[0-9-]+/trades$")
 INSTRUMENT_RE = re.compile(r"^[A-Z0-9]{2,10}_[A-Z0-9]{2,10}$")
@@ -153,13 +158,14 @@ class OandaReadOnlyClient:
 
     __str__ = __repr__
 
-    def _get(self, url, url_ok):
+    def _get(self, url, url_ok, timeout=None):
         """One GET -> decoded JSON object (Decimal numbers). Raises ReadOnlyError(code) on any failure."""
         if not url_ok(url, HOSTS[self.environment]):
             raise ReadOnlyError("refused")
         headers = {"Accept": "application/json", "Authorization": f"Bearer {self._token}"}
         try:
-            status, _headers, raw = self._transport("GET", url, headers, None, self._timeout)
+            status, _headers, raw = self._transport("GET", url, headers, None,
+                                                    self._timeout if timeout is None else timeout)
         except TimeoutError:
             raise ReadOnlyError("timeout") from None
         except ReadOnlyError:
@@ -187,18 +193,26 @@ class OandaReadOnlyClient:
             raise ReadOnlyError("malformed")
         return account
 
-    def get_trades(self, state, *, since=None, max_pages=TRADES_MAX_PAGES):
+    def get_trades(self, state, *, since=None, max_pages=TRADES_MAX_PAGES, deadline=None, clock=time.monotonic):
         """Trades in ``state`` (OPEN|CLOSED), newest first, reduced to ``TRADE_FIELDS``. Follows ``beforeID`` pages
         while a page is full and (with ``since``) every trade on it opened at/after ``since``; never more than
-        ``TRADES_MAX_PAGES`` GETs. Raises ReadOnlyError(code) on any failure."""
+        ``TRADES_MAX_PAGES`` GETs. ``deadline`` (a ``clock()`` value) bounds the whole read; each GET's timeout is
+        capped by the time left. Raises ReadOnlyError(code) on any failure: ``deadline`` when the time is up,
+        ``incomplete`` when the page cap runs out with more (post-``since``) trades left: never partial totals."""
         if state not in TRADE_STATES:
             raise ReadOnlyError("state_invalid")
         trades, seen, before = [], set(), None
         for _page in range(max(1, min(int(max_pages), TRADES_MAX_PAGES))):
+            timeout = None
+            if deadline is not None:
+                left = deadline - clock()
+                if left <= 0:
+                    raise ReadOnlyError("deadline")
+                timeout = min(self._timeout, left)
             query = {"state": state, "count": str(TRADES_PAGE_SIZE)}
             if before is not None:
                 query["beforeID"] = str(before)
-            page = self._get(f"{self._trades_url}?{urlencode(query)}", _trades_url_ok).get("trades")
+            page = self._get(f"{self._trades_url}?{urlencode(query)}", _trades_url_ok, timeout).get("trades")
             if not isinstance(page, list) or not all(isinstance(trade, dict) for trade in page):
                 raise ReadOnlyError("malformed")
             safe = [safe_trade(trade) for trade in page]
@@ -211,6 +225,10 @@ class OandaReadOnlyClient:
             if since is not None and any(at is None or at < since for at in opened):
                 break
             before = min(ids) - 1
+        else:
+            raise ReadOnlyError("incomplete")
+        if deadline is not None and clock() > deadline:
+            raise ReadOnlyError("deadline")
         return trades
 
 
@@ -336,10 +354,14 @@ def cached_account_view(environment):
         return AccountView(ERROR, str(environment), error_code="unexpected")
 
 
-def demo_trades(env=None, *, since=None, transport=None, now=None):
+def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.monotonic,
+                deadline_seconds=TRADES_REFRESH_DEADLINE_SECONDS):
     """``{"closed": [...], "open": [...], "as_of": now}`` for the PRACTICE account only (``OANDA_PRACTICE_TOKEN`` +
-    ``OANDA_ACCOUNT_ID``), or None when not configured or on any read failure. Never raises."""
+    ``OANDA_ACCOUNT_ID``); ``{"error": "deadline"|"incomplete", "as_of": now}`` when CLOSED+OPEN did not finish
+    within ``deadline_seconds`` or the page cap ran out; None when not configured or on any other read failure.
+    Never raises."""
     env = os.environ if env is None else env
+    deadline = clock() + float(deadline_seconds)
     try:
         token_name, account_name = ENV_NAMES["practice"]
         token, account = env.get(token_name), env.get(account_name)
@@ -348,30 +370,59 @@ def demo_trades(env=None, *, since=None, transport=None, now=None):
         if not token or not account:
             return None
         client = OandaReadOnlyClient(token, account, "practice", transport=transport)
-        return {"closed": client.get_trades("CLOSED", since=since), "open": client.get_trades("OPEN", since=since),
-                "as_of": now or datetime.now(timezone.utc)}
+        closed = client.get_trades("CLOSED", since=since, deadline=deadline, clock=clock)
+        opened = client.get_trades("OPEN", since=since, deadline=deadline, clock=clock)
+        return {"closed": closed, "open": opened, "as_of": now or datetime.now(timezone.utc)}
+    except ReadOnlyError as error:
+        if error.code in TRADES_ERRORS:
+            return {"error": error.code, "as_of": now or datetime.now(timezone.utc)}
+        return None
     except Exception:  # noqa: BLE001 - codes are not needed by the dashboard: no data is "sin datos"
         return None
 
 
 class CachedDemoTrades:
-    """TTL cache (>= 5 s) of ``demo_trades`` keyed by ``since``; a failed read is cached too (no hammering)."""
+    """TTL cache (>= 5 s) of ``demo_trades`` keyed by ``since``; a failed read is cached too (no hammering).
 
-    def __init__(self, ttl=CACHE_TTL_SECONDS, *, clock=None, fetch=None):
+    The lock only guards the cache dict, never the network: one caller refreshes while the others get the previous
+    (stale) value for the same ``since`` at once, or wait up to ``wait_seconds`` for the first read when none exists."""
+
+    def __init__(self, ttl=CACHE_TTL_SECONDS, *, clock=None, fetch=None, wait_seconds=TRADES_REFRESH_DEADLINE_SECONDS):
         self.ttl = max(5.0, float(ttl))
         self._clock = clock or time.monotonic
         self._fetch = fetch or demo_trades
+        self._wait = float(wait_seconds)
         self._lock = threading.Lock()
         self._cache = {}  # since -> (fetched_at, result)
+        self._inflight = {}  # since -> threading.Event set when that refresh ends
 
     def get(self, since, env=None):
         with self._lock:
             cached = self._cache.get(since)
             if cached is not None and self._clock() - cached[0] < self.ttl:
                 return cached[1]
+            running = self._inflight.get(since)
+            if running is None:
+                running = self._inflight[since] = threading.Event()
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            if cached is not None:
+                return cached[1]  # stale while another session refreshes
+            running.wait(self._wait)
+            with self._lock:
+                cached = self._cache.get(since)
+            return cached[1] if cached is not None else None
+        result = None
+        try:
             result = self._fetch(env, since=since)
-            self._cache = {since: (self._clock(), result)}
-            return result
+        finally:
+            with self._lock:
+                self._cache = {since: (self._clock(), result)}
+                self._inflight.pop(since, None)
+            running.set()
+        return result
 
 
 _TRADES = CachedDemoTrades()

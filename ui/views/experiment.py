@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import os
 
 from ui.i18n_es import tr
 from ui.adapters import MARKETS
@@ -8,13 +9,13 @@ DEMO_LENGTH_DAYS = 30
 
 def demo_progress_text(now=None):
     """"Día N de 30" of the OANDA demo (from the first routed trade) while broker-demo routing is ON; None when OFF."""
-    try:
-        from execution.demo_dashboard import demo_mode, demo_progress
-        if not demo_mode():
-            return None
-        _epoch, _first, day = demo_progress(now or datetime.now(timezone.utc))
-    except Exception:  # The demo view is optional: unavailable => the page exactly as before.
+    if os.environ.get("AI_FLOOR_BROKER_DEMO_ROUTING") != "1":
         return None
+    try:
+        from execution.demo_dashboard import demo_progress
+        _epoch, _first, day = demo_progress(now or datetime.now(timezone.utc))
+    except Exception:  # noqa: BLE001 - routing ON but the demo view is unavailable: no day counter
+        return "Demo OANDA: sin datos"
     return f"Demo OANDA: Día {day} de {DEMO_LENGTH_DAYS}" if day else "Demo OANDA: aún sin operaciones del demo"
 
 

@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-19 — Fixes revisión Codex de `feat/demo-from-zero`
+
+- P1 `runtime/cloud.py` archivo pre-demo: backup por pasos (`ARCHIVE_STEP_PAGES`) con plazo total de 20 s (`ARCHIVE_DEADLINE_SECONDS`, reloj inyectable) y busy timeout de 1 s; al vencer se aborta, se borra solo el temp y se registra `PRE_DEMO_ARCHIVE_SKIPPED reason=timeout`. La fuente nunca se toca.
+- P2 `ui/views/luxury.py` `demo_api()`: lee `AI_FLOOR_BROKER_DEMO_ROUTING` por su cuenta; enrutado ON + módulo demo no importable ⇒ pantallas demo con «sin datos» y filtro de Decisions con el inicio por defecto (constante inline), nunca PAPER. `experiment.py`: «Demo OANDA: sin datos».
+- P2 `execution/oanda_readonly.py`: plazo total de 8 s para CLOSED+OPEN (+ 4 s del summary ⇒ ≤ 12 s), timeout de cada GET acotado al tiempo restante ⇒ `{"error": "deadline"}`; tope de páginas agotado antes del inicio ⇒ `{"error": "incomplete"}` (nunca totales parciales). `CachedDemoTrades` ya no retiene el lock durante la red: otras sesiones reciben el valor previo (stale) mientras una refresca. `demo_snapshot` expone `trades_error`; el dashboard muestra «sin datos (totales incompletos…)» / «sin datos (OANDA tardó demasiado…)».
+- P2 tests: los tests de `serve()` (`test_security_audit.CloudServeTests`, `test_watchdog_diagnostics`) mockean el archivo; test guardián que ejecuta las suites de `serve()` y verifica que no se crea `data/runtime/archive` ni se archiva una DB del repo.
+
 ## 2026-10-19 — Demo OANDA «desde cero» en el dashboard; archivo del PAPER previo (branch `feat/demo-from-zero`)
 
 - Nuevo `execution/demo_epoch.py`: inicio del demo `2026-10-18T22:25:00Z` (deploy que encendió el enrutado; override `AI_FLOOR_DEMO_EPOCH` ISO 8601 con offset, inválido/naive ⇒ default) e `is_demo_trade` (`aif-<run_id>`; excluye la orden manual `aif-test-*`).

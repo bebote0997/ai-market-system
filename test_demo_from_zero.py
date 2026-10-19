@@ -222,8 +222,75 @@ class ReadOnlyTradesTests(unittest.TestCase):
         self.assertEqual(len(self.client(transport).get_trades("OPEN", since=EPOCH)), len(safe_short))
         self.assertEqual(len(transport.calls), 1)
         transport = Pages(*[full_page(100000 - 500 * i) for i in range(20)])
-        self.client(transport).get_trades("CLOSED", since=EPOCH, max_pages=99)
+        with self.assertRaises(ro.ReadOnlyError) as ctx:  # cap reached before the epoch: never partial totals
+            self.client(transport).get_trades("CLOSED", since=EPOCH, max_pages=99)
+        self.assertEqual(ctx.exception.code, "incomplete")
         self.assertEqual(len(transport.calls), ro.TRADES_MAX_PAGES)
+        transport = Pages(full_page(1500), full_page(1000, last_opened="2026-10-18T10:00:00Z"))
+        self.assertEqual(len(self.client(transport).get_trades("CLOSED", since=EPOCH, max_pages=2)), 1000)
+
+    def test_page_cap_before_epoch_is_incomplete_not_success(self):
+        env = {"OANDA_PRACTICE_TOKEN": TOKEN, "OANDA_ACCOUNT_ID": ACCOUNT}
+        transport = Pages(*[full_page(100000 - 500 * i) for i in range(ro.TRADES_MAX_PAGES)])
+        self.assertEqual(ro.demo_trades(env, transport=transport, since=EPOCH, now=NOW),
+                         {"error": "incomplete", "as_of": NOW})
+        view = ro.AccountView("OK", "practice", nav=Decimal("100000"), balance=Decimal("100000"))
+        snapshot = demo_dashboard.demo_snapshot(NOW, SnapshotTests.ENV, account_reader=lambda env: view,
+                                                trades_reader=lambda since: {"error": "incomplete", "as_of": NOW})
+        self.assertIsNone(snapshot["stats"])
+        self.assertEqual((snapshot["trades_error"], snapshot["curve"], snapshot["closed_rows"]), ("incomplete", [], []))
+        self.assertEqual(snapshot["capital"], {"start": None, "change": None})
+
+    def test_refresh_deadline_is_an_error_state(self):
+        env = {"OANDA_PRACTICE_TOKEN": TOKEN, "OANDA_ACCOUNT_ID": ACCOUNT}
+        now = [0.0]
+        timeouts = []
+
+        def slow(method, url, headers, body, timeout):  # every GET "takes" 3 s of the fake clock
+            timeouts.append(timeout)
+            now[0] += 3.0
+            return 200, {}, json.dumps({"trades": full_page(100000 - 500 * len(timeouts))}).encode()
+
+        result = ro.demo_trades(env, transport=slow, since=EPOCH, now=NOW, clock=lambda: now[0], deadline_seconds=8)
+        self.assertEqual(result, {"error": "deadline", "as_of": NOW})
+        self.assertEqual(len(timeouts), 3)  # 0 s, 3 s, 6 s; at 9 s the budget is gone: no 4th GET
+        self.assertEqual(timeouts, [ro.TIMEOUT_SECONDS, ro.TIMEOUT_SECONDS, 2.0])  # capped by the time left
+        now[0] = 0.0
+
+        def late(method, url, headers, body, timeout):  # one short page, but it ends past the deadline
+            now[0] += 9.0
+            return 200, {}, json.dumps({"trades": []}).encode()
+        self.assertEqual(ro.demo_trades(env, transport=late, since=EPOCH, now=NOW, clock=lambda: now[0],
+                                        deadline_seconds=8), {"error": "deadline", "as_of": NOW})
+        self.assertLessEqual(ro.TRADES_REFRESH_DEADLINE_SECONDS + ro.TIMEOUT_SECONDS, 12.0)
+
+    def test_cache_never_holds_the_lock_during_network_io(self):
+        import threading
+        started, release = threading.Event(), threading.Event()
+        fresh = {"closed": [], "open": [], "as_of": NOW}
+        now = [0.0]
+
+        def fetch(env, since):
+            started.set()
+            self.assertTrue(release.wait(5))
+            return fresh
+        old = {"closed": SCENARIO, "open": [], "as_of": NOW}
+        cache = ro.CachedDemoTrades(ttl=5, clock=lambda: now[0], fetch=fetch, wait_seconds=5)
+        cache._cache = {EPOCH: (0.0, old)}
+        now[0] = 6.0  # expired: the next get refreshes
+        worker = threading.Thread(target=lambda: results.append(cache.get(EPOCH)))
+        results = []
+        worker.start()
+        self.assertTrue(started.wait(5))
+        self.assertIs(cache.get(EPOCH), old)  # another session gets the stale value at once, no blocking
+        release.set()
+        worker.join(5)
+        self.assertEqual(results, [fresh])
+        self.assertIs(cache.get(EPOCH), fresh)
+        cache = ro.CachedDemoTrades(ttl=5, clock=lambda: now[0], fetch=lambda env, since: 1 / 0)
+        with self.assertRaises(ZeroDivisionError):
+            cache.get(EPOCH)
+        self.assertEqual(cache._inflight, {})  # a failed refresh never leaves the slot taken
 
     def test_only_safe_fields_and_no_account_id(self):
         transport = Pages(SCENARIO_RAW)
@@ -375,6 +442,42 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("+$3.00", content)
         self.assertNotIn("Capital de tu cuenta de práctica", content)
 
+    def test_routing_on_incomplete_or_slow_read_shows_sin_datos_for_totals(self):
+        for code, reason in (("incomplete", "totales incompletos"), ("deadline", "OANDA tardó demasiado")):
+            self.trades = {"error": code, "as_of": NOW}
+            with self.subTest(code=code), self.env():
+                _app, content = self.page("Overview")
+                self.assertIn(f"sin datos ({reason}", content)
+                self.assertIn("Resultado desde el inicio del demo: sin datos", content)
+                self.assertNotIn("+$3.00", content)
+                _app, content = self.page("Trades")
+                self.assertIn(f"sin datos ({reason}", content)
+                self.assertNotIn("Operaciones cerradas del demo OANDA", content)
+
+    def test_routing_on_demo_module_unavailable_never_shows_paper(self):
+        import sys
+        from ui.views import luxury
+        self.assertEqual(luxury.DEMO_DEFAULT_EPOCH, EPOCH)
+        with self.env(), patch.dict(sys.modules, {"execution.demo_dashboard": None}):
+            api = luxury.demo_api()
+            self.assertIsNotNone(api)
+            self.assertEqual(api["epoch"](), EPOCH)  # the Decisions filter stays on
+            self.assertIsNone(api["snapshot"](NOW)["stats"])
+            _app, content = self.page("Overview")
+            self.assertIn("sin datos", content)
+            self.assertIn("Demo OANDA (práctica)", content)
+            self.assertNotIn("+$3.00", content)
+            self.assertNotIn("Capital de tu cuenta de práctica", content)
+            _app, content = self.page("Trades")
+            self.assertIn("sin datos (la vista del demo no está disponible)", content)
+            self.assertNotIn("+$3.00", content)
+            self.page("Decisions")
+            from ui.views.experiment import demo_progress_text
+            self.assertEqual(demo_progress_text(NOW), "Demo OANDA: sin datos")
+        with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "0"}), \
+                patch.dict(sys.modules, {"execution.demo_dashboard": None}):
+            self.assertIsNone(luxury.demo_api())
+
     def test_routing_on_empty_demo_starts_from_zero(self):
         self.trades = {"closed": [], "open": []}
         with self.env():
@@ -509,6 +612,53 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual(cloud.archive_pre_demo_db(bogus, disk_usage=self.PLENTY), "PRE_DEMO_ARCHIVE_SKIPPED")
         self.assertIn("reason=not_sqlite", logs.output[0])
         self.assertTrue(Path(f"{bogus}-wal").exists())
+
+    def test_deadline_aborts_and_removes_only_the_temp_file(self):
+        self.make_db()
+        with closing(sqlite3.connect(self.db)) as con:  # many pages => several backup steps
+            con.executemany("INSERT INTO closed_trades VALUES (?,?)", [(f"big{i}", "x" * 4000) for i in range(400)])
+            con.commit()
+        before = self.digest()
+        ticks = iter([0.0, 0.0, 0.0] + [25.0] * 1000)  # start, first check, first step... then past 20 s
+        with self.assertLogs("runtime.cloud", "INFO") as logs:
+            self.assertEqual(cloud.archive_pre_demo_db(self.db, disk_usage=self.PLENTY, clock=lambda: next(ticks)),
+                             "PRE_DEMO_ARCHIVE_SKIPPED")
+        self.assertEqual(len(logs.output), 1)
+        self.assertRegex(logs.output[0], r"event=PRE_DEMO_ARCHIVE_SKIPPED reason=timeout$")
+        self.assertEqual(self.digest(), before)  # the source is untouched
+        self.assertEqual(list(self.target.parent.iterdir()), [])  # temp removed, no archive
+        ticks = iter([0.0] + [20.0] * 10)  # even a one-step copy is dropped once the deadline has passed
+        with self.assertLogs("runtime.cloud", "INFO") as logs:
+            cloud.archive_pre_demo_db(self.db, disk_usage=self.PLENTY, clock=lambda: next(ticks))
+        self.assertIn("reason=timeout", logs.output[0])
+        self.assertFalse(self.target.exists())
+        self.assertEqual(cloud.archive_pre_demo_db(self.db, disk_usage=self.PLENTY), "PRE_DEMO_ARCHIVED")
+
+    def test_serve_tests_leave_no_archive_in_the_repo(self):
+        """Every serve() test either mocks the archive or points it at a temp dir: none writes data/runtime/archive."""
+        import test_security_audit
+        import test_security_hardening
+        import test_watchdog_diagnostics
+        repo = Path(__file__).resolve().parent
+        archive = repo / "data" / "runtime" / cloud.ARCHIVE_DIR
+        listing = sorted(archive.iterdir()) if archive.exists() else None
+        real, in_repo = cloud.archive_pre_demo_db, []
+
+        def guard(db_path, **kwargs):
+            if Path(db_path).resolve().is_relative_to(repo):
+                in_repo.append(str(db_path))
+                return "PRE_DEMO_ARCHIVE_SKIPPED"
+            return real(db_path, **kwargs)
+        loader = unittest.TestLoader()
+        suite = unittest.TestSuite(loader.loadTestsFromTestCase(case) for case in (
+            test_security_audit.CloudServeTests, test_security_hardening.CloudStartupTests,
+            test_watchdog_diagnostics.ServeWatchdogTests))
+        suite.addTest(ArchiveTests("test_serve_archives_before_any_child_and_preflight_is_untouched"))
+        with patch.object(cloud, "archive_pre_demo_db", side_effect=guard):
+            result = unittest.TextTestRunner(stream=open(os.devnull, "w"), verbosity=0).run(suite)
+        self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
+        self.assertEqual(in_repo, [])
+        self.assertEqual(sorted(archive.iterdir()) if archive.exists() else None, listing)
 
     def test_serve_archives_before_any_child_and_preflight_is_untouched(self):
         order = []

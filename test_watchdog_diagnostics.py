@@ -137,7 +137,7 @@ class ServeWatchdogTests(unittest.TestCase):
                 patch.object(cloud.RuntimeConfig, "from_env", return_value=config), \
                 patch.object(cloud, "cloud_preflight", return_value=SimpleNamespace(experiment_ready=True)), \
                 patch.object(cloud, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=MagicMock())), \
-                patch.object(cloud, "_sleep") as sleeps, \
+                patch.object(cloud, "_sleep") as sleeps, patch.object(cloud, "archive_pre_demo_db"), \
                 patch.object(cloud, "scheduler_health_detail", side_effect=[STALE]) as detail, \
                 self.assertLogs("runtime.cloud", "ERROR") as logs, \
                 self.assertRaisesRegex(RuntimeError, "scheduler heartbeat stale"):

@@ -277,14 +277,29 @@ def health_dot(status):
                    f'{escape(es.status_text(status))}</span>')
 
 
+DEMO_ROUTING_ENV = 'AI_FLOOR_BROKER_DEMO_ROUTING'
+DEMO_DEFAULT_EPOCH = datetime(2026, 10, 18, 22, 25, tzinfo=timezone.utc)  # == demo_epoch.DEFAULT_DEMO_EPOCH_UTC
+
+
+def demo_unavailable_api():
+    """Routing is ON but the demo module is unavailable: the demo screens with "sin datos", never PAPER numbers."""
+    def snapshot(_now):
+        return {'epoch': DEMO_DEFAULT_EPOCH, 'stats': None, 'curve': [], 'open_rows': [], 'closed_rows': [],
+                'nav': None, 'balance': None, 'currency': None, 'capital': {'start': None, 'change': None},
+                'stale': False, 'trades_error': 'unavailable'}
+    return {'epoch': lambda: DEMO_DEFAULT_EPOCH, 'snapshot': snapshot,
+            'progress': lambda _now: (DEMO_DEFAULT_EPOCH, None, None)}
+
+
 def demo_api():
-    """The OANDA demo view (lazy, guarded) while broker-demo routing is ON; None => PAPER screens unchanged."""
-    try:
-        from execution.demo_dashboard import demo_epoch, demo_mode, demo_progress, demo_snapshot
-        if not demo_mode():
-            return None
-    except Exception:  # The demo view is optional: unavailable => the PAPER screens exactly as before.
+    """The OANDA demo view (lazy, guarded) while broker-demo routing is ON; None => PAPER screens unchanged. The flag
+    is read here, independently of the demo module: ON + module unavailable => demo screens with "sin datos"."""
+    if os.environ.get(DEMO_ROUTING_ENV) != '1':
         return None
+    try:
+        from execution.demo_dashboard import demo_epoch, demo_progress, demo_snapshot
+    except Exception:  # noqa: BLE001 - routing ON: never fall back to PAPER numbers
+        return demo_unavailable_api()
     return {'epoch': demo_epoch, 'snapshot': demo_snapshot, 'progress': demo_progress}
 
 
@@ -377,6 +392,16 @@ DEMO_ARCHIVE_NOTE = ('Los datos PAPER anteriores al demo están archivados y no 
                      '(ver Historial en Control).')
 
 
+DEMO_TRADES_ERRORS = {'incomplete': 'totales incompletos: OANDA tiene más operaciones que el límite de páginas',
+                      'deadline': 'OANDA tardó demasiado en responder',
+                      'unavailable': 'la vista del demo no está disponible'}
+
+
+def demo_no_data(demo):
+    """"sin datos (<reason>)" for a demo snapshot without stats (failed, slow or incomplete OANDA read)."""
+    return f"{DEMO_NO_DATA} ({DEMO_TRADES_ERRORS.get(demo.get('trades_error'), 'no se pudo leer OANDA')})"
+
+
 def demo_title(epoch):
     return f'Demo OANDA (práctica) · desde {es.datetime_et(epoch)}'
 
@@ -436,8 +461,7 @@ def demo_overview(st, db, now, demo):
         if demo['curve']:
             curve_chart(st, demo['curve'], title, 'Resultado realizado acumulado desde el inicio del demo')
         else:
-            card(st, title, summary='Aún no hay operaciones cerradas del demo.' if known
-                 else f'{DEMO_NO_DATA} (no se pudo leer OANDA)')
+            card(st, title, summary='Aún no hay operaciones cerradas del demo.' if known else demo_no_data(demo))
         if known:
             table(st, tr('Open positions'), demo['open_rows'], ['symbol', 'side', 'quantity', 'entry_price', 'stop',
                                                                 'target', 'unrealized_pnl'], render=POSITION_CELLS)
@@ -558,7 +582,7 @@ def demo_trades(st, demo):
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
              f'<div class="small">{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
     if demo['stats'] is None:
-        card(st, 'Operaciones del demo OANDA', summary=f'{DEMO_NO_DATA} (no se pudo leer OANDA)')
+        card(st, 'Operaciones del demo OANDA', summary=demo_no_data(demo))
         return
     closed = list(reversed(demo['closed_rows']))
     table(st, 'Operaciones cerradas del demo OANDA', closed, ['exited_at', 'symbol', 'side', 'quantity',
