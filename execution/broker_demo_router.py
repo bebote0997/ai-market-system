@@ -901,8 +901,7 @@ class BrokerDemoRouter:
         "starting"}`` or ``{"source", "error"}``; never raises, never places, modifies or closes anything."""
         basis = {"source": "OANDA_DEMO"}
         try:
-            with self._lock:
-                nav = _dec(self._broker.get_balance().equity)
+            nav = _dec(self._broker.get_balance().equity)  # no router lock: a slow read never delays manage/closes
             starting = demo_start_equity(self._env)
             if nav is None:
                 basis["error"] = "nav_invalid"
