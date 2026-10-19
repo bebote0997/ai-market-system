@@ -907,6 +907,13 @@ class OperationalRuntime:
                 self.halt_gate.active_run = None  # V2 P4a: no run in flight any more (R evidence closes with it)
         return returned
 
+    def _drawdown_basis(self):
+        """Router's OANDA demo drawdown basis; a failing router yields an error basis (fail closed), never raises."""
+        try:
+            return self.broker_router.drawdown_basis()
+        except Exception as exc:  # noqa: BLE001
+            return {"source": "OANDA_DEMO", "error": f"basis_failed:{type(exc).__name__}"}
+
     def _run_cycle(self, symbol, scheduled_at, rex_holder, cycle_context):
         if symbol not in MARKETS:
             raise ValueError("unsupported operational symbol")
@@ -1232,6 +1239,8 @@ class OperationalRuntime:
                                             if o.symbol == symbol and o.status == "PENDING"),
                 "open_on_symbol": None if symbol not in broker.account.open_positions
                 else broker.account.open_positions[symbol].position_id})
+            # DEC-DEMO-GATE-1: routing ON -> Risk V2's drawdown gate uses the OANDA demo account (once per cycle)
+            drawdown_basis = None if self.broker_router is None else self._drawdown_basis()
             stage = "paper"
             execution_status, execution_reason = "SKIPPED", "POLICY_NOT_READY"
             blocking_position_id = blocking_order_id = submitted_order_id = None
@@ -1252,7 +1261,8 @@ class OperationalRuntime:
                   and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values())):
                 from execution.opposite_policy import execute
                 outcome = execute(self, deterministic, snapshot, key=key, at=execution_at,
-                                  ai_allowed=eligible and ai_healthy, writer=rex_store)
+                                  ai_allowed=eligible and ai_healthy, writer=rex_store,
+                                  **({} if drawdown_basis is None else {"drawdown_basis": drawdown_basis}))
                 execution_status, execution_reason, submitted_order_id = outcome.status, outcome.reason, outcome.order_id
                 position = broker.account.open_positions.get(symbol)
                 if position is not None and outcome.status != "SUBMITTED":

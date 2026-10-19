@@ -13,6 +13,7 @@ import pandas as pd
 from core.risk_policy import RISK_POLICY_V2_P5
 from execution.candidate_identity import CLAIMED, SAME, candidate_fields, claim_run
 from execution.conflict_path import candidate
+from execution.risk_engine_v2 import drawdown_basis_scope
 from execution.risk_reservation import prepare_reservation
 from runtime.gates import fresh_snapshot
 
@@ -101,8 +102,9 @@ def assess(report, position, snapshot, instrument, at, limits, *, original_stop=
     return "WOULD_CLOSE_LOSS"
 
 
-def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None):
-    """Called only for STRUCTURE_CHANGE. Both writes reuse runtime CAS, halt/REX and slot ownership."""
+def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, drawdown_basis=None):
+    """Called only for STRUCTURE_CHANGE. Both writes reuse runtime CAS, halt/REX and slot ownership.
+    ``drawdown_basis`` (routing ON only): Risk V2 Gate 4 on the OANDA demo account (DEC-DEMO-GATE-1)."""
     store, symbol, run_id = runtime.store, report.symbol, report.run_id
     if not store.owns_slot(key, symbol):
         raise RuntimeError("opposite policy requires symbol lock")
@@ -184,8 +186,9 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None):
         if reason is not None:
             outcome = Outcome("SKIPPED", reason)
         else:
-            prepared = prepare_reservation(report, instrument, broker.account, broker.orders, broker.fills,
-                                           as_of=at, setup_id=setup_id, stamp_setup_id=True)
+            with drawdown_basis_scope(drawdown_basis):  # risk_reservation.py is frozen: the basis is scoped
+                prepared = prepare_reservation(report, instrument, broker.account, broker.orders, broker.fills,
+                                               as_of=at, setup_id=setup_id, stamp_setup_id=True)
             if prepared.status == "APPROVED":
                 broker.journal.extend(prepared.broker.journal)
                 outcome = Outcome("SUBMITTED", "STRUCTURE_REVERSE_SUBMITTED" if reversing else "ORDER_SUBMITTED",

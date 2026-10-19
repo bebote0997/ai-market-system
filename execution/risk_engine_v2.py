@@ -5,6 +5,11 @@ Gate order (first failing gate decides; the reason priority is this order):
   2 plan geometry (single R:R contract, exactly 3R, declared R:R must match) -> existing geometry reasons
   3 conservative equity basis  = min(current_equity, starting_equity + realized_pnl)   (``cash`` is not used)
   4 account drawdown gate      current_equity <= starting_equity x (1 - 5%) -> ACCOUNT_DRAWDOWN_LIMIT
+    DEC-DEMO-GATE-1: with ``drawdown_basis`` (broker-demo routing ON) current/starting come ONLY from that basis
+    (OANDA practice NAV vs the demo starting equity); sizing (3/5) keeps the PAPER account. An error or invalid
+    basis fails closed for new risk                                              -> ACCOUNT_DRAWDOWN_UNAVAILABLE
+    Callers that reach ``evaluate`` through the frozen ``risk_reservation.prepare_reservation`` scope the basis with
+    ``drawdown_basis_scope`` (a context variable: per thread/task, reset on exit); an explicit keyword wins.
   5 sizing: min(conservative x 1% / (D x m), conservative x 100% / (entry x m)), floored to the PAPER increment;
     TRUE planned money risk = quantity x D x m (never above the 1% ceiling)        -> PAPER_QUANTITY_BELOW_INCREMENT
   6 pending reservations: every PENDING order must carry a REGISTERED durable risk-policy identity
@@ -21,6 +26,7 @@ Risk amounts (money at risk to the stop, never quantity or notional):
   proposed trade : TRUE planned money risk x fill factor
 Exact arithmetic (Fraction) throughout; nothing is fetched, mutated or moved.
 """
+import contextvars
 from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
@@ -28,6 +34,25 @@ from fractions import Fraction
 from core.contracts import RiskDecision
 from core.risk_policy import RISK_POLICY_V2_P5, registered_risk_policy, stamps_registered_semantics
 from core.rr_contract import POLICY_V2_F3, WITHIN_POLICY, classify, declared_matches, geometry, to_decimal
+
+
+_DRAWDOWN_BASIS = contextvars.ContextVar("risk_v2_drawdown_basis", default=None)
+
+
+class drawdown_basis_scope:
+    """``with drawdown_basis_scope(basis):`` every ``evaluate`` in the block without an explicit ``drawdown_basis``
+    uses ``basis`` (None = the PAPER account, unchanged)."""
+
+    def __init__(self, basis):
+        self._basis, self._token = basis, None
+
+    def __enter__(self):
+        self._token = _DRAWDOWN_BASIS.set(self._basis)
+        return self
+
+    def __exit__(self, *_exc):
+        _DRAWDOWN_BASIS.reset(self._token)
+        return False
 
 
 @dataclass(frozen=True)
@@ -48,6 +73,13 @@ def _real(value):
         return None
     number = Decimal(repr(float(value))) if isinstance(value, float) else Decimal(value)
     return Fraction(number) if number.is_finite() else None
+
+
+def _basis_amount(value):
+    """Drawdown-basis amount (Decimal/Fraction/int) as an exact Fraction, else None."""
+    if isinstance(value, Fraction):
+        return value
+    return _real(value) if not isinstance(value, float) else None
 
 
 def _money(value):
@@ -90,8 +122,11 @@ def pending_reservation(order):
     return {"planned": planned, "reserved": None if factor is None else planned * factor, "trace": trace}
 
 
-def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, setup_id=None, at=None):
+def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, setup_id=None, at=None,
+             drawdown_basis=None):
     factor = policy.fill_money_risk_factor
+    if drawdown_basis is None:
+        drawdown_basis = _DRAWDOWN_BASIS.get()
     record = {"policy": policy.as_record(), "policy_version": policy.version, "run_id": getattr(plan, "run_id", None),
               "setup_id": setup_id, "symbol": getattr(plan, "symbol", None), "direction": getattr(plan, "side", None),
               "planned_entry": None, "sl": None, "tp": None, "planned_rr": str(policy.planned_rr),
@@ -136,9 +171,21 @@ def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, set
     if conservative <= 0:
         return reject("INVALID_ACCOUNT_STATE")
     # 4 drawdown gate (new risk only)
-    drawdown = max(Fraction(0), (starting - current) / starting)
+    dd_current, dd_starting = current, starting
+    if drawdown_basis is not None:  # DEC-DEMO-GATE-1: the OANDA demo account only
+        source = drawdown_basis.get("source") if isinstance(drawdown_basis, dict) else None
+        record.update(drawdown_source=source, drawdown_limit=str(policy.account_drawdown_fraction))
+        if source != "OANDA_DEMO" or drawdown_basis.get("error") is not None:
+            return reject("ACCOUNT_DRAWDOWN_UNAVAILABLE",
+                          drawdown_error=str(drawdown_basis.get("error") if source == "OANDA_DEMO" else "invalid_basis"))
+        dd_current = _basis_amount(drawdown_basis.get("current"))
+        dd_starting = _basis_amount(drawdown_basis.get("starting"))
+        if dd_current is None or dd_starting is None or dd_starting <= 0:
+            return reject("ACCOUNT_DRAWDOWN_UNAVAILABLE", drawdown_error="invalid_basis")
+        record.update(drawdown_current_equity=_money(dd_current), drawdown_starting_equity=_money(dd_starting))
+    drawdown = max(Fraction(0), (dd_starting - dd_current) / dd_starting)
     record.update(drawdown_fraction=_money(drawdown), drawdown_limit=str(policy.account_drawdown_fraction))
-    if current <= starting * (1 - policy.account_drawdown_fraction):
+    if dd_current <= dd_starting * (1 - policy.account_drawdown_fraction):
         return reject("ACCOUNT_DRAWDOWN_LIMIT")
     # 5 sizing on the conservative basis; PAPER floor; TRUE planned money risk
     entry, stop = Fraction(shape.entry), Fraction(shape.stop)
@@ -202,4 +249,4 @@ def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, set
     return RiskV2Result(decision, record)
 
 
-__all__ = ["RiskV2Result", "evaluate", "pending_reservation", "position_risk"]
+__all__ = ["RiskV2Result", "drawdown_basis_scope", "evaluate", "pending_reservation", "position_risk"]

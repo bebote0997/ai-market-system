@@ -3,14 +3,19 @@
 Routing to the practice account was switched on by the deploy at 2026-10-18 18:25 ET (22:25 UTC). The owner may move
 the epoch with ``AI_FLOOR_DEMO_EPOCH`` (ISO 8601 WITH offset, e.g. ``2026-10-18T22:25:00Z``); an invalid or naive
 value keeps the default. Routed trades carry the OANDA clientExtensions id ``aif-<run_id>``; the one-off manual test
-order (``aif-test-<UTC>``) is never a demo trade. Pure; never raises.
+order (``aif-test-<UTC>``) is never a demo trade. The demo's starting equity (DEC-DEMO-GATE-1 baseline of the PAPER
+5% drawdown gate while routing is ON) is the practice NAV at the epoch; ``AI_FLOOR_DEMO_START_EQUITY`` (positive
+decimal) overrides it, an invalid value keeps the default. Pure; never raises.
 """
 from datetime import datetime, timezone
+from decimal import Decimal
 import os
 
 EPOCH_ENV = "AI_FLOOR_DEMO_EPOCH"
 DEFAULT_DEMO_EPOCH_UTC = "2026-10-18T22:25:00Z"
 DEMO_PREFIX, TEST_PREFIX = "aif-", "aif-test-"
+START_EQUITY_ENV = "AI_FLOOR_DEMO_START_EQUITY"
+DEFAULT_DEMO_START_EQUITY = Decimal("99999.977")  # OANDA practice NAV at the epoch (2026-10-18 18:25 ET)
 
 
 def parse_aware(value):
@@ -36,6 +41,16 @@ def demo_epoch(env=None):
     except Exception:  # noqa: BLE001 - a broken env mapping keeps the default
         override = None
     return override or parse_aware(DEFAULT_DEMO_EPOCH_UTC)
+
+
+def demo_start_equity(env=None):
+    """Positive Decimal; ``AI_FLOOR_DEMO_START_EQUITY`` override when valid, else the NAV at the epoch. Never raises."""
+    try:
+        raw = (os.environ if env is None else env).get(START_EQUITY_ENV)
+        value = Decimal(raw.strip()) if isinstance(raw, str) and raw.strip() else None
+    except Exception:  # noqa: BLE001 - malformed value or broken env mapping keeps the default
+        value = None
+    return value if value is not None and value.is_finite() and value > 0 else DEFAULT_DEMO_START_EQUITY
 
 
 def is_demo_trade(client_id):
