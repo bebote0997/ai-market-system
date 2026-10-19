@@ -179,6 +179,15 @@ class CloseTests(PauseCase):
         self.assertEqual(runtime.close_paused_symbols(SLOT + timedelta(minutes=15)), {})
         self.assert_closed_once(SLOT)
 
+    def test_never_closes_on_a_bar_older_than_the_durable_watermark(self):
+        from dataclasses import replace as dc_replace
+        self.seed(dc_replace(xau_short(), last_processed_at=SLOT + timedelta(minutes=30)))
+        runtime = self.runtime(Prices(last_bar_at(SLOT), OPENED - 4 * FIVE))
+        with patch.object(PaperBroker, "close_market", autospec=True) as close:
+            Scheduler(runtime, lambda: SLOT).tick()
+        close.assert_not_called()
+        self.assertIn("XAUUSD", self.paper()[0].open_positions)
+
     def test_close_notification_is_the_normal_position_closed_alert(self):
         self.seed(xau_short())
         runtime = self.runtime(Prices(last_bar_at(SLOT), OPENED - 4 * FIVE))

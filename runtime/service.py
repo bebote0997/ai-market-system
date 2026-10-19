@@ -30,7 +30,7 @@ from runtime.halt import HaltGate, HaltRefused, halt_bookkeeping, startup_halt_c
 from runtime.observability import setup_id as audit_setup_id
 from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
-from storage.codec import utc
+from storage.codec import parse_utc, utc
 from storage.database import Store
 from storage.evidence_store import EvidenceBudgetExceeded, EvidenceStore
 from ui.adapters import MARKETS, from_ai_report
@@ -793,6 +793,15 @@ class OperationalRuntime:
                 current = fresh.account.open_positions.get(symbol)
                 if current is None or current.position_id != position.position_id or current.status != "OPEN":
                     return False, None
+                watermark = getattr(current, "last_processed_at", None)
+                try:  # never close on a bar older than the durable valuation watermark (Codex P2): retry next tick
+                    stale = watermark is not None and (parse_utc(watermark) if isinstance(watermark, str)
+                                                       else watermark) > bar.end
+                except (TypeError, ValueError):
+                    stale = True
+                if stale:
+                    LOG.warning("symbol=%s component=symbol_pause event=PAUSED_CLOSE_STALE_BAR", symbol)
+                    return False, "STALE_BAR"
                 fresh.close_market(symbol, bar.close, bar.end, exit_reason=reason, decision_run_id=current.run_id)
                 fresh._event(bar.end, current.run_id, symbol, current.position_id, "SYMBOL_PAUSED_EXIT",
                              {"exit_reason": reason, "price": bar.close, "price_bar_start": utc(bar.start),
