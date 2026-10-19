@@ -101,7 +101,9 @@ class SlackNotificationSink:
             "evidence_refs": event.evidence_refs,
         }
         payload = {"text": "AI Market System PAPER alert\n" + json.dumps(details, sort_keys=True)}
-        if event.type == "DAILY_SUMMARY":
+        if event.type == "DAILY_SUMMARY" and _routing_on():
+            payload = {"text": oanda_demo_summary_text(event.timestamp_utc)}  # DEC-DEMO-GATE-1: never PAPER numbers
+        elif event.type == "DAILY_SUMMARY":
             payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
                        json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
         elif event.type == "EXECUTION_DECISION":
@@ -120,6 +122,54 @@ class SlackNotificationSink:
                 "risk_status": event.risk_decision.get("status") if event.risk_decision else None,
             }, sort_keys=True)}
         send_slack(self.transport, self.webhook_url, payload, self.timeout)
+
+
+def _routing_on():
+    try:
+        from execution.demo_dashboard import demo_mode
+        return demo_mode(os.environ)
+    except Exception:  # noqa: BLE001 - unreadable flag: the unchanged PAPER summary
+        return False
+
+
+def _amount(value, currency, signed=False):
+    if value is None:
+        return "sin datos"
+    return (f"{value:+,.2f}" if signed else f"{value:,.2f}") + (f" {currency}" if currency else "")
+
+
+def oanda_demo_summary_text(timestamp_utc=None):
+    """Daily Slack summary of the OANDA practice demo (routing ON): figures since the demo epoch only, from
+    ``execution.demo_dashboard`` (read-only, never raises). A failed read reads "sin datos"; no ids or tokens."""
+    header = "AI Market System OANDA DEMO DAILY_SUMMARY"
+    try:
+        return "\n".join([header, *_demo_lines(timestamp_utc)])
+    except Exception:  # noqa: BLE001 - no demo data: never PAPER numbers
+        return header + "\nOANDA demo: sin datos"
+
+
+def _demo_lines(timestamp_utc):
+    from datetime import datetime, timezone
+    from execution.demo_dashboard import demo_progress, demo_snapshot
+    from execution.demo_epoch import parse_aware
+    from execution.demo_metrics import DEMO_LENGTH_DAYS
+    now = parse_aware(timestamp_utc) or datetime.now(timezone.utc)
+    snapshot = demo_snapshot(now)
+    stats, currency = snapshot.get("stats"), snapshot.get("currency")
+    if stats is None and snapshot.get("nav") is None:
+        return ["OANDA demo: sin datos"]
+    day = demo_progress(now)[2]
+    avg_r = None if stats is None else stats.get("avg_r")
+    lines = [f"Día {day} de {DEMO_LENGTH_DAYS}" if day else "Demo OANDA: aún sin operaciones del demo",
+             "NAV: " + _amount(snapshot.get("nav"), currency),
+             "P&L desde el inicio del demo: " + _amount((snapshot.get("capital") or {}).get("change"), currency, True)]
+    if stats is None:
+        return lines + ["OANDA demo: sin datos de operaciones"]
+    return lines + [f"Operaciones cerradas: {stats.get('trades')} (ganadoras: {stats.get('wins')})",
+                    "R medio: " + (f"{avg_r:.2f}" if avg_r is not None else "sin datos" +
+                                   (f" ({stats['avg_r_reason']})" if stats.get("avg_r_reason") else "")),
+                    "P&L de hoy (ET): " + _amount(stats.get("today_pnl"), currency, True),
+                    f"Operaciones abiertas: {len(snapshot.get('open_rows') or ())}"]
 
 
 def send_slack(transport, url, payload, timeout):

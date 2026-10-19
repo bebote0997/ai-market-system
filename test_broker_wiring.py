@@ -2,8 +2,8 @@
 
 Exceptions (each a lazy, guarded import): the read-only Control screen (registry snapshot, router status, read-only
 balance), the read-only OANDA demo view (execution.demo_dashboard) of the Overview/Trades/Decisions and experiment
-screens, and ONE import of execution.broker_demo_router in runtime/service.py, executed only when
-AI_FLOOR_BROKER_DEMO_ROUTING is exactly "1"."""
+screens and of the daily Slack summary (runtime/notifications.py), and ONE import of execution.broker_demo_router in
+runtime/service.py, executed only when AI_FLOOR_BROKER_DEMO_ROUTING is exactly "1"."""
 import ast
 from pathlib import Path
 import unittest
@@ -30,7 +30,10 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     ("runtime/service.py", "execution.broker_demo_router"), ("runtime/service.py", "broker_demo_router"),
                     # OANDA demo numbers (GET-only reads + broker state DB mode=ro; no writes, no orders): lazy + guarded.
                     ("ui/views/luxury.py", "execution.demo_dashboard"), ("ui/views/luxury.py", "demo_dashboard"),
-                    ("ui/views/experiment.py", "execution.demo_dashboard"), ("ui/views/experiment.py", "demo_dashboard")}
+                    ("ui/views/experiment.py", "execution.demo_dashboard"), ("ui/views/experiment.py", "demo_dashboard"),
+                    # DEC-DEMO-GATE-1: daily Slack summary with OANDA demo figures while routing is ON: lazy + guarded.
+                    ("runtime/notifications.py", "execution.demo_dashboard"),
+                    ("runtime/notifications.py", "demo_dashboard")}
 LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
                                         "execution.broker_demo_state": [["read_router_status"]],
                                         "execution.oanda_readonly": [["cached_account_view"]],
@@ -41,7 +44,9 @@ LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_co
                 "runtime/service.py": {"execution.broker_demo_router": [["router_from_env"]]},
                 "ui/views/luxury.py": {"execution.demo_dashboard": [["demo_epoch", "demo_progress",
                                                                      "demo_snapshot"]]},
-                "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_progress"]]}}
+                "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_progress"]]},
+                "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"],
+                                                                          ["demo_mode"]]}}
 
 
 def guarded_sources():

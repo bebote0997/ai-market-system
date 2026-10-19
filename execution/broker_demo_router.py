@@ -59,6 +59,7 @@ from execution.broker_demo_state import (CLOSED, CLOSED_AT_BROKER, DRY_RUN, HEAR
                                          dry_run_flag, max_units_setting, routing_flag, summarize_status)
 from execution.broker_port import (ACCEPTED, APPROVED, BrokerAuthError, BrokerGuardError, BrokerMalformedResponse,
                                    BrokerRateLimited, OrderPlan, RiskApproval)
+from execution.demo_epoch import demo_start_equity
 from execution.daily_loss_limit import NAV_INVALID, STATE_UNREADABLE, UNAVAILABLE, LossDecision, limit_from_env
 from execution.dxtrade_broker import real_execution_enabled
 from execution.oanda_broker import (ACCOUNT_ENV, ALLOWED_SYMBOLS, CLIENT_TAG, DEMO_MODE, INSTRUMENTS, PROVIDER,
@@ -190,8 +191,9 @@ def _not_routed(reason):
 
 class BrokerDemoRouter:
     def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None,
-                 friday_minutes=None, closing_only=False, on_alert=None):
+                 friday_minutes=None, closing_only=False, on_alert=None, env=None):
         self._broker = broker
+        self._env = env  # demo_start_equity source (None: os.environ)
         self.closing_only = bool(closing_only)  # emergency restart: closes routed trades, never opens
         self._loss_limit = loss_limit
         self._friday_minutes = friday_minutes  # None: Friday pre-flatten OFF (behaviour unchanged)
@@ -892,6 +894,30 @@ class BrokerDemoRouter:
             self._event(f"FLATTEN_{reason}", None, results=results)
         return results
 
+    # -- PAPER drawdown basis (DEC-DEMO-GATE-1) ---------------------------------------------------------------------
+    def drawdown_basis(self):
+        """Basis of the PAPER Risk V2 5% drawdown gate while routing is ON: the practice NAV (one read-only
+        ``get_balance``, bounded by the client's timeouts) vs ``demo_start_equity``. ``{"source", "current",
+        "starting"}`` or ``{"source", "error"}``; never raises, never places, modifies or closes anything."""
+        basis = {"source": "OANDA_DEMO"}
+        try:
+            nav = _dec(self._broker.get_balance().equity)  # no router lock: a slow read never delays manage/closes
+            starting = demo_start_equity(self._env)
+            if nav is None:
+                basis["error"] = "nav_invalid"
+            else:
+                basis.update(current=nav, starting=starting)
+        except Exception as exc:  # noqa: BLE001 - unreadable NAV: the gate fails closed for new risk
+            basis["error"] = f"nav_unavailable:{type(exc).__name__}"
+        try:
+            pct = ("%.2f" % (max(Decimal(0), (basis["starting"] - basis["current"]) / basis["starting"]) * 100)
+                   if "error" not in basis else "NA")
+            LOG.info("component=broker_demo event=PAPER_GATE_BASIS source=OANDA_DEMO drawdown_pct=%s status=%s",
+                     pct, "error" if "error" in basis else "ok")
+        except Exception:  # noqa: BLE001 - logging never changes the basis
+            pass
+        return basis
+
     # -- read-only view --------------------------------------------------------------------------------------------
     def status(self):
         try:
@@ -975,7 +1001,7 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     loss_limit = limit_from_env(env, store, clock=now)
     router = BrokerDemoRouter(broker, store, registry=registry, dry_run=dry_run_flag(env),
                               max_units=max_units_setting(env), clock=now, loss_limit=loss_limit,
-                              friday_minutes=fc.minutes_from_env(env), closing_only=closing_only)
+                              friday_minutes=fc.minutes_from_env(env), closing_only=closing_only, env=env)
     router._heartbeat()
     if closing_only:
         LOG.warning("component=broker_demo event=ROUTER_CLOSING_ONLY reason=emergency_stop")

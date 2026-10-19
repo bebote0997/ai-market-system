@@ -172,6 +172,8 @@ class OperationalRuntime:
                 if broker_router is not None:
                     attach_broker_alerts(broker_router, os.environ)
         self.broker_router = broker_router
+        if broker_router is not None:  # DEC-DEMO-GATE-1: evidence of the gate's source (no amounts, no ids)
+            LOG.info("component=risk event=PAPER_DRAWDOWN_GATE source=OANDA_DEMO")
 
     def _startup(self, market_provider, recovery_stale_after_seconds):
         """Process start. With the halt gate every write is a STARTUP site (``startup_write``): refused after T_h,
@@ -907,6 +909,13 @@ class OperationalRuntime:
                 self.halt_gate.active_run = None  # V2 P4a: no run in flight any more (R evidence closes with it)
         return returned
 
+    def _drawdown_basis(self):
+        """Router's OANDA demo drawdown basis; a failing router yields an error basis (fail closed), never raises."""
+        try:
+            return self.broker_router.drawdown_basis()
+        except Exception as exc:  # noqa: BLE001
+            return {"source": "OANDA_DEMO", "error": f"basis_failed:{type(exc).__name__}"}
+
     def _run_cycle(self, symbol, scheduled_at, rex_holder, cycle_context):
         if symbol not in MARKETS:
             raise ValueError("unsupported operational symbol")
@@ -1251,8 +1260,12 @@ class OperationalRuntime:
                   and broker.account.open_positions[symbol].status == "OPEN"
                   and not any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values())):
                 from execution.opposite_policy import execute
+                # DEC-DEMO-GATE-1: routing ON -> Risk V2's drawdown gate uses the OANDA demo account. Read only here,
+                # where Risk V2 decides (the normal entry path has no PAPER drawdown gate; the router has its own).
+                drawdown_basis = None if self.broker_router is None else self._drawdown_basis()
                 outcome = execute(self, deterministic, snapshot, key=key, at=execution_at,
-                                  ai_allowed=eligible and ai_healthy, writer=rex_store)
+                                  ai_allowed=eligible and ai_healthy, writer=rex_store,
+                                  **({} if drawdown_basis is None else {"drawdown_basis": drawdown_basis}))
                 execution_status, execution_reason, submitted_order_id = outcome.status, outcome.reason, outcome.order_id
                 position = broker.account.open_positions.get(symbol)
                 if position is not None and outcome.status != "SUBMITTED":
