@@ -693,3 +693,22 @@ class ArchiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoundedReadTests(__import__("unittest").TestCase):
+    def test_trickle_is_cut_by_wall_clock(self):
+        from execution import oanda_readonly as ro
+        ticks = iter(range(0, 1000))
+
+        class Slow:
+            def read(self, _n):
+                return b"x"
+        with self.assertRaises(TimeoutError):
+            ro._bounded_read(Slow(), 5, clock=lambda: next(ticks))
+
+    def test_size_cap_and_normal_read(self):
+        from execution import oanda_readonly as ro
+        import io
+        self.assertEqual(ro._bounded_read(io.BytesIO(b"abc"), 5), b"abc")
+        with self.assertRaises(OSError):
+            ro._bounded_read(io.BytesIO(b"a" * 100), 5, max_bytes=10, chunk=8)

@@ -87,6 +87,28 @@ def _trades_url_ok(url, host):
             and len(keys) == len(set(keys)) and set(keys) <= set(TRADES_QUERY_KEYS) and "state" in keys)
 
 
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+def _bounded_read(response, timeout, *, clock=None, chunk=65536, max_bytes=MAX_RESPONSE_BYTES):
+    """Read the body in chunks with a wall-clock limit (``timeout``) and a size cap: a slow trickle can never hold a
+    dashboard session beyond the request budget."""
+    import time
+    clock = clock or time.monotonic
+    deadline = clock() + float(timeout if timeout is not None else 10)
+    parts, size = [], 0
+    while True:
+        if clock() > deadline:
+            raise TimeoutError("timeout")
+        data = response.read(chunk)
+        if not data:
+            return b"".join(parts)
+        size += len(data)
+        if size > max_bytes:
+            raise OSError("response too large")
+        parts.append(data)
+
+
 def urllib_transport(method, url, headers, body, timeout):
     """Default network transport (never used by tests). GET only; redirects are never followed."""
     import socket
@@ -102,7 +124,7 @@ def urllib_transport(method, url, headers, body, timeout):
         raise ReadOnlyError("refused")
     try:
         with build_opener(NoRedirect).open(Request(url, headers=headers, method="GET"), timeout=timeout) as response:  # noqa: S310
-            return response.status, dict(response.headers), response.read()
+            return response.status, dict(response.headers), _bounded_read(response, timeout)
     except HTTPError as error:
         return error.code, dict(error.headers or {}), b""
     except URLError as error:
