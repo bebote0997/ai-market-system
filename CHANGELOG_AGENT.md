@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-19 — DEC-DEMO-GATE-1: gate de drawdown y resumen diario con el demo OANDA (branch `feat/demo-gates-oanda`)
+
+- `execution/demo_epoch.py`: `DEFAULT_DEMO_START_EQUITY = Decimal("99999.977")` (NAV practice en el inicio del demo) y `demo_start_equity(env)` con override `AI_FLOOR_DEMO_START_EQUITY` (decimal positivo; inválido ⇒ default; nunca lanza).
+- `execution/risk_engine_v2.evaluate`: keyword opcional `drawdown_basis` (`{"source": "OANDA_DEMO", "current", "starting"}` o `{"source", "error"}`). None ⇒ idéntico. Con base: el gate 4 usa current/starting de la base (misma fracción 5 %, mismo `ACCOUNT_DRAWDOWN_LIMIT`) y registra `drawdown_source`/`drawdown_current_equity`/`drawdown_starting_equity`; base con error o inválida ⇒ `ACCOUNT_DRAWDOWN_UNAVAILABLE` (+ `drawdown_error`). Gates 3/5 (sizing) siguen con la cuenta PAPER.
+- Plumbing: `execution/risk_reservation.py` está congelado desde P3 (`test_phase8_p4b`) y los llamadores de `submit_plan` están fijados (`test_safety_invariants`), así que la base llega a `evaluate` mediante `risk_engine_v2.drawdown_basis_scope` (context variable, por hilo/tarea, se restablece al salir; un keyword explícito gana). `execution/opposite_policy.execute(..., drawdown_basis=None)` envuelve la llamada intacta a `prepare_reservation`. En el runtime, Risk V2 solo se alcanza por esta ruta (STRUCTURE_CHANGE); la ruta V1 `run_floor`/`submit_plan` no tiene gate de drawdown y no cambia.
+- `execution/broker_demo_router.BrokerDemoRouter.drawdown_basis()`: un `get_balance()` de solo lectura (timeouts del cliente) vs `demo_start_equity(env)`; nunca lanza (dict de error), nunca envía/modifica/cierra órdenes; log INFO `component=broker_demo event=PAPER_GATE_BASIS source=OANDA_DEMO drawdown_pct=<x.xx|NA> status=ok|error` (sin importes ni ids).
+- `runtime/service.py`: con `broker_router` presente calcula la base una vez por ciclo antes de la etapa PAPER y la pasa a `opposite_policy.execute`; un router que lanza ⇒ base de error (fail-closed). Sin router: la llamada no cambia.
+- `runtime/notifications.py`: con enrutado ON, el texto Slack de `DAILY_SUMMARY` es el resumen del demo OANDA (cabecera `AI Market System OANDA DEMO DAILY_SUMMARY`, «Día N de 30», NAV, P&L desde el inicio, cerradas/ganadoras, R medio, P&L de hoy ET, abiertas) vía `demo_dashboard.demo_snapshot/demo_progress` (import perezoso y protegido); fallo ⇒ «OANDA demo: sin datos». El payload persistido del journal no cambia. OFF ⇒ texto idéntico.
+- Tests: nuevo `test_demo_gates_oanda.py`; `test_broker_wiring.py` registra el import perezoso de `execution.demo_dashboard` en `runtime/notifications.py`. Sin cambios en valores de política, fingerprint, experimento/freeze, órdenes del router, env vars de producción ni flags. REAL OFF.
+
 ## 2026-10-19 — Fixes revisión Codex de `feat/demo-from-zero`
 
 - P1 `runtime/cloud.py` archivo pre-demo: backup por pasos (`ARCHIVE_STEP_PAGES`) con plazo total de 20 s (`ARCHIVE_DEADLINE_SECONDS`, reloj inyectable) y busy timeout de 1 s; al vencer se aborta, se borra solo el temp y se registra `PRE_DEMO_ARCHIVE_SKIPPED reason=timeout`. La fuente nunca se toca.
