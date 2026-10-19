@@ -1,7 +1,8 @@
 """Broker skeleton is inert: no runtime/floor/ui/entry-point module imports it, and REAL execution stays OFF.
 
 Exceptions (each a lazy, guarded import): the read-only Control screen (registry snapshot, router status, read-only
-balance) and ONE import of execution.broker_demo_router in runtime/service.py, executed only when
+balance), the read-only OANDA demo view (execution.demo_dashboard) of the Overview/Trades/Decisions and experiment
+screens, and ONE import of execution.broker_demo_router in runtime/service.py, executed only when
 AI_FLOOR_BROKER_DEMO_ROUTING is exactly "1"."""
 import ast
 from pathlib import Path
@@ -11,10 +12,11 @@ ROOT = Path(__file__).resolve().parent
 NEW_MODULES = {"execution.broker_port", "execution.paper_broker_adapter", "execution.dxtrade_client",
                "execution.dxtrade_broker", "execution.broker_config", "execution.account_registry",
                "execution.oanda_client", "execution.oanda_broker", "execution.broker_demo_router",
-               "execution.broker_demo_state", "execution.oanda_readonly", "execution.operator_actions"}
+               "execution.broker_demo_state", "execution.oanda_readonly", "execution.operator_actions",
+               "execution.demo_dashboard"}
 SHORT_NAMES = ("broker_port", "paper_broker_adapter", "dxtrade_client", "dxtrade_broker", "broker_config",
                "account_registry", "oanda_client", "oanda_broker", "broker_demo_router", "broker_demo_state",
-               "oanda_readonly", "operator_actions")
+               "oanda_readonly", "operator_actions", "demo_dashboard")
 GUARDED_DIRS = ("runtime", "floor", "ui")
 GUARDED_FILES = ("servicio.py", "app.py", "main.py")
 # The only allowed references: the read-only Control screen reads the account registry snapshot, the router status
@@ -25,7 +27,10 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     ("ui/views/control.py", "execution.oanda_readonly"), ("ui/views/control.py", "oanda_readonly"),
                     # Emergency button / drift-clear request (writes only the state DB; never orders): lazy + guarded.
                     ("ui/views/control.py", "execution.operator_actions"), ("ui/views/control.py", "operator_actions"),
-                    ("runtime/service.py", "execution.broker_demo_router"), ("runtime/service.py", "broker_demo_router")}
+                    ("runtime/service.py", "execution.broker_demo_router"), ("runtime/service.py", "broker_demo_router"),
+                    # OANDA demo numbers (GET-only reads + broker state DB mode=ro; no writes, no orders): lazy + guarded.
+                    ("ui/views/luxury.py", "execution.demo_dashboard"), ("ui/views/luxury.py", "demo_dashboard"),
+                    ("ui/views/experiment.py", "execution.demo_dashboard"), ("ui/views/experiment.py", "demo_dashboard")}
 LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
                                         "execution.broker_demo_state": [["read_router_status"]],
                                         "execution.oanda_readonly": [["cached_account_view"]],
@@ -33,7 +38,10 @@ LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_co
                                         "execution.operator_actions": [["button_flags", "operator_state",
                                                                         "request_drift_clear",
                                                                         "request_emergency_stop"]]},
-                "runtime/service.py": {"execution.broker_demo_router": [["router_from_env"]]}}
+                "runtime/service.py": {"execution.broker_demo_router": [["router_from_env"]]},
+                "ui/views/luxury.py": {"execution.demo_dashboard": [["demo_epoch", "demo_mode", "demo_progress",
+                                                                     "demo_snapshot"]]},
+                "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_mode", "demo_progress"]]}}
 
 
 def guarded_sources():
@@ -104,6 +112,7 @@ class BrokerSkeletonNotWiredTests(unittest.TestCase):
                     "execution/broker_demo_state.py", "scripts/oanda_first_test_order.py"):
             with self.subTest(file=rel):
                 self.assertNotIn("oanda_readonly", (ROOT / rel).read_text(encoding="utf-8"))
+                self.assertNotIn("demo_dashboard", (ROOT / rel).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

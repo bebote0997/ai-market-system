@@ -277,7 +277,22 @@ def health_dot(status):
                    f'{escape(es.status_text(status))}</span>')
 
 
+def demo_api():
+    """The OANDA demo view (lazy, guarded) while broker-demo routing is ON; None => PAPER screens unchanged."""
+    try:
+        from execution.demo_dashboard import demo_epoch, demo_mode, demo_progress, demo_snapshot
+        if not demo_mode():
+            return None
+    except Exception:  # The demo view is optional: unavailable => the PAPER screens exactly as before.
+        return None
+    return {'epoch': demo_epoch, 'snapshot': demo_snapshot, 'progress': demo_progress}
+
+
 def overview(st, db, now):
+    demo = demo_api()
+    if demo is not None:
+        demo_overview(st, db, now, demo['snapshot'](now))
+        return
     states = {r['key']: r['value'] for r in records(db, 'system_state')}
     accounts = payloads(db, 'paper_accounts')
     stats, curve = ledger_statistics(db, now)
@@ -308,45 +323,128 @@ def overview(st, db, now):
     left, right = st.columns([1.7, 1])
     with left:
         if curve:
-            import plotly.graph_objects as go
-            fig = go.Figure(go.Scatter(x=[r['Closed at'].astimezone(es.ET) for r in curve],
-                                       y=[r['Cumulative realized PnL'] for r in curve], mode='lines+markers',
-                                       line=dict(color='#2459d6', width=2.5, shape='hv'),
-                                       marker=dict(size=7, color='#2459d6'), fill='tozeroy',
-                                       fillcolor='rgba(36,89,214,0.08)',
-                                       hovertemplate='%{x|%d %b %H:%M} ET<br>$%{y:,.2f}<extra></extra>'))
-            fig.add_hline(y=0, line_color='#98a2b3', line_width=1)
-            fig.update_layout(height=260, margin=dict(l=65, r=15, t=10, b=40), paper_bgcolor='#ffffff',
-                              plot_bgcolor='#ffffff', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
-                                                                color='#556070', size=12),
-                              xaxis=dict(gridcolor='#eef2f6', tickformat='%d/%m %H:%M'),
-                              yaxis=dict(gridcolor='#eef2f6', automargin=True, tickprefix='$', title='Ganancia acumulada'))
-            with st.container(key='curve-card'):
-                html(st, f'<h3 style="margin:0">{escape(tr("Closed-trade curve"))}</h3><div class="small">'
-                         f'{escape(tr("Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger"))} · hora ET'
-                         '</div>')
-                st.plotly_chart(fig, width='stretch', theme=None, key='equity-curve')
+            curve_chart(st, curve, tr('Closed-trade curve'),
+                        tr('Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger'))
         else:
             card(st, tr('Closed-trade curve'), summary='Aún no hay operaciones cerradas para dibujar la curva.')
         opened = open_position_rows(db)
         table(st, tr('Open positions'), opened, ['symbol', 'side', 'quantity', 'entry_price', 'stop', 'target',
                                                  'unrealized_pnl'], render=POSITION_CELLS)
     with right:
-        sessions = ', '.join(es.SESSIONS.get(name, name) for name in session_names(now)) or tr('Outside sessions')
-        card(st, tr('Session'), [('Ahora mismo', sessions), (es.column('scheduler'), health_dot(states.get('scheduler'))),
-             (es.column('last_success'), states.get('last_success')), (es.column('heartbeat'), states.get('heartbeat'))])
-        path = Path(os.environ.get('AI_FLOOR_DB_PATH', 'data/runtime/trading_floor.db'))
-        with dashboard_database(os.environ.get('AI_FLOOR_HEALTH_DB_PATH', str(path.with_name('system_health.db')))) as health_db:
-            health = payloads(health_db, 'component_health')
-        rows = [(es.COMPONENTS.get(name, name), health_dot(r.get('status'))) for r in health
-                for name in [r.get('component', r.get('component_id', MISSING))]]
-        rows += [(es.COMPONENTS[key], es.status_text(states.get(key)) if states.get(key) else MISSING)
-                 for key in ('market_data_provider', 'ai_provider')]
-        rows += [(es.COMPONENTS['last_run'], display(states.get('last_run')))]
-        card(st, tr('System'), rows)
-        card(st, tr('Active policies'), [(es.POLICIES[key], f'{display(value)} · origen: {source}')
-             for key in ('V2_PLANNER_POLICY', 'V2_OPPOSITE_SETUP_POLICY')
-             for value, source in [policy_value(states, key)]])
+        side_panel(st, now, states)
+
+
+def curve_chart(st, curve, title, caption):
+    import plotly.graph_objects as go
+    fig = go.Figure(go.Scatter(x=[r['Closed at'].astimezone(es.ET) for r in curve],
+                               y=[r['Cumulative realized PnL'] for r in curve], mode='lines+markers',
+                               line=dict(color='#2459d6', width=2.5, shape='hv'),
+                               marker=dict(size=7, color='#2459d6'), fill='tozeroy',
+                               fillcolor='rgba(36,89,214,0.08)',
+                               hovertemplate='%{x|%d %b %H:%M} ET<br>$%{y:,.2f}<extra></extra>'))
+    fig.add_hline(y=0, line_color='#98a2b3', line_width=1)
+    fig.update_layout(height=260, margin=dict(l=65, r=15, t=10, b=40), paper_bgcolor='#ffffff',
+                      plot_bgcolor='#ffffff', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
+                                                        color='#556070', size=12),
+                      xaxis=dict(gridcolor='#eef2f6', tickformat='%d/%m %H:%M'),
+                      yaxis=dict(gridcolor='#eef2f6', automargin=True, tickprefix='$', title='Ganancia acumulada'))
+    with st.container(key='curve-card'):
+        html(st, f'<h3 style="margin:0">{escape(title)}</h3><div class="small">{escape(caption)} · hora ET'
+                 '</div>')
+        st.plotly_chart(fig, width='stretch', theme=None, key='equity-curve')
+
+
+def side_panel(st, now, states):
+    sessions = ', '.join(es.SESSIONS.get(name, name) for name in session_names(now)) or tr('Outside sessions')
+    card(st, tr('Session'), [('Ahora mismo', sessions), (es.column('scheduler'), health_dot(states.get('scheduler'))),
+         (es.column('last_success'), states.get('last_success')), (es.column('heartbeat'), states.get('heartbeat'))])
+    path = Path(os.environ.get('AI_FLOOR_DB_PATH', 'data/runtime/trading_floor.db'))
+    with dashboard_database(os.environ.get('AI_FLOOR_HEALTH_DB_PATH', str(path.with_name('system_health.db')))) as health_db:
+        health = payloads(health_db, 'component_health')
+    rows = [(es.COMPONENTS.get(name, name), health_dot(r.get('status'))) for r in health
+            for name in [r.get('component', r.get('component_id', MISSING))]]
+    rows += [(es.COMPONENTS[key], es.status_text(states.get(key)) if states.get(key) else MISSING)
+             for key in ('market_data_provider', 'ai_provider')]
+    rows += [(es.COMPONENTS['last_run'], display(states.get('last_run')))]
+    card(st, tr('System'), rows)
+    card(st, tr('Active policies'), [(es.POLICIES[key], f'{display(value)} · origen: {source}')
+         for key in ('V2_PLANNER_POLICY', 'V2_OPPOSITE_SETUP_POLICY')
+         for value, source in [policy_value(states, key)]])
+
+
+DEMO_NO_DATA = 'sin datos'
+DEMO_ARCHIVE_NOTE = ('Los datos PAPER anteriores al demo están archivados y no cuentan aquí '
+                     '(ver Historial en Control).')
+
+
+def demo_title(epoch):
+    return f'Demo OANDA (práctica) · desde {es.datetime_et(epoch)}'
+
+
+def demo_money(value, signed=False):
+    return es.money(value, signed=signed) if number(value) else DEMO_NO_DATA
+
+
+def demo_pnl_phrase(total):
+    if not number(total):
+        return f'Resultado desde el inicio del demo: {DEMO_NO_DATA}'
+    if total == 0:
+        return 'Desde el inicio del demo: sin ganancias ni pérdidas'
+    if total < 0:
+        return f'Perdiste {es.money(-total)} desde el inicio del demo'
+    return f'Ganaste {es.money(total)} desde el inicio del demo'
+
+
+def demo_overview(st, db, now, demo):
+    """Overview while broker-demo routing is ON: every number comes from the OANDA practice account since the demo
+    epoch; a failed read is "sin datos", never PAPER numbers."""
+    states = {r['key']: r['value'] for r in records(db, 'system_state')}
+    stats = demo['stats']
+    known = stats is not None
+    total = stats['total_pnl'] if known else None
+    trades_count = stats['trades'] if known else 0
+    rate = f"{100*stats['wins']/trades_count:.0f}% ganadoras" if known and trades_count else ''
+    start = demo['capital']['start']
+    stale = ' · datos anteriores' if demo.get('stale') else ''
+    html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
+             f'<div class="small">{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
+    tiles = [
+        kpi('💰', 'Capital de la cuenta demo OANDA', escape(demo_money(demo['nav'])),
+            technical=f'NAV · inicio del demo {demo_money(start)}{stale}', hint=es.TOOLTIPS['equity']),
+        kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total),
+            escape(demo_money(total, signed=True)), tone=es.tone(total), technical='Ganancia realizada (PnL)',
+            hint=es.TOOLTIPS['pnl']),
+        kpi('🎯', es.wins_phrase(stats['wins'], trades_count) if known else f'Operaciones del demo: {DEMO_NO_DATA}',
+            escape(rate), tone='teal', technical='Tasa de acierto (win rate)', hint=es.TOOLTIPS['win_rate']),
+        kpi('🛡️', f'La mayor caída del resultado de operaciones cerradas: {demo_money(stats and stats["max_drawdown"])}',
+            tone='orange', technical='Máxima caída (max drawdown)', hint=es.TOOLTIPS['drawdown']),
+        kpi('📅', es.today_phrase(stats['today_pnl']) if known else f'Hoy: {DEMO_NO_DATA}',
+            escape(demo_money(stats and stats['today_pnl'], signed=True)), tone=es.tone(stats and stats['today_pnl']),
+            technical='Resultado de hoy (ET)', hint=es.TOOLTIPS['today']),
+        kpi('⚖️', es.avg_r_phrase(stats['avg_r'], stats['avg_r_reason']) if known
+            else f'Promedio vs riesgo: {DEMO_NO_DATA}',
+            escape(f"{stats['avg_r']:+.2f} R") if known and number(stats['avg_r']) else '',
+            tone=es.tone(stats and stats['avg_r']), technical='Promedio R realizado', hint=es.TOOLTIPS['avg_r']),
+    ]
+    for begin in (0, 3):
+        for col, tile in zip(st.columns(3), tiles[begin:begin+3]):
+            with col:
+                html(st, tile)
+    left, right = st.columns([1.7, 1])
+    with left:
+        title = 'Curva del demo OANDA (operaciones cerradas)'
+        if demo['curve']:
+            curve_chart(st, demo['curve'], title, 'Resultado realizado acumulado desde el inicio del demo')
+        else:
+            card(st, title, summary='Aún no hay operaciones cerradas del demo.' if known
+                 else f'{DEMO_NO_DATA} (no se pudo leer OANDA)')
+        if known:
+            table(st, tr('Open positions'), demo['open_rows'], ['symbol', 'side', 'quantity', 'entry_price', 'stop',
+                                                                'target', 'unrealized_pnl'], render=POSITION_CELLS)
+        else:
+            card(st, tr('Open positions'), summary=DEMO_NO_DATA)
+    with right:
+        side_panel(st, now, states)
 
 
 def money_cell(key):
@@ -455,7 +553,25 @@ def trade_label(row):
     return f"{row.get('symbol', '')} · {side} · abierta desde {display(row.get('opened_at'))}"
 
 
+def demo_trades(st, demo):
+    """Trades while broker-demo routing is ON: OANDA demo trades (closed + open) since the epoch only."""
+    html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
+             f'<div class="small">{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
+    if demo['stats'] is None:
+        card(st, 'Operaciones del demo OANDA', summary=f'{DEMO_NO_DATA} (no se pudo leer OANDA)')
+        return
+    closed = list(reversed(demo['closed_rows']))
+    table(st, 'Operaciones cerradas del demo OANDA', closed, ['exited_at', 'symbol', 'side', 'quantity',
+          'entry_price', 'exit_price', 'net_pnl', 'realized_r'], render=TRADE_CELLS)
+    table(st, tr('Open positions'), demo['open_rows'], ['opened_at', 'symbol', 'side', 'quantity', 'entry_price',
+          'stop', 'target', 'unrealized_pnl'], render=POSITION_CELLS)
+
+
 def trades(st, db):
+    demo = demo_api()
+    if demo is not None:
+        demo_trades(st, demo['snapshot'](datetime.now(timezone.utc)))
+        return
     closed = [{**r, 'record': 'closed', 'close_reason': r.get('reason')} for r in closed_trade_rows(db)]
     opened = [{**r, 'record': 'open'} for r in open_position_rows(db)]
     rows = closed + opened
@@ -551,8 +667,23 @@ DECISION_CELLS = {
 }
 
 
+def since_epoch(rows, epoch):
+    """Rows whose ``as_of`` is at/after ``epoch`` (missing or unparsable timestamps are left out)."""
+    kept = []
+    for row in rows:
+        try:
+            if parse_utc(row.get('as_of')) >= epoch:
+                kept.append(row)
+        except (ValueError, TypeError):
+            continue
+    return kept
+
+
 def decisions(st, db):
     rows = decision_rows(db)
+    demo = demo_api()
+    if demo is not None:
+        rows = since_epoch(rows, demo['epoch']())
     if rows:
         selected = st.selectbox(tr('Decision process'), list(dict.fromkeys(r['run_id'] for r in rows if r.get('run_id'))))
         process_link(st, selected, 'decision-process')
