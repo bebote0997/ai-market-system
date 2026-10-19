@@ -267,6 +267,7 @@ class CloudServeTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True), patch.object(cloud.subprocess, "Popen", manager.popen), \
                 patch.object(cloud.os, "umask", manager.umask), patch.object(cloud.signal, "signal"), \
                 patch.object(cloud, "cloud_preflight", return_value=SimpleNamespace(infra_ready=True)), \
+                patch.object(cloud, "archive_pre_demo_db", manager.archive), \
                 patch("execution.log_redaction.install_log_redaction", manager.install), \
                 self.assertRaises(RuntimeError):
             cloud.serve()

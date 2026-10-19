@@ -66,10 +66,12 @@ class ClientTests(ReadOnlyBase):
 
     def test_class_has_no_write_path(self):
         public = {name for name in dir(OandaReadOnlyClient) if not name.startswith("_")}
-        self.assertEqual(public, {"get_account_summary"})
+        self.assertEqual(public, {"get_account_summary", "get_trades"})  # both GET (trades list: dashboard demo)
         source = (ROOT / "execution/oanda_readonly.py").read_text(encoding="utf-8")
-        for verb in ('"POST"', '"PUT"', '"PATCH"', '"DELETE"', "'POST'", "'PUT'", "/orders", "/close", "/trades"):
+        for verb in ('"POST"', '"PUT"', '"PATCH"', '"DELETE"', "'POST'", "'PUT'", "/orders", "/close", "/trades/",
+                     "/transactions", "/positions"):
             self.assertNotIn(verb, source)
+        self.assertEqual(source.count('"/trades"'), 1)  # the one list path (no per-trade endpoints)
         self.assertEqual(ro.HOSTS, {"practice": "api-fxpractice.oanda.com", "live": "api-fxtrade.oanda.com"})
 
     def test_default_transport_refuses_non_get_and_other_hosts(self):

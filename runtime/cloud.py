@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -23,6 +24,13 @@ WATCHDOG_READ_RETRIES = 3  # an unreadable DB (transient lock) is re-read before
 WATCHDOG_RETRY_SECONDS = 2
 _sleep = time.sleep  # indirection so tests never really sleep
 LOGGER = logging.getLogger(__name__)
+ARCHIVE_DIR, ARCHIVE_SUFFIX = "archive", "_pre_demo_20261018"
+ARCHIVE_MARGIN_BYTES = 64 * 1024 * 1024
+ARCHIVE_DEADLINE_SECONDS = 20.0  # the archive runs before any child starts: it must never hold startup longer
+ARCHIVE_STEP_PAGES = 256  # backup in steps so the deadline is checked between them
+ARCHIVE_BUSY_TIMEOUT_SECONDS = 1.0
+SQLITE_HEADER = b"SQLite format 3\x00"
+WAL_MAGIC = (b"\x37\x7f\x06\x82", b"\x37\x7f\x06\x83")
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,93 @@ def check_scheduler_or_raise(path):
     LOGGER.error("component=watchdog event=SCHEDULER_STALE scheduler=%s heartbeat_age_s=%s error_type=%s",
                  detail["scheduler"], detail["heartbeat_age_seconds"], detail["error_type"])
     raise RuntimeError("scheduler heartbeat stale")
+
+
+def _archive_log(event, **fields):
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    LOGGER.info("component=archive event=%s %s", event, " ".join(f"{k}={v}" for k, v in fields.items()))
+
+
+class _ArchiveTimeout(Exception):
+    pass
+
+
+def archive_pre_demo_db(db_path, *, disk_usage=shutil.disk_usage, clock=time.monotonic,
+                        deadline_seconds=ARCHIVE_DEADLINE_SECONDS):
+    """One-time copy of the PAPER trading DB taken before the OANDA demo: ``<db dir>/archive/<stem>_pre_demo_20261018.db``
+    via the SQLite backup API from a ``mode=ro`` source, written to a temp file in the archive dir then ``os.replace``.
+    Only when the source exists, the target does not, and free space >= 2*size + 64 MiB. The copy runs in steps of
+    ``ARCHIVE_STEP_PAGES`` and is aborted once ``deadline_seconds`` have passed (only the temp file is removed;
+    ``reason=timeout``). Never deletes the source, never raises; logs one line (codes and byte counts only, no paths).
+    Returns the event name."""
+    tmp = None
+    deadline = clock() + float(deadline_seconds)
+
+    def progress(_status, _remaining, _total):
+        if clock() >= deadline:
+            raise _ArchiveTimeout()
+
+    try:
+        source = Path(db_path)
+        if not source.is_file():
+            _archive_log("PRE_DEMO_ARCHIVE_SKIPPED", reason="missing_source")
+            return "PRE_DEMO_ARCHIVE_SKIPPED"
+        folder = source.parent / ARCHIVE_DIR
+        target = folder / f"{source.stem}{ARCHIVE_SUFFIX}.db"
+        if target.exists():
+            _archive_log("PRE_DEMO_ARCHIVE_SKIPPED", reason="exists")
+            return "PRE_DEMO_ARCHIVE_SKIPPED"
+        wal = source.with_name(source.name + "-wal")
+        with open(source, "rb") as handle:
+            header_ok = handle.read(len(SQLITE_HEADER)) == SQLITE_HEADER
+        if header_ok and wal.is_file() and wal.stat().st_size:
+            with open(wal, "rb") as handle:  # SQLite would discard an unrecognised WAL: never let it touch one
+                header_ok = handle.read(4) in WAL_MAGIC
+        if not header_ok:
+            _archive_log("PRE_DEMO_ARCHIVE_SKIPPED", reason="not_sqlite")
+            return "PRE_DEMO_ARCHIVE_SKIPPED"
+        size = source.stat().st_size + (wal.stat().st_size if wal.is_file() else 0)
+        if disk_usage(source.parent).free < 2 * size + ARCHIVE_MARGIN_BYTES:
+            _archive_log("PRE_DEMO_ARCHIVE_SKIPPED", reason="low_space")
+            return "PRE_DEMO_ARCHIVE_SKIPPED"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        tmp = folder / f".{target.name}.{os.getpid()}.tmp"
+        src = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True, timeout=ARCHIVE_BUSY_TIMEOUT_SECONDS)
+        try:
+            dst = sqlite3.connect(tmp, timeout=ARCHIVE_BUSY_TIMEOUT_SECONDS)
+            try:
+                progress(None, None, None)
+                src.backup(dst, pages=ARCHIVE_STEP_PAGES, progress=progress, sleep=0.05)
+                progress(None, None, None)
+                dst.execute("PRAGMA journal_mode=DELETE")  # the archive is one self-contained file
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+        tmp = None
+        _archive_log("PRE_DEMO_ARCHIVED", bytes=target.stat().st_size)
+        return "PRE_DEMO_ARCHIVED"
+    except _ArchiveTimeout:
+        try:
+            _archive_log("PRE_DEMO_ARCHIVE_SKIPPED", reason="timeout")
+        except Exception:  # noqa: BLE001
+            pass
+        return "PRE_DEMO_ARCHIVE_SKIPPED"
+    except Exception as exc:  # noqa: BLE001 - the archive is best effort and never blocks startup
+        try:
+            _archive_log("PRE_DEMO_ARCHIVE_SKIPPED", reason="error", error_type=type(exc).__name__)
+        except Exception:  # noqa: BLE001
+            pass
+        return "PRE_DEMO_ARCHIVE_SKIPPED"
+    finally:
+        if tmp is not None:
+            try:
+                Path(tmp).unlink(missing_ok=True)  # only our own partial temp copy, never the source
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def cloud_preflight(config, *, env=None, disk_mounted=None):
@@ -186,6 +281,10 @@ def serve():
         secure_sqlite_files(RuntimeConfig.from_env().db_path)
         secure_sqlite_files(os.environ.get("AI_FLOOR_BROKER_STATE_DB_PATH") or "data/runtime/broker_state.db")
     except Exception:  # noqa: BLE001 - hardening never blocks startup
+        pass
+    try:  # Best-effort one-time archive of the PAPER trading DB before the OANDA demo (never deletes, never raises).
+        archive_pre_demo_db(RuntimeConfig.from_env().db_path)
+    except Exception:  # noqa: BLE001 - the archive never blocks startup
         pass
     children = []
     stop = False
