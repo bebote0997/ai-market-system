@@ -24,7 +24,7 @@ from execution.trade_manager import TradeManager
 from floor.orchestrator import run as run_floor
 from riesgo import crear_configuracion_riesgo_v2
 from runtime.config import RuntimeConfig
-from runtime import health_hooks
+from runtime import health_hooks, symbol_pause
 from runtime.gates import fresh_snapshot, paper_policy
 from runtime.halt import HaltGate, HaltRefused, halt_bookkeeping, startup_halt_check, startup_write
 from runtime.observability import setup_id as audit_setup_id
@@ -673,6 +673,14 @@ class OperationalRuntime:
         for symbol in self.config.enabled_symbols:
             if self.halt_gate is not None and self.halt_gate.halted:
                 break
+            if symbol_pause.is_paused(symbol):  # DEC-XAU-OFF-1: flatten instead of managing
+                try:
+                    outcome = self._close_paused(symbol, slot)
+                except HaltRefused:
+                    break
+                if outcome is not None:
+                    results[symbol] = outcome
+                continue
             if self._due_orders(orders, symbol, slot):  # pending orders: Friday / Day-2 NY close (no data needed)
                 try:
                     cancelled, blocked = self._cancel_due_orders(symbol, slot, None)
@@ -704,6 +712,101 @@ class OperationalRuntime:
                             symbol, type(exc).__name__)
                 results[symbol] = "ERROR"
         return results
+
+    def close_paused_symbols(self, at):
+        """DEC-XAU-OFF-1: flatten every paused enabled symbol in PAPER (simulated; never the broker router), called by
+        the Scheduler at the start of each in-session tick (the manage pass does it out of session). Idempotent: a
+        flat symbol does nothing. Returns {symbol: outcome} of the symbols acted on; never raises an Exception."""
+        results = {}
+        if not self.paper_enabled:
+            return results
+        slot = slot_at(at, self.config.cadence_minutes)
+        for symbol in self.config.enabled_symbols:
+            if not symbol_pause.is_paused(symbol):
+                continue
+            if self.halt_gate is not None and self.halt_gate.halted:
+                break
+            try:
+                outcome = self._close_paused(symbol, slot)
+            except HaltRefused:
+                break
+            if outcome is not None:
+                results[symbol] = outcome
+        return results
+
+    def _close_paused(self, symbol, slot):
+        """Cancel the paused ``symbol``'s PENDING orders and close its open PAPER position at the close of the latest
+        closed 5m bar by ``slot`` (``close_market``, exit reason SYMBOL_PAUSED), each in one guarded CAS write. SL/TP
+        management first runs up to the slot on the same catch-up route as the trade-duration rule, so an earlier
+        stop/target wins. Returns None when already flat, else the outcome; a failure (no data, STALE, error) is
+        logged and retried at the next tick. Only HaltRefused propagates."""
+        from execution import trade_duration as td
+        reason = symbol_pause.EXIT_REASON
+        try:
+            broker = self._broker(symbol)
+            outcome = None
+            if any(o.symbol == symbol and o.status == "PENDING" for o in broker.orders.values()):
+                def cancel(fresh):
+                    cancelled = []
+                    for order in fresh.orders.values():
+                        if order.symbol == symbol and order.status == "PENDING":
+                            order.status = "CANCELLED"
+                            fresh._event(slot, order.run_id, symbol, order.order_id, "ORDER_CANCELLED",
+                                         {"reason": reason})
+                            LOG.info("symbol=%s component=symbol_pause event=ORDER_CANCELLED order_id=%s reason=%s",
+                                     symbol, order.order_id, reason)
+                            cancelled.append(order.order_id)
+                    return bool(cancelled), tuple(cancelled)
+                if self._guarded_paper_write(symbol, None, cancel, None, "symbol_pause_cancel")[0] is None:
+                    return STALE_PAPER_STATE
+                outcome = "ORDERS_CANCELLED"
+            if broker.account.open_positions.get(symbol) is None:
+                return outcome
+            if self.market_provider is None:
+                LOG.warning("symbol=%s component=symbol_pause event=PAUSED_CLOSE_NO_DATA reason=no_provider", symbol)
+                return "NO_DATA"
+            snapshot = self.market_provider.load_snapshot(symbol, slot)
+            if self.config.catch_up_applies(symbol):
+                blocked = self._ingest_evidence(symbol, snapshot, slot)
+                if blocked is not None:
+                    return blocked
+            if self._snapshot_catch_up_applies(symbol):
+                blocked = self._catch_up_positions(symbol, slot, None, frame=snapshot["5m"])
+            elif self.config.catch_up_applies(symbol):
+                blocked = self._catch_up_positions(symbol, slot, None)
+            else:
+                blocked = None  # legacy newest-bar route (no enabled PAPER symbol uses it)
+            if blocked is not None:
+                return blocked
+            position = self._broker(symbol).account.open_positions.get(symbol)
+            if position is None:
+                return "CLOSED_BY_MANAGEMENT"  # SL/TP up to the slot closed it first
+            bars, blocked = self._duration_evidence(symbol, snapshot, "5m")
+            if blocked is not None:
+                return blocked
+            bar = td.price_bar((b for b in bars or () if b.closed_at(slot)), position, slot)
+            if bar is None:
+                LOG.warning("symbol=%s component=symbol_pause event=PAUSED_CLOSE_NO_DATA slot=%s", symbol, utc(slot))
+                return "NO_DATA"
+
+            def close(fresh):
+                current = fresh.account.open_positions.get(symbol)
+                if current is None or current.position_id != position.position_id or current.status != "OPEN":
+                    return False, None
+                fresh.close_market(symbol, bar.close, bar.end, exit_reason=reason, decision_run_id=current.run_id)
+                fresh._event(bar.end, current.run_id, symbol, current.position_id, "SYMBOL_PAUSED_EXIT",
+                             {"exit_reason": reason, "price": bar.close, "price_bar_start": utc(bar.start),
+                              "decision": "DEC-XAU-OFF-1"})
+                LOG.info("symbol=%s component=symbol_pause event=POSITION_CLOSED reason=%s", symbol, reason)
+                return True, "POSITION_CLOSED"
+            fresh, action = self._guarded_paper_write(symbol, None, close, None, "symbol_pause_close")
+            return STALE_PAPER_STATE if fresh is None else (action or outcome)
+        except HaltRefused:
+            raise
+        except Exception as exc:  # noqa: BLE001 - retried at the next tick
+            LOG.warning("symbol=%s component=symbol_pause event=PAUSED_CLOSE_FAILED error_type=%s",
+                        symbol, type(exc).__name__)
+            return "ERROR"
 
     def _macro_review_matters(self, ai, deterministic, symbol):
         """Macro AI review NO_DATA in a cycle where it gates something: a PLAN_READY plan or a pending order."""
@@ -921,6 +1024,9 @@ class OperationalRuntime:
             raise ValueError("unsupported operational symbol")
         if symbol not in self.config.enabled_symbols:
             raise ValueError("symbol disabled by configuration")
+        if symbol_pause.is_paused(symbol):  # DEC-XAU-OFF-1: no claim, no run, no AI call, nothing persisted
+            symbol_pause.log_paused_once(symbol)
+            return "SYMBOL_PAUSED"
         slot = slot_at(scheduled_at, self.config.cadence_minutes)
         key = slot_key(symbol, slot, self.config.cadence_minutes)
         run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, key))

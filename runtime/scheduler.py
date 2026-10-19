@@ -3,6 +3,7 @@ from datetime import timezone
 import logging
 from zoneinfo import ZoneInfo
 
+from runtime import symbol_pause
 from storage.codec import utc
 
 LOG = logging.getLogger("ai_floor.runtime")
@@ -53,6 +54,12 @@ class Scheduler:
         if gate is None or gate.allow("O"):
             with self.runtime.store.transaction():
                 self.runtime.store.set_state("scheduler_slot", utc(slot))
+        symbols = []
+        for symbol in config.enabled_symbols:
+            if symbol_pause.is_paused(symbol):  # DEC-XAU-OFF-1: never a cycle (no claim, no AI, no alerts)
+                symbol_pause.log_paused_once(symbol)
+            else:
+                symbols.append(symbol)
         if not set(session_names(slot)) & set(config.sessions):
             # Pre-demo trade-duration rule: the 17:00 NY close falls outside every session, so open positions
             # are checked here too (no cycle, no slot claim). Never raises into the scheduler.
@@ -64,11 +71,19 @@ class Scheduler:
                     LOG.warning("component=trade_duration event=TRADE_DURATION_FAILED error_type=%s",
                                 type(exc).__name__)
             return []
+        # DEC-XAU-OFF-1: flatten paused symbols (PAPER, simulated) before the cycles; out of session the
+        # manage pass above does it. Never raises into the scheduler.
+        close_paused = getattr(self.runtime, "close_paused_symbols", None)
+        if close_paused is not None and (gate is None or not gate.halted):
+            try:
+                close_paused(slot)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("component=symbol_pause event=PAUSED_CLOSE_FAILED error_type=%s", type(exc).__name__)
         if gate is None:
-            results = [self.runtime.run_cycle(symbol, slot) for symbol in config.enabled_symbols]
+            results = [self.runtime.run_cycle(symbol, slot) for symbol in symbols]
         else:
             results = []
-            for symbol in config.enabled_symbols:
+            for symbol in symbols:
                 if gate.halted:  # design 3.8 row 6: no new claim once T_h happened (non-economic check)
                     break
                 results.append(self.runtime.run_cycle(symbol, slot))
