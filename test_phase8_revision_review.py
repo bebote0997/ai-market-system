@@ -303,3 +303,8 @@ class EscalationTests(Harness):
             with self.assertRaises(ValueError):
                 self.review(**kwargs)
         self.assertEqual(self.reviews(), [])
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))

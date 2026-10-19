@@ -235,6 +235,7 @@ CLOSE_REASONS = {
     "EXIT_PROVIDER_ERROR": "Se cerró por un error del proveedor de precios",
     "EXIT_EXECUTION_GATE": "Se cerró por una regla de seguridad de ejecución",
     "EXIT_ERROR": "Se cerró por un error del sistema",
+    "SYMBOL_PAUSED": "Se cerró porque el mercado se pausó por decisión del dueño",
 }
 
 COMPONENTS = {

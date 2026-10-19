@@ -144,3 +144,8 @@ class PreviewTests(Harness):
         source = (Path(__file__).resolve().parent / "replay" / "activation_preview.py").read_text(encoding="utf-8")
         for forbidden in ("save_paper", "TradeManager", "process_bar", "UPDATE ", "INSERT ", "DELETE "):
             self.assertNotIn(forbidden, source)
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))

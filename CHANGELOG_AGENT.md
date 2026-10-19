@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-10-19 — DEC-XAU-OFF-1: XAUUSD pausado en el motor PAPER por código (branch `feat/pause-xauusd`)
+
+- Nuevo `runtime/symbol_pause.py`: `PAUSED_SYMBOLS = frozenset({"XAUUSD"})`, `is_paused`, `EXIT_REASON = "SYMBOL_PAUSED"`, log único por proceso `component=scheduler event=SYMBOL_PAUSED symbol=XAUUSD`. Sin env var: `RuntimeConfig`, fingerprint, preflight (local y cloud), scope de catch-up, env vars y flags sin cambios.
+- `runtime/scheduler.py`: los símbolos pausados nunca ejecutan ciclo; en sesión, antes de los ciclos, llama `close_paused_symbols(slot)` (nunca lanza al scheduler; respeta el halt gate). Fuera de sesión lo hace el pase `manage_trade_duration`.
+- `runtime/service.py`: `_run_cycle` devuelve `SYMBOL_PAUSED` sin claim ni escritura; `close_paused_symbols(at)` / `_close_paused(symbol, slot)`: cancela las órdenes PENDING (evento `ORDER_CANCELLED` `{"reason": "SYMBOL_PAUSED"}`) y cierra la posición abierta con `PaperBroker.close_market(..., exit_reason="SYMBOL_PAUSED", decision_run_id=<run de apertura>)` vía `_guarded_paper_write` (CAS), al cierre de la última vela 5m cerrada (`td.price_bar` sobre el snapshot normal / evidencia), tras la gestión SL/TP hasta el slot por la misma ruta de catch-up que trade duration (un stop/target anterior gana). Evento `SYMBOL_PAUSED_EXIT` + el `POSITION_CLOSED` normal (notificado). Sin snapshot / sin vela / STALE / error ⇒ warning y reintento en el siguiente tick. Idempotente; respeta `paper_enabled` y el halt gate; nunca toca el router OANDA. `manage_trade_duration` aplica lo mismo a los pausados en vez de la regla de duración.
+- `runtime/demo_runner.py`: `close_paused_symbols` captura y entrega las notificaciones (como `manage_trade_duration`); `run_once` trata `SYMBOL_PAUSED` como `HALT_REFUSED` (sin run).
+- `ui/i18n_es.py`: texto para el motivo de cierre `SYMBOL_PAUSED`.
+- Tests: nuevo `test_pause_xauusd.py`. Los tests existentes que ejecutan ciclos XAUUSD (54 módulos) parchean `runtime.symbol_pause.PAUSED_SYMBOLS` a vacío en `setUpModule` (y en sus procesos hijo); sin otros cambios de aserciones.
+- Suite completa: 2328 tests OK (41 skipped, 1 expected failure); `ruff check .` limpio. (Una primera corrida baseline en `fa690f1` dio 40 fallos transitorios en tests de procesos hijo/señales reales; re-ejecutados en `fa690f1` pasan.) REAL OFF.
+
 ## 2026-10-19 — DEC-DEMO-GATE-1: gate de drawdown y resumen diario con el demo OANDA (branch `feat/demo-gates-oanda`)
 
 - `execution/demo_epoch.py`: `DEFAULT_DEMO_START_EQUITY = Decimal("99999.977")` (NAV practice en el inicio del demo) y `demo_start_equity(env)` con override `AI_FLOOR_DEMO_START_EQUITY` (decimal positivo; inválido ⇒ default; nunca lanza).

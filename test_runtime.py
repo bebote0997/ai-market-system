@@ -326,3 +326,8 @@ class TestRuntime(TemporaryDB):
         self.assertEqual(runtime.store.db.execute("SELECT count(*) FROM paper_orders").fetchone()[0], 0)
         self.assertEqual(runtime.run_cycle("XAUUSD", T), "DUPLICATE")
         runtime.close()
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))

@@ -159,7 +159,7 @@ class DemoRunner:
         at = scheduled_at or self.clock()
         slot = slot_at(at, self.config.cadence_minutes)
         status = self.runtime.run_cycle(symbol, slot)
-        if status == "HALT_REFUSED":  # V2 P4a: no claim, no run, nothing persisted
+        if status in {"HALT_REFUSED", "SYMBOL_PAUSED"}:  # V2 P4a / DEC-XAU-OFF-1: no claim, no run, nothing persisted
             return {"schema_version": "1.0", "run_id": None, "symbol": symbol, "status": status,
                     "durable_status": None, "review_durable": False, "journal_count": 0,
                     "paper_orders_enabled": not self.dry_run}
@@ -188,6 +188,14 @@ class DemoRunner:
     def manage_trade_duration(self, at):
         """Out-of-session trade-duration pass (Scheduler); its closes are notified like any other."""
         results = self.runtime.manage_trade_duration(at)
+        gate = getattr(self, "halt_gate", None)
+        if results and (gate is None or gate.allow("S")):
+            self._capture_and_deliver()
+        return results
+
+    def close_paused_symbols(self, at):
+        """DEC-XAU-OFF-1 in-session flatten of paused symbols (Scheduler); its close is notified like any other."""
+        results = self.runtime.close_paused_symbols(at)
         gate = getattr(self, "halt_gate", None)
         if results and (gate is None or gate.allow("S")):
             self._capture_and_deliver()

@@ -417,3 +417,8 @@ class ReplayPolicyTests(unittest.TestCase):
         self.assertEqual(block["reversals_approved_by_risk"], 0)
         self.assertEqual(structure["would_close_profit"], 1)
         self.assertEqual(structure["reversals_approved_by_risk"], 1)
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))

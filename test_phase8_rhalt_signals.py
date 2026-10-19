@@ -29,6 +29,8 @@ CHILD = textwrap.dedent('''
     from runtime import halt as halt_module
     from runtime.service import OperationalRuntime
     from storage.database import Store
+    from runtime import symbol_pause
+    symbol_pause.PAUSED_SYMBOLS = frozenset()  # DEC-XAU-OFF-1: this child drives XAUUSD cycles
     from test_demo_runner import Data, T, instrument, macro_fixture, patched_scouts
 
     db, mode, minutes = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -231,6 +233,11 @@ class CrashRestartTests(Processes):
         report = verify(self.db, edg_start=GENESIS)
         self.assertEqual([h["halt_journal_id"] for h in report["halts"] if "halt_journal_id" in h], [halt_id])
         self.assertNotIn("WRITE_AFTER_HALT_RECORD", {f["code"] for f in report["findings"]})  # a new process id
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
 
 
 if __name__ == "__main__":

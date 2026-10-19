@@ -338,5 +338,10 @@ class SlackSummaryTests(unittest.TestCase):
         self.assertEqual(snap.call_args.args[0], datetime(2026, 10, 20, 21, 0, tzinfo=timezone.utc))
 
 
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
+
+
 if __name__ == "__main__":
     unittest.main()

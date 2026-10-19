@@ -347,3 +347,8 @@ class Phase12E2ETests(unittest.TestCase):
         self.assertEqual(len(data.seen), seen)
         self.assertEqual(normalized_journal(runner.store), before)
         self.assertIsNone(runner.store.load_snapshot("NAS100"))
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
