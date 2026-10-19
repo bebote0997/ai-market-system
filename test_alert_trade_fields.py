@@ -81,5 +81,10 @@ class AlertTradeFieldTests(unittest.TestCase):
         self.assertEqual((rows["Entry"], rows["Order ID"]), (NO_DATA, NO_DATA))
 
 
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
+
+
 if __name__ == "__main__":
     unittest.main()

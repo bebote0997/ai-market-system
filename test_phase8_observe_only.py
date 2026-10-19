@@ -269,5 +269,10 @@ class OutOfScopeRevisionTests(Twins):
         self.assertEqual(demo_gate(self.a_db, self.a_ev)["blockers"], ["ESCALATED_UNRESOLVED"])  # DEC-8.15
 
 
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
+
+
 if __name__ == "__main__":
     unittest.main()

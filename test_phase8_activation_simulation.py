@@ -123,3 +123,8 @@ class ActivationSimulationTests(Harness):
         account = self.paper()[0]
         self.assertAlmostEqual(account.equity, 10000.0 + trade.net_pnl)
         self.assertEqual(json.dumps(account.realized_pnl), json.dumps(trade.net_pnl))
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))

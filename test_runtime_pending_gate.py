@@ -359,8 +359,15 @@ def _child(argv):
     runtime.close()
 
 
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "child":
+        from runtime import symbol_pause
+        symbol_pause.PAUSED_SYMBOLS = frozenset()  # DEC-XAU-OFF-1: the children drive XAUUSD cycles
         _child(sys.argv[2:])
     else:
         unittest.main()

@@ -358,6 +358,8 @@ CHILD = textwrap.dedent('''
     from pathlib import Path
     from execution.trade_manager import TradeManager
     from storage.database import Store
+    from runtime import symbol_pause
+    symbol_pause.PAUSED_SYMBOLS = frozenset()  # DEC-XAU-OFF-1: this child drives XAUUSD cycles
     from test_runtime_catch_up import make_runtime
     db, ev, signal_path, mode, slot, overrides, recovery = sys.argv[1:]
     slot = datetime.fromisoformat(slot)
@@ -466,6 +468,11 @@ class IsolationTests(unittest.TestCase):
         for config in (RuntimeConfig(), RuntimeConfig.from_env()):
             self.assertEqual((config.v2_position_catch_up, config.v2_ai_call_audit, config.v2_ai_resilience),
                              (False, False, False))
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
 
 
 if __name__ == "__main__":

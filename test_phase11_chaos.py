@@ -389,3 +389,8 @@ class Phase11ChaosTests(ChaosHarness):
         self.assertEqual(self.submit(runner.store, candidate(XAU_LONG, "healthy")).status, "DUPLICATE_RUN")
         self.assertEqual(self.state(runner), before)
         self.assertEqual(self.count(runner), 1)
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))

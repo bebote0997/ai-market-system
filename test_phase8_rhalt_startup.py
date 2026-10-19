@@ -234,6 +234,8 @@ CHILD = textwrap.dedent('''
     from runtime.halt import HaltGate, HaltRefused
     from runtime import demo_runner as demo_module
     from storage.database import Store
+    from runtime import symbol_pause
+    symbol_pause.PAUSED_SYMBOLS = frozenset()  # DEC-XAU-OFF-1: this child drives XAUUSD cycles
     from test_demo_runner import Data, T, instrument, macro_fixture
 
     db, site, existing = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
@@ -466,6 +468,11 @@ class VerifierEvidenceTests(unittest.TestCase):
         self.sql("INSERT INTO journal(timestamp,run_id,symbol,source,event_type,severity,payload) "
                  "VALUES('2026-01-15T14:00:00+00:00','new-run','XAUUSD','runtime','RUN_STARTED','INFO','{}')")
         self.assertIn("POST_HALT_WRITE", self.codes())
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
 
 
 if __name__ == "__main__":

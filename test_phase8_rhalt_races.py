@@ -257,6 +257,8 @@ def child(argv):
     """Child-process entry: ``<dir> <scenario> <point name|-> <kind|-> <nth|target> <SIGTERM|SIGINT>``. Installs the
     production handler, fires a REAL signal at the injection point and prints the evidence as one JSON line."""
     dir_, name, point, kind, number, signame = argv
+    from runtime import symbol_pause
+    symbol_pause.PAUSED_SYMBOLS = frozenset()  # DEC-XAU-OFF-1: the children drive XAUUSD cycles
     gate = HaltGate()  # created before the uuid patch, as in production (its own process id)
     signum = getattr(signal, signame)
     signal.signal(signal.SIGTERM, gate.request)  # the production handler: one assignment, no KeyboardInterrupt
@@ -737,6 +739,11 @@ class RealSignalRaceTests(Checks):
                 out = self.child(dir_, "period", None, target)
                 self.assertEqual(out["fired_at"][0], target)
                 self.assert_invariants(out, dir_ / "trading_floor.db", prefixes=prefixes)
+
+
+def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
+    import unittest.mock
+    unittest.enterModuleContext(unittest.mock.patch("runtime.symbol_pause.PAUSED_SYMBOLS", frozenset()))
 
 
 if __name__ == "__main__":
