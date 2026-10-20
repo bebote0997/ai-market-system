@@ -883,7 +883,7 @@ def _f(x, fmt):
 
 def table(results, split):
     head = ("| Variant | Trades/mo IS / OOS | Purged | Win % | Avg R | Total R | MTM DD R | Med hold h | "
-            "Exits TP/SL/TIME/FRI % IS ; OOS | CI80 low | G3 G4 G5 |\n|---|---|---|---|---|---|---|---|---|---|---|")
+            "Exits TP/SL/TIME/FRI % IS ; OOS | CI80 low day-block | CI80 low IID | G3 G4 G5 |\n" + "|---" * 12 + "|")
     rows = [head]
     for name, (trades, _) in results.items():
         a, b = summarise(trades, split)
@@ -899,7 +899,7 @@ def table(results, split):
                     f"({b['trades']}) | {purged} | {pair('win_rate', '.0f', 100)} | {pair('avg_r', '+.3f')} | "
                     f"{pair('total_r', '+.1f')} | {pair('max_dd_mtm_r', '.1f')} | "
                     f"{' / '.join(_f(m['hold_h'][0], '.1f') for m in (a, b))} | {exits(a)} ; {exits(b)} | "
-                    f"{pair('ci80_low', '+.3f')} | {gate_flags(a)} / {gate_flags(b)} |")
+                    f"{pair('ci80_low', '+.3f')} | {pair('ci80_low_iid', '+.3f')} | {gate_flags(a)} / {gate_flags(b)} |")
     return "\n".join(rows)
 
 
@@ -1055,7 +1055,10 @@ def write_report(path, state):
         f"- ADR20 (pips) over the tradable period ({adr['n']} trading days): median {adr['median']:.1f}, mean "
         f"{adr['mean']:.1f}, p10 {adr['p10']:.1f}, p90 {adr['p90']:.1f}.",
         "- Columns: IS / OOS. Trades/mo (n). MTM DD = mark-to-market max drawdown in R. CI80 low = lower bound of the "
-        "80% bootstrap CI of the mean R. Gates G3 (mean > +0.15R, CI low > 0, worst >= -1.2R), G4 (MTM DD <= 8R), G5 "
+        "80% bootstrap CI of the mean R: primary = circular moving-block bootstrap over blocks of "
+        f"{bt.BOOTSTRAP_BLOCK_DAYS} consecutive trading days (17:00->17:00 NY, days without trades included; all trades "
+        "of a day stay together; assumes dependence shorter than ~a week and stationarity within each segment); "
+        "`IID` = single-trade resampling (secondary, ignores clustering). Gates G3 (mean > +0.15R, CI low > 0, worst >= -1.2R), G4 (MTM DD <= 8R), G5 "
         "(avg cost <= 0.10R and <= 25% of gross) from `replay.intraday_backtest.gates`; P = pass, F = fail.", ""]
     if "jt" in state:
         lines += ["## 1. JT_SMC — Jeferson's plan, mechanical (priority)", "", JT_DEFINITIONS,
@@ -1103,7 +1106,7 @@ def write_report(path, state):
         both = [n for n, *_ in positive if summarise(everything[n][0], split)[0]["avg_r"] > 0]
         lines.append(f"Positive in BOTH IS and OOS: {', '.join(both) or 'none'}.")
         lines += ["", f"**Multiple-testing warning**: {len(everything)} variants were evaluated on the same year. With a "
-                  "one-sided 10% error per test (the 80% CI lower bound), ~"
+                  "one-sided 10% error per test (the 80% day-block CI lower bound), ~"
                   f"{0.10 * len(everything):.0f} variants would show 'CI lower > 0' by chance alone if none had an "
                   "edge (fewer in practice because the variants are strongly correlated, but the point stands). A "
                   "positive OOS result in one variant among many is NOT evidence of an edge; it needs a fresh, "

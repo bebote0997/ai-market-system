@@ -43,6 +43,7 @@ FALLBACK_SPREAD_PIPS = 1.6  # causal spread when no bid/ask bar exists in the lo
 CAUSAL_SPREAD_DAYS = 30
 BUFFER_ATR = 0.2
 MIN_SL_PIPS, MAX_SL_PIPS = 15.0, 30.0
+BOOTSTRAP_BLOCK_DAYS = 5  # day-block bootstrap: blocks of 5 consecutive trading days (one week), fixed upfront
 DAILY_HALT_R = 2.0  # DEC-5.5a: 2 % daily loss at 1 % risk per trade
 F3_FILL_RR_FLOOR = 2.5  # DEC-4.7 fill-time tolerance of the production fixed-3R paper broker (core.rr_contract)
 LONDON = ZoneInfo("Europe/London")
@@ -533,12 +534,40 @@ def longest_losing_streak(rs):
 
 
 def bootstrap_lower(rs, quantile=0.10, n=10000, seed=7):
-    """Lower bound of the two-sided 80 % percentile bootstrap CI of the mean R."""
+    """IID (secondary): lower bound of the two-sided 80 % percentile bootstrap CI of the mean R, resampling single
+    trades. Assumes trades are independent; ignores day/regime clustering, so it can be too narrow."""
     if len(rs) < 2:
         return None
     rng = np.random.default_rng(seed)
     means = rng.choice(np.asarray(rs), size=(n, len(rs)), replace=True).mean(axis=1)
     return float(np.quantile(means, quantile))
+
+
+def day_block_bootstrap_lower(trades, block_days=BOOTSTRAP_BLOCK_DAYS, quantile=0.10, n=10000, seed=7):
+    """Primary: lower bound of the two-sided 80 % CI of the mean R from a circular moving-block bootstrap over
+    trading days. Days = every weekday trading day (17:00 -> 17:00 NY, ``day_key`` of the fill) from the first to
+    the last trade, including days without trades (plus any other day holding a trade); a replicate concatenates ceil(D / block) blocks of
+    ``block_days`` consecutive days (random circular starts) and its mean R = total R / trades in the drawn days.
+    Assumes dependence lasts less than about a block (one week) and stationarity over the sample; all trades of a
+    day stay together. Replicates that draw no trade are discarded. None with < 2 trades."""
+    if len(trades) < 2:
+        return None
+    keys = [day_key(t["fill_at"]) for t in trades]
+    days = sorted(set(pd.bdate_range(min(keys), max(keys)).date) | set(keys))
+    position = {d: i for i, d in enumerate(days)}
+    count, total = np.zeros(len(days)), np.zeros(len(days))
+    for key, t in zip(keys, trades):
+        count[position[key]] += 1
+        total[position[key]] += t["r"]
+    size = len(days)
+    block = max(1, min(block_days, size))
+    blocks = -(-size // block)
+    rng = np.random.default_rng(seed)
+    starts = rng.integers(0, size, size=(n, blocks))
+    picked = ((starts[:, :, None] + np.arange(block)) % size).reshape(n, -1)[:, :size]
+    trades_drawn, r_drawn = count[picked].sum(axis=1), total[picked].sum(axis=1)
+    ok = trades_drawn > 0
+    return float(np.quantile(r_drawn[ok] / trades_drawn[ok], quantile))
 
 
 def pct(values, q):
@@ -562,7 +591,7 @@ def metrics(trades, months):
         "avg_cost_r": float((gross - rs).mean()) if n else float("nan"),
         "max_dd_r": max_drawdown(rs), "max_dd_mtm_r": mtm_drawdown(trades), "losing_streak": longest_losing_streak(rs),
         "worst_r": float(rs.min()) if n else float("nan"),
-        "ci80_low": bootstrap_lower(rs),
+        "ci80_low": day_block_bootstrap_lower(trades), "ci80_low_iid": bootstrap_lower(rs),
         "exits": {k: reasons.get(k, 0) / n * 100 if n else 0.0 for k in (TP, SL, TIME, FRIDAY, BE, END)},
         "stale_exits": sum(1 for t in trades if t.get("stale_exit")),
         "spread_pips": [pct([t["spread_pips"] for t in trades], q) for q in (50, 10, 90)],
@@ -602,8 +631,10 @@ def gates(m):
         ("G1 duration >= 30 days live", "N/A (live demo only)"),
         ("G2 >= 30 closed trades (in 30 days)", f"{verdict(m['trades_per_month'] >= 30)} (~{m['trades_per_month']:.1f}/month)"),
         ("G3 mean R > +0.15R", f"{verdict(m['avg_r'] > 0.15)} ({m['avg_r']:+.3f}R)"),
-        ("G3 bootstrap 80% CI lower > 0", f"{verdict(m['ci80_low'] is not None and m['ci80_low'] > 0)} "
-                                          f"({m['ci80_low'] if m['ci80_low'] is None else round(m['ci80_low'], 3)}R)"),
+        ("G3 bootstrap 80% CI lower > 0 (day-block)",
+         f"{verdict(m['ci80_low'] is not None and m['ci80_low'] > 0)} "
+         f"({m['ci80_low'] if m['ci80_low'] is None else round(m['ci80_low'], 3)}R; IID "
+         f"{m['ci80_low_iid'] if m['ci80_low_iid'] is None else round(m['ci80_low_iid'], 3)}R)"),
         ("G3 worst trade >= -1.2R", f"{verdict(m['worst_r'] >= -1.2)} ({m['worst_r']:+.2f}R)"),
         ("G4 max DD <= 8R (mark-to-market)", f"{verdict(m['max_dd_mtm_r'] <= 8)} ({m['max_dd_mtm_r']:.2f}R)"),
         ("G4 never trip the 5% account halt (<= 5R at 1%, mark-to-market)",
@@ -704,7 +735,10 @@ def write_report(path, ctx):
     row("Max drawdown R (mark-to-market, 5m closes bid/ask)", lambda m: f"{m['max_dd_mtm_r']:.2f}")
     row("Longest losing streak", lambda m: str(m["losing_streak"]))
     row("Worst trade R", lambda m: f"{m['worst_r']:+.2f}")
-    row("Bootstrap 80% CI lower (mean R)", lambda m: "n/a" if m["ci80_low"] is None else f"{m['ci80_low']:+.3f}")
+    row(f"Bootstrap 80% CI lower (mean R), {BOOTSTRAP_BLOCK_DAYS}-trading-day blocks",
+        lambda m: "n/a" if m["ci80_low"] is None else f"{m['ci80_low']:+.3f}")
+    row("Bootstrap 80% CI lower (mean R), IID trades (secondary)",
+        lambda m: "n/a" if m["ci80_low_iid"] is None else f"{m['ci80_low_iid']:+.3f}")
     for key in (TP, SL, TIME, FRIDAY, BE, END):
         row(f"% exits {key}", lambda m, key=key: f"{m['exits'][key]:.1f}%")
     row("Stale boundary exits (no bar ending in (fill, boundary])", lambda m: str(m["stale_exits"]))
@@ -782,7 +816,9 @@ def write_report(path, ctx):
               "blackout, so trades through high-impact releases are included at candle prices.",
               "- 500-bar windows as the runtime provider; scouts see nothing older.",
               "- Single instrument (EURUSD), one year, one regime; sample sizes in the table — the bootstrap CI shows "
-              "how wide the uncertainty is. No parameter was tuned on this data except the owner-specified ones.",
+              "how wide the uncertainty is (primary = circular moving-block bootstrap over blocks of "
+              f"{BOOTSTRAP_BLOCK_DAYS} consecutive trading days incl. days without trades, assuming dependence "
+              "shorter than ~a week and a stationary sample; the IID trade bootstrap is shown as secondary). No parameter was tuned on this data except the owner-specified ones.",
               "- 5m bar granularity: intrabar ordering unknown (same-bar SL+TP assumed SL), fills at bar opens, "
               "15-min decision cadence.",
               "- F3 Day-2 structure check evaluated on each closed 15m bar; the runtime acts on its own cycle "

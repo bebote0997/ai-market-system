@@ -262,5 +262,36 @@ class Portfolio(unittest.TestCase):
         self.assertEqual(bt.longest_losing_streak([1, -1, -1, 2, -1]), 2)
 
 
+class DayBlockBootstrap(unittest.TestCase):
+    @staticmethod
+    def trades(day_rs, per_day):
+        """``per_day`` trades on each consecutive weekday (14:00 UTC fills), every trade of a day with that day's R."""
+        days = pd.bdate_range("2026-02-02", periods=len(day_rs))
+        return [{"fill_at": (d + pd.Timedelta(hours=14 + k / 10)).tz_localize(UTC).to_pydatetime(), "r": r}
+                for d, r in zip(days, day_rs) for k in range(per_day)]
+
+    def test_clustered_days_widen_the_interval_versus_iid(self):
+        day_rs = np.random.default_rng(1).choice([-1.0, 1.2], size=40)
+        trades = self.trades(day_rs, 5)
+        rs = [t["r"] for t in trades]
+        block, iid = bt.day_block_bootstrap_lower(trades), bt.bootstrap_lower(rs)
+        self.assertLess(block, iid - 0.05)  # 5 identical trades a day are ~1 observation, not 5
+        self.assertLess(block, np.mean(rs))
+        self.assertEqual(block, bt.day_block_bootstrap_lower(trades))  # fixed seed: deterministic
+
+    def test_one_trade_per_day_with_one_day_blocks_matches_iid(self):
+        day_rs = np.random.default_rng(2).normal(0.1, 1.0, size=60)
+        trades = self.trades(day_rs, 1)
+        self.assertAlmostEqual(bt.day_block_bootstrap_lower(trades, block_days=1), bt.bootstrap_lower(day_rs),
+                               delta=0.02)
+
+    def test_days_without_trades_are_part_of_the_calendar_and_small_samples(self):
+        trades = self.trades([1.0, 1.0], 1)
+        trades[1]["fill_at"] += timedelta(days=14)  # 10 empty weekdays in between
+        self.assertAlmostEqual(bt.day_block_bootstrap_lower(trades), 1.0)
+        self.assertIsNone(bt.day_block_bootstrap_lower(trades[:1]))
+        self.assertEqual(bt.day_key(datetime(2026, 2, 2, 22, 30, tzinfo=UTC)).isoformat(), "2026-02-03")
+
+
 if __name__ == "__main__":
     unittest.main()
