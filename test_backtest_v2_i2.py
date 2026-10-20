@@ -124,6 +124,8 @@ class Simulation(unittest.TestCase):
         self.assertEqual(result["reason"], bt.SL)
         self.assertAlmostEqual(result["exit"], 1.0980 - 0.2 * bt.PIP)
         self.assertLess(result["r"], -1)
+        self.assertEqual(len(result["marks"]), 1)  # fill-bar close (bid) marked, exit bar realised
+        self.assertAlmostEqual(result["marks"][0], (1.1 - 0.5 * bt.PIP - result["fill"]) / (result["fill"] - 1.0980))
 
     def test_gap_through_stop_fills_at_bar_open(self):
         market = flat_market(self.slot, 20, overrides={2: (1.0950, 1.0955, 1.0940, 1.0950)})
@@ -240,6 +242,9 @@ class Portfolio(unittest.TestCase):
 
     def test_drawdown_and_streak(self):
         self.assertAlmostEqual(bt.max_drawdown([1, -1, -1, 2, -1.5]), 2.0)
+        trades = [{"r": 1.0, "marks": np.array([0.5, 2.0, -0.2])}, {"r": -1.0, "marks": np.array([-0.5])}]
+        self.assertAlmostEqual(bt.mtm_drawdown(trades), 2.2)  # open peak +2.0 -> open trough -0.2
+        self.assertAlmostEqual(bt.mtm_drawdown([{"r": 0.5, "marks": np.array([-0.9])}]), 0.9)
         self.assertEqual(bt.longest_losing_streak([1, -1, -1, 2, -1]), 2)
 
 

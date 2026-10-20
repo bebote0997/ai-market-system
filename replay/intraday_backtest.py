@@ -376,7 +376,8 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
 
     def done(j, exit_at, price, reason, detail=None, stale=False):
         net = sign * (price - fill) / risk
-        return {"fill_at": opened, "fill": fill, "mid_fill": mid_fill, "stop": stop, "target": target,
+        marks = sign * (market.close[i:j] - sign * hs - fill) / risk  # open R on each 5m close before the exit bar
+        return {"marks": marks, "fill_at": opened, "fill": fill, "mid_fill": mid_fill, "stop": stop, "target": target,
                 "exit_at": exit_at, "exit": price, "reason": reason, "detail": detail or reason, "r": net,
                 "risk_pips": risk / PIP, "tp_pips": reward / PIP, "exit_index": j, "stale_exit": stale}
 
@@ -489,6 +490,17 @@ def max_drawdown(rs):
     return float((peak - equity).max()) if len(equity) else 0.0
 
 
+def mtm_drawdown(trades):
+    """Max drawdown in R of the equity marked on every 5m close (bid LONG / ask SHORT) while a position is open,
+    and at the realised R of each exit; flat between trades."""
+    curve, realised = [np.zeros(1)], 0.0
+    for t in trades:
+        curve.append(realised + np.asarray(t.get("marks", ()), dtype=float))
+        realised += t["r"]
+        curve.append(np.array([realised]))
+    return max_drawdown(np.diff(np.concatenate(curve)))
+
+
 def longest_losing_streak(rs):
     best = run = 0
     for r in rs:
@@ -525,7 +537,7 @@ def metrics(trades, months):
         "avg_r": float(rs.mean()) if n else float("nan"), "total_r": float(rs.sum()),
         "avg_gross_r": float(gross.mean()) if n else float("nan"),
         "avg_cost_r": float((gross - rs).mean()) if n else float("nan"),
-        "max_dd_r": max_drawdown(rs), "losing_streak": longest_losing_streak(rs),
+        "max_dd_r": max_drawdown(rs), "max_dd_mtm_r": mtm_drawdown(trades), "losing_streak": longest_losing_streak(rs),
         "worst_r": float(rs.min()) if n else float("nan"),
         "ci80_low": bootstrap_lower(rs),
         "exits": {k: reasons.get(k, 0) / n * 100 if n else 0.0 for k in (TP, SL, TIME, FRIDAY, BE, END)},
@@ -567,8 +579,9 @@ def gates(m, spread_pips):
         ("G3 bootstrap 80% CI lower > 0", f"{verdict(m['ci80_low'] is not None and m['ci80_low'] > 0)} "
                                           f"({m['ci80_low'] if m['ci80_low'] is None else round(m['ci80_low'], 3)}R)"),
         ("G3 worst trade >= -1.2R", f"{verdict(m['worst_r'] >= -1.2)} ({m['worst_r']:+.2f}R)"),
-        ("G4 max DD <= 8R", f"{verdict(m['max_dd_r'] <= 8)} ({m['max_dd_r']:.2f}R)"),
-        ("G4 never trip the 5% account halt (<= 5R at 1%)", f"{verdict(m['max_dd_r'] < 5)} ({m['max_dd_r']:.2f}R)"),
+        ("G4 max DD <= 8R (mark-to-market)", f"{verdict(m['max_dd_mtm_r'] <= 8)} ({m['max_dd_mtm_r']:.2f}R)"),
+        ("G4 never trip the 5% account halt (<= 5R at 1%, mark-to-market)",
+         f"{verdict(m['max_dd_mtm_r'] < 5)} ({m['max_dd_mtm_r']:.2f}R)"),
         ("G5 entry slippage <= 0.5 pip", f"PASS by construction (modeled {SLIPPAGE_PIPS} pip)"),
         ("G5 entry spread <= 1.5 pip", f"{verdict(spread_pips <= 1.5)} (modeled {spread_pips:.2f} pip)"),
         ("G5 mean total cost <= 0.10R", f"{verdict(m['avg_cost_r'] <= 0.10)} ({m['avg_cost_r']:.3f}R)"),
@@ -656,7 +669,8 @@ def write_report(path, ctx):
     row("Total R", lambda m: f"{m['total_r']:+.2f}")
     row("Avg gross R (mid, no costs)", lambda m: f"{m['avg_gross_r']:+.3f}")
     row("Avg cost R", lambda m: f"{m['avg_cost_r']:.3f}")
-    row("Max drawdown R", lambda m: f"{m['max_dd_r']:.2f}")
+    row("Max drawdown R (realised, trade exits)", lambda m: f"{m['max_dd_r']:.2f}")
+    row("Max drawdown R (mark-to-market, 5m closes bid/ask)", lambda m: f"{m['max_dd_mtm_r']:.2f}")
     row("Longest losing streak", lambda m: str(m["losing_streak"]))
     row("Worst trade R", lambda m: f"{m['worst_r']:+.2f}")
     row("Bootstrap 80% CI lower (mean R)", lambda m: "n/a" if m["ci80_low"] is None else f"{m['ci80_low']:+.3f}")
@@ -670,10 +684,11 @@ def write_report(path, ctx):
               ", ".join(f"{v} {r[v]['units']:.0f}" for v in variants) + ". Because of that notional cap the real "
               "money risk per trade is far below 1 % for EURUSD; every figure here is in R.", ""]
     lines += ["## Spread sensitivity (same signals, spread 1.0 pip)", "",
-              "| Variant | Trades | Avg R | Total R | Max DD R |", "|---|---|---|---|---|"]
+              "| Variant | Trades | Avg R | Total R | Max DD R realised | Max DD R MTM |", "|---|---|---|---|---|---|"]
     for v in variants:
         m = r[v]["m_sens"]
-        lines.append(f"| {v} | {m['trades']} | {m['avg_r']:+.3f} | {m['total_r']:+.2f} | {m['max_dd_r']:.2f} |")
+        lines.append(f"| {v} | {m['trades']} | {m['avg_r']:+.3f} | {m['total_r']:+.2f} | {m['max_dd_r']:.2f} | "
+                     f"{m['max_dd_mtm_r']:.2f} |")
     lines += ["", "## Monthly R (by exit month, New York)", "", "| Month | " + " | ".join(variants) + " |",
               "|---|" + "---|" * len(variants)]
     for month, values in ctx["monthly"].items():
@@ -724,7 +739,10 @@ def write_report(path, ctx):
               "- Portfolio: one position per policy, signals skipped while open; one entry per production setup_id "
               "(a fill-gate rejection does not consume it). Daily halt: realised R of the 17:00→17:00 NY day ≤ −2R "
               "blocks new entries until the next day (open-P&L flatten and the pre-entry remaining-budget rule of "
-              "DEC-5.5a are not modeled).", "",
+              "DEC-5.5a are not modeled).",
+              "- Drawdown: realised = on the cumulative R at trade exits; mark-to-market = equity marked on every "
+              "5m close while a position is open (bid for LONG / ask for SHORT, no exit slippage) plus the realised "
+              "R at each exit. Gate G4 uses the mark-to-market figure.", "",
               "## Limitations", "",
               "- OANDA practice **mid** candles; bid/ask only as 5m closes → a constant median spread is modeled. "
               "Real spreads widen around 17:00 NY rollover and news; time exits at 17:00 NY are therefore optimistic.",
@@ -815,7 +833,8 @@ def main(argv=None):
                             "units": float(np.median(units)) if units else float("nan")}
         write_trades_csv(os.path.join(args.out, f"trades_{variant}.csv"), trades)
         m = results[variant]["m"]
-        log(f"{variant}: trades {m['trades']} avgR {m['avg_r']:+.3f} totalR {m['total_r']:+.2f} DD {m['max_dd_r']:.2f}")
+        log(f"{variant}: trades {m['trades']} avgR {m['avg_r']:+.3f} totalR {m['total_r']:+.2f} DD {m['max_dd_r']:.2f} "
+            f"DD_MTM {m['max_dd_mtm_r']:.2f}")
     valid = [s for s in signals if s.get("status") == "VALID_SETUP"]
     ctx = {"results": results, "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
            "data_start": first.isoformat(), "data_end": last.isoformat(), "slots": len(signals),
