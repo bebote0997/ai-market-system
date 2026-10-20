@@ -416,8 +416,9 @@ def entry_candidates(ctx, family):
 
 
 def e5_filter(ctx, candidate):
-    """E5 overlay: last closed 5m bar starts in 03:00-11:00 ET and its BidClose/AskClose spread <= 1.2 pip."""
-    clock = et_clock(candidate.t - FIVE_NS)
+    """E5 overlay: decision/fill time ``candidate.t`` in [03:00, 11:00) ET and the last closed 5m bar's
+    BidClose/AskClose spread <= 1.2 pip."""
+    clock = et_clock(candidate.t)
     spread = ctx.spread_at(candidate.t)
     return E5_WINDOW[0] <= clock < E5_WINDOW[1] and math.isfinite(spread) and spread <= E5_MAX_SPREAD_PIPS
 
@@ -1024,7 +1025,7 @@ E_DEFINITIONS = """\
 - **E3** Asian breakout + retest: first 5m close above the Asian high in 03:00-07:00 ET; within 12 bars a retest
   (low <= level) and a close back above -> long; structure = lowest low from the retest to entry.
 - **E4** NY-open London sweep: London range 03:00-08:00 ET; in 08:00-11:00 ET same rule as E2.
-- **E5.x** = Ex restricted to decision bars starting 03:00-11:00 ET with the last closed 5m bar's
+- **E5.x** = Ex restricted to decision/fill times in [03:00, 11:00) ET with the last closed 5m bar's
   AskClose-BidClose <= 1.2 pip.
 - Exits: `FIX2`/`FIX15` = structure -/+ 0.2 x ATR14(H1), < 15 pips widened, > 30 pips skipped, TP 2R / 1.5R;
   `ADR` = SL 0.3 x ADR20 clamped 15-30 pips, TP 0.58 x ADR20, TP/SL clamped to 1.5-2.0R. `F80` = skip when today's

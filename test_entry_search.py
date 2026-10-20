@@ -301,6 +301,15 @@ class Fills(unittest.TestCase):
         self.assertEqual(skips["e5_session_or_spread"], 1)
 
 
+class E5Filter(unittest.TestCase):
+    def test_session_window_applies_to_the_decision_fill_time(self):
+        at = lambda clock: pd.Timestamp(f"2026-03-04 {clock}", tz=es.NY).value  # noqa: E731
+        ctx = StubContext(spread=1.0)
+        for clock, ok in (("02:55", False), ("03:00", True), ("10:55", True), ("11:00", False)):
+            self.assertEqual(es.e5_filter(ctx, es.Candidate(at(clock), "LONG", 1.1, "E2", "x")), ok, clock)
+        self.assertFalse(es.e5_filter(StubContext(spread=1.3), es.Candidate(at("09:00"), "LONG", 1.1, "E2", "x")))
+
+
 class ExitGeometry(unittest.TestCase):
     def cand(self, struct, targets=()):
         return es.Candidate(0, "LONG", struct, "x", "x", targets)
