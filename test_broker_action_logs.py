@@ -68,10 +68,25 @@ class LogFormatTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertLogs(LOGGER, "INFO") as logs:
                 bdr._log_action(kind, "6397", "EMERGENCY:a b\nc")
             self.assertEqual(logs.records[0].getMessage(),
-                             f"component=broker_demo event={kind} trade_id=6397 reason=EMERGENCY:a_b_c")
+                             f"component=broker_demo event={kind} trade_id=6397 reason=EMERGENCY")
+        for reason in (*td.CLOSE_REASONS, "SL_TP_OR_EXTERNAL", "DAILY_LOSS", "DRAWDOWN", "FRIDAY_PREFLATTEN",
+                       "EMERGENCY_ACTIVE", "EMERGENCY_BUTTON", "BrokerRateLimited"):
+            self.assertEqual(bdr._log_reason(reason), reason)
+        self.assertEqual(bdr._log_reason(None), "-")
         self.assertEqual(bdr.ACTION_LOG_KINDS, {
             "CLOSED", "CLOSE_UNKNOWN", "CLOSE_FAILED", "CLOSE_REJECTED", "CLOSED_AT_BROKER", "BREAKEVEN",
             "BREAKEVEN_UNKNOWN", "BREAKEVEN_REJECTED", "BREAKEVEN_BLOCKED"})
+
+    def test_uncontrolled_reasons_never_reach_the_log(self):
+        for reason, expected in ((f"EMERGENCY:account {ACCOUNT}", "EMERGENCY"), (f"EMERGENCY_{TOKEN}", "EMERGENCY"),
+                                 (f"rejected for {ACCOUNT}", "OTHER"), (f"Bearer {TOKEN}", "OTHER"),
+                                 (ACCOUNT, "OTHER"), (TOKEN, "OTHER"), ("ValueError", "OTHER")):
+            with self.subTest(reason=reason), self.assertLogs(LOGGER, "INFO") as logs:
+                bdr._log_action("CLOSE_REJECTED", "6397", reason)
+            message = logs.records[0].getMessage()
+            self.assertEqual(message, f"component=broker_demo event=CLOSE_REJECTED trade_id=6397 reason={expected}")
+            self.assertNotIn(ACCOUNT, message)
+            self.assertNotIn(TOKEN, message)
 
 
 if __name__ == "__main__":

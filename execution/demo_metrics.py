@@ -197,7 +197,7 @@ def load_loss_flags(path):
 def daily_loss_view(flags, nav, now, env=None):
     """Daily-loss status of the OANDA demo for the dashboard (DEC-5.5a): today's realised + open loss (NAV-based, as
     the router evaluates it) vs ``fraction`` of the day-start NAV ``dl_e0``. ``status``: ``OFF`` (limit not enabled),
-    ``NO_DATA`` (flags unreadable), ``PENDING`` (not yet evaluated this trading day), ``TRIGGERED`` (latched for the
+    ``NO_DATA`` (flags unreadable, or no valid day-start NAV / transfers / NAV), ``PENDING`` (not yet evaluated this trading day), ``TRIGGERED`` (latched for the
     trading day), ``OK``. ``drawdown_halted`` mirrors the 5 % drawdown latch. Amounts None when unknown. Pure."""
     env = env or {}
     fraction = dl.fraction_setting(env)
@@ -215,7 +215,7 @@ def daily_loss_view(flags, nav, now, env=None):
     if flags.get(dl.DAY_FLAG) != key:
         return {**view, "status": "PENDING"}
     e0, transfers, nav = as_float(flags.get(dl.E0_FLAG)), as_float(flags.get(dl.TRANSFERS_FLAG)), as_float(nav)
-    view["status"] = "TRIGGERED" if flags.get(dl.HALT_FLAG) == key else "OK"
+    view["status"] = "TRIGGERED" if flags.get(dl.HALT_FLAG) == key else "NO_DATA"
     if e0 is None or e0 <= 0:
         return view
     view["day_start_nav"] = e0
@@ -223,6 +223,8 @@ def daily_loss_view(flags, nav, now, env=None):
         pnl = nav - e0 - transfers
         loss = max(0.0, -pnl)
         view.update(pnl=pnl, loss=loss, used_pct=100.0 * loss / (float(fraction) * e0))
+        if view["status"] != "TRIGGERED":
+            view["status"] = "OK"
     return view
 
 

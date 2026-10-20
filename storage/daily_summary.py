@@ -1,20 +1,38 @@
 """Read-only daily aggregation of persisted evidence; never invokes the floor."""
 from collections import Counter
-from datetime import timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 import json
+from zoneinfo import ZoneInfo
 
 from storage.codec import utc
 
 
+NEW_YORK = ZoneInfo("America/New_York")
+NY_CLOSE = time(17)
+
+
+def summary_window(at):
+    """``(date_ny, start_utc, end_utc, close_utc)`` of the NY trading day the summary at ``at`` covers: the latest NY
+    calendar date whose 17:00 America/New_York close is <= ``at`` (DST-correct). Rows are aggregated over that whole NY
+    calendar date ([00:00, 24:00) NY, as UTC bounds), like the OANDA "P&L de hoy (ET)" figure."""
+    local = at.astimezone(NEW_YORK)
+    day = local.date() if local.time() >= NY_CLOSE else local.date() - timedelta(days=1)
+
+    def instant(d, t):
+        return datetime.combine(d, t, NEW_YORK).astimezone(timezone.utc)
+    return day.isoformat(), instant(day, time()), instant(day + timedelta(days=1), time()), instant(day, NY_CLOSE)
+
+
 def build_daily_summary(store, at):
     captured_at = utc(at)
-    # Only summarize a closed UTC day, even when called just after midnight.
-    date = (at.astimezone(timezone.utc) - timedelta(days=1)).date().isoformat()
+    date, start, end, close = summary_window(at)
+    bounds = tuple(t.strftime("%Y-%m-%d %H:%M:%S") for t in (start, end))
+    in_day = "datetime({0}) >= ? AND datetime({0}) < ?"  # datetime() normalises any stored offset to UTC
     runs = store.db.execute(
-        "SELECT * FROM runs r WHERE date(started_at)=? "
+        "SELECT * FROM runs r WHERE " + in_day.format("started_at") + " "
         "AND coalesce(final_status,'') != 'SESSION_SKIPPED' "
         "AND NOT EXISTS (SELECT 1 FROM journal j WHERE j.run_id=r.run_id AND j.event_type='SESSION_SKIPPED')",
-        (date,)).fetchall()
+        bounds).fetchall()
     symbols = json.loads(store.get_state("enabled_symbols") or "[]")
     by_symbol = dict.fromkeys(symbols, 0)
     by_symbol.update(Counter(r["symbol"] for r in runs))
@@ -29,16 +47,16 @@ def build_daily_summary(store, at):
 
     def count_entities(table, field):
         return store.db.execute(
-            f"SELECT count(*) FROM {table} WHERE date(json_extract(payload,'$.{field}'))=?",
-            (date,)).fetchone()[0]
+            f"SELECT count(*) FROM {table} WHERE " + in_day.format(f"json_extract(payload,'$.{field}')"),
+            bounds).fetchone()[0]
 
     closed = [json.loads(r[0]) for r in store.db.execute(
-        "SELECT payload FROM closed_trades WHERE date(json_extract(payload,'$.exited_at'))=?", (date,))]
+        "SELECT payload FROM closed_trades WHERE " + in_day.format("json_extract(payload,'$.exited_at')"), bounds)]
     pnl = [t.get("net_pnl") for t in closed]
     account_row = store.db.execute("SELECT payload FROM paper_accounts WHERE account_id=?",
                                    (store.get_state("account_id"),)).fetchone()
     account = json.loads(account_row[0]) if account_row else {}
-    rows = store.db.execute("SELECT * FROM journal WHERE date(timestamp)=?", (date,)).fetchall()
+    rows = store.db.execute("SELECT * FROM journal WHERE " + in_day.format("timestamp"), bounds).fetchall()
     provider_types = {"PROVIDER_FAILURE", "AUTH_ERROR", "ENTITLEMENT_ERROR", "RATE_LIMITED",
                       "DATA_UNAVAILABLE", "DATA_STALE", "NOT_CONFIGURED", "NO_DATA", "TIMEOUT"}
     # DATA_CHECK and RUN_FAILED can repeat the same provider failure; count its
@@ -55,7 +73,7 @@ def build_daily_summary(store, at):
     policy_macro.discard(None)
     latest = store.latest_run()
     return {
-        "date_utc": date, "snapshot_at_utc": captured_at,
+        "date_ny": date, "close_at_utc": utc(close), "snapshot_at_utc": captured_at,
         "cycles": len(runs), "cycles_by_symbol": by_symbol,
         **{status: setup_counts[status] for status in ("NO_SETUP", "WATCH", "VALID_SETUP")},
         "RISK_REJECTED": risk_rejected,

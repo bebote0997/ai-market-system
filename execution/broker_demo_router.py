@@ -192,15 +192,30 @@ ACTION_LOG_KINDS = frozenset({"CLOSED", "CLOSE_UNKNOWN", "CLOSE_FAILED", "CLOSE_
 _ACTION_LOG_OK = frozenset({"CLOSED", CLOSED_AT_BROKER, "BREAKEVEN"})
 
 
+# Only these controlled reason codes reach the log; "EMERGENCY:<free text>" -> EMERGENCY, anything else (broker
+# reject text, unexpected exception names, ...) -> OTHER, so a reason can never leak an id or token.
+_LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN,
+                          EMERGENCY_ACTIVE, EMERGENCY_BUTTON, "BrokerAuthError", "BrokerRateLimited",
+                          "BrokerGuardError", "BrokerMalformedResponse", "no_open_position"})
+
+
 def _log_token(value):
     text = "-" if value is None or value == "" else str(value)
     return "".join(ch if ch.isalnum() or ch in "._:-" else "_" for ch in text)[:64]
 
 
+def _log_reason(reason):
+    if reason is None or reason == "":
+        return "-"
+    if reason in _LOG_REASONS:
+        return reason
+    return "EMERGENCY" if str(reason).startswith("EMERGENCY") else "OTHER"
+
+
 def _log_action(kind, trade_id, reason):
     level = logging.INFO if kind in _ACTION_LOG_OK else logging.WARNING
     LOG.log(level, "component=broker_demo event=%s trade_id=%s reason=%s", kind, _log_token(trade_id),
-            _log_token(reason))
+            _log_reason(reason))
 
 
 def _not_routed(reason):

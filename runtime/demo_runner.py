@@ -208,14 +208,15 @@ class DemoRunner:
         self.runtime.flush_evidence_observations()
 
     def daily_summary(self, at=None):
-        """Persist the previous complete UTC day, then attempt notification once."""
+        """Persist the latest NY date whose 17:00 America/New_York close has passed (first call at/after it), then
+        attempt notification once; deduped durably on that NY date (journal run_id ``daily:<date>``)."""
         gate = getattr(self, "halt_gate", None)  # None on legacy-built runners (flag OFF)
         if gate is not None and not gate.allow("S"):
             return False  # V2 P4a: summaries and notifications are suppressed after T_h
         at = at or self.clock()
         with self.store.transaction():
             summary = build_daily_summary(self.store, at)
-            date = summary["date_utc"]
+            date = summary["date_ny"]
             if self.store.db.execute(
                 "SELECT 1 FROM journal WHERE event_type='DAILY_SUMMARY' AND run_id=?",
                 (f"daily:{date}",)).fetchone():

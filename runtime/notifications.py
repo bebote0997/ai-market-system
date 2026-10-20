@@ -127,14 +127,16 @@ class SlackNotificationSink:
 
     def _deliver_daily_summary(self, event):
         """DEC-DEMO-GATE-1: OANDA demo figures while routing is ON (never PAPER numbers), else the PAPER summary.
-        One log line per attempt: source + UTC date of the summary only (never the webhook URL or figures)."""
+        One log line per attempt: source + NY date of the summary only (never the webhook URL or figures). The OANDA
+        figures are taken as of that NY date's 17:00 close, so "P&L de hoy (ET)" is the summary's NY date."""
         source = "OANDA_DEMO" if _routing_on() else "PAPER"
+        summary = event.daily_summary or {}
         if source == "OANDA_DEMO":
-            payload = {"text": oanda_demo_summary_text(event.timestamp_utc)}
+            payload = {"text": oanda_demo_summary_text(summary.get("close_at_utc") or event.timestamp_utc)}
         else:
             payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
                        json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
-        date = str((event.daily_summary or {}).get("date_utc") or "")[:10] or "-"
+        date = str(summary.get("date_ny") or "")[:10] or "-"
         try:
             send_slack(self.transport, self.webhook_url, payload, self.timeout)
         except Exception as exc:

@@ -347,7 +347,7 @@ class SlackSummaryTests(unittest.TestCase):
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/secret", transport=fail)
         summary = NotificationEvent("1.0", "evt-1", "daily:2026-10-19", "2026-10-20T00:00:30+00:00", "INFO",
                                     "DAILY_SUMMARY", None, (), (), None, (), (), (),
-                                    daily_summary={"date_utc": "2026-10-19"})
+                                    daily_summary={"date_ny": "2026-10-19"})
         with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), \
                 patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT), \
                 patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)), \
@@ -357,6 +357,17 @@ class SlackSummaryTests(unittest.TestCase):
         self.assertEqual(logs.records[0].getMessage(), "component=notifications event=DAILY_SUMMARY_FAILED "
                                                        "source=OANDA_DEMO date=2026-10-19 error_type=RATE_LIMITED")
         self.assertNotIn("secret", logs.output[0])
+
+    def test_oanda_summary_is_read_at_the_ny_close_of_its_date(self):
+        sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x", transport=lambda *a: None)
+        late = NotificationEvent("1.0", "evt-1", "daily:2026-10-19", "2026-10-20T14:00:00+00:00", "INFO",
+                                 "DAILY_SUMMARY", None, (), (), None, (), (), (),
+                                 daily_summary={"date_ny": "2026-10-19", "close_at_utc": "2026-10-19T21:00:00+00:00"})
+        with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), \
+                patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT) as snap, \
+                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
+            sink.deliver(late)
+        self.assertEqual(snap.call_args.args[0], datetime(2026, 10, 19, 21, 0, tzinfo=timezone.utc))
 
     def test_summary_text_uses_event_time(self):
         with patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT) as snap, \

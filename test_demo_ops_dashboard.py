@@ -111,9 +111,18 @@ class DailyLossViewTests(unittest.TestCase):
         self.assertEqual(daily_loss_view(None, 99000, NOW, ON)["status"], "NO_DATA")
         self.assertEqual(daily_loss_view({}, 99000, NOW, ON)["status"], "PENDING")
         unknown_nav = daily_loss_view(self.flags(), None, NOW, ON)
-        self.assertEqual((unknown_nav["status"], unknown_nav["used_pct"]), ("OK", None))
-        self.assertEqual(dict(es.daily_loss_rows(unknown_nav))["Usado del límite (2 %)"], es.NO_DATA)
-        self.assertEqual(daily_loss_view(self.flags(**{dl.E0_FLAG: "garbage"}), 99000, NOW, ON)["day_start_nav"], None)
+        self.assertEqual((unknown_nav["status"], unknown_nav["used_pct"]), ("NO_DATA", None))
+        self.assertEqual(es.daily_loss_rows(unknown_nav), [("Estado", es.DAILY_LOSS_STATUS["NO_DATA"])])
+        garbage = daily_loss_view(self.flags(**{dl.E0_FLAG: "garbage"}), 99000, NOW, ON)
+        self.assertEqual((garbage["status"], garbage["day_start_nav"]), ("NO_DATA", None))
+
+    def test_invalid_inputs_are_no_data_but_halt_stays_triggered(self):
+        for flags in (self.flags(**{dl.E0_FLAG: "0"}), self.flags(**{dl.E0_FLAG: "-5"}),
+                      {dl.DAY_FLAG: KEY, dl.E0_FLAG: "100000"}, {dl.DAY_FLAG: KEY}):
+            with self.subTest(flags=flags):
+                self.assertEqual(daily_loss_view(flags, 99000, NOW, ON)["status"], "NO_DATA")
+                halted = daily_loss_view({**flags, dl.HALT_FLAG: KEY}, None, NOW, ON)
+                self.assertEqual(halted["status"], "TRIGGERED")
 
     def test_drawdown_latch_and_stricter_fraction(self):
         view = daily_loss_view(self.flags(**{dl.DD_HALT_FLAG: "2026-10-19T10:00:00+00:00"}), 99500, NOW,
