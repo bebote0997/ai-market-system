@@ -317,6 +317,38 @@ class JTTrigger(unittest.TestCase):
         self.assertEqual(es._trigger_ob([((1.1000, 1.1010), 5), newest], 9, 1.1005, 1.0990, 1.1020), newest[0])
 
 
+class SweepIdentity(unittest.TestCase):
+    def idea(self, x, extreme):
+        return es.Idea(x, x + 1, x, extreme, ["ASIAN"])
+
+    def test_a_consumed_sweep_never_opens_a_second_idea(self):
+        book = es.SweepBook()
+        first = book.open(self.idea(10, 1.0950))
+        first.dead, first.why = True, "candidate"  # entered (and possibly exited) already
+        self.assertTrue(book.join(10, 1.0950, "PDL"))  # another level swept by the same low confirms later
+        self.assertEqual((len(book.ideas), first.kinds), (1, ["ASIAN", "PDL"]))
+        self.assertTrue(book.join(10, 1.0950, "SWING_1H"))  # also after a non-candidate end
+        self.assertFalse(book.join(14, 1.0940, "SWING_1H"))  # a deeper, different low is a new sweep
+
+    def test_shallower_sweeps_merge_into_the_live_idea_and_deeper_supersede(self):
+        book = es.SweepBook()
+        live = book.open(self.idea(10, 1.0950))
+        self.assertTrue(book.join(12, 1.0960, "PDL"))
+        self.assertIs(book.by_low[12], live)
+        live.dead = True
+        self.assertTrue(book.join(12, 1.0960, "SWING_1H"))  # same low as the merged event: still that idea
+        live.dead = False
+        deeper = book.open(self.idea(15, 1.0930))
+        self.assertEqual((live.dead, live.why, book.active), (True, "superseded_by_deeper_sweep", deeper))
+
+    def test_jt_candidates_have_one_entry_per_sweep_low(self):
+        ctx = es.Context(synthetic_frames(days=90, seed=11))
+        for conf in (False, True):
+            cands = es.jt_all(ctx, conf, {})[0]
+            self.assertTrue(cands or conf)  # the 1h-OB confluence variant may be empty on random data
+            self.assertEqual(len({c.idea for c in cands}), len(cands))
+
+
 def fake_trade(signal_at, hours, r):
     exit_at = signal_at + pd.Timedelta(hours=hours).to_pytimedelta()
     return {"signal_at": signal_at, "fill_at": signal_at, "exit_at": exit_at, "r": r, "gross_r": r + 0.05,

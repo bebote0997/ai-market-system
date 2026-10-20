@@ -450,6 +450,7 @@ JT_STAGES = ("sweep", "trend", "ob15", "trigger", "fvg1h", "news", "ob1h_conf", 
 class Idea:
     f: int  # first trade-through bar
     c: int  # close-back bar (sweep confirmed at its close)
+    x: int  # bar printing the sweep extreme (the sweep's identity)
     extreme: float
     kinds: list
     stage: int = 0
@@ -464,6 +465,36 @@ class Idea:
     obs5: list = field(default_factory=list)
     why: str = "expired_12et"  # how the idea ended
     blocked: str = ""  # last check that failed at a fib/OB trigger
+
+
+class SweepBook:
+    """Sweep -> idea assignment for one side and ET day. A sweep is identified by the 5m bar printing its extreme:
+    every level confirmation sharing that bar joins the same idea, whether it is live or already ended (candidate,
+    dropped, expired), so one sweep never yields a second idea or entry. A shallower sweep (different extreme bar)
+    while an idea is live merges into it; a deeper one supersedes it."""
+
+    def __init__(self):
+        self.ideas, self.active, self.by_low = [], None, {}
+
+    def join(self, x, extreme, kind):
+        """True when the event belongs to an existing idea (merged there, no new idea)."""
+        owner = self.by_low.get(x)
+        live = self.active is not None and not self.active.dead
+        if owner is None and live and extreme >= self.active.extreme:
+            owner = self.active
+        if owner is None:
+            return False
+        owner.kinds.append(kind)
+        self.by_low.setdefault(x, owner)
+        return True
+
+    def open(self, idea):
+        if self.active is not None and not self.active.dead:
+            self.active.dead, self.active.why = True, "superseded_by_deeper_sweep"
+        self.active = idea
+        self.ideas.append(idea)
+        self.by_low[idea.x] = idea
+        return idea
 
 
 def _levels(ctx, view, day, asian):
@@ -513,7 +544,7 @@ def _opposite_levels(ctx, view, day, asian, k):
 
 
 def _sweeps(ctx, view, levels, win):
-    """Sweep events {close-back bar: [(first trade-through, extreme, kind)]} for levels first traded through inside
+    """Sweep events {close-back bar: [(first trade-through, extreme bar, extreme, kind)]} for levels first traded through inside
     the window and closed back over within JT_SWEEP_BARS bars."""
     b = view.m5
     events = defaultdict(list)
@@ -531,7 +562,8 @@ def _sweeps(ctx, view, levels, win):
             if not _contiguous(b, f, c):
                 break
             if b.c[c] > price:
-                events[c].append((f, float(b.l[f:c + 1].min()), kind))
+                x = f + int(np.argmin(b.l[f:c + 1]))  # sweep identity: the bar printing the sweep extreme
+                events[c].append((f, x, float(b.l[x]), kind))
                 break
     return events
 
@@ -569,19 +601,15 @@ def jt_candidates(ctx, view, require_conf, news_days, funnel, since=0):
         if not events:
             continue
         expiry = ctx.window(day, JT_WINDOW[0], JT_EXPIRY)
-        ideas, active = [], None
+        book = SweepBook()
         for k in expiry:
-            for f, extreme, kind in events.get(int(k), ()):
-                if active is not None and not active.dead and extreme >= active.extreme:
-                    active.kinds.append(kind)  # same move: merged into the live idea
+            for f, x, extreme, kind in events.get(int(k), ()):
+                if book.join(x, extreme, kind):
                     continue
-                if active is not None and not active.dead:
-                    active.dead, active.why = True, "superseded_by_deeper_sweep"
                 j15 = max(0, int(np.searchsorted(m15.start, b.start[f], "right")) - 1)  # 15m bar holding f
                 j1 = max(0, int(np.searchsorted(h1.start, b.start[f], "right")) - 1)
-                active = Idea(f, int(k), extreme, [kind], high=float(b.h[f:k + 1].max()), j15=j15, j15_0=j15,
-                              j1=j1, j1_0=j1)
-                ideas.append(active)
+                active = book.open(Idea(f, int(k), x, extreme, [kind], high=float(b.h[f:k + 1].max()), j15=j15,
+                                        j15_0=j15, j1=j1, j1_0=j1))
                 t = int(b.end[k])
                 i1, i4 = h1.asof(t), view.h4.asof(t)
                 if i1 < 0 or i4 < 0 or view.trend1[i1] <= 0 or view.trend4[i4] <= 0:
@@ -590,6 +618,7 @@ def jt_candidates(ctx, view, require_conf, news_days, funnel, since=0):
                                                      else "trend: H1 and H4 disagree / neutral")
                 else:
                     active.stage = 1
+            active = book.active
             if active is None or active.dead:
                 continue
             idea, t = active, int(b.end[k])
@@ -653,10 +682,10 @@ def jt_candidates(ctx, view, require_conf, news_days, funnel, since=0):
                 continue
             idea.stage = max(idea.stage, 7)
             out.append(Candidate(t, view.side, view.price(idea.ob15[0]), "JT_SMC",
-                                 f"JT:{view.side}:{_stamp(int(b.end[idea.c]))}",
+                                 f"JT:{view.side}:{_stamp(int(b.start[idea.x]))}",
                                  _opposite_levels(ctx, view, day, asian, int(k)), conf))
             idea.dead, idea.why = True, "candidate"  # one entry per idea
-        for idea in ideas:
+        for idea in book.ideas:
             if b.end[idea.c] < since:
                 continue
             funnel["sweep"] += 1
@@ -936,9 +965,10 @@ Mechanical definitions (fixed before any run; long rules shown, shorts mirror th
   confirmed 1h swing lows whose pivot lies in the last 5 completed trading days. A level is eligible only if its FIRST
   trade-through after it formed happens in 03:00-11:00 ET (untouched until then).
 - **Sweep**: that first trade-through bar wicks below the level and a 5m close back above it comes within 6 bars
-  (30 min). Sweep extreme = lowest low from the trade-through to the close back. Simultaneous / shallower sweeps
-  merge into the live idea; a deeper one supersedes it; a 5m close below the extreme kills it; ideas expire at
-  12:00 ET. One entry per idea.
+  (30 min). Sweep extreme = lowest low from the trade-through to the close back. A sweep is identified by the 5m bar
+  printing its extreme: later confirmations of other levels with the same extreme bar join the existing idea even
+  after it ended (one idea and at most one entry per sweep). Simultaneous / shallower sweeps merge into the live
+  idea; a deeper one supersedes it; a 5m close below the extreme kills it; ideas expire at 12:00 ET.
 - **15m OB**: the first closed 15m bar after the sweep that closes above the last confirmed 15m swing high (BOS);
   the OB = last bearish 15m candle in the up-to-12 bars before that BOS bar (not earlier than 2 bars before the
   sweep), full candle range. No such candle -> idea dropped.
