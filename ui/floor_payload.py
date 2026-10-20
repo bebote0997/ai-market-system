@@ -2,8 +2,9 @@
 
 ``build_floor_payload`` only READS what the engine already stores: the PAPER sqlite DB (``mode=ro`` through
 ``ui.state.dashboard_database``) with the same helpers the dashboard uses (``ui.views.luxury`` / ``ui.views.process``),
-and, while broker-demo routing is ON, the existing guarded read-only OANDA demo view (``luxury.demo_api``: cached GET
-reads, never PAPER numbers in demo mode). Every section is built inside a guard: a read error yields ``None`` for that
+and, while broker-demo routing is ON, the existing guarded read-only OANDA demo view (``luxury.demo_api``) fed ONLY
+by what the dashboard caches already hold (``ui.floor_cache`` peek readers: the Floor never triggers a broker / network
+call; nothing cached => None) and never PAPER numbers in demo mode (header, trades and the analysts' signal outcomes). Every section is built inside a guard: a read error yields ``None`` for that
 section, never an exception. Missing data stays ``None`` (the page shows "—" / "sin datos aún"); nothing is invented.
 
 In sample mode only, sections without real data are filled from ``ui.fixtures.floor_example`` and listed in
@@ -37,6 +38,7 @@ TRADE_LIMIT = 10
 SIGNAL_LIMIT = 5
 PIP = 0.0001  # EURUSD
 CURVE_POINTS = 40
+FRESH_SECONDS = 120  # a cached demo NAV observed longer ago than this is shown as "(dato antiguo · HH:MM ET)"
 
 
 def number(value):
@@ -98,7 +100,7 @@ def header_from_stats(stats, *, equity, start=None, daily_loss=None, day=None):
             "daily_loss_limit_pct": 100.0 * fraction if fraction is not None and loss.get('status') != 'OFF' else None,
             "daily_loss_status": loss.get('status') if loss.get('status') else None,
             "day_text": es.demo_day_text(day) if isinstance(day, int) and not isinstance(day, bool) else None,
-            "trades": trades}
+            "trades": trades, "equity_stale": None, "equity_as_of": None}
 
 
 def paper_header(db, now):
@@ -117,12 +119,24 @@ def curve_values(curve):
     return values or None
 
 
-def demo_header(snapshot, day):
+def demo_header(snapshot, day, now):
+    """Demo KPIs. NAV freshness is kept: ``equity_stale`` when the cached read is the last good one (``stale``) or was
+    observed more than ``FRESH_SECONDS`` ago; ``equity_as_of`` = its observation time. Stale without a known
+    observation time => equity None ("—"), never shown as current."""
     stats = snapshot.get('stats')
     known = stats is not None
-    return header_from_stats(stats if known else {}, equity=snapshot.get('nav'),
-                             start=(snapshot.get('capital') or {}).get('start') if known else None,
-                             daily_loss=snapshot.get('daily_loss'), day=day)
+    header = header_from_stats(stats if known else {}, equity=snapshot.get('nav'),
+                               start=(snapshot.get('capital') or {}).get('start') if known else None,
+                               daily_loss=snapshot.get('daily_loss'), day=day)
+    at = as_utc(snapshot.get('as_of'))
+    stale = snapshot.get('stale') is True or at is None or (now - at).total_seconds() > FRESH_SECONDS
+    if header['equity'] is None:
+        stale = None
+    elif stale and at is None:
+        header['equity'], stale = None, None
+    header['equity_stale'] = stale
+    header['equity_as_of'] = et_text(at, with_date=False) if header['equity'] is not None else None
+    return header
 
 
 # -- trades ------------------------------------------------------------------------------------------------------
@@ -240,10 +254,21 @@ def closed_by_run(db):
     return {r['run_id']: r for r in closed_trade_rows(db) if r.get('run_id') and r.get('symbol') == SYMBOL}
 
 
+def demo_closed_by_run(snapshot):
+    """Closed OANDA demo trades by run (client id ``aif-<run_id>``); None when the demo trades are unknown."""
+    if not isinstance(snapshot, dict) or snapshot.get('stats') is None:
+        return None
+    return {run_id: r for r in snapshot.get('closed_rows') or ()
+            for run_id in [demo_run_id(r)] if run_id and r.get('symbol') == SYMBOL}
+
+
 def signals_and_hit_rate(decisions, closed):
     """Last 5 directional signals of one agent with the outcome of the trade of the SAME run (exact run_id link).
     Hit rate = share of linked closed trades where the signal's side matched the trade and it won (or the signal
-    opposed it and it lost); None when no signal is linked to a closed trade."""
+    opposed it and it lost); None when no signal is linked to a closed trade. ``closed`` None = outcomes unknown
+    (demo trades not readable): every outcome and the hit rate are None."""
+    known = closed is not None
+    closed = closed or {}
     signals, hits, linked_count = [], 0, 0
     for row in decisions:
         side = SIDE_OF_BIAS.get(row.get('bias'))
@@ -257,15 +282,16 @@ def signals_and_hit_rate(decisions, closed):
         if len(signals) < SIGNAL_LIMIT:
             signals.append({"at": et_text(row.get('as_of')), "signal": f"{SYMBOL} {side.title()}",
                             "outcome": (es.close_reason_text(trade.get('reason')) if trade.get('reason') else
-                                        'Cerrada') if trade else 'sin operación',
+                                        'Cerrada') if trade else 'sin operación' if known else None,
                             "r": num(trade.get('realized_r')) if trade else None})
     return (signals or None), (100.0 * hits / linked_count if linked_count else None)
 
 
-def ai_agents(db, snapshot):
+def ai_agents(db, snapshot, closed):
+    """``closed``: closed trades by run of the SELECTED source (PAPER ledger, or the OANDA demo trades while routing
+    is ON: never PAPER outcomes in demo metrics); None = unknown."""
     agents = {}
     decisions = guarded(lambda: agent_decision_rows(db), [])
-    closed = guarded(lambda: closed_by_run(db), {})
     persisted = {a.get('name') or a.get('agent_name'): a for a in (snapshot or {}).get('agents') or ()}
     for agent_id, names in AI_AGENTS.items():
         mine = [d for d in decisions if d.get('agent_name') in names]
@@ -449,14 +475,17 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
     payload = {"version": 1, "sample_mode": bool(sample_mode), "generated_at": et_text(now),
                "source": None, "header": None, "trades": None, "agents": {}, "cycle": None, "symbols": None,
                "feed": None, "market": None, "curve": None}
-    snapshot = None
+    snapshot = demo_snap = None
     if demo is not None:
         payload["source"] = "OANDA_DEMO"
-        demo_snap = guarded(lambda: demo['snapshot'](now))
+        from ui.floor_cache import peek_account_view, peek_demo_trades
+        # peek-only readers: the stored cache contents, never a refresh (no broker / network call from the Floor)
+        demo_snap = guarded(lambda: demo['snapshot'](now, trades_reader=peek_demo_trades,
+                                                     account_reader=peek_account_view))
         from ui.views.luxury import demo_day
         day = guarded(lambda: demo_day(demo, now))
         if isinstance(demo_snap, dict):
-            payload["header"] = guarded(lambda: demo_header(demo_snap, day))
+            payload["header"] = guarded(lambda: demo_header(demo_snap, day, now))
             payload["curve"] = guarded(lambda: curve_values(demo_snap.get('curve')))
             payload["trades"] = guarded(lambda: demo_trades(db, demo_snap))
     elif db is not None:
@@ -469,7 +498,9 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         run = guarded(lambda: latest_run(db))
         from ui.views.process import cycle_evidence
         evidence = guarded(lambda: cycle_evidence(db, run)[0]) if run else None
-        payload["agents"].update(guarded(lambda: ai_agents(db, snapshot), {}))
+        closed = (guarded(lambda: demo_closed_by_run(demo_snap)) if demo is not None
+                  else guarded(lambda: closed_by_run(db)))
+        payload["agents"].update(guarded(lambda: ai_agents(db, snapshot, closed), {}))
         payload["agents"].update(guarded(lambda: engine_agents(db, snapshot, run, evidence), {}))
         payload["cycle"] = guarded(lambda: cycle_view(run, evidence, payload["trades"])) if run else None
         payload["feed"] = guarded(lambda: journal_feed(db))

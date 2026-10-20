@@ -49,7 +49,10 @@ if page in luxury.PAGES:
     st.stop()
 
 if page == floor_view.PAGE:
-    floor_view.render(st, enabled_symbols)
+    @st.fragment(run_every="60s" if refresh else None)
+    def render_floor_view():
+        floor_view.render(st, enabled_symbols)
+    render_floor_view()
     st.stop()
 
 if page in dashboard.PAGES:

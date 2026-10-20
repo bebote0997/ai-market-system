@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from execution.contracts import PaperAccount
 from storage.codec import paper_encode
@@ -37,7 +37,7 @@ FORBIDDEN_MODULES = ("execution.paper_broker", "execution.oanda_broker",
                      "execution.dxtrade_broker", "execution.dxtrade_client", "execution.operator_actions",
                      "execution.pending_order_gate", "execution.oanda_readonly", "execution.demo_dashboard",
                      "runtime.demo_runner", "runtime.service")
-FLOOR_MODULES = ("ui/floor_payload.py", "ui/views/floor_view.py", "ui/fixtures/floor_example.py")
+FLOOR_MODULES = ("ui/floor_payload.py", "ui/floor_cache.py", "ui/views/floor_view.py", "ui/fixtures/floor_example.py")
 
 
 def seed(path):
@@ -83,20 +83,20 @@ def seed(path):
         store.close()
 
 
-def fake_demo(stats=True):
+def fake_demo(stats=True, closed_rows=()):
     snapshot = {
         "epoch": NOW - timedelta(days=2), "nav": 100123.45, "balance": 100100.0, "currency": "USD",
-        "capital": {"start": 100000.0, "change": 123.45}, "stale": False, "trades_error": None, "curve": [
+        "capital": {"start": 100000.0, "change": 123.45}, "stale": False, "as_of": NOW, "trades_error": None, "curve": [
             {"Closed at": NOW, "Cumulative realized PnL": 50.0}, {"Closed at": NOW, "Cumulative realized PnL": 100.0}],
         "stats": {"trades": 2, "wins": 1, "total_pnl": 100.0, "today_pnl": 0.0, "max_drawdown": 30.0,
                   "avg_r": 0.25, "avg_r_reason": None} if stats else None,
         "open_rows": [{"trade_id": "77", "client_id": "aif-run-e1", "symbol": "EURUSD", "side": "LONG",
                        "units": 5000.0, "quantity": 5000.0, "opened_at": NOW, "entry_price": 1.10013, "stop": 1.098,
                        "target": 1.106, "unrealized_pnl": 12.5}],
-        "closed_rows": [],
+        "closed_rows": list(closed_rows),
         "daily_loss": {"status": "OK", "fraction": 0.02, "used_pct": 25.0, "day_start_nav": 100000.0,
                        "pnl": -500.0, "loss": 500.0, "drawdown_halted": False}}
-    return {"epoch": lambda: snapshot["epoch"], "snapshot": lambda _now: snapshot,
+    return {"epoch": lambda: snapshot["epoch"], "snapshot": lambda _now, **_readers: snapshot,
             "progress": lambda _now: (snapshot["epoch"], NOW, 2)}
 
 
@@ -135,7 +135,7 @@ class FloorPayloadTests(unittest.TestCase):
                 patch("ui.views.process.cycle_evidence", side_effect=ValueError("bad json")):
             payload = self.build(sample_mode=False)
         self.assertIsNone(payload["header"])
-        broken = {"snapshot": lambda _now: 1 / 0, "progress": lambda _now: 1 / 0}
+        broken = {"snapshot": lambda _now, **_readers: 1 / 0, "progress": lambda _now: 1 / 0}
         payload = self.build(sample_mode=False, demo=broken)
         self.assertEqual((payload["source"], payload["header"], payload["trades"]), ("OANDA_DEMO", None, None))
 
@@ -196,6 +196,41 @@ class FloorPayloadTests(unittest.TestCase):
         self.assertEqual([s["outcome"] for s in agent["signals"]][0], "sin operación")  # run-e1 not closed yet
         self.assertAlmostEqual(agent["signals"][1]["r"], 3.0)
 
+    def test_demo_signal_outcomes_come_from_demo_trades_only(self):
+        seed(self.path)  # PAPER ledger: run-e0 closed with a win (must NOT leak into the demo metrics)
+        store = Store(self.path)
+        store.db.execute("INSERT INTO runs(slot_key,run_id,symbol,as_of,started_at,status) VALUES(?,?,?,?,?,?)",
+                         ("slot-e0", "run-e0", "EURUSD", "2026-10-19T11:00:00+00:00", "2026-10-19T11:00:00+00:00",
+                          "COMPLETED"))
+        store.db.execute("INSERT INTO agent_decisions(slot_key,agent_name,as_of,status,bias,confidence) "
+                         "VALUES(?,?,?,?,?,?)", ("slot-e0", "structure_ai", "2026-10-19T11:00:00+00:00", "OK",
+                                                 "BULLISH", 0.6))
+        store.close()
+        agent = self.build(sample_mode=False, demo=fake_demo())["agents"]["Structure"]
+        self.assertIsNone(agent["hit_rate"])  # no demo trade closed: the PAPER win is not counted
+        self.assertEqual({s["outcome"] for s in agent["signals"]}, {"sin operación"})
+        lost = {"trade_id": "9", "client_id": "aif-run-e0", "symbol": "EURUSD", "side": "LONG", "net_pnl": -40.0,
+                "realized_r": -1.0}
+        agent = self.build(sample_mode=False, demo=fake_demo(closed_rows=[lost]))["agents"]["Structure"]
+        self.assertEqual(agent["hit_rate"], 0.0)  # the demo trade of run-e0 lost
+        self.assertEqual(agent["signals"][1]["r"], -1.0)
+        agent = self.build(sample_mode=False, demo=fake_demo(stats=False))["agents"]["Structure"]
+        self.assertIsNone(agent["hit_rate"])  # demo trades unknown: outcomes unknown, never PAPER ones
+        self.assertEqual({s["outcome"] for s in agent["signals"]}, {None})
+
+    def test_demo_nav_freshness_is_kept(self):
+        def equity(**changes):
+            demo = fake_demo()
+            snapshot = {**demo["snapshot"](NOW), **changes}
+            header = self.build(sample_mode=False, demo={**demo, "snapshot": lambda _now, **_r: snapshot})["header"]
+            return header["equity"], header["equity_stale"], header["equity_as_of"]
+        self.assertEqual(equity(as_of=NOW - timedelta(seconds=30)), (100123.45, False, "09:29"))
+        self.assertEqual(equity(as_of=NOW - timedelta(hours=2)), (100123.45, True, "07:30"))  # old cached read
+        self.assertEqual(equity(as_of=NOW, stale=True), (100123.45, True, "09:30"))  # last good read after an error
+        self.assertEqual(equity(as_of=None), (None, None, None))  # unknown observation time: never shown as current
+        html = floor_view.render_html(self.build(sample_mode=False, demo=fake_demo()))
+        self.assertIn("(dato antiguo · ${HD.equity_as_of} ET)", html)
+
     def test_demo_routing_uses_oanda_view_never_paper_numbers(self):
         seed(self.path)
         payload = self.build(sample_mode=False, demo=fake_demo())
@@ -215,6 +250,44 @@ class FloorPayloadTests(unittest.TestCase):
         unknown = self.build(sample_mode=False, demo=fake_demo(stats=False))
         self.assertIsNone(unknown["header"]["pnl"])
         self.assertIsNone(unknown["trades"])
+
+    def demo_env(self):
+        return {"AI_FLOOR_BROKER_DEMO_ROUTING": "1", "OANDA_PRACTICE_TOKEN": TOKEN, "OANDA_ACCOUNT_ID": OANDA_ACCOUNT}
+
+    def test_routing_on_with_empty_cache_never_calls_the_broker(self):
+        from execution import oanda_readonly
+        from ui.views.luxury import demo_api
+        seed(self.path)
+        transport = Mock(side_effect=AssertionError("network must not be touched"))
+        with patch.dict(os.environ, self.demo_env()), patch.object(oanda_readonly, "urllib_transport", transport), \
+                patch.object(oanda_readonly._VIEWS, "_cache", {}), patch.object(oanda_readonly._TRADES, "_cache", {}):
+            payload = self.build(sample_mode=False, demo=demo_api())
+            self.assertEqual((oanda_readonly._VIEWS._cache, oanda_readonly._TRADES._cache), ({}, {}))  # not filled
+        transport.assert_not_called()
+        self.assertEqual(payload["source"], "OANDA_DEMO")
+        self.assertIsNone(payload["trades"])
+        self.assertTrue(all(payload["header"][k] is None for k in ("equity", "pnl", "win_rate", "r_total")))
+        self.assertIsNone(payload["agents"]["Structure"]["hit_rate"])
+        self.assertNotIn(10055.5, payload["header"].values())  # never the PAPER equity
+
+    def test_routing_on_reads_the_stored_cache_without_refreshing(self):
+        from execution import oanda_readonly
+        from ui.views.luxury import demo_api
+        seed(self.path)
+        view = oanda_readonly.AccountView("OK", "practice", "***", "USD", 100050, 100070, 0, 0, 0,
+                                          as_of=NOW - timedelta(hours=1), stale=False)
+        trades = {"closed": [], "open": [], "as_of": NOW - timedelta(hours=1)}
+        transport = Mock(side_effect=AssertionError("network must not be touched"))
+        with patch.dict(os.environ, self.demo_env()), patch.object(oanda_readonly, "urllib_transport", transport), \
+                patch.object(oanda_readonly._VIEWS, "_cache", {"practice": (-1e9, view)}), \
+                patch.object(oanda_readonly._TRADES, "_cache", {}):
+            demo = demo_api()
+            oanda_readonly._TRADES._cache[demo["epoch"]()] = (-1e9, trades)  # long expired: a refresh would GET
+            payload = self.build(sample_mode=False, demo=demo)
+        transport.assert_not_called()
+        header = payload["header"]
+        self.assertEqual((header["equity"], header["equity_stale"], header["equity_as_of"]), (100070.0, True, "08:30"))
+        self.assertEqual(header["trades"], 0)  # the stored (empty) trades read, not refreshed
 
     def test_sample_mode_fills_only_missing_sections_and_marks_them(self):
         seed(self.path)
@@ -284,7 +357,10 @@ class FloorWiringTests(unittest.TestCase):
         source = (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
         self.assertIn("from ui.views import floor_view", source)
         self.assertIn("luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES", source)
-        self.assertIn("if page == floor_view.PAGE:\n    floor_view.render(st, enabled_symbols)", source)
+        # Inside the 60s auto-refresh fragment (like the luxury pages) so payload/freshness recompute each refresh.
+        self.assertIn("if page == floor_view.PAGE:\n    @st.fragment(run_every=\"60s\" if refresh else None)\n"
+                      "    def render_floor_view():\n        floor_view.render(st, enabled_symbols)\n"
+                      "    render_floor_view()\n    st.stop()", source)
         self.assertEqual((floor_view.PAGE, floor_view.LABEL), ("Floor", "Floor"))
 
     def test_floor_modules_import_no_order_or_broker_path(self):
@@ -315,8 +391,8 @@ class FloorPageAppTests(unittest.TestCase):
             env = {"AI_FLOOR_DB_PATH": str(path), "AI_FLOOR_HEALTH_DB_PATH": str(Path(tmp) / "health.db"),
                    "AI_FLOOR_REMOTE_DASHBOARD": "1", "RENDER": "false",
                    "AI_FLOOR_DASHBOARD_PASSWORD": "fixture-password"}
-            with patch.dict(os.environ, env), patch("execution.oanda_readonly.urllib_transport",
-                                                    side_effect=AssertionError("network must not be touched")):
+            transport = Mock(side_effect=AssertionError("network must not be touched"))
+            with patch.dict(os.environ, env), patch("execution.oanda_readonly.urllib_transport", transport):
                 for sample in (False, True):
                     app = AppTest.from_file(str(ROOT / "ui" / "app.py"), default_timeout=30)
                     app.session_state["dashboard_authenticated"] = True
@@ -331,6 +407,7 @@ class FloorPageAppTests(unittest.TestCase):
                         caption = " ".join(c.value for c in app.caption)
                         self.assertIn("solo lectura", caption)
                         self.assertEqual("EJEMPLO" in caption, sample)
+            transport.assert_not_called()
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
 
 

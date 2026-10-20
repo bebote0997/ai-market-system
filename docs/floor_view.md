@@ -20,13 +20,15 @@ zoom con rueda/pellizco, layout móvil). **No ejecuta, no escribe y no envía ó
 
 Fuentes: la DB PAPER (`AI_FLOOR_DB_PATH`, abierta `mode=ro` vía `ui.state.dashboard_database`) con los mismos helpers
 que el dashboard (`ui.views.luxury`, `ui.views.process`, `ui.views.dashboard.records/payloads`); con el routing demo
-ON (`AI_FLOOR_BROKER_DEMO_ROUTING=1`), la vista OANDA demo de solo lectura ya existente (`luxury.demo_api()`: lecturas
-GET cacheadas). `payload["source"]` = `OANDA_DEMO` | `PAPER` | `None`. En modo demo nunca se muestran cifras PAPER
-en la cabecera ni en las operaciones.
+ON (`AI_FLOOR_BROKER_DEMO_ROUTING=1`), la vista OANDA demo de solo lectura ya existente (`luxury.demo_api()`) alimentada SOLO con lo que ya contienen las
+cachés del dashboard (`ui.floor_cache`: lectura "peek" de `execution.oanda_readonly._TRADES/_VIEWS`, sin refrescar).
+El Floor nunca dispara una llamada al broker ni a la red: si no hay nada en caché, los campos demo son `None` ("—").
+`payload["source"]` = `OANDA_DEMO` | `PAPER` | `None`. En modo demo nunca se muestran cifras PAPER en la cabecera, en
+las operaciones ni en los resultados de las señales de los analistas.
 
 | Campo | Real (fuente) | Si no hay dato |
 |---|---|---|
-| `header.equity` | Demo: NAV OANDA. PAPER: `paper_accounts.equity` (nunca el id de cuenta). | `—` |
+| `header.equity` (+ `equity_stale`, `equity_as_of`) | Demo: NAV OANDA en caché; si es la última lectura buena (`stale`) o se observó hace más de 120 s se muestra con "(dato antiguo · HH:MM ET)"; sin hora de observación ⇒ `—`. PAPER: `paper_accounts.equity` (nunca el id de cuenta). | `—` |
 | `header.pnl`, `win_rate`, `drawdown`, `trades` | Demo: `demo_statistics` desde el epoch. PAPER: `ledger_statistics` (ledger completo). | `—` |
 | `header.r_total` | R medio × nº de operaciones cerradas (solo si el R de todas es conocido). | `—` |
 | `header.drawdown_pct` | Demo: drawdown / capital de inicio del demo. PAPER: no disponible. | se muestra el drawdown en $ o `—` |
@@ -40,7 +42,7 @@ en la cabecera ni en las operaciones.
 | `agents.Conflict` (Arbiter) | Eventos de conflicto / política de setup opuesto del último ciclo (`process.cycle_evidence`). | idem |
 | `agents.RiskEng` (Sentinel) | `risk_decisions` del último ciclo (estado, motivo, % riesgo, capital en riesgo); si falta, `risk_status` del snapshot. | idem |
 | `agents.Exec` (Echo) | Última operación EURUSD (abierta o cerrada); hit rate = % de cerradas ganadoras. | idem |
-| `agents.*.signals` / `hit_rate` | Últimas 5 decisiones direccionales del agente (BULLISH/BEARISH) con el resultado de la operación del **mismo run_id**; acierto = el sesgo coincide con el lado y ganó (o lo contradice y perdió). | `—` si ninguna señal enlaza con una operación cerrada |
+| `agents.*.signals` / `hit_rate` | Últimas 5 decisiones direccionales del agente (BULLISH/BEARISH) con el resultado de la operación del **mismo run_id** en la fuente seleccionada (demo: operaciones OANDA `aif-<run_id>`; nunca resultados PAPER en métricas demo; operaciones demo desconocidas ⇒ resultado y hit rate `None`); acierto = el sesgo coincide con el lado y ganó (o lo contradice y perdió). | `—` si ninguna señal enlaza con una operación cerrada |
 | `cycle.steps[8]` | Último run EURUSD: un paso está ✓ si tiene evidencia persistida (`process.cycle_evidence`); "Entry / Exit" también si hay operación demo de ese run; "Resultado" si el run terminó. Hora = primer timestamp persistido del paso (nunca inferido). | sin marcas |
 | `symbols` | `enabled_market_symbols()` + `runtime.symbol_pause.is_paused` (XAUUSD pausado, DEC-XAU-OFF-1). | — |
 | `feed` | Últimos 5 eventos del `journal` (EURUSD/XAUUSD): hora ET, símbolo, tipo. | "sin datos aún" |

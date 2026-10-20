@@ -43,7 +43,7 @@ tr.pick{cursor:pointer}tr.pick:hover td{color:var(--gold2)}
 .big{display:flex;gap:30px}.big div b{display:block;white-space:nowrap;font-size:26px;font-weight:300}.big small{font-size:9px;letter-spacing:.2em;color:var(--mute);text-transform:uppercase}
 .rr{position:relative;height:46px;margin-top:6px}
 .rr .seg{position:absolute;top:18px;height:4px}.rr .t{position:absolute;top:0;font-size:9px;letter-spacing:.1em;color:var(--mute);transform:translateX(-50%);white-space:nowrap}
-.rr .t2{top:28px}.rr .dot{position:absolute;top:14px;width:12px;height:12px;border-radius:50%;background:var(--gold);transform:translateX(-50%);box-shadow:0 0 10px var(--gold)}
+.rr .t.l{left:0;transform:none}.rr .t.r{right:0;transform:none}.rr .t2{top:28px}.rr .dot{position:absolute;top:14px;width:12px;height:12px;border-radius:50%;background:var(--gold);transform:translateX(-50%);box-shadow:0 0 10px var(--gold)}
 .chain{font-size:12px;line-height:2;color:#a9bfbd;font-weight:300}.chain span{color:var(--gold)}
 .empty{font-size:12px;color:var(--mute);letter-spacing:.08em}
 @media (max-width:820px){
@@ -54,7 +54,10 @@ tr.pick{cursor:pointer}tr.pick:hover td{color:var(--gold2)}
  body.open #stage{right:0;bottom:58%}
  #drawer{width:100%;top:auto;height:58%;border-left:0;border-top:1px solid var(--gold);transform:translateY(100%);padding:22px}
  #drawer h2{font-size:20px}.big div b{font-size:22px}
+ .big{flex-wrap:wrap;gap:12px 20px}.big div{flex:1 1 84px;min-width:0}.big div b{white-space:normal;overflow-wrap:anywhere}
+ table{table-layout:fixed}td,th{overflow-wrap:anywhere;padding-left:4px}th{letter-spacing:.08em}
 }
+@media (max-width:360px){#drawer{padding:16px 14px}.big div{flex-basis:100%}.big div b{font-size:19px}td{font-size:12px}}
 </style></head><body>
 <script id="floor-data" type="application/json">__FLOOR_PAYLOAD__</script>
 <header>
@@ -74,6 +77,8 @@ const FEED=DATA.feed||[],ML=(DATA.market&&DATA.market.lines)||[],CURVE=DATA.curv
 const EXF=new Set(DATA.sample_mode?(DATA.example_fields||[]):[]);
 const isEx=k=>EXF.has(k)||[...EXF].some(f=>f.startsWith(k+'.'));
 const BADGE='<span class="ex">EJEMPLO</span>',badge=k=>isEx(k)?BADGE:'';
+// a stale (last good / old) demo NAV is never shown as current: value + "(dato antiguo · HH:MM ET)"
+const STALE=HD.equity_stale===true&&HD.equity_as_of?`(dato antiguo · ${HD.equity_as_of} ET)`:'';
 const NA='—',EMPTY='sin datos aún';
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ok=v=>typeof v==='number'&&isFinite(v);
@@ -93,7 +98,7 @@ const dd=ok(HD.drawdown_pct)?(HD.drawdown_pct>0?'−':'')+HD.drawdown_pct.toFixe
 const KP=[[money(HD.equity),'Equity',ok(HD.equity)?'':'na',['equity']],[money(HD.pnl,1),'PnL',tone(HD.pnl),['pnl']],[fR(HD.r_total),'R total',tone(HD.r_total),['r_total']],
  [ok(HD.win_rate)?HD.win_rate.toFixed(0)+'%':NA,'Win rate',ok(HD.win_rate)?'':'na',['win_rate']],[dd,'Drawdown',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],[dl,'Daily loss',dl==NA?'na':'',['daily_loss_used_pct','daily_loss_limit_pct']]];
 // EJEMPLO next to each KPI that fell back to example data (sample mode only)
-document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small></div>`).join('');
+document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3][0]==='equity'&&STALE?' '+esc(STALE):''}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small></div>`).join('');
 const real=(DATA.real_fields||[]).length>0;
 document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura · `+
  (EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:`<i>${EMPTY}</i>`)+
@@ -222,9 +227,10 @@ function frame(now){const t=now-t0;const step=FIX!=null?FIX:Math.floor(t/STEP_MS
  const E=[P(3,0,1.9),P(9,0,1.9),P(9,0,3.7),P(3,0,3.7)];scr(E,step==7);
  // equity wall: real cumulative realised PnL curve (payload.curve); none => no line
  if(CURVE.length>1){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=8;cx.lineWidth=1.6;cx.beginPath();
-  CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,2.15+.8*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0}
+  CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,2.15+.8*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0;
+  if(isEx('curve'))wt(3.3,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4')}
  else wt(3.3,0,2.4,EMPTY,8,'#4f6462');
- wt(3.3,0,3.4,'EQUITY · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':''),8,'#3fa9a4');wt(3.3,0,3.0,money(HD.equity),17,'#9ff5ee','Didot,Georgia,serif');
+ wt(3.3,0,3.4,'EQUITY · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':'')+(STALE?'  '+STALE.toUpperCase():''),8,STALE?'#ffb020':'#3fa9a4');wt(3.3,0,3.0,money(HD.equity),17,'#9ff5ee','Didot,Georgia,serif');
  const F=[P(9.8,0,1.9),P(16.6,0,1.9),P(16.6,0,3.7),P(9.8,0,3.7)];scr(F,false);
  wt(10.1,0,3.4,'FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4');
  (FEED.length?FEED:[EMPTY]).slice(0,5).forEach((l,i)=>wt(10.1,0,3.05-i*.24,l,7.2,i==0&&FEED.length?'#39ff88':'#aebfc0'));
@@ -275,7 +281,7 @@ function rrBar(t){const sl=t.sl_actual!=null?t.sl_actual:t.sl_expected,tp=t.tp_a
  if(!ok(sl)||!ok(tp)||!ok(en)||sl===tp)return `<div class="empty">${EMPTY}</div>`;
  const pos=v=>Math.max(0,Math.min(100,100*(v-sl)/(tp-sl)));const e=pos(en);const now=ok(t.exit_price)?t.exit_price:t.last_price;
  return `<div class="rr"><div class="seg" style="left:0;width:${e}%;background:#8a2335"></div><div class="seg" style="left:${e}%;width:${100-e}%;background:#1f7a4a"></div>
- <div class="t" style="left:2%">SL ${px(sl)}</div><div class="t" style="left:${e}%">Entry ${px(en)}</div><div class="t" style="left:96%">TP ${px(tp)}</div>`+
+ <div class="t l">SL ${px(sl)}</div><div class="t" style="left:${e}%">Entry ${px(en)}</div><div class="t r">TP ${px(tp)}</div>`+
  (ok(now)?`<div class="dot" style="left:${pos(now)}%"></div><div class="t t2" style="left:${pos(now)}%;color:var(--gold)">${px(now)} · ${esc(fR(t.r_realized))}</div>`:'')+`</div>`}
 const delta=(a,b)=>ok(a)&&ok(b)?(a===b?NA:px(b-a)):NA;
 function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${EMPTY}</div>`;
