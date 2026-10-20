@@ -38,7 +38,9 @@ LOG = logging.getLogger("replay.intraday_backtest")
 SYMBOL = "EURUSD"
 PIP = 0.0001
 SLIPPAGE_PIPS = 0.2
-DEFAULT_SPREAD_PIPS = 1.0  # only when bid/ask are missing
+SENSITIVITY_SPREAD_PIPS = 1.0  # constant-spread sensitivity run
+FALLBACK_SPREAD_PIPS = 1.6  # causal spread when no bid/ask bar exists in the look-back window
+CAUSAL_SPREAD_DAYS = 30
 BUFFER_ATR = 0.2
 MIN_SL_PIPS, MAX_SL_PIPS = 15.0, 30.0
 DAILY_HALT_R = 2.0  # DEC-5.5a: 2 % daily loss at 1 % risk per trade
@@ -79,6 +81,15 @@ def median_spread_pips(frame_5m):
     spread = (frame_5m["AskClose"] - frame_5m["BidClose"]).dropna()
     spread = spread[spread > 0]
     return None if spread.empty else float(spread.median() / PIP)
+
+
+def causal_spread_pips(frame_5m, days=CAUSAL_SPREAD_DAYS):
+    """Per 5m bar: median (AskClose - BidClose) in pips of the bars starting in [start - days, start), i.e. only bars
+    closed by the fill at this bar's open; NaN when there is none (caller falls back)."""
+    if not {"BidClose", "AskClose"} <= set(frame_5m.columns):
+        return pd.Series(np.nan, index=frame_5m.index)
+    spread = (frame_5m["AskClose"] - frame_5m["BidClose"]) / PIP
+    return spread.where(spread > 0).rolling(f"{days}D", closed="left").median()
 
 
 def snapshot_at(frames, slot):
@@ -286,12 +297,23 @@ class Market:
     slippage: float
     frame_15m: pd.DataFrame = None
     cutoff: datetime = None  # evaluation end: only bars ending at or before it are simulated
+    half_spreads: np.ndarray = None  # causal half spread per fill bar (NaN -> ``half_spread`` fallback)
 
     @classmethod
-    def from_frames(cls, frames, spread_pips, slippage_pips=SLIPPAGE_PIPS, cutoff=None):
+    def from_frames(cls, frames, spread_pips, slippage_pips=SLIPPAGE_PIPS, cutoff=None, causal=False):
+        """Constant ``spread_pips``, or with ``causal`` a per-trade trailing median (``spread_pips`` = fallback)."""
         f = frames["5m"]
+        causal_half = (causal_spread_pips(f) * PIP / 2).to_numpy() if causal else None
         return cls(f.index.as_unit("ns").asi8.copy(), f["Open"].to_numpy(), f["High"].to_numpy(), f["Low"].to_numpy(),
-                   f["Close"].to_numpy(), spread_pips * PIP / 2, slippage_pips * PIP, frames.get("15m"), cutoff)
+                   f["Close"].to_numpy(), spread_pips * PIP / 2, slippage_pips * PIP, frames.get("15m"), cutoff,
+                   causal_half)
+
+    def half_spread_at(self, i):
+        """(half spread, used fallback) for a trade filled at bar ``i``; constant over the trade."""
+        if self.half_spreads is None:
+            return self.half_spread, False
+        value = float(self.half_spreads[i])
+        return (self.half_spread, True) if not math.isfinite(value) else (value, False)
 
     @property
     def limit(self):
@@ -350,7 +372,7 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
         return {"rejected": "no_fill_data"}
     long = side == "LONG"
     sign = 1 if long else -1
-    hs, slip = market.half_spread, market.slippage
+    (hs, spread_fallback), slip = market.half_spread_at(i), market.slippage
     mid_fill = float(market.open[i])
     fill = mid_fill + sign * (hs + slip)
     risk = sign * (fill - stop)
@@ -379,7 +401,8 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
         marks = sign * (market.close[i:j] - sign * hs - fill) / risk  # open R on each 5m close before the exit bar
         return {"marks": marks, "fill_at": opened, "fill": fill, "mid_fill": mid_fill, "stop": stop, "target": target,
                 "exit_at": exit_at, "exit": price, "reason": reason, "detail": detail or reason, "r": net,
-                "risk_pips": risk / PIP, "tp_pips": reward / PIP, "exit_index": j, "stale_exit": stale}
+                "risk_pips": risk / PIP, "tp_pips": reward / PIP, "exit_index": j, "stale_exit": stale,
+                "spread_pips": 2 * hs / PIP, "spread_fallback": spread_fallback}
 
     def market_exit(j, at, reason, detail, stale=False):
         bid_ask = float(market.close[j]) - sign * hs  # exit on bid (LONG) / ask (SHORT)
@@ -542,6 +565,8 @@ def metrics(trades, months):
         "ci80_low": bootstrap_lower(rs),
         "exits": {k: reasons.get(k, 0) / n * 100 if n else 0.0 for k in (TP, SL, TIME, FRIDAY, BE, END)},
         "stale_exits": sum(1 for t in trades if t.get("stale_exit")),
+        "spread_pips": [pct([t["spread_pips"] for t in trades], q) for q in (50, 10, 90)],
+        "spread_fallbacks": sum(1 for t in trades if t.get("spread_fallback")),
     }
 
 
@@ -549,10 +574,11 @@ def add_gross(trades, market):
     """Mid-price result (no spread / slippage) of each trade, to measure the modeled cost in R."""
     for t in trades:
         sign = 1 if t["side"] == "LONG" else -1
+        half_spread = t["spread_pips"] * PIP / 2
         if t["reason"] == TP:
-            mid_exit = t["exit"] + sign * market.half_spread
+            mid_exit = t["exit"] + sign * half_spread
         elif t["reason"] in (SL, BE, TIME, FRIDAY, END):
-            mid_exit = t["exit"] + sign * (market.half_spread + market.slippage)
+            mid_exit = t["exit"] + sign * (half_spread + market.slippage)
         else:
             mid_exit = t["exit"]
         t["gross_r"] = sign * (mid_exit - t["mid_fill"]) / t["risk_pips"] / PIP
@@ -567,7 +593,7 @@ def monthly_table(trades_by_variant):
     return dict(sorted(rows.items()))
 
 
-def gates(m, spread_pips):
+def gates(m):
     """G1-G11 (plans/real_trading_readiness_plan.md section 1, approved as DEC-LIVE-1): backtest-computable subset."""
     def verdict(ok):
         return "PASS" if ok else "FAIL"
@@ -583,7 +609,8 @@ def gates(m, spread_pips):
         ("G4 never trip the 5% account halt (<= 5R at 1%, mark-to-market)",
          f"{verdict(m['max_dd_mtm_r'] < 5)} ({m['max_dd_mtm_r']:.2f}R)"),
         ("G5 entry slippage <= 0.5 pip", f"PASS by construction (modeled {SLIPPAGE_PIPS} pip)"),
-        ("G5 entry spread <= 1.5 pip", f"{verdict(spread_pips <= 1.5)} (modeled {spread_pips:.2f} pip)"),
+        ("G5 entry spread <= 1.5 pip (median causal per-trade spread)",
+         f"{verdict(m['spread_pips'][0] <= 1.5)} (modeled {m['spread_pips'][0]:.2f} pip)"),
         ("G5 mean total cost <= 0.10R", f"{verdict(m['avg_cost_r'] <= 0.10)} ({m['avg_cost_r']:.3f}R)"),
         ("G5 costs <= 25% of gross expectancy", f"{verdict(cost_share <= 0.25)} "
                                                 f"({'n/a, gross <= 0' if math.isinf(cost_share) else f'{cost_share:.0%}'})"),
@@ -597,8 +624,8 @@ def gates(m, spread_pips):
 # ---------------------------------------------------------------- outputs
 def write_trades_csv(path, trades):
     columns = ["variant", "setup_id", "side", "signal_at", "fill_at", "planned_entry", "fill", "stop", "target",
-               "sl_source", "risk_pips", "tp_pips", "units", "exit_at", "exit", "reason", "detail", "stale_exit", "r",
-               "gross_r"]
+               "sl_source", "risk_pips", "tp_pips", "units", "exit_at", "exit", "reason", "detail", "stale_exit",
+               "spread_pips", "spread_fallback", "r", "gross_r"]
     pd.DataFrame([{c: t.get(c) for c in columns} for t in trades], columns=columns).to_csv(path, index=False)
 
 
@@ -649,9 +676,11 @@ def write_report(path, ctx):
         f"- Data: OANDA practice mid candles {SYMBOL} 5m/15m/1h, {ctx['data_start']} → {ctx['data_end']} "
         f"(UTC bar starts, complete bars). Decision slots: {ctx['slots']} (15 min, LONDON/NEW_YORK), "
         f"fresh snapshots {ctx['fresh']}, VALID_SETUP slots {ctx['valid']} ({ctx['unique_setups']} distinct setup_id).",
-        f"- Spread: median (AskClose−BidClose) of 5m bars = **{ctx['spread']:.2f} pip** (mean {ctx['spread_mean']:.2f}); "
-        f"modeled constant spread {ctx['spread']:.2f} pip (half on each side), slippage {SLIPPAGE_PIPS} pip adverse on "
-        "entry, stop and time exits, 0 on TP.",
+        f"- Spread (causal, per trade): median (AskClose−BidClose) of the 5m bars in the {CAUSAL_SPREAD_DAYS} days "
+        f"before the fill bar (bars closed by the fill; fallback {FALLBACK_SPREAD_PIPS} pip when none), constant over "
+        f"the trade, half on each side; slippage {SLIPPAGE_PIPS} pip adverse on entry, stop and time exits, 0 on TP. "
+        f"Full-sample median of all 5m bars = {ctx['spread']:.2f} pip (mean {ctx['spread_mean']:.2f}) — reported "
+        "only, not used in the simulation (it would look ahead).",
         f"- Period length used for /month: {ctx['months']:.2f} months.", "",
         "## Results (net R, 1R = initial risk fill→SL)", "",
         "| Metric | " + " | ".join(variants) + " |", "|---|" + "---|" * len(variants),
@@ -669,6 +698,8 @@ def write_report(path, ctx):
     row("Total R", lambda m: f"{m['total_r']:+.2f}")
     row("Avg gross R (mid, no costs)", lambda m: f"{m['avg_gross_r']:+.3f}")
     row("Avg cost R", lambda m: f"{m['avg_cost_r']:.3f}")
+    row("Causal spread pips (med / p10 / p90)", lambda m: _fmt3(m["spread_pips"], 2))
+    row("Trades on the fallback spread", lambda m: str(m["spread_fallbacks"]))
     row("Max drawdown R (realised, trade exits)", lambda m: f"{m['max_dd_r']:.2f}")
     row("Max drawdown R (mark-to-market, 5m closes bid/ask)", lambda m: f"{m['max_dd_mtm_r']:.2f}")
     row("Longest losing streak", lambda m: str(m["losing_streak"]))
@@ -683,7 +714,7 @@ def write_report(path, ctx):
               "= 100 % notional, i.e. ~8 500 units at 1.17); median approved units per variant: " +
               ", ".join(f"{v} {r[v]['units']:.0f}" for v in variants) + ". Because of that notional cap the real "
               "money risk per trade is far below 1 % for EURUSD; every figure here is in R.", ""]
-    lines += ["## Spread sensitivity (same signals, spread 1.0 pip)", "",
+    lines += [f"## Spread sensitivity (same signals, constant spread {SENSITIVITY_SPREAD_PIPS} pip)", "",
               "| Variant | Trades | Avg R | Total R | Max DD R realised | Max DD R MTM |", "|---|---|---|---|---|---|"]
     for v in variants:
         m = r[v]["m_sens"]
@@ -708,7 +739,7 @@ def write_report(path, ctx):
               "`docs/decisions.md`, 2026-10-17; the table itself is not in the repo). They are demo→live gates over "
               "a 30-day OANDA demo; here they are applied to the backtest only as a screen.", "",
               "| Gate | " + " | ".join(variants) + " |", "|---|" + "---|" * len(variants)]
-    gate_rows = {v: gates(r[v]["m"], ctx["spread"]) for v in variants}
+    gate_rows = {v: gates(r[v]["m"]) for v in variants}
     for index, (label, _) in enumerate(gate_rows[variants[0]]):
         lines.append(f"| {label} | " + " | ".join(gate_rows[v][index][1] for v in variants) + " |")
     lines += ["", "## Method", "",
@@ -744,7 +775,8 @@ def write_report(path, ctx):
               "5m close while a position is open (bid for LONG / ask for SHORT, no exit slippage) plus the realised "
               "R at each exit. Gate G4 uses the mark-to-market figure.", "",
               "## Limitations", "",
-              "- OANDA practice **mid** candles; bid/ask only as 5m closes → a constant median spread is modeled. "
+              "- OANDA practice **mid** candles; bid/ask only as 5m closes → a trailing 30-day median spread per "
+              "trade is modeled (constant within the trade). "
               "Real spreads widen around 17:00 NY rollover and news; time exits at 17:00 NY are therefore optimistic.",
               "- No AI reviewers and no macro/news filter (NoMacroDataProvider): live signals can differ; no news "
               "blackout, so trades through high-impact releases are included at candle prices.",
@@ -764,8 +796,8 @@ def write_report(path, ctx):
 
 
 # ---------------------------------------------------------------- main
-def evaluate(signals, frames, spread_pips, cutoff=None):
-    market = Market.from_frames(frames, spread_pips, cutoff=cutoff)
+def evaluate(signals, frames, spread_pips, cutoff=None, causal=False):
+    market = Market.from_frames(frames, spread_pips, cutoff=cutoff, causal=causal)
     out = {}
     for variant in VARIANTS:
         trades, skips, unique_skips, halts = run_policy(signals, market, variant)
@@ -818,11 +850,14 @@ def main(argv=None):
         with open(cache, "w", encoding="utf-8") as handle:
             for record in signals:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
-    spread = median_spread_pips(frames["5m"])
+    spread = median_spread_pips(frames["5m"])  # full sample: reported only
     spread_mean = float(((frames["5m"]["AskClose"] - frames["5m"]["BidClose"]) / PIP).mean()) if spread else float("nan")
-    spread = spread if spread is not None else DEFAULT_SPREAD_PIPS
-    log(f"simulating (spread {spread:.2f} pip)")
-    base, sens = evaluate(signals, frames, spread, end), evaluate(signals, frames, DEFAULT_SPREAD_PIPS, end)
+    spread = spread if spread is not None else float("nan")
+    log(f"simulating (causal {CAUSAL_SPREAD_DAYS}-day spread, fallback {FALLBACK_SPREAD_PIPS} pip; full-sample "
+        f"median {spread:.2f} pip) up to {end}")
+    base = evaluate(signals, frames, FALLBACK_SPREAD_PIPS, end, causal=True)
+    log(f"simulating sensitivity (constant spread {SENSITIVITY_SPREAD_PIPS} pip)")
+    sens = evaluate(signals, frames, SENSITIVITY_SPREAD_PIPS, end)
     months = (end - start).total_seconds() / 86400 / (365.25 / 12)
     results = {}
     for variant in VARIANTS:

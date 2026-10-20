@@ -47,6 +47,20 @@ class NoLookahead(unittest.TestCase):
         self.assertAlmostEqual(result["fill"], 1.10100 + 0.7 * bt.PIP)
 
 
+    def test_causal_spread_uses_only_bars_before_the_fill_and_falls_back(self):
+        starts = pd.date_range("2026-01-01", periods=6, freq="5min", tz=UTC)
+        five = frame(starts, [[1.1] * 4] * 6, 5)
+        five["BidClose"], five["AskClose"] = 1.1, 1.1 + np.array([1, 1, 3, 3, 3, 50]) * bt.PIP
+        spread = bt.causal_spread_pips(five)
+        self.assertTrue(np.isnan(spread.iloc[0]))  # nothing before the first bar
+        self.assertAlmostEqual(spread.iloc[2], 1.0)  # bars 0-1 only, bar 2 itself excluded
+        self.assertAlmostEqual(spread.iloc[5], 3.0)  # the 50-pip bar 5 never prices its own fill
+        market = bt.Market.from_frames({"5m": five}, bt.FALLBACK_SPREAD_PIPS, causal=True)
+        self.assertEqual(market.half_spread_at(0), (bt.FALLBACK_SPREAD_PIPS * bt.PIP / 2, True))
+        self.assertAlmostEqual(market.half_spread_at(5)[0], 1.5 * bt.PIP)
+        self.assertEqual(bt.causal_spread_pips(five[["Open", "High", "Low", "Close"]]).isna().all(), True)
+
+
 class I2Stop(unittest.TestCase):
     def setUp(self):
         self.five_empty = frame(pd.date_range("2026-03-03", periods=3, freq="5min", tz=UTC), [[1.1, 1.1, 1.1, 1.1]] * 3, 5)
