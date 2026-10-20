@@ -1,0 +1,310 @@
+<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Trading Floor — Floor</title>
+<!-- Read-only Floor view (port of the approved mockup v4). Every figure comes from the payload injected by
+     ui/views/floor_view.py (ui/floor_payload.py); this file holds no data and fetches nothing. -->
+<style>
+:root{--gold:#19e3d3;--gold2:#9ff5ee;--ink:#0a0a0b;--line:#1a2325;--mute:#7f9593}
+*{box-sizing:border-box}html,body{margin:0;height:100%;display:flex;flex-direction:column;background:var(--ink);color:#e6eef0;font-family:"Helvetica Neue",Inter,Arial,sans-serif;overflow:hidden}
+.serif{font-family:Didot,"Bodoni 72","Playfair Display",Georgia,serif}
+header{height:78px;display:flex;align-items:center;justify-content:space-between;padding:0 36px;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;gap:4px}
+.brand h1{margin:0;font-weight:400;font-size:24px;letter-spacing:.32em;text-transform:uppercase;color:var(--gold2)}
+.brand div{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute)}
+.brand b{color:var(--gold);font-weight:600}
+.ex{border:1px solid var(--gold);color:var(--gold);padding:2px 7px;margin-left:8px;font-size:9px;letter-spacing:.2em;font-weight:400;vertical-align:middle}
+.kpis{display:flex;gap:34px}.kpi{text-align:right}.kpi .ex{margin-left:5px;padding:1px 4px;font-size:7px;letter-spacing:.12em}
+.kpi b{display:block;font-size:17px;font-weight:300;letter-spacing:.02em}.kpi small{font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--mute)}
+.pos{color:#3ddc84}.neg{color:#ff4d6d}.na{color:var(--mute)}
+main{position:relative;flex:1;min-height:0;overflow:hidden}header,footer{flex:none}
+#stage{position:absolute;left:0;top:0;bottom:0;right:0;transition:right .5s cubic-bezier(.2,.8,.2,1),bottom .5s}
+canvas{width:100%;height:100%;display:block;cursor:default}
+body.open #stage{right:440px}
+footer{height:78px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 36px;gap:0}
+.step{flex:1;position:relative;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#4f6462;padding-top:16px;white-space:nowrap}
+.step:before{content:"";position:absolute;top:4px;left:0;right:8px;height:1px;background:#1a2325}
+.step:after{content:"";position:absolute;top:0;left:0;width:9px;height:9px;border-radius:50%;border:1px solid #1f4645;background:var(--ink)}
+.step.done{color:#7fa9a6}.step.done:before{background:#0b7f7c}.step.done:after{background:#0b7f7c;border-color:#0b7f7c}
+.step.on{color:var(--gold2)}.step.on:after{background:var(--gold);border-color:var(--gold);box-shadow:0 0 12px var(--gold)}
+.step em{display:block;font-style:normal;color:#3ddc84;font-size:9px;margin-top:3px;letter-spacing:.06em}.step.real{font-weight:600}
+.note{position:absolute;left:36px;bottom:14px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}
+.hint{color:#4f6462}.note i{color:var(--gold);font-style:normal}
+#drawer{position:absolute;top:0;right:0;bottom:0;width:440px;border-left:1px solid var(--line);background:#0d0d0e;padding:34px 34px;transform:translateX(100%);transition:transform .5s cubic-bezier(.2,.8,.2,1);overflow:auto}
+body.open #drawer{transform:none}
+#drawer h2{margin:0;font-weight:400;font-size:26px;color:var(--gold2);letter-spacing:.04em}
+.sub{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute);margin:8px 0 26px}
+.x{position:absolute;top:26px;right:28px;color:var(--mute);cursor:pointer;font-size:22px;font-weight:200}
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+th{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute);font-weight:400;text-align:right;padding:0 0 10px}
+td{padding:11px 0;border-top:1px solid #162022;text-align:right;font-weight:300}
+td:first-child,th:first-child{text-align:left;color:#a9bfbd}
+tr.pick{cursor:pointer}tr.pick:hover td{color:var(--gold2)}
+.lab{font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--mute);margin:30px 0 10px}
+.big{display:flex;gap:30px}.big div b{display:block;white-space:nowrap;font-size:26px;font-weight:300}.big small{font-size:9px;letter-spacing:.2em;color:var(--mute);text-transform:uppercase}
+.rr{position:relative;height:46px;margin-top:6px}
+.rr .seg{position:absolute;top:18px;height:4px}.rr .t{position:absolute;top:0;font-size:9px;letter-spacing:.1em;color:var(--mute);transform:translateX(-50%);white-space:nowrap}
+.rr .t2{top:28px}.rr .dot{position:absolute;top:14px;width:12px;height:12px;border-radius:50%;background:var(--gold);transform:translateX(-50%);box-shadow:0 0 10px var(--gold)}
+.chain{font-size:12px;line-height:2;color:#a9bfbd;font-weight:300}.chain span{color:var(--gold)}
+.empty{font-size:12px;color:var(--mute);letter-spacing:.08em}
+@media (max-width:820px){
+ header{height:auto;flex-direction:column;align-items:flex-start;padding:16px 18px;gap:12px}
+ .brand h1{font-size:17px}.kpis{gap:0;width:100%;display:grid;grid-template-columns:repeat(3,1fr);row-gap:8px}.kpi{text-align:left}.kpi b{font-size:14px}
+ footer{height:64px;padding:0 14px;overflow:hidden}.step{font-size:0}.step.on{font-size:9px;flex:3}.step em{font-size:0}.step.on em{font-size:9px}
+ .note{left:14px;bottom:auto;top:6px;font-size:8px}.hint{display:none}
+ body.open #stage{right:0;bottom:58%}
+ #drawer{width:100%;top:auto;height:58%;border-left:0;border-top:1px solid var(--gold);transform:translateY(100%);padding:22px}
+ #drawer h2{font-size:20px}.big div b{font-size:22px}
+}
+</style></head><body>
+<script id="floor-data" type="application/json">__FLOOR_PAYLOAD__</script>
+<header>
+ <div class="brand"><h1 class="serif">AI Trading Floor</h1><div id="brandSub"></div></div>
+ <div class="kpis" id="kpis"></div>
+</header>
+<main>
+ <div id="stage"><canvas id="c"></canvas><div class="note" id="note"></div></div>
+ <aside id="drawer"><span class="x" onclick="closeD()">×</span><div id="agentV" style="display:none"></div><div id="tradeV"></div></aside>
+</main>
+<footer id="steps"></footer>
+<script>
+// ---- payload (no hard-coded figures: missing values are null and render as "—") ----
+let DATA={};try{DATA=JSON.parse(document.getElementById('floor-data').textContent)||{}}catch(e){DATA={}}
+const HD=DATA.header||{},AG=DATA.agents||{},TRADES=DATA.trades||[],CY=DATA.cycle||null,SYM=DATA.symbols||{};
+const FEED=DATA.feed||[],ML=(DATA.market&&DATA.market.lines)||[],CURVE=DATA.curve||[];
+const EXF=new Set(DATA.sample_mode?(DATA.example_fields||[]):[]);
+const isEx=k=>EXF.has(k)||[...EXF].some(f=>f.startsWith(k+'.'));
+const BADGE='<span class="ex">EJEMPLO</span>',badge=k=>isEx(k)?BADGE:'';
+const NA='—',EMPTY='sin datos aún';
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ok=v=>typeof v==='number'&&isFinite(v);
+const money=(v,signed)=>ok(v)?(v<0?'−':signed&&v>0?'+':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):NA;
+const fR=v=>ok(v)?(v<0?'−':v>0?'+':'')+Math.abs(v).toFixed(2)+' R':NA;
+const px=v=>ok(v)?v.toFixed(5):NA;
+const pct=(v,d=1)=>ok(v)?v.toFixed(d)+'%':NA;
+const tone=v=>ok(v)?(v>0?'pos':v<0?'neg':''):'na';
+const SRC={OANDA_DEMO:'OANDA Demo',PAPER:'PAPER'}[DATA.source]||null;
+const SIDE={LONG:'Long',SHORT:'Short'};
+let TR=TRADES.find(t=>t.status==='OPEN')||TRADES[0]||null;
+
+// ---- header ----
+document.getElementById('brandSub').innerHTML=`V2.1 · ${esc(SRC||EMPTY)} · <b>${esc(HD.day_text||NA)}</b>${badge('header.day_text')}`;
+const dl=(ok(HD.daily_loss_used_pct)||ok(HD.daily_loss_limit_pct))?`${ok(HD.daily_loss_used_pct)?HD.daily_loss_used_pct.toFixed(1):NA} / ${pct(HD.daily_loss_limit_pct)}`:NA;
+const dd=ok(HD.drawdown_pct)?(HD.drawdown_pct>0?'−':'')+HD.drawdown_pct.toFixed(2)+'%':ok(HD.drawdown)?money(-HD.drawdown):NA;
+const KP=[[money(HD.equity),'Equity',ok(HD.equity)?'':'na',['equity']],[money(HD.pnl,1),'PnL',tone(HD.pnl),['pnl']],[fR(HD.r_total),'R total',tone(HD.r_total),['r_total']],
+ [ok(HD.win_rate)?HD.win_rate.toFixed(0)+'%':NA,'Win rate',ok(HD.win_rate)?'':'na',['win_rate']],[dd,'Drawdown',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],[dl,'Daily loss',dl==NA?'na':'',['daily_loss_used_pct','daily_loss_limit_pct']]];
+// EJEMPLO next to each KPI that fell back to example data (sample mode only)
+document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small></div>`).join('');
+const real=(DATA.real_fields||[]).length>0;
+document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura · `+
+ (EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:`<i>${EMPTY}</i>`)+
+ (CY&&CY.as_of?` · último ciclo ${esc(CY.as_of)}${CY.status?' · '+esc(CY.status):''}`:'');
+
+const STEPS=["Datos","Análisis","Reviewer","Conflict Engine","Risk Engine","Plan R:R","Entry / Exit","Resultado"];
+const CSTEPS=(CY&&CY.steps)||[];
+const COL={Structure:'#a77bff',Liquidity:'#4a7dff',Macro:'#ffb020',Risk:'#ff3d9a',Reviewer:'#2ee59d',Conflict:'#ff7a1a',RiskEng:'#ff2e4d',Exec:'#39ff88'};
+const RCOL={'Structure':COL.Structure,'Liquidity':COL.Liquidity,'Macro':COL.Macro,'Risk':COL.Risk,'Reviewer':COL.Reviewer,'Conflict Engine':COL.Conflict,'Risk Engine':COL.RiskEng};
+const rgba=(h,a)=>{const n=parseInt(h.slice(1),16);return `rgba(${n>>16},${n>>8&255},${n&255},${a})`};
+const W=18,D=14,H=3.9,STEP_MS=4200;
+const q=new URLSearchParams(location.search);const FIX=q.has('step')?+q.get('step'):null;
+const cv=document.getElementById('c'),cx=cv.getContext('2d');let U=30,ox=0,oy=0,Z=1,PX=0,PY=0,dpr=1,vw=0,vh=0;
+const P=(x,y,z=0)=>[ox+(x-y)*U,oy+(x+y)*U/2-z*U];
+function fit(){const r=cv.getBoundingClientRect();dpr=devicePixelRatio||1;vw=r.width;vh=r.height;cv.width=vw*dpr;cv.height=vh*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
+ const padT=vh*.12,pad=16;U=Math.min((vw-pad*2)/(W+D),(vh-padT-pad)/((W+D)/2+H));ox=pad+D*U+((vw-pad*2)-(W+D)*U)/2;oy=padT+H*U+((vh-padT-pad)-((W+D)/2+H)*U)/2;
+ if(Z0==null)Z0=vw<600?1.45:1; const Zt=Z0*Z; const cxm=vw/2,cym=vh/2; ox=cxm+(ox-cxm)*Zt+PX; oy=cym+(oy-cym)*Zt+PY-(vw<600?vh*.1:0); U*=Zt;}
+let Z0=null;
+addEventListener('resize',fit);
+function poly(pts,fill,stroke,lw=1){cx.beginPath();pts.forEach((p,i)=>i?cx.lineTo(p[0],p[1]):cx.moveTo(p[0],p[1]));cx.closePath();if(fill){cx.fillStyle=fill;cx.fill()}if(stroke){cx.strokeStyle=stroke;cx.lineWidth=lw;cx.stroke()}}
+function box(x,y,z,w,d,h,c,a=1,edge){cx.globalAlpha=a;
+ poly([P(x,y+d,z),P(x+w,y+d,z),P(x+w,y+d,z+h),P(x,y+d,z+h)],c[1],edge);
+ poly([P(x+w,y,z),P(x+w,y+d,z),P(x+w,y+d,z+h),P(x+w,y,z+h)],c[2],edge);
+ poly([P(x,y,z+h),P(x+w,y,z+h),P(x+w,y+d,z+h),P(x,y+d,z+h)],c[0],edge);cx.globalAlpha=1}
+const DESK=['#20272a','#0d1416','#181e21'],MON=['#111','#0b0b0b','#151515'];
+// rooms
+const ROOMS=[
+ {n:'Structure',x:.4,y:.4,w:4,d:3,door:'f'},{n:'Liquidity',x:4.8,y:.4,w:4,d:3,door:'f'},
+ {n:'Macro',x:9.2,y:.4,w:4,d:3,door:'f'},{n:'Risk',x:13.6,y:.4,w:4,d:3,door:'f'},
+ {n:'Reviewer',x:.4,y:4.3,w:3.4,d:3,door:'r'},{n:'Conflict Engine',x:.4,y:7.6,w:3.4,d:3,door:'r'},{n:'Risk Engine',x:.4,y:10.9,w:3.4,d:2.7,door:'r'}];
+ROOMS.forEach(r=>{r.dx=r.door=='f'?r.x+r.w/2:r.x+r.w+.35;r.dy=r.door=='f'?r.y+r.d+.35:r.y+r.d/2});
+function room(r,hot){const C=RCOL[r.n];const g=rgba(C,hot?.95:.42);cx.shadowColor=C;cx.shadowBlur=hot?14:2;const z=1.25;
+ poly([P(r.x,r.y),P(r.x+r.w,r.y),P(r.x+r.w,r.y+r.d),P(r.x,r.y+r.d)],rgba(C,hot?.12:.035),null);
+ poly([P(r.x,r.y),P(r.x,r.y+r.d),P(r.x,r.y+r.d,z),P(r.x,r.y,z)],rgba(C,hot?.07:.02),g,.8);
+ poly([P(r.x,r.y),P(r.x+r.w,r.y),P(r.x+r.w,r.y,z),P(r.x,r.y,z)],rgba(C,hot?.07:.02),g,.8);
+ cx.shadowBlur=0;
+ const dx=r.x+r.w/2-.9,dy=r.y+.45;box(dx,dy,0,1.8,.7,.42,DESK);
+ box(dx+.25,dy+.12,.42,.55,.06,.38,MON);box(dx+1,dy+.12,.42,.55,.06,.38,MON);
+ cx.globalAlpha=.85;poly([P(dx+.27,dy+.18,.46),P(dx+.78,dy+.18,.46),P(dx+.78,dy+.18,.77),P(dx+.27,dy+.18,.77)],hot?C:rgba(C,.45));poly([P(dx+1.02,dy+.18,.46),P(dx+1.53,dy+.18,.46),P(dx+1.53,dy+.18,.77),P(dx+1.02,dy+.18,.77)],hot?rgba(C,.75):rgba(C,.3));cx.globalAlpha=1;
+ r.after=()=>{cx.shadowColor=C;cx.shadowBlur=hot?14:2;
+  const fy=r.y+r.d,fx=r.x+r.w;
+  if(r.door=='f'){poly([P(r.x,fy),P(r.dx-.5,fy),P(r.dx-.5,fy,z),P(r.x,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(r.dx+.5,fy),P(fx,fy),P(fx,fy,z),P(r.dx+.5,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.y),P(fx,fy),P(fx,fy,z),P(fx,r.y,z)],rgba(C,hot?.08:.025),g,.8)}
+  else{poly([P(r.x,fy),P(fx,fy),P(fx,fy,z),P(r.x,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.y),P(fx,r.dy-.5),P(fx,r.dy-.5,z),P(fx,r.y,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.dy+.5),P(fx,fy),P(fx,fy,z),P(fx,r.dy+.5,z)],rgba(C,hot?.08:.025),g,.8)}
+  cx.shadowBlur=0;
+  const [lx,ly]=P(r.x+.25,fy-.1);cx.save();cx.translate(lx,ly);cx.transform(1,-.5,0,1,0,0);
+  cx.font=`${Math.max(8,U*.30)}px Didot,Georgia,serif`;cx.fillStyle=hot?C:rgba(C,.75);cx.textBaseline='bottom';cx.fillText(r.n.toUpperCase(),0,0);cx.restore();}
+}
+// characters
+const A={};function agent(id,room,col){const r=ROOMS.find(o=>o.n==room);A[id]={id,room:r,hx:r.x+r.w/2,hy:r.y+1.55,x:0,y:0,col,walk:0,carry:0};}
+agent('Structure','Structure');agent('Liquidity','Liquidity');agent('Macro','Macro');agent('Risk','Risk');
+agent('Reviewer','Reviewer');agent('Conflict','Conflict Engine');agent('RiskEng','Risk Engine');
+A.Exec={id:'Exec',hx:9.2,hy:8.6,x:0,y:0,walk:0,carry:0};
+const live=SYM.EURUSD==='ACTIVE';
+const DESKS=[{s:'EURUSD',x:8.5,y:7.2,live:live?1:0},{s:'XAUUSD',x:12.6,y:7.2,live:SYM.XAUUSD==='ACTIVE'?1:0}];
+const SPARE=[[8.5,10.6],[12.6,10.6]];
+function deskSub(d){const st=SYM[d.s];if(st==='PAUSED')return 'PAUSADO';if(st==='DISABLED')return 'APAGADO';
+ if(d.s==='EURUSD'){if(TR&&TR.status==='OPEN')return `${(TR.side||NA)} · ${fR(TR.r_realized)}`;return st==='ACTIVE'?'ACTIVO · sin posición':EMPTY}
+ return st==='ACTIVE'?'ACTIVO':EMPTY}
+function person(a,t,hot){const C=COL[a.id];const [x,y]=P(a.x,a.y,0);const s=U/30;const bob=a.walk?Math.abs(Math.sin(t/120))*2*s:Math.sin(t/700+a.hx)*0.8*s;
+ cx.fillStyle='rgba(0,0,0,.55)';cx.beginPath();cx.ellipse(x,y,7*s,3.5*s,0,0,7);cx.fill();
+ if(hot){cx.strokeStyle=C;cx.shadowColor=C;cx.shadowBlur=10;cx.lineWidth=1.5;cx.beginPath();cx.ellipse(x,y,12*s,6*s,0,0,7);cx.stroke();cx.shadowBlur=0}
+ const lg=a.walk?Math.sin(t/120)*3*s:0;cx.strokeStyle='#151a1d';cx.lineWidth=3*s;cx.lineCap='round';
+ cx.beginPath();cx.moveTo(x-2*s,y-9*s-bob);cx.lineTo(x-2*s+lg,y-1*s);cx.moveTo(x+2*s,y-9*s-bob);cx.lineTo(x+2*s-lg,y-1*s);cx.stroke();
+ const by=y-bob;cx.fillStyle='#1a2024';cx.strokeStyle=hot?C:rgba(C,.6);cx.lineWidth=1;
+ cx.beginPath();cx.roundRect(x-6*s,by-22*s,12*s,14*s,4*s);cx.fill();cx.stroke();
+ cx.fillStyle=hot?C:rgba(C,.7);cx.fillRect(x-.7*s,by-21*s,1.4*s,9*s);
+ cx.fillStyle='#d9c7a3';cx.beginPath();cx.arc(x,by-27*s,5*s,0,7);cx.fill();
+ cx.fillStyle='#1c2326';cx.beginPath();cx.arc(x,by-28.5*s,5*s,Math.PI,0);cx.fill();
+ if(a.carry){cx.save();cx.translate(x+8*s,by-16*s);cx.rotate(.785);cx.fillStyle='#19e3d3';cx.shadowColor='#19e3d3';cx.shadowBlur=10;cx.fillRect(-3.5*s,-3.5*s,7*s,7*s);cx.restore()}
+ a.head=[x,by-34*s];}
+function bubble(a,txt,hot,sub){if(!a.head)return;const C=COL[a.id]||'#19e3d3';const [hx,hy]=a.head;const s=Math.max(.75,Math.min(1.15,U/34));
+ cx.font=`${(hot?12:10.5)*s}px "Helvetica Neue",Arial,sans-serif`;const w1=cx.measureText(txt).width;let w2=0;
+ if(sub){cx.font=`${9*s}px "Helvetica Neue",Arial`;w2=cx.measureText(sub).width}
+ const pw=Math.max(w1,w2)+18*s,ph=(sub?36:22)*s,bx=Math.max(4,Math.min(vw-pw-4,a.al?hx-16*s:hx-pw/2));let by=Math.max(4,hy-ph-9*s);
+ for(let k=0;k<6;k++){const o=PLACED.find(r=>bx<r[0]+r[2]+4&&bx+pw+4>r[0]&&by<r[1]+r[3]+4&&by+ph+4>r[1]);if(!o)break;by=o[1]-ph-6}PLACED.push([bx,by,pw,ph]);
+ cx.globalAlpha=hot?1:.9;cx.fillStyle=hot?'#101016':'#0c0c10';cx.strokeStyle=hot?C:rgba(C,.55);cx.lineWidth=hot?1.4:1;if(hot){cx.shadowColor=C;cx.shadowBlur=14}
+ cx.beginPath();cx.roundRect(bx,by,pw,ph,3*s);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.fillRect(bx+1,by+3*s,2.2*s,ph-6*s);cx.fillStyle=hot?C:rgba(C,.55);
+ if(hy-(by+ph)>12*s){cx.beginPath();cx.moveTo(hx,by+ph);cx.lineTo(hx,hy-1);cx.stroke()}else{cx.beginPath();cx.moveTo(hx-5*s,by+ph-.5);cx.lineTo(hx,hy-1);cx.lineTo(hx+5*s,by+ph-.5);cx.closePath();cx.fill()}
+ cx.fillStyle=hot?'#ffffff':'#cfcfd8';cx.textBaseline='middle';cx.font=`${(hot?12:10.5)*s}px "Helvetica Neue",Arial`;cx.fillText(txt,bx+9*s,by+11*s);
+ if(sub){cx.fillStyle=hot?C:rgba(C,.8);cx.font=`${9*s}px "Helvetica Neue",Arial`;cx.fillText(sub,bx+9*s,by+25*s)}cx.globalAlpha=1}
+function tag(x,y,z,t1,t2,live){const [px,py]=P(x,y,z);const s=Math.max(.8,Math.min(1.2,U/34));cx.font=`600 ${11*s}px "Helvetica Neue",Arial`;const w=Math.max(cx.measureText(t1).width,cx.measureText(t2).width*.85,60)+22*s;
+ cx.strokeStyle=live?'#19e3d3':'#1f4645';cx.lineWidth=1;cx.beginPath();cx.moveTo(px,py);cx.lineTo(px,py-14*s);cx.stroke();
+ cx.fillStyle=live?'rgba(10,10,11,.92)':'rgba(10,10,11,.8)';cx.beginPath();cx.roundRect(px-w/2,py-46*s,w,32*s,2);cx.fill();cx.stroke();
+ cx.textAlign='center';cx.fillStyle=live?'#9ff5ee':'#5f7c7b';cx.textBaseline='middle';cx.fillText(t1,px,py-36*s);cx.font=`${9*s}px "Helvetica Neue",Arial`;cx.fillStyle=live?'#3ddc84':'#4f6462';cx.fillText(t2,px,py-23*s);cx.textAlign='left';return [px-w/2,py-46*s,w,32*s]}
+// paths
+function route(a,b){const pts=[[a.dx,a.dy]];const cy=4.0,cxl=4.25;
+ if(a.door=='f'){pts.push([a.dx,cy]);} else pts.push([cxl,a.dy]);
+ if(b.door=='r'){pts.push([cxl,a.door=='f'?cy:a.dy]);pts.push([cxl,b.dy]);} else if(b.door=='f'){pts.push([b.dx,cy])}else{pts.push([b.x,b.y])}
+ pts.push([b.dx,b.dy]);return pts}
+function along(pts,f){let L=[],T=0;for(let i=1;i<pts.length;i++){const l=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);L.push(l);T+=l}
+ let d=f*T;for(let i=0;i<L.length;i++){if(d<=L[i]){const k=L[i]?d/L[i]:0;return[pts[i][0]+(pts[i+1][0]-pts[i][0])*k,pts[i][1]+(pts[i+1][1]-pts[i][1])*k]}d-=L[i]}return pts[pts.length-1]}
+const RV=ROOMS[4],CE=ROOMS[5],RE=ROOMS[6],DK={door:'x',x:9.5,y:8.9,dx:9.6,dy:9.3};
+const WALK={2:['Liquidity',ROOMS[1],RV],3:['Reviewer',RV,CE],4:['Conflict',CE,RE],5:['RiskEng',RE,DK]};
+// speech bubbles from the payload ("sin datos aún" / "—" when unknown)
+const ag=id=>AG[id]||{};const st=id=>ag(id).status||EMPTY;
+const conf=id=>ok(ag(id).confidence)?'confianza '+ag(id).confidence.toFixed(2):'confianza '+NA;
+const T0=TR||{};const nA=['Structure','Liquidity','Macro','Risk'].filter(k=>AG[k]).length;
+const units=ok(T0.units)?T0.units.toLocaleString('en-US',{maximumFractionDigits:0})+' units':NA+' units';
+const SAY={
+ 0:{wall:[ML[0]||EMPTY,ML[1]||NA]},
+ 1:{Structure:[st('Structure'),conf('Structure')],Liquidity:[st('Liquidity'),conf('Liquidity')],Macro:[st('Macro'),conf('Macro')],Risk:[st('Risk'),conf('Risk')]},
+ 2:{Liquidity:['Entregando análisis',`${nA} de 4 agentes`],Reviewer:['Recibido','validando consistencia']},
+ 3:{Reviewer:[st('Reviewer'),conf('Reviewer')],Conflict:['Revisando conflictos','sesgos vs macro']},
+ 4:{Conflict:[st('Conflict'),conf('Conflict')],RiskEng:['Evaluando gates',`daily loss ${dl}`]},
+ 5:{RiskEng:[st('RiskEng'),`SL ${px(T0.sl_expected)} · TP ${px(T0.tp_expected)}`],Exec:['Plan recibido',units]},
+ 6:{Exec:[`Entry ${px(T0.entry_actual)}`,SRC?'orden · '+SRC:EMPTY]},
+ 7:{Exec:[`${fR(T0.r_realized)}${T0.status==='OPEN'?' abierto':''}`,`PnL ${money(T0.pnl,1)}`]}};
+const NAMES={Structure:['Atlas','Analista de estructura','Structure'],Liquidity:['Nova','Analista de liquidez','Liquidity'],Macro:['Orion','Analista macro','Macro'],Risk:['Vega','Revisor de la operación (riesgo)','Risk'],Reviewer:['Sage','Revisor de consenso','Reviewer'],Conflict:['Arbiter','Motor de conflictos','Conflict Engine'],RiskEng:['Sentinel','Motor de riesgo (gates)','Risk Engine'],Exec:['Echo','Ejecución','Mesa EURUSD']};
+let NHITS=[];
+function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));cx.font=`${9.5*s}px Didot,Georgia,serif`;const t=NAMES[a.id][0].toUpperCase().split('').join(String.fromCharCode(8202));const w=cx.measureText(t).width+14*s,h=14*s,bx=x-w/2,by=y+5*s;
+ cx.fillStyle='rgba(10,10,11,.88)';const C=COL[a.id];cx.strokeStyle=C;cx.shadowColor=C;cx.shadowBlur=6;cx.lineWidth=.9;cx.beginPath();cx.roundRect(bx,by,w,h,h/2);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.textAlign='center';cx.textBaseline='middle';cx.fillText(t,x,by+h/2+.5);cx.textAlign='left';
+ const pad=MOB()?8:3;NHITS.push([bx-pad,by-pad-34*s,w+pad*2,h+pad*2+34*s,a.id]);}
+const IDLE=id=>AG[id]?(AG[id].status||NA):EMPTY;
+document.getElementById('steps').innerHTML=STEPS.map((s,i)=>{const c=CSTEPS[i]||{};return `<div class="step${c.done?' real':''}" id="s${i}" title="${c.done?'completado en el último ciclo':EMPTY}">${s}${c.done?`<em>✓ ${esc(c.at||'')}</em>`:''}</div>`}).join('')+(isEx('cycle')?BADGE:'');
+let hits=[],PLACED=[];const MOB=()=>vw<600;const t0=performance.now();
+const wt=(x,y,z,txt,sz,col,font)=>{const [a,b]=P(x,y,z);cx.save();cx.translate(a,b);if(y==0)cx.transform(1,.5,0,1,0,0);else cx.transform(1,-.5,0,1,0,0);cx.font=`${sz*U/30}px ${font||'"Helvetica Neue",Arial'}`;cx.fillStyle=col;cx.textBaseline='alphabetic';cx.fillText(txt,0,0);cx.restore()};
+function frame(now){const t=now-t0;const step=FIX!=null?FIX:Math.floor(t/STEP_MS)%8;const f=FIX!=null?.5:(t%STEP_MS)/STEP_MS;
+ STEPS.forEach((_,i)=>{const el=document.getElementById('s'+i);const r=(CSTEPS[i]||{}).done?' real':'';el.className='step'+(i<step?' done':i==step?' on':'')+r});
+ cx.clearRect(0,0,vw,vh);
+ const g=cx.createRadialGradient(vw/2,vh*.55,10,vw/2,vh*.55,vw*.7);g.addColorStop(0,'#0d1416');g.addColorStop(1,'#0a0a0b');cx.fillStyle=g;cx.fillRect(0,0,vw,vh);
+ poly([P(0,0),P(0,D),P(0,D,H),P(0,0,H)],'#121110',null);poly([P(0,0),P(W,0),P(W,0,H),P(0,0,H)],'#151412',null);
+ cx.strokeStyle='#0b7f7c';cx.lineWidth=1;[[P(0,D,H),P(0,0,H),P(W,0,H)],[P(0,D,.08),P(0,0,.08),P(W,0,.08)]].forEach(l=>{cx.beginPath();cx.moveTo(...l[0]);cx.lineTo(...l[1]);cx.lineTo(...l[2]);cx.stroke()});
+ poly([P(0,0),P(W,0),P(W,D),P(0,D)],'#0f0e0c','#173c3b');
+ cx.strokeStyle='rgba(25,227,211,.06)';for(let i=1;i<W;i++){cx.beginPath();cx.moveTo(...P(i,0));cx.lineTo(...P(i,D));cx.stroke()}for(let j=1;j<D;j++){cx.beginPath();cx.moveTo(...P(0,j));cx.lineTo(...P(W,j));cx.stroke()}
+ const scr=(pts,hot)=>poly(pts,'#0c0b09',hot?'#9ff5ee':'#0b7f7c',hot?1.4:1);
+ const E=[P(3,0,1.9),P(9,0,1.9),P(9,0,3.7),P(3,0,3.7)];scr(E,step==7);
+ // equity wall: real cumulative realised PnL curve (payload.curve); none => no line
+ if(CURVE.length>1){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=8;cx.lineWidth=1.6;cx.beginPath();
+  CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,2.15+.8*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0}
+ else wt(3.3,0,2.4,EMPTY,8,'#4f6462');
+ wt(3.3,0,3.4,'EQUITY · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':''),8,'#3fa9a4');wt(3.3,0,3.0,money(HD.equity),17,'#9ff5ee','Didot,Georgia,serif');
+ const F=[P(9.8,0,1.9),P(16.6,0,1.9),P(16.6,0,3.7),P(9.8,0,3.7)];scr(F,false);
+ wt(10.1,0,3.4,'FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4');
+ (FEED.length?FEED:[EMPTY]).slice(0,5).forEach((l,i)=>wt(10.1,0,3.05-i*.24,l,7.2,i==0&&FEED.length?'#39ff88':'#aebfc0'));
+ const M=[P(0,6.4,1.9),P(0,12.8,1.9),P(0,12.8,3.7),P(0,6.4,3.7)];scr(M,step==0);
+ wt(0,12.5,3.4,'MARKET & MACRO DATA'+(isEx('market')?'  · EJEMPLO':''),8,'#3fa9a4');
+ wt(0,12.5,3.05,ML[0]||EMPTY,10,'#9ff5ee');if(ML[1])wt(0,12.5,2.75,ML[1],8,'#7f9593');if(ML[2])wt(0,12.5,2.5,ML[2],8,'#7f9593');
+ cx.strokeStyle='#0b7f7c';cx.beginPath();for(let i=0;i<=30;i++){const p=P(0,7.0+i*.1,1.98+.2*Math.abs(Math.sin(i*.5+t/2000)));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke();
+ if(step==0){for(let k=0;k<4;k++){const r=ROOMS[k];for(let j=0;j<3;j++){const ff=((f*1.6+j/3)%1);const a=P(0,8.5,2.3),b=P(r.x+r.w/2,r.y+1,1);const px=a[0]+(b[0]-a[0])*ff,py=a[1]+(b[1]-a[1])*ff-Math.sin(ff*Math.PI)*40;const C=RCOL[r.n];cx.fillStyle=rgba(C,1-ff*.7);cx.shadowColor=C;cx.shadowBlur=10;cx.beginPath();cx.arc(px,py,2.6,0,7);cx.fill();cx.shadowBlur=0}}}
+ const hotRooms={0:[],1:['Structure','Liquidity','Macro','Risk'],2:['Reviewer'],3:['Conflict Engine'],4:['Risk Engine'],5:['Risk Engine'],6:[],7:[]}[step];
+ ROOMS.forEach(r=>room(r,hotRooms.includes(r.n)));
+ hits=[];
+ DESKS.concat(SPARE.map(s=>({s:'',x:s[0],y:s[1],spare:1}))).forEach(d=>{const a=d.live?1:d.spare?.35:.4;
+  box(d.x,d.y,0,2.4,1,.45,DESK,a,d.live?'rgba(57,255,136,.45)':null);
+  for(let m=0;m<2;m++){box(d.x+.3+m*1,d.y+.18,.45,.8,.07,.5,MON,a);cx.globalAlpha=a*.9;const mx=d.x+.32+m*1,my=d.y+.26;
+   poly([P(mx,my,.5),P(mx+.76,my,.5),P(mx+.76,my,.9),P(mx,my,.9)],d.live?(step==6&&m==0?'#39ff88':'#0b2416'):'#141310');
+   if(d.live){cx.strokeStyle=step==6&&m==0?'#06240f':'#39ff88';cx.shadowColor='#39ff88';cx.shadowBlur=6;cx.lineWidth=1.2;cx.beginPath();for(let i=0;i<=12;i++){const p=P(mx+.04+i*.056,my,.62+.18*Math.abs(Math.sin(i*.9+t/600+m)));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke();cx.shadowBlur=0}cx.globalAlpha=1}
+  if(!d.spare){const b=tag(d.x+2.0,d.y+.3,1.1,d.s,deskSub(d),d.live);hits.push({b,box:[Math.min(P(d.x,d.y,.45)[0],P(d.x,d.y+1)[0]),P(d.x,d.y,1)[1],(3.4)*U,2.2*U],s:d.s,live:d.s==='EURUSD'})}
+ });
+ [[17.3,13.3],[4.7,13.3],[17.3,4.3]].forEach(([x,y])=>{box(x-.25,y-.25,0,.5,.5,.4,['#20272a','#141a1c','#192023']);const [px,py]=P(x,y,.4);cx.fillStyle='#163a33';cx.beginPath();cx.ellipse(px,py-U*.35,U*.32,U*.42,0,0,7);cx.fill();cx.strokeStyle='#1f5a4c';cx.stroke()});
+ Object.values(A).forEach(a=>{a.x=a.hx;a.y=a.hy;a.walk=0;a.carry=0});
+ const wk=WALK[step];if(wk){const a=A[wk[0]];const path=[[a.hx,a.hy]].concat(route(wk[1],wk[2]));let ff;
+  if(FIX!=null){ff=.62}else ff=f<.45?f/.45:f<.55?1:1-(f-.55)/.45;
+  const p=along(path,Math.min(1,ff));a.x=p[0];a.y=p[1];a.walk=(f<.45||f>.55)&&FIX==null?1:(FIX!=null?1:0);a.carry=f<.5||FIX!=null}
+ if(step==6||step==7)A.Exec.carry=step==6;
+ Object.values(A).sort((p,q)=>(p.x+p.y)-(q.x+q.y)).forEach(a=>person(a,t,!!(SAY[step]&&SAY[step][a.id])));
+ ROOMS.forEach(r=>r.after());
+ NHITS=[];Object.values(A).forEach(plate);
+ const say=SAY[step]||{};PLACED=hits.map(h=>h.b.slice());
+ Object.values(A).forEach(a=>{if(say[a.id])bubble(a,say[a.id][0],true,MOB()?null:say[a.id][1])});
+ if(!MOB())Object.values(A).forEach(a=>{if(!say[a.id])bubble(a,IDLE(a.id),false)});
+ if(say.wall){const [hx,hy]=P(0,5.0,3.0);bubble({head:[hx,hy],al:1},say.wall[0],true,say.wall[1])}
+ requestAnimationFrame(frame)}
+fit();requestAnimationFrame(frame);
+const pts=new Map();let lastD=0,moved=0;cv.style.touchAction='none';
+cv.addEventListener('pointerdown',e=>{pts.set(e.pointerId,[e.clientX,e.clientY]);moved=0});
+cv.addEventListener('pointermove',e=>{if(!pts.has(e.pointerId))return;const o=pts.get(e.pointerId);pts.set(e.pointerId,[e.clientX,e.clientY]);
+ if(pts.size==1){PX+=e.clientX-o[0];PY+=e.clientY-o[1];moved+=Math.abs(e.clientX-o[0])+Math.abs(e.clientY-o[1])}
+ else if(pts.size==2){const [a,b]=[...pts.values()];const d=Math.hypot(a[0]-b[0],a[1]-b[1]);if(lastD)Z=Math.max(.6,Math.min(3,Z*d/lastD));lastD=d;moved=99}fit()});
+const up=e=>{pts.delete(e.pointerId);if(pts.size<2)lastD=0};cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+cv.addEventListener('wheel',e=>{e.preventDefault();Z=Math.max(.6,Math.min(3,Z*(e.deltaY<0?1.1:.9)));fit()},{passive:false});
+cv.addEventListener('dblclick',()=>{Z=1;PX=0;PY=0;fit()});
+cv.addEventListener('click',e=>{if(moved>6)return;const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+ for(const n of NHITS){if(x>n[0]&&x<n[0]+n[2]&&y>n[1]&&y<n[1]+n[3]){openAgent(n[4]);return}}
+ for(const h of hits){const [bx,by,bw,bh]=h.b,[kx,ky,kw,kh]=h.box;if(h.live&&((x>bx&&x<bx+bw&&y>by&&y<by+bh)||(x>kx&&x<kx+kw&&y>ky&&y<ky+kh))){openD();return}}});
+cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;cv.style.cursor=NHITS.some(n=>x>n[0]&&x<n[0]+n[2]&&y>n[1]&&y<n[1]+n[3])||hits.some(h=>h.live&&x>h.box[0]&&x<h.box[0]+h.box[2]&&y>h.box[1]-60&&y<h.box[1]+h.box[3])?'pointer':'default'});
+// ---- drawers (all values escaped; "—" / "sin datos aún" when unknown) ----
+function rrBar(t){const sl=t.sl_actual!=null?t.sl_actual:t.sl_expected,tp=t.tp_actual!=null?t.tp_actual:t.tp_expected,en=t.entry_actual!=null?t.entry_actual:t.entry_expected;
+ if(!ok(sl)||!ok(tp)||!ok(en)||sl===tp)return `<div class="empty">${EMPTY}</div>`;
+ const pos=v=>Math.max(0,Math.min(100,100*(v-sl)/(tp-sl)));const e=pos(en);const now=ok(t.exit_price)?t.exit_price:t.last_price;
+ return `<div class="rr"><div class="seg" style="left:0;width:${e}%;background:#8a2335"></div><div class="seg" style="left:${e}%;width:${100-e}%;background:#1f7a4a"></div>
+ <div class="t" style="left:2%">SL ${px(sl)}</div><div class="t" style="left:${e}%">Entry ${px(en)}</div><div class="t" style="left:96%">TP ${px(tp)}</div>`+
+ (ok(now)?`<div class="dot" style="left:${pos(now)}%"></div><div class="t t2" style="left:${pos(now)}%;color:var(--gold)">${px(now)} · ${esc(fR(t.r_realized))}</div>`:'')+`</div>`}
+const delta=(a,b)=>ok(a)&&ok(b)?(a===b?NA:px(b-a)):NA;
+function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${EMPTY}</div>`;
+ const open=t.status==='OPEN',ex=badge('trades');
+ const slip=ok(t.slippage_pips)?t.slippage_pips.toFixed(1)+' pip':ok(t.slippage_price)?px(t.slippage_price):NA;
+ const rows=[['Entry',px(t.entry_expected),px(t.entry_actual),slip,t.slippage_against?'neg':t.slippage_against===false?'pos':''],
+  ['Stop Loss',px(t.sl_expected),px(t.sl_actual),delta(t.sl_expected,t.sl_actual),''],['Take Profit',px(t.tp_expected),px(t.tp_actual),delta(t.tp_expected,t.tp_actual),''],
+  ['Riesgo',money(t.risk_expected),NA,'',''],['R',ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA,fR(t.r_realized),'',''],
+  ['PnL',NA,money(t.pnl,1),open?'abierta':(t.close_reason||''),''],['MAE / MFE',NA,NA,'','']];
+ const chain=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng'].map(id=>`<span>◆</span> ${esc(NAMES[id][2])} — ${esc(AG[id]?(AG[id].status||NA):EMPTY)}`).join('<br>');
+ const others=TRADES.length>1?`<div class="lab">Operaciones recientes</div><table><tr><th>Fecha (ET)</th><th>Lado</th><th>Estado</th><th>R</th></tr>${TRADES.map((o,i)=>`<tr class="pick" onclick="pickTrade(${i})"><td>${esc(o.opened_at||NA)}</td><td>${esc(SIDE[o.side]||NA)}</td><td>${o.status==='OPEN'?'Abierta':esc(o.close_reason||'Cerrada')}</td><td class="${tone(o.r_realized)}">${esc(fR(o.r_realized))}</td></tr>`).join('')}</table>`:'';
+ return `<h2 class="serif">${esc(t.symbol||'EURUSD')} · ${esc(SIDE[t.side]||NA)}</h2>
+ <div class="sub">Trade #${esc(t.id||NA)} · ${esc(t.opened_at||NA)} · ${ok(t.units)?esc(t.units.toLocaleString('en-US',{maximumFractionDigits:0})):NA} units · ${open?'Abierta':'Cerrada'}${t.closed_at?' '+esc(t.closed_at):''}${ex}</div>
+ <div class="big"><div><b class="${tone(t.pnl)}">${esc(money(t.pnl,1))}</b><small>PnL</small></div><div><b class="${tone(t.r_realized)}">${esc(fR(t.r_realized))}</b><small>R ${open?'actual':'final'}</small></div><div><b style="color:var(--mute)">${ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA}</b><small>R objetivo</small></div></div>
+ <div class="lab">Plan R:R</div>${rrBar(t)}
+ <div class="lab">Esperado vs real</div><table><tr><th></th><th>Esperado</th><th>Real</th><th>Δ</th></tr>${rows.map(r=>`<tr><td>${r[0]}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="${r[4]}">${esc(r[3])}</td></tr>`).join('')}</table>
+ <div class="lab">Cadena de decisión</div><div class="chain">${chain}</div>${others}`}
+function pickTrade(i){TR=TRADES[i]||TR;document.getElementById('tradeV').innerHTML=tradeHTML(TR)}
+document.getElementById('tradeV').innerHTML=tradeHTML(TR);
+function openAgent(id){const n=NAMES[id],d=AG[id]||{};document.getElementById('tradeV').style.display='none';const v=document.getElementById('agentV');v.style.display='';
+ const sig=d.signals&&d.signals.length?`<table><tr><th>Fecha (ET)</th><th>Señal</th><th>Resultado</th><th>R</th></tr>${d.signals.map(r=>`<tr><td>${esc(r.at||NA)}</td><td>${esc(r.signal||NA)}</td><td>${esc(r.outcome||NA)}</td><td class="${tone(r.r)}" style="font-weight:500">${esc(fR(r.r))}</td></tr>`).join('')}</table>`:`<div class="empty">${EMPTY}</div>`;
+ v.innerHTML=`<h2 class="serif" style="color:${COL[id]};text-shadow:0 0 18px ${COL[id]}66">${n[0]}</h2><div style="height:2px;width:46px;background:${COL[id]};margin:10px 0 0;box-shadow:0 0 10px ${COL[id]}"></div><div class="sub">${n[1]} · Sala ${n[2]}${badge('agents.'+id)}</div>
+ <div class="big"><div><b>${ok(d.hit_rate)?d.hit_rate.toFixed(0)+'%':NA}</b><small>Hit rate</small></div><div><b>${ok(d.confidence)?d.confidence.toFixed(2):NA}</b><small>Confianza</small></div><div><b style="font-size:16px;padding-top:12px;color:var(--gold2)">${esc(d.status||EMPTY)}</b><small>Estado</small></div></div>
+ <div class="lab">Último análisis · ${esc(d.as_of||NA)}</div><div class="chain" style="line-height:1.7">${esc(d.analysis||EMPTY)}</div>
+ <div class="lab">Últimas 5 señales</div>${sig}
+ <div class="lab">Actualizado ${esc(d.as_of||NA)}${isEx('agents.'+id)?' · datos de ejemplo':''}</div>`;
+ document.body.classList.add('open');setTimeout(fit,520)}
+function openD(){document.getElementById('agentV').style.display='none';document.getElementById('tradeV').style.display='';document.body.classList.add('open');setTimeout(fit,520)}
+function closeD(){document.body.classList.remove('open');setTimeout(fit,520)}
+if(q.has('agent')&&NAMES[q.get('agent')]){openAgent(q.get('agent'));document.getElementById('stage').style.transition='none';document.getElementById('drawer').style.transition='none';fit()}
+if(q.has('detail')){document.body.classList.add('open');document.getElementById('stage').style.transition='none';document.getElementById('drawer').style.transition='none';fit()}
+</script></body></html>
