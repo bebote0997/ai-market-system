@@ -1,10 +1,13 @@
 """Durable notification contract. Delivery never controls trading."""
 from dataclasses import asdict, dataclass
 import json
+import logging
 import os
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,9 @@ class SlackNotificationSink:
     def deliver(self, event: NotificationEvent) -> None:
         if not self.webhook_url:
             raise SlackNotificationError("NOT_CONFIGURED")
+        if event.type == "DAILY_SUMMARY":
+            self._deliver_daily_summary(event)
+            return
         details = {
             "event_id": event.event_id, "run_id": event.run_id,
             "timestamp_utc": event.timestamp_utc, "severity": event.severity,
@@ -101,12 +107,7 @@ class SlackNotificationSink:
             "evidence_refs": event.evidence_refs,
         }
         payload = {"text": "AI Market System PAPER alert\n" + json.dumps(details, sort_keys=True)}
-        if event.type == "DAILY_SUMMARY" and _routing_on():
-            payload = {"text": oanda_demo_summary_text(event.timestamp_utc)}  # DEC-DEMO-GATE-1: never PAPER numbers
-        elif event.type == "DAILY_SUMMARY":
-            payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
-                       json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
-        elif event.type == "EXECUTION_DECISION":
+        if event.type == "EXECUTION_DECISION":
             outcome = event.execution or {}
             payload = {"text": "AI Market System PAPER execution\n" + json.dumps({
                 "run_id": event.run_id, "symbol": event.symbol,
@@ -122,6 +123,26 @@ class SlackNotificationSink:
                 "risk_status": event.risk_decision.get("status") if event.risk_decision else None,
             }, sort_keys=True)}
         send_slack(self.transport, self.webhook_url, payload, self.timeout)
+
+
+    def _deliver_daily_summary(self, event):
+        """DEC-DEMO-GATE-1: OANDA demo figures while routing is ON (never PAPER numbers), else the PAPER summary.
+        One log line per attempt: source + UTC date of the summary only (never the webhook URL or figures)."""
+        source = "OANDA_DEMO" if _routing_on() else "PAPER"
+        if source == "OANDA_DEMO":
+            payload = {"text": oanda_demo_summary_text(event.timestamp_utc)}
+        else:
+            payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
+                       json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
+        date = str((event.daily_summary or {}).get("date_utc") or "")[:10] or "-"
+        try:
+            send_slack(self.transport, self.webhook_url, payload, self.timeout)
+        except Exception as exc:
+            code = exc.args[0] if isinstance(exc, SlackNotificationError) and exc.args else type(exc).__name__
+            LOG.warning("component=notifications event=DAILY_SUMMARY_FAILED source=%s date=%s error_type=%s", source,
+                        date, code)
+            raise
+        LOG.info("component=notifications event=DAILY_SUMMARY_SENT source=%s date=%s", source, date)
 
 
 def _routing_on():
@@ -163,6 +184,7 @@ def _demo_lines(timestamp_utc):
     avg_r = None if stats is None else stats.get("avg_r")
     lines = [demo_day_text(day, DEMO_LENGTH_DAYS),
              "NAV: " + _amount(snapshot.get("nav"), currency),
+             "Balance: " + _amount(snapshot.get("balance"), currency),
              "P&L desde el inicio del demo: " + _amount((snapshot.get("capital") or {}).get("change"), currency, True)]
     if stats is None:
         return lines + ["OANDA demo: sin datos de operaciones"]
