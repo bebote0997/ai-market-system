@@ -185,6 +185,24 @@ def breakeven_stop(row):
     return round_price(_dec(row.get("fill_price")) or _dec(row["entry"]))
 
 
+# Close / breakeven outcomes also go to the process log (one line each; the broker trade number only, never the
+# account id, token or client id). Every close path (manage, daily-loss/drawdown, Friday, emergency) uses _close.
+ACTION_LOG_KINDS = frozenset({"CLOSED", "CLOSE_UNKNOWN", "CLOSE_FAILED", "CLOSE_REJECTED", CLOSED_AT_BROKER,
+                              "BREAKEVEN", "BREAKEVEN_UNKNOWN", "BREAKEVEN_REJECTED", "BREAKEVEN_BLOCKED"})
+_ACTION_LOG_OK = frozenset({"CLOSED", CLOSED_AT_BROKER, "BREAKEVEN"})
+
+
+def _log_token(value):
+    text = "-" if value is None or value == "" else str(value)
+    return "".join(ch if ch.isalnum() or ch in "._:-" else "_" for ch in text)[:64]
+
+
+def _log_action(kind, trade_id, reason):
+    level = logging.INFO if kind in _ACTION_LOG_OK else logging.WARNING
+    LOG.log(level, "component=broker_demo event=%s trade_id=%s reason=%s", kind, _log_token(trade_id),
+            _log_token(reason))
+
+
 def _not_routed(reason):
     return "NOT_ROUTED", reason
 
@@ -217,12 +235,14 @@ class BrokerDemoRouter:
     __str__ = __repr__
 
     # -- helpers ---------------------------------------------------------------------------------------------------
-    def _event(self, kind, client_id=None, **detail):
+    def _event(self, kind, client_id=None, *, log_trade_id=None, **detail):
         try:
             self._store.event(kind, client_id, detail or None)
         except Exception as exc:  # noqa: BLE001 - audit is best effort; decisions use the trade rows
             LOG.warning("component=broker_demo event=EVENT_WRITE_FAILED kind=%s error_type=%s", kind,
                         type(exc).__name__)
+        if kind in ACTION_LOG_KINDS:
+            _log_action(kind, detail.get("trade_id", log_trade_id), detail.get("reason"))
         self._alert(kind, detail)
 
     def _alert(self, kind, detail):
@@ -649,11 +669,11 @@ class BrokerDemoRouter:
         try:
             result = self._broker.close_market(row["trade_id"], reason=reason, client_id=close_id)
         except (BrokerAuthError, BrokerRateLimited) as exc:  # definite: not processed, retried next tick
-            self._event("CLOSE_FAILED", client_id, reason=type(exc).__name__)
+            self._event("CLOSE_FAILED", client_id, reason=type(exc).__name__, log_trade_id=row["trade_id"])
             return "CLOSE_FAILED"
         except Exception as exc:  # noqa: BLE001 - may have closed: latch until reconcile
             self._store.update(client_id, pending_action=CLOSE_PREFIX + reason, action_status=UNKNOWN)
-            self._event("CLOSE_UNKNOWN", client_id, reason=type(exc).__name__)
+            self._event("CLOSE_UNKNOWN", client_id, reason=type(exc).__name__, log_trade_id=row["trade_id"])
             return UNKNOWN
         if result.status == ACCEPTED:
             self._store.update(client_id, status=CLOSED, closed_reason=reason, pending_action=None, action_status=None)
@@ -665,10 +685,10 @@ class BrokerDemoRouter:
             self._event(CLOSED_AT_BROKER, client_id, trade_id=row["trade_id"], reason=SL_TP_OR_EXTERNAL)
             return CLOSED_AT_BROKER
         if result.status == REJECTED:
-            self._event("CLOSE_REJECTED", client_id, reason=result.reason)
+            self._event("CLOSE_REJECTED", client_id, reason=result.reason, log_trade_id=row["trade_id"])
             return "CLOSE_REJECTED"
         self._store.update(client_id, pending_action=CLOSE_PREFIX + reason, action_status=UNKNOWN)
-        self._event("CLOSE_UNKNOWN", client_id, reason=result.reason)
+        self._event("CLOSE_UNKNOWN", client_id, reason=result.reason, log_trade_id=row["trade_id"])
         return UNKNOWN
 
     def _breakeven(self, row):
@@ -677,21 +697,21 @@ class BrokerDemoRouter:
         try:
             result = self._broker.modify_stop(row["trade_id"], entry, client_id=f"{client_id}-be")
         except (BrokerGuardError, BrokerAuthError, BrokerRateLimited) as exc:  # switch OFF / emergency / definite
-            self._event("BREAKEVEN_BLOCKED", client_id, reason=type(exc).__name__)
+            self._event("BREAKEVEN_BLOCKED", client_id, reason=type(exc).__name__, log_trade_id=row["trade_id"])
             return "BREAKEVEN_BLOCKED"
         except Exception as exc:  # noqa: BLE001
             self._store.update(client_id, pending_action=BREAKEVEN, action_status=UNKNOWN)
-            self._event("BREAKEVEN_UNKNOWN", client_id, reason=type(exc).__name__)
+            self._event("BREAKEVEN_UNKNOWN", client_id, reason=type(exc).__name__, log_trade_id=row["trade_id"])
             return UNKNOWN
         if result.status == ACCEPTED:
             self._store.update(client_id, stage=td.STAGE_DAY2, initial_stop=row["stop"], stop=entry)
             self._event("BREAKEVEN", client_id, trade_id=row["trade_id"], stop=entry)
             return "BREAKEVEN"
         if result.status == REJECTED:
-            self._event("BREAKEVEN_REJECTED", client_id, reason=result.reason)
+            self._event("BREAKEVEN_REJECTED", client_id, reason=result.reason, log_trade_id=row["trade_id"])
             return "BREAKEVEN_REJECTED"
         self._store.update(client_id, pending_action=BREAKEVEN, action_status=UNKNOWN)
-        self._event("BREAKEVEN_UNKNOWN", client_id, reason=result.reason)
+        self._event("BREAKEVEN_UNKNOWN", client_id, reason=result.reason, log_trade_id=row["trade_id"])
         return UNKNOWN
 
     def emergency_close_all(self, reason="emergency", **_kwargs):
