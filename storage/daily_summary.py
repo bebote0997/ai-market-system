@@ -140,7 +140,7 @@ def build_daily_summary(store, at, day=None):
             "SELECT count(*) FROM paper_positions WHERE json_extract(payload,'$.status')='OPEN'").fetchone()[0],
         "positions_closed": len(closed),
         "realized_pnl_day": sum(pnl) if all(v is not None for v in pnl) else None,
-        "wins_day": sum(v is not None and v > 0 for v in pnl),
+        "wins_day": sum(v > 0 for v in pnl) if all(v is not None for v in pnl) else None,
         "avg_r_day": avg_r, "avg_r_day_reason": avg_r_reason,
         "unrealized_pnl_current": account.get("unrealized_pnl"),
         "equity_current": account.get("equity"),

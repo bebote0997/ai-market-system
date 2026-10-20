@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-19 — DEC-SUMMARY-DAY-1: correcciones de revisión Codex (branch `feat/summary-trading-day`)
+
+- HIGH `runtime/demo_runner.py` `daily_summary`: cada pase (sink durable únicamente) entrega también los DAILY_SUMMARY persistidos que un crash dejó sin capturar (journal sin `notification_events`) o sin reclamar (sin fila en `notification_deliveries`). Un envío reclamado sin resultado durante más de `SUMMARY_CLAIM_GRACE = 15 min` (crash a mitad del envío) no se reenvía (Slack no deduplica): estado `UNKNOWN` y una sola línea `component=notifications event=DAILY_SUMMARY_UNKNOWN date=<fecha>`. `storage/database.py` sin cambios (módulo congelado por hash).
+- MED `runtime/notifications.py`: NAV, Balance, P&L desde el inicio del demo y operaciones abiertas son la foto a la hora de envío y se rotulan «(a las HH:MM ET)»; «Día N de 30» se calcula a la hora de envío (`SlackNotificationSink(clock=...)`, por defecto ahora). Los agregados del día siguen en la ventana 17:00 → 17:00 NY de su fecha (catch-up de varios días correcto).
+- MED `execution/demo_metrics.window_statistics` y `storage/daily_summary.wins_day`: si una operación incluida no tiene P&L, las ganadoras son desconocidas (`None`; Slack muestra «ganadoras: —»), nunca un recuento parcial.
+- Tests: `test_daily_summary.py` (crash tras captura ⇒ enviado una vez en el siguiente pase; crash tras reclamo ⇒ no reenviado, `UNKNOWN` registrado una vez; `wins_day` None), `test_demo_gates_oanda.py` (catch-up de varios días con foto a la hora de envío, «ganadoras: —»). REAL OFF.
+
 ## 2026-10-19 — Dashboard: terminología profesional de trading (branch `feat/summary-trading-day`, orden del owner 22:39 ET)
 
 - Revierte las frases en español simple de `e672c51` a términos estándar (como antes de esa reescritura): PnL (Realized / Unrealized / Net / Today PnL), Equity, Balance, NAV, Max drawdown, Win rate, Avg R (expectancy), R realized, Open positions, Closed trades, Daily loss limit, Setup, Side, Size, Entry / Fill / Exit, Stop loss (SL), Take profit (TP), R:R, Slippage, Exit reason. Español solo donde es neutral (navegación, estados del sistema, fechas). Se mantienen «AI Trading Floor» y «Día N de 30»; el texto Slack no cambia.

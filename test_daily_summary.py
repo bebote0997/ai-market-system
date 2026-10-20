@@ -122,6 +122,8 @@ class DailySummaryTests(unittest.TestCase):
         self.assertEqual(summary['cycles'], 1)
         self.assertEqual(summary['provider_problems'], 510)
         self.assertIsNone(summary['realized_pnl_day'])
+        self.entity('closed_trades', 'win', exited_at=DAY.isoformat(), net_pnl=5)
+        self.assertIsNone(build_daily_summary(self.store, T)['wins_day'])  # a trade without P&L: wins unknown
         with self.assertRaises(ValueError):
             self.runner.daily_summary(T.replace(tzinfo=None))
 
@@ -244,15 +246,39 @@ class DailySummaryTests(unittest.TestCase):
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM runs').fetchone()[0], 0)
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM paper_orders').fetchone()[0], 0)
 
-    def test_crash_after_journal_commit_can_capture_persisted_summary(self):
+    def test_crash_after_journal_commit_is_captured_and_sent_on_the_next_pass(self):
         with patch.object(self.store, 'capture_notifications', side_effect=RuntimeError('crash')):
             self.assertTrue(self.runner.daily_summary(T))
         self.assertEqual(len(self.sent), 0)
-        events = self.store.capture_notifications()
-        self.runner._deliver(events)
-        self.runner._deliver(events)
-        self.assertEqual(len(self.sent), 1)
         self.assertFalse(self.runner.daily_summary(T))
+        self.assertFalse(self.runner.daily_summary(T + timedelta(hours=1)))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_crash_after_capture_before_claim_is_sent_on_the_next_pass_exactly_once(self):
+        with patch.object(self.runner, '_deliver'):  # the process dies between capture and claim
+            self.assertTrue(self.runner.daily_summary(T))
+        self.assertEqual((len(self.store.notification_events()), len(self.sent)), (1, 0))
+        for at in (T + timedelta(minutes=15), T + timedelta(hours=2)):
+            self.assertFalse(self.runner.daily_summary(at))
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual([r[0] for r in self.store.db.execute('SELECT status FROM notification_deliveries')],
+                         ['DELIVERED'])
+
+    def test_crash_after_claim_is_never_resent_and_logged_unknown_once(self):
+        with patch.object(self.runner.sink, 'deliver', side_effect=KeyboardInterrupt), \
+                self.assertRaises(KeyboardInterrupt):  # the process dies mid-send: claimed, no outcome
+            self.runner.daily_summary(T)
+        with self.assertNoLogs('ai_floor.observability', 'WARNING'):
+            self.assertFalse(self.runner.daily_summary(T + timedelta(minutes=5)))  # may still be in flight
+        with self.assertLogs('ai_floor.observability', 'WARNING') as logs:
+            self.assertFalse(self.runner.daily_summary(T + timedelta(minutes=20)))
+        self.assertEqual(logs.output, ['WARNING:ai_floor.observability:component=notifications '
+                                       'event=DAILY_SUMMARY_UNKNOWN date=2026-09-18'])
+        with self.assertNoLogs('ai_floor.observability', 'WARNING'):
+            self.assertFalse(self.runner.daily_summary(T + timedelta(hours=3)))
+        self.assertEqual(len(self.sent), 0)
+        self.assertEqual([r[0] for r in self.store.db.execute('SELECT status FROM notification_deliveries')],
+                         ['UNKNOWN'])
 
     def test_transport_maps_errors_without_url_or_response_body(self):
         self.runner.daily_summary(T)

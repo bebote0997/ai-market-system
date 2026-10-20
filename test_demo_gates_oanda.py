@@ -302,11 +302,15 @@ SNAPSHOT = {"stats": {"trades": 3, "wins": 2, "total_pnl": 40.0, "today_pnl": -5
                             closed_row("2026-10-20T21:00:00", 7.0, 2.0)]}
 
 
+SENT_AT = datetime(2026, 10, 21, 14, 0, tzinfo=timezone.utc)  # 10:00 EDT, the morning after the summarized day
+
+
 class SlackSummaryTests(unittest.TestCase):
     def send(self, env, **patches):
         sent = []
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x",
-                                     transport=lambda url, payload, timeout: sent.append(payload["text"]))
+                                     transport=lambda url, payload, timeout: sent.append(payload["text"]),
+                                     clock=lambda: SENT_AT)
         with patch.dict(os.environ, env), \
                 patch("execution.demo_dashboard.demo_snapshot", **patches.get("snapshot", {"return_value": SNAPSHOT})), \
                 patch("execution.demo_dashboard.demo_progress",
@@ -324,9 +328,10 @@ class SlackSummaryTests(unittest.TestCase):
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"})
         self.assertEqual(text.splitlines(), [
             "AI Market System OANDA DEMO DAILY_SUMMARY", "Día 2 de 30", "Día de trading: 2026-10-20 (17:00 a 17:00 ET)",
-            "NAV: 100,040.00 USD", "Balance: 100,039.98 USD", "P&amp;L desde el inicio del demo: +40.02 USD",
+            "NAV (a las 10:00 ET): 100,040.00 USD", "Balance (a las 10:00 ET): 100,039.98 USD",
+            "P&amp;L desde el inicio del demo (a las 10:00 ET): +40.02 USD",
             "P&amp;L del día de trading: -5.50 USD", "Operaciones cerradas en el día: 3 (ganadoras: 2)",
-            "R medio del día: -0.08", "Operaciones abiertas: 1"])
+            "R medio del día: -0.08", "Operaciones abiertas (a las 10:00 ET): 1"])
         self.assertNotIn("1234", text)
         self.assertNotIn("paper", text.lower())
 
@@ -340,8 +345,10 @@ class SlackSummaryTests(unittest.TestCase):
         nav_only = {**empty, "nav": 99990.0, "currency": "USD"}
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}, snapshot={"return_value": nav_only}, day=None)
         self.assertEqual(text.splitlines()[1:], ["Demo OANDA: aún sin operaciones del demo",
-                                                 "Día de trading: 2026-10-20 (17:00 a 17:00 ET)", "NAV: 99,990.00 USD",
-                                                 "Balance: sin datos", "P&amp;L desde el inicio del demo: sin datos",
+                                                 "Día de trading: 2026-10-20 (17:00 a 17:00 ET)",
+                                                 "NAV (a las 10:00 ET): 99,990.00 USD",
+                                                 "Balance (a las 10:00 ET): sin datos",
+                                                 "P&amp;L desde el inicio del demo (a las 10:00 ET): sin datos",
                                                  "OANDA demo: sin datos de operaciones"])
 
     def test_send_log_line_names_the_source_never_the_webhook(self):
@@ -371,16 +378,35 @@ class SlackSummaryTests(unittest.TestCase):
                                                        "source=OANDA_DEMO date=2026-10-19 error_type=RATE_LIMITED")
         self.assertNotIn("secret", logs.output[0])
 
-    def test_oanda_summary_is_read_at_the_ny_close_of_its_date(self):
-        sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x", transport=lambda *a: None)
-        late = NotificationEvent("1.0", "evt-1", "daily:2026-10-19", "2026-10-20T14:00:00+00:00", "INFO",
-                                 "DAILY_SUMMARY", None, (), (), None, (), (), (),
-                                 daily_summary={"date_ny": "2026-10-19", "close_at_utc": "2026-10-19T21:00:00+00:00"})
+    def test_multi_day_catch_up_snapshot_at_send_time_and_aggregates_per_trading_day(self):
+        # Two missed days sent together the next morning: current figures (NAV, balance, open trades, day counter)
+        # are read and labelled at the send time; each day's aggregates keep its own 17:00 -> 17:00 NY window.
+        sent = []
+        sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x", clock=lambda: SENT_AT,
+                                     transport=lambda url, payload, timeout: sent.append(payload["text"]))
+        events = [NotificationEvent("1.0", f"evt-{date}", f"daily:{date}", SENT_AT.isoformat(), "INFO",
+                                    "DAILY_SUMMARY", None, (), (), None, (), (), (),
+                                    daily_summary={"date_ny": date, "close_at_utc": close, "window_start_utc": start})
+                  for date, start, close in (("2026-10-19", "2026-10-18T21:00:00+00:00", "2026-10-19T21:00:00+00:00"),
+                                             ("2026-10-20", "2026-10-19T21:00:00+00:00", "2026-10-20T21:00:00+00:00"))]
         with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), \
                 patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT) as snap, \
-                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
-            sink.deliver(late)
-        self.assertEqual(snap.call_args.args[0], datetime(2026, 10, 19, 21, 0, tzinfo=timezone.utc))
+                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 3)) as progress:
+            for summary in events:
+                sink.deliver(summary)
+        self.assertEqual([c.args[0] for c in snap.call_args_list + progress.call_args_list], [SENT_AT] * 4)
+        first, second = (text.splitlines() for text in sent)
+        for lines in (first, second):
+            self.assertEqual(lines[1], "Día 3 de 30")
+            self.assertEqual([lines[3], lines[4], lines[-1]], ["NAV (a las 10:00 ET): 100,040.00 USD",
+                                                               "Balance (a las 10:00 ET): 100,039.98 USD",
+                                                               "Operaciones abiertas (a las 10:00 ET): 1"])
+        self.assertEqual((first[2], first[6:8]), ("Día de trading: 2026-10-19 (17:00 a 17:00 ET)",
+                                                  ["P&amp;L del día de trading: +45.50 USD",
+                                                   "Operaciones cerradas en el día: 1 (ganadoras: 1)"]))
+        self.assertEqual((second[2], second[6:8]), ("Día de trading: 2026-10-20 (17:00 a 17:00 ET)",
+                                                    ["P&amp;L del día de trading: -5.50 USD",
+                                                     "Operaciones cerradas en el día: 3 (ganadoras: 2)"]))
 
     def test_day_figures_cover_the_window_and_flag_missing_data(self):
         with patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
@@ -388,7 +414,7 @@ class SlackSummaryTests(unittest.TestCase):
                     ([], ["+0.00 USD", "0 (ganadoras: 0)", "sin datos (sin operaciones cerradas en el día)"]),
                     ([closed_row("2026-10-20T10:00:00", 2.0, None, "sin stop original"),
                       closed_row("2026-10-20T11:00:00", None, 1.0)],
-                     ["sin datos", "2 (ganadoras: 1)", "sin datos (sin stop original en 1 de 2 operaciones)"]),
+                     ["sin datos", "2 (ganadoras: —)", "sin datos (sin stop original en 1 de 2 operaciones)"]),
                     ([{**closed_row("2026-10-20T10:00:00", 2.0, 1.0), "exited_at": None}],
                      ["sin datos", "sin datos", "sin datos (datos de cierre incompletos en OANDA)"])):
                 with self.subTest(rows=len(rows)), \
@@ -401,11 +427,12 @@ class SlackSummaryTests(unittest.TestCase):
             lines = oanda_demo_summary_text("2026-10-20T21:00:00+00:00", "2026-10-20T00:00:00+00:00").splitlines()
         self.assertEqual(lines[6:8], ["P&L del día de trading: -8.50 USD", "Operaciones cerradas en el día: 2 (ganadoras: 1)"])
 
-    def test_summary_text_uses_event_time(self):
+    def test_summary_text_reads_the_snapshot_at_send_time(self):
         with patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT) as snap, \
-                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 1)):
-            oanda_demo_summary_text("2026-10-20T21:00:00Z")
-        self.assertEqual(snap.call_args.args[0], datetime(2026, 10, 20, 21, 0, tzinfo=timezone.utc))
+                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 1)) as progress:
+            lines = oanda_demo_summary_text("2026-10-20T21:00:00Z", None, SENT_AT).splitlines()
+        self.assertEqual((snap.call_args.args[0], progress.call_args.args[0]), (SENT_AT, SENT_AT))
+        self.assertEqual(lines[2], "Día de trading: 2026-10-20 (17:00 a 17:00 ET)")
 
 
 def setUpModule():  # DEC-XAU-OFF-1: these tests drive XAUUSD cycles; the pause itself is in test_pause_xauusd
