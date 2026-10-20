@@ -573,24 +573,32 @@ def plot_equity(path, trades_by_variant):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    colors = {"V2_F3": "#2a6fdb", "V2_I2": "#e07b39", "V2_I2_15": "#3a9e6e"}
-    fig, ax = plt.subplots(figsize=(10, 5), dpi=120)
+    colors = {"V2_F3": "#2a78d6", "V2_I2": "#eb6834", "V2_I2_15": "#1baf7a"}  # categorical slots 1-3, fixed order
+    ink, muted, surface = "#0b0b0b", "#52514e", "#fcfcfb"
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=120, facecolor=surface)
+    ax.set_facecolor(surface)
     for variant, trades in trades_by_variant.items():
         if not trades:
             continue
         xs = [trades[0]["fill_at"]] + [t["exit_at"] for t in trades]
         ys = np.concatenate([[0.0], np.cumsum([t["r"] for t in trades])])
-        ax.step(xs, ys, where="post", color=colors.get(variant), linewidth=1.8, label=f"{variant} ({ys[-1]:+.1f}R)")
-    ax.axhline(0, color="#999999", linewidth=0.8)
-    ax.set_title("EURUSD 1-year backtest — equity in R (net of modeled spread + slippage)", loc="left")
-    ax.set_ylabel("Cumulative R")
-    ax.grid(axis="y", color="#e5e5e5")
+        ax.step(xs, ys, where="post", color=colors.get(variant), linewidth=2, label=variant)
+        ax.annotate(f"{variant} {ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points",
+                    va="center", fontsize=9, color=ink)
+    ax.axhline(0, color=muted, linewidth=0.8)
+    ax.set_title("EURUSD 1-year backtest - cumulative R, net of modeled spread + slippage", loc="left", color=ink)
+    ax.set_ylabel("Cumulative R", color=muted)
+    ax.tick_params(colors=muted)
+    ax.grid(axis="y", color="#e8e8e6", linewidth=0.8)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    ax.legend(frameon=False, loc="upper left")
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color("#c9c8c4")
+    if any(trades_by_variant.values()):
+        ax.legend(frameon=False, loc="lower left", labelcolor=ink)
     fig.autofmt_xdate()
     fig.tight_layout()
-    fig.savefig(path)
+    fig.savefig(path, facecolor=surface)
     plt.close(fig)
 
 
