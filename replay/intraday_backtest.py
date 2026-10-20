@@ -690,8 +690,10 @@ def write_report(path, ctx):
               "`evaluar_trade_plan` (V1 branch with ratio_minimo = k). No fill gate. Hard close at the end of the "
               "2nd session (London-open entry → 17:00 NY same day; NY-only entry → next weekday 17:00 London); "
               "Friday 17:00 NY overrides (labelled FRIDAY).",
-              "- Execution: fill at the open of the 5m bar starting at the slot ± (half spread + 0.2 pip). SL/TP on "
-              "5m bars from the fill bar on, on the bid (LONG) / ask (SHORT) = mid ∓ half spread; same-bar SL+TP → "
+              "- Execution: fill at the open of the 5m bar starting at the slot ± (half spread + 0.2 pip). SL/TP are "
+              "walked from the fill bar itself (inclusive): the fill is at that bar's open, so its whole high/low "
+              "range happens after the fill and is admissible (no gap check on the fill bar — the open *is* the "
+              "fill). SL/TP on the bid (LONG) / ask (SHORT) = mid ∓ half spread; same-bar SL+TP → "
               "SL; gap through the stop → bar open − slippage; gap through TP → bar open. Time exits at the close "
               "of the last 5m bar ending at the boundary (bid/ask − slippage). BE = stop moved to entry and hit.",
               "- Portfolio: one position per policy, signals skipped while open; one entry per production setup_id "
