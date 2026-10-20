@@ -33,7 +33,11 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     ("ui/views/experiment.py", "execution.demo_dashboard"), ("ui/views/experiment.py", "demo_dashboard"),
                     # DEC-DEMO-GATE-1: daily Slack summary with OANDA demo figures while routing is ON: lazy + guarded.
                     ("runtime/notifications.py", "execution.demo_dashboard"),
-                    ("runtime/notifications.py", "demo_dashboard")}
+                    ("runtime/notifications.py", "demo_dashboard"),
+                    # Floor page: peek-only reader of the oanda_readonly TTL caches via sys.modules (never imports or
+                    # fetches; no network, no orders), plugged into demo_dashboard.demo_snapshot readers.
+                    ("ui/floor_cache.py", "execution.oanda_readonly"), ("ui/floor_cache.py", "oanda_readonly"),
+                    ("ui/floor_cache.py", "execution.demo_dashboard"), ("ui/floor_cache.py", "demo_dashboard")}
 LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
                                         "execution.broker_demo_state": [["read_router_status"]],
                                         "execution.oanda_readonly": [["cached_account_view"]],
