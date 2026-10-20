@@ -88,7 +88,7 @@ def causal_spread_pips(frame_5m, days=CAUSAL_SPREAD_DAYS):
     closed by the fill at this bar's open; NaN when there is none (caller falls back)."""
     if not {"BidClose", "AskClose"} <= set(frame_5m.columns):
         return pd.Series(np.nan, index=frame_5m.index)
-    spread = (frame_5m["AskClose"] - frame_5m["BidClose"]) / PIP
+    spread = ((frame_5m["AskClose"] - frame_5m["BidClose"]) / PIP).round(2)  # quotes are on a 0.1-pip grid: no float noise
     return spread.where(spread > 0).rolling(f"{days}D", closed="left").median()
 
 
