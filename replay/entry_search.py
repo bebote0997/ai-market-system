@@ -936,7 +936,7 @@ def oos_positive(results, split):
     return names
 
 
-def plot_equity(path, results, names, split):
+def plot_equity(path, results, names, split, title=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -955,8 +955,9 @@ def plot_equity(path, results, names, split):
         ax.annotate(f"{name} {ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points", va="center",
                     fontsize=9, color=ink)
     ax.axhline(0, color=muted, linewidth=0.8)
-    ax.set_title(f"EURUSD entry search - cumulative R: {names[0]} (JT_SMC plan) first, then the top in-sample "
-                 "variants (shaded = out-of-sample)", loc="left", color=ink, fontsize=10)
+    title = title or (f"EURUSD entry search - cumulative R: {names[0]} (JT_SMC plan) first, then the top in-sample "
+                      "variants (shaded = out-of-sample)")
+    ax.set_title(title, loc="left", color=ink, fontsize=10)
     ax.set_ylabel("Cumulative R (net of spread + slippage)", color=muted)
     ax.tick_params(colors=muted)
     ax.grid(axis="y", color="#e8e8e6", linewidth=0.8)
