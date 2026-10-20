@@ -7,7 +7,7 @@ MTM drawdown, 2R/day realised halt, one position at a time.
 
 No-lookahead contract: every signal is decided at the close ``t`` of a 5m (or 15m) bar from bars ENDING at or before
 ``t`` and fills at the open of the 5m bar starting at ``t`` (no fill when that bar is missing). H4 and D1 are resampled
-from closed 1h bars and become visible only at their bucket end (D1 = the 17:00 -> 17:00 New York trading day, H4 =
+from closed 1h bars, kept only when every expected hour is present, and become visible only at their bucket end (D1 = the 17:00 -> 17:00 New York trading day, H4 =
 4h buckets anchored at the 17:00 NY open). Swings are 3-bar pivots confirmed at the close of the following bar.
 
 Every long rule is written once; shorts run the same code on a mirrored price view (O, H, L, C) -> (-O, -L, -H, -C).
@@ -114,10 +114,12 @@ def _next_open(open_ns):
     return np.array([lookup[v] for v in open_ns], dtype=np.int64)
 
 
-def resample_closed(frame_1h, hours):
+def resample_closed(frame_1h, hours, complete_only=True):
     """H4 (hours=4) or D1 (hours=24) from 1h bars, buckets anchored at the 17:00 NY open of the trading day.
     Column ``available`` = bucket end (UTC ns; H4 capped at the day close): a bucket is visible only from then, once
-    all of its 1h bars have closed. Buckets ending after the last 1h bar are dropped (incomplete)."""
+    all of its 1h bars have closed. Column ``complete`` = every expected hour of the bucket is present ((end - start)
+    / 1h distinct 1h bars, DST-safe) and the bucket ended by the last 1h bar. Incomplete buckets (missing hours,
+    a partial first bucket, the in-progress last one) are dropped unless ``complete_only`` is False."""
     starts = _ns(frame_1h.index)
     opens = trading_day_open(frame_1h.index)
     closes = _next_open(opens)
@@ -132,9 +134,13 @@ def resample_closed(frame_1h, hours):
                         "Close": frame_1h["Close"].to_numpy()})
     out = raw.groupby("key", sort=True).agg(available=("available", "first"), start=("start", "first"),
                                             Open=("Open", "first"), High=("High", "max"), Low=("Low", "min"),
-                                            Close=("Close", "last"))
+                                            Close=("Close", "last"), hours=("start", "nunique"))
     last_end = starts[-1] + HOUR if len(starts) else 0
-    out = out[out["available"] <= last_end]
+    expected = (out["available"] - out.index.to_numpy()) // HOUR
+    out["complete"] = (out["hours"] == expected) & (out["available"] <= last_end)
+    out = out.drop(columns="hours")
+    if complete_only:
+        out = out[out["complete"]]
     out.index = pd.DatetimeIndex(pd.to_datetime(out["start"].to_numpy(), utc=True))
     return out
 
@@ -191,7 +197,7 @@ def structure_trend(bars, ph, pl):
 class View:
     """All price features of one direction (sign +1: original prices, longs; -1: mirrored prices, shorts)."""
 
-    def __init__(self, frames, sign, h4=None, d1=None):
+    def __init__(self, frames, sign, h4=None, d1=None, d1_all=None):
         self.sign = sign
         self.side = LONG if sign > 0 else SHORT
         self.m5 = make_bars(frames["5m"], sign, FIVE_NS)
@@ -201,6 +207,9 @@ class View:
         d1 = resample_closed(frames["1h"], 24) if d1 is None else d1
         self.h4 = make_bars(h4, sign, end=h4["available"].to_numpy())
         self.d1 = make_bars(d1, sign, end=d1["available"].to_numpy())
+        d1_all = resample_closed(frames["1h"], 24, complete_only=False) if d1_all is None else d1_all
+        self.d1_seen_end = d1_all["available"].to_numpy()  # every trading day with data, complete or not
+        self.d1_seen_ok = d1_all["complete"].to_numpy(bool)
         self.sh5, self.sl5, _, _ = confirmed_swings(self.m5.h, self.m5.l)
         self.bos5 = bos_up(self.m5, self.sh5)
         self.sh15, _, _, _ = confirmed_swings(self.m15.h, self.m15.l)
@@ -219,6 +228,12 @@ class View:
         self.fvg_end = np.array([h.end[m] for m in idx], dtype=np.int64)
         self.fvg_bottom = np.array([h.h[m - 2] for m in idx])
 
+    def prior_day(self, t):
+        """Index in ``d1`` of the last trading day ended by ``t``; -1 when that day is incomplete (PDH/PDL then
+        unavailable: never replaced by an older day) or none has ended."""
+        i = int(np.searchsorted(self.d1_seen_end, t, side="right")) - 1
+        return self.d1.asof(t) if i >= 0 and self.d1_seen_ok[i] else -1
+
     def price(self, p):
         """View price -> real price."""
         return self.sign * p
@@ -228,8 +243,9 @@ class View:
 class Context:
     def __init__(self, frames):
         self.frames = frames
-        h4, d1 = resample_closed(frames["1h"], 4), resample_closed(frames["1h"], 24)
-        self.views = {1: View(frames, 1, h4, d1), -1: View(frames, -1, h4, d1)}
+        h4, d1_all = resample_closed(frames["1h"], 4), resample_closed(frames["1h"], 24, complete_only=False)
+        d1 = d1_all[d1_all["complete"]]
+        self.views = {v: View(frames, v, h4, d1, d1_all) for v in (1, -1)}
         v = self.views[1]
         self.m5, self.d1, self.h1 = v.m5, v.d1, v.h1
         local = frames["5m"].index.tz_convert(NY)
@@ -508,9 +524,11 @@ def _levels(ctx, view, day, asian):
     out = []
     if day in asian:
         out.append((asian[day][0], int(win[0]), "ASIAN"))
+    p = view.prior_day(start_ns)
+    if p >= 0:
+        out.append((float(view.d1.l[p]), int(np.searchsorted(b.start, view.d1.end[p])), "PDL"))
     d = view.d1.asof(start_ns)
     if d >= 0:
-        out.append((float(view.d1.l[d]), int(np.searchsorted(b.start, view.d1.end[d])), "PDL"))
         first = view.d1.start[max(0, d - JT_LEVEL_DAYS + 1)]
         h = view.h1
         for j, price in view.pl1:
@@ -527,9 +545,11 @@ def _opposite_levels(ctx, view, day, asian, k):
     levels = []
     if day in asian and len(win):
         levels.append((asian[day][1], int(win[0])))
+    p = view.prior_day(t)
+    if p >= 0:
+        levels.append((float(view.d1.h[p]), int(np.searchsorted(b.start, view.d1.end[p]))))
     d = view.d1.asof(t)
     if d >= 0:
-        levels.append((float(view.d1.h[d]), int(np.searchsorted(b.start, view.d1.end[d]))))
         first = view.d1.start[max(0, d - JT_LEVEL_DAYS + 1)]
         h = view.h1
         for j, price in view.ph1:

@@ -73,7 +73,8 @@ class Resampling(unittest.TestCase):
         self.hours = ohlc_frame(index, 1.10 + np.arange(40) * 1e-4)
 
     def test_d1_is_the_17_to_17_new_york_day_and_visible_only_at_its_close(self):
-        d1 = es.resample_closed(self.hours, 24)
+        d1 = es.resample_closed(self.hours, 24, complete_only=False)  # bucket 0 = the partial day before
+        self.assertEqual(list(d1["complete"]), [False, True, False])
         first_full = d1.index[1]
         self.assertEqual(first_full, pd.Timestamp("2026-03-02 22:00", tz=UTC))  # 17:00 EST open
         self.assertEqual(d1["available"].iloc[1], pd.Timestamp("2026-03-03 22:00", tz=UTC).value)
@@ -87,7 +88,7 @@ class Resampling(unittest.TestCase):
 
     def test_d1_open_follows_new_york_dst(self):
         index = pd.date_range("2026-03-09 18:00", periods=30, freq="1h", tz=UTC)  # EDT (UTC-4) after Mar 8
-        d1 = es.resample_closed(ohlc_frame(index, np.full(30, 1.1)), 24)
+        d1 = es.resample_closed(ohlc_frame(index, np.full(30, 1.1)), 24, complete_only=False)
         self.assertEqual(d1.index[1], pd.Timestamp("2026-03-09 21:00", tz=UTC))
 
     def test_h4_buckets_anchored_at_the_open_and_incomplete_buckets_dropped(self):
@@ -97,6 +98,33 @@ class Resampling(unittest.TestCase):
         self.assertTrue((h4["available"] - h4.index.as_unit("ns").asi8 <= 4 * es.HOUR).all())
         last_end = self.hours.index[-1] + pd.Timedelta("1h")
         self.assertTrue((h4["available"] <= last_end.value).all())
+
+    def test_buckets_missing_an_hour_or_partial_are_dropped(self):
+        d1 = es.resample_closed(self.hours, 24)
+        self.assertEqual(list(d1.index), [pd.Timestamp("2026-03-02 22:00", tz=UTC)])  # partial first/last dropped
+        gap = self.hours.drop(pd.Timestamp("2026-03-03 05:00", tz=UTC))
+        self.assertTrue(es.resample_closed(gap, 24).empty)
+        h4_full, h4_gap = es.resample_closed(self.hours, 4), es.resample_closed(gap, 4)
+        missing = pd.Timestamp("2026-03-03 02:00", tz=UTC)  # the 02:00-06:00 UTC bucket holds 05:00
+        self.assertIn(missing, h4_full.index)
+        self.assertNotIn(missing, h4_gap.index)
+        self.assertEqual(len(h4_full) - len(h4_gap), 1)
+        partial_first = self.hours.index[0] < h4_full.index[0]  # 20:00 UTC is mid-bucket (18:00 -> 22:00)
+        self.assertTrue(partial_first)
+
+    def test_pdh_pdl_unavailable_after_an_incomplete_day(self):
+        frames = synthetic_frames(days=40)
+        day = pd.Timestamp("2026-02-03 22:00", tz=UTC)  # trading day Tue 17:00 -> Wed 17:00 EST
+        frames["1h"] = frames["1h"].drop(day + pd.Timedelta("6h"))
+        ctx = es.Context(frames)
+        view = ctx.views[1]
+        after = (day + pd.Timedelta("1D") + pd.Timedelta("10h")).value  # Thursday 03:00 EST
+        self.assertEqual(view.prior_day(after), -1)
+        self.assertEqual(view.d1.end[view.d1.asof(after)], day.value)  # the older day is still in D1 (for ADR)
+        self.assertEqual(view.prior_day(after + es.DAY_NS), view.d1.asof(after + es.DAY_NS))
+        ordinal = (pd.Timestamp("2026-02-05") - pd.Timestamp("1970-01-01")).days
+        levels, _ = es._levels(ctx, view, ordinal, es.session_ranges(ctx, view, es.ASIAN))
+        self.assertNotIn("PDL", [kind for *_, kind in levels])
 
     def test_resampling_is_prefix_invariant(self):
         full = es.resample_closed(self.hours, 4)
