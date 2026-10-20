@@ -40,11 +40,19 @@ class HealthDetailTests(unittest.TestCase):
         self.assertIs(cloud.scheduler_healthy(self.path, now=NOW), True)
 
     def test_stale(self):
-        self.write(121)
+        self.write(301)
         detail = cloud.scheduler_health_detail(self.path, now=NOW)
-        self.assertEqual((detail["healthy"], detail["heartbeat_age_seconds"], detail["error_type"]), (False, 121, None))
+        self.assertEqual((detail["healthy"], detail["heartbeat_age_seconds"], detail["error_type"]), (False, 301, None))
         self.assertIs(cloud.scheduler_healthy(self.path, now=NOW), False)
-        self.assertIs(cloud.scheduler_healthy(self.path, now=NOW, limit_seconds=200), True)
+        self.assertIs(cloud.scheduler_healthy(self.path, now=NOW, limit_seconds=400), True)
+
+    def test_dec_watchdog_2_headroom(self):
+        self.write(180)  # a slow AI tick (stale under the old 120 s limit) is healthy now
+        self.assertIs(cloud.scheduler_healthy(self.path, now=NOW), True)
+        self.assertEqual(cloud.WATCHDOG_STALE_SECONDS, 300)
+        self.assertEqual(cloud_runner.SLOW_TICK_SECONDS, 90)
+        self.assertLess(cloud_runner.SLOW_TICK_SECONDS, cloud_runner.STALL_DUMP_SECONDS)
+        self.assertLess(cloud_runner.STALL_DUMP_SECONDS, cloud.WATCHDOG_STALE_SECONDS)
 
     def test_not_running(self):
         self.write(10, scheduler="STOPPED")
@@ -128,7 +136,7 @@ class ServeWatchdogTests(unittest.TestCase):
         config = RuntimeConfig(db_path=Path(tmp.name) / "trading_floor.db", scheduler_enabled=True)
         child = MagicMock()
         child.poll.return_value = None
-        clock = iter([0.0, 200.0])
+        clock = iter([0.0, 301.0])
         env = {"RENDER": "true", "PORT": "10000", "AI_FLOOR_DASHBOARD_PASSWORD": "correct-horse-battery-staple",
                "AI_FLOOR_CLOUD_RUNNER": "1"}
         with patch.dict(os.environ, env, clear=True), patch.object(cloud.subprocess, "Popen", return_value=child), \
@@ -145,6 +153,71 @@ class ServeWatchdogTests(unittest.TestCase):
         detail.assert_called_once_with(config.db_path)
         sleeps.assert_not_called()
         self.assertIn("event=SCHEDULER_STALE", logs.output[0])
+
+
+class ServeWatchdogGraceTests(unittest.TestCase):
+    def test_no_check_inside_the_startup_grace(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        config = RuntimeConfig(db_path=Path(tmp.name) / "trading_floor.db", scheduler_enabled=True)
+        child = MagicMock()
+        child.poll.side_effect = [None, None, 0, 0, 0]  # two children; second loop pass: exited -> serve raises
+        clock = iter([0.0, 299.0])
+        env = {"RENDER": "true", "PORT": "10000", "AI_FLOOR_DASHBOARD_PASSWORD": "correct-horse-battery-staple",
+               "AI_FLOOR_CLOUD_RUNNER": "1"}
+        with patch.dict(os.environ, env, clear=True), patch.object(cloud.subprocess, "Popen", return_value=child), \
+                patch.object(cloud.os, "umask"), patch.object(cloud.signal, "signal"), \
+                patch("execution.log_redaction.install_log_redaction"), \
+                patch.object(cloud.RuntimeConfig, "from_env", return_value=config), \
+                patch.object(cloud, "cloud_preflight", return_value=SimpleNamespace(experiment_ready=True)), \
+                patch.object(cloud, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=MagicMock())), \
+                patch.object(cloud, "archive_pre_demo_db"), \
+                patch.object(cloud, "scheduler_health_detail") as detail, \
+                self.assertRaisesRegex(RuntimeError, "cloud child process stopped"):
+            cloud.serve()
+        detail.assert_not_called()
+
+
+class ProgressHeartbeatTests(unittest.TestCase):
+    """DEC-WATCHDOG-2: heartbeat after each completed symbol cycle; never while a cycle is still running."""
+
+    def runtime(self, run_cycle):
+        config = SimpleNamespace(scheduler_enabled=True, cadence_minutes=15, enabled_symbols=("EURUSD", "GBPUSD"),
+                                 sessions=("LONDON", "NEW_YORK"))
+        store = MagicMock()
+        store.get_state.return_value = None
+        return SimpleNamespace(config=config, store=store, run_cycle=run_cycle, halt_gate=None)
+
+    def test_heartbeat_after_each_cycle(self):
+        from runtime.scheduler import Scheduler
+        at = datetime(2026, 10, 19, 14, 0, tzinfo=timezone.utc)  # Monday, London + NY session
+        order = []
+        runtime = self.runtime(lambda symbol, slot: order.append(symbol) or "OK")
+        runtime.store.heartbeat.side_effect = lambda when, status: order.append(("hb", status))
+        with patch("runtime.scheduler.symbol_pause.is_paused", return_value=False):
+            Scheduler(runtime, lambda: at).tick()
+        self.assertEqual(order, [("hb", "RUNNING"), "EURUSD", ("hb", "RUNNING"), "GBPUSD", ("hb", "RUNNING")])
+
+    def test_failed_progress_heartbeat_never_stops_the_tick(self):
+        from runtime.scheduler import Scheduler
+        at = datetime(2026, 10, 19, 14, 0, tzinfo=timezone.utc)
+        runtime = self.runtime(lambda symbol, slot: symbol)
+        runtime.store.heartbeat.side_effect = [None, sqlite3.OperationalError("locked"), None]
+        with patch("runtime.scheduler.symbol_pause.is_paused", return_value=False), \
+                self.assertLogs("ai_floor.runtime", "WARNING") as logs:
+            self.assertEqual(Scheduler(runtime, lambda: at).tick(), ["EURUSD", "GBPUSD"])
+        self.assertIn("event=PROGRESS_HEARTBEAT_FAILED error_type=OperationalError", logs.output[0])
+
+    def test_hung_cycle_writes_no_progress_heartbeat(self):
+        from runtime.scheduler import Scheduler
+        at = datetime(2026, 10, 19, 14, 0, tzinfo=timezone.utc)
+
+        def hang(symbol, slot):
+            raise TimeoutError("hung")
+        runtime = self.runtime(hang)
+        with patch("runtime.scheduler.symbol_pause.is_paused", return_value=False), self.assertRaises(TimeoutError):
+            Scheduler(runtime, lambda: at).tick()
+        self.assertEqual(runtime.store.heartbeat.call_count, 1)  # only the tick-start one
 
 
 class RunnerStallDiagnosticsTests(unittest.TestCase):

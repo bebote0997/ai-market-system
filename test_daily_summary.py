@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from runtime.demo_runner import DemoRunner
 from runtime.notifications import SlackNotificationSink, SlackNotificationError
-from storage.daily_summary import build_daily_summary
+from storage.daily_summary import NEW_YORK, build_daily_summary, summary_window
 from storage.database import Store
 
 
@@ -59,7 +59,7 @@ class DailySummaryTests(unittest.TestCase):
     def test_empty_day_has_zero_counts_and_null_unknown_values(self):
         self.assertTrue(self.runner.daily_summary(T))
         summary = json.loads(self.sent[0]['text'].split('\n', 1)[1])
-        self.assertEqual(summary['date_utc'], '2026-09-18')
+        self.assertEqual((summary['date_ny'], summary['close_at_utc']), ('2026-09-18', '2026-09-18T21:00:00+00:00'))
         for field in ('cycles', 'NO_SETUP', 'WATCH', 'VALID_SETUP', 'RISK_REJECTED',
                       'paper_orders_created', 'positions_opened', 'positions_closed',
                       'positions_open_current', 'realized_pnl_day', 'provider_problems', 'errors', 'macro_high_events'):
@@ -78,7 +78,7 @@ class DailySummaryTests(unittest.TestCase):
             self.run_row(key, symbol, setup, risk)
         self.run_row('skipped', 'EURUSD', final='SESSION_SKIPPED')
         self.run_row('old', 'EURUSD', 'WATCH', at=T-timedelta(days=2))
-        self.run_row('new', 'EURUSD', 'WATCH', at=T)
+        self.run_row('new', 'EURUSD', 'WATCH', at=T + timedelta(hours=4))  # 00:00 NY on the 19th
         self.entity('paper_orders', 'o', as_of=DAY.isoformat())
         self.entity('paper_orders', 'o-old', as_of=(T-timedelta(days=2)).isoformat())
         self.entity('paper_positions', 'p', opened_at=DAY.isoformat(), status='CLOSED')
@@ -105,8 +105,8 @@ class DailySummaryTests(unittest.TestCase):
         for key, value in expected.items():
             self.assertEqual(summary[key], value, key)
 
-    def test_utc_boundaries_missing_pnl_and_unbounded_counts(self):
-        # UTC 18th, despite the timestamp's local date being the 19th.
+    def test_offset_timestamps_missing_pnl_and_unbounded_counts(self):
+        # NY 18th, despite the timestamp's local date being the 19th.
         offset = datetime(2026, 9, 19, 1, tzinfo=timezone(timedelta(hours=2)))
         self.run_row('offset', 'EURUSD', at=offset)
         self.entity('closed_trades', 'missing', exited_at=offset.isoformat())
@@ -132,6 +132,56 @@ class DailySummaryTests(unittest.TestCase):
         self.assertFalse(self.runner.daily_summary(T))
         self.assertEqual(len(self.sent), 2)
         self.assertEqual(self.store.notification_events()[0]['daily_summary'], saved)
+
+    def ny(self, *args):
+        return datetime(*args, tzinfo=NEW_YORK).astimezone(timezone.utc)
+
+    def test_ny_date_window_across_utc_midnight_and_the_17_00_close(self):
+        # EDT: NY date 2026-09-18 = [04:00Z on the 18th, 04:00Z on the 19th); the close is 21:00Z on the 18th.
+        self.run_row('before', 'EURUSD', at=self.ny(2026, 9, 17, 23, 59))
+        self.run_row('first', 'EURUSD', at=self.ny(2026, 9, 18, 0, 0))
+        self.run_row('utc-19th', 'EURUSD', at=self.ny(2026, 9, 18, 21, 30))  # 01:30Z on the 19th, NY 18th
+        self.run_row('after', 'EURUSD', at=self.ny(2026, 9, 19, 0, 0))
+        self.entity('closed_trades', 'across-midnight', exited_at=self.ny(2026, 9, 18, 20, 30).isoformat(), net_pnl=7)
+        self.assertEqual(summary_window(self.ny(2026, 9, 18, 16, 59, 59))[0], '2026-09-17')
+        self.assertEqual(summary_window(self.ny(2026, 9, 18, 17, 0))[0], '2026-09-18')
+        self.assertEqual(summary_window(self.ny(2026, 9, 19, 16, 0))[0], '2026-09-18')  # after UTC midnight
+        summary = build_daily_summary(self.store, self.ny(2026, 9, 18, 22, 0))
+        self.assertEqual((summary['date_ny'], summary['cycles'], summary['realized_pnl_day']), ('2026-09-18', 2, 7))
+        # First tick before the close -> the previous NY date; at/after the close -> that day, once.
+        self.runner.sink.transport = lambda *args: self.sent.append(args[1])
+        self.assertTrue(self.runner.daily_summary(self.ny(2026, 9, 18, 16, 59)))
+        self.assertTrue(self.runner.daily_summary(self.ny(2026, 9, 18, 17, 0)))
+        for at in (self.ny(2026, 9, 18, 17, 1), self.ny(2026, 9, 18, 20, 30), self.ny(2026, 9, 19, 16, 59)):
+            self.assertFalse(self.runner.daily_summary(at))  # incl. after UTC midnight (new UTC date)
+        self.assertEqual([e['run_id'] for e in self.store.notification_events()], ['daily:2026-09-17', 'daily:2026-09-18'])
+
+    def test_dst_change_close_and_window(self):
+        # 2026-11-01: EDT -> EST. The 17:00 close moves from 21:00Z to 22:00Z; that NY date lasts 25 hours.
+        self.assertEqual(summary_window(self.ny(2026, 10, 31, 17, 0)),
+                         ('2026-10-31', datetime(2026, 10, 31, 4, tzinfo=timezone.utc),
+                          datetime(2026, 11, 1, 4, tzinfo=timezone.utc), datetime(2026, 10, 31, 21, tzinfo=timezone.utc)))
+        date, start, end, close = summary_window(datetime(2026, 11, 1, 22, tzinfo=timezone.utc))
+        self.assertEqual((date, start, end, close), ('2026-11-01', datetime(2026, 11, 1, 4, tzinfo=timezone.utc),
+                                                     datetime(2026, 11, 2, 5, tzinfo=timezone.utc),
+                                                     datetime(2026, 11, 1, 22, tzinfo=timezone.utc)))
+        self.assertEqual(summary_window(datetime(2026, 11, 1, 21, 30, tzinfo=timezone.utc))[0], '2026-10-31')
+        # Spring forward 2026-03-08: close moves from 22:00Z to 21:00Z; the NY date lasts 23 hours.
+        self.assertEqual(summary_window(datetime(2026, 3, 8, 21, tzinfo=timezone.utc))[1:3],
+                         (datetime(2026, 3, 8, 5, tzinfo=timezone.utc), datetime(2026, 3, 9, 4, tzinfo=timezone.utc)))
+        self.run_row('fall-back-hour', 'EURUSD', at=datetime(2026, 11, 2, 4, 30, tzinfo=timezone.utc))  # 23:30 EST
+        self.assertEqual(build_daily_summary(self.store, datetime(2026, 11, 2, 12, tzinfo=timezone.utc))['cycles'], 1)
+
+    def test_never_sent_twice_for_one_ny_date_across_restarts(self):
+        close = self.ny(2026, 9, 18, 17, 0)
+        self.assertTrue(self.runner.daily_summary(close))
+        for at in (close + timedelta(minutes=5), close + timedelta(hours=7, minutes=30)):  # restarts, before/after 0Z
+            self.store.close()
+            self.store = Store(self.path)
+            self.runner.store = self.store
+            self.runner.sink.transport = lambda *args: self.sent.append(args[1])
+            self.assertFalse(self.runner.daily_summary(at))
+        self.assertEqual(len(self.sent), 1)
 
     def test_slack_failures_are_isolated_recorded_and_never_retried(self):
         for error in (TimeoutError(), URLError('offline'), HTTPError('redacted', 429, '', {}, None),

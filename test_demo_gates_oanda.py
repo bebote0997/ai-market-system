@@ -313,7 +313,7 @@ class SlackSummaryTests(unittest.TestCase):
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"})
         self.assertEqual(text.splitlines(), [
             "AI Market System OANDA DEMO DAILY_SUMMARY", "Día 2 de 30", "NAV: 100,040.00 USD",
-            "P&amp;L desde el inicio del demo: +40.02 USD", "Operaciones cerradas: 3 (ganadoras: 2)",
+            "Balance: 100,039.98 USD", "P&amp;L desde el inicio del demo: +40.02 USD", "Operaciones cerradas: 3 (ganadoras: 2)",
             "R medio: 0.46", "P&amp;L de hoy (ET): -5.50 USD", "Operaciones abiertas: 1"])
         self.assertNotIn("1234", text)
         self.assertNotIn("paper", text.lower())
@@ -328,8 +328,46 @@ class SlackSummaryTests(unittest.TestCase):
         nav_only = {**empty, "nav": 99990.0, "currency": "USD"}
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}, snapshot={"return_value": nav_only}, day=None)
         self.assertEqual(text.splitlines()[1:], ["Demo OANDA: aún sin operaciones del demo", "NAV: 99,990.00 USD",
-                                                 "P&amp;L desde el inicio del demo: sin datos",
+                                                 "Balance: sin datos", "P&amp;L desde el inicio del demo: sin datos",
                                                  "OANDA demo: sin datos de operaciones"])
+
+    def test_send_log_line_names_the_source_never_the_webhook(self):
+        for routing, source in (("1", "OANDA_DEMO"), ("0", "PAPER")):
+            with self.subTest(routing=routing), self.assertLogs("runtime.notifications", "INFO") as logs:
+                self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": routing})
+            self.assertEqual([r.getMessage() for r in logs.records],
+                             [f"component=notifications event=DAILY_SUMMARY_SENT source={source} date=-"])
+            self.assertNotIn("hooks.slack.com", logs.output[0])
+
+    def test_failed_send_is_logged_with_the_safe_code_and_reraised(self):
+        from runtime.notifications import SlackNotificationError
+
+        def fail(url, payload, timeout):
+            raise SlackNotificationError("RATE_LIMITED")
+        sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/secret", transport=fail)
+        summary = NotificationEvent("1.0", "evt-1", "daily:2026-10-19", "2026-10-20T00:00:30+00:00", "INFO",
+                                    "DAILY_SUMMARY", None, (), (), None, (), (), (),
+                                    daily_summary={"date_ny": "2026-10-19"})
+        with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), \
+                patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT), \
+                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)), \
+                self.assertLogs("runtime.notifications", "WARNING") as logs, \
+                self.assertRaises(SlackNotificationError):
+            sink.deliver(summary)
+        self.assertEqual(logs.records[0].getMessage(), "component=notifications event=DAILY_SUMMARY_FAILED "
+                                                       "source=OANDA_DEMO date=2026-10-19 error_type=RATE_LIMITED")
+        self.assertNotIn("secret", logs.output[0])
+
+    def test_oanda_summary_is_read_at_the_ny_close_of_its_date(self):
+        sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x", transport=lambda *a: None)
+        late = NotificationEvent("1.0", "evt-1", "daily:2026-10-19", "2026-10-20T14:00:00+00:00", "INFO",
+                                 "DAILY_SUMMARY", None, (), (), None, (), (), (),
+                                 daily_summary={"date_ny": "2026-10-19", "close_at_utc": "2026-10-19T21:00:00+00:00"})
+        with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), \
+                patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT) as snap, \
+                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
+            sink.deliver(late)
+        self.assertEqual(snap.call_args.args[0], datetime(2026, 10, 19, 21, 0, tzinfo=timezone.utc))
 
     def test_summary_text_uses_event_time(self):
         with patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT) as snap, \

@@ -306,7 +306,7 @@ def demo_api():
 def overview(st, db, now):
     demo = demo_api()
     if demo is not None:
-        demo_overview(st, db, now, demo['snapshot'](now))
+        demo_overview(st, db, now, demo['snapshot'](now), day=demo_day(demo, now))
         return
     states = {r['key']: r['value'] for r in records(db, 'system_state')}
     accounts = payloads(db, 'paper_accounts')
@@ -402,6 +402,14 @@ def demo_no_data(demo):
     return f"{DEMO_NO_DATA} ({DEMO_TRADES_ERRORS.get(demo.get('trades_error'), 'no se pudo leer OANDA')})"
 
 
+def demo_day(demo, now):
+    """Uncapped demo day (``demo_progress``) or None; never raises."""
+    try:
+        return demo['progress'](now)[2]
+    except Exception:  # noqa: BLE001 - no day counter rather than a broken screen
+        return None
+
+
 def demo_title(epoch):
     return f'Demo OANDA (práctica) · desde {es.datetime_et(epoch)}'
 
@@ -420,9 +428,9 @@ def demo_pnl_phrase(total):
     return f'Ganaste {es.money(total)} desde el inicio del demo'
 
 
-def demo_overview(st, db, now, demo):
+def demo_overview(st, db, now, demo, day=None):
     """Overview while broker-demo routing is ON: every number comes from the OANDA practice account since the demo
-    epoch; a failed read is "sin datos", never PAPER numbers."""
+    epoch; a failed read is "sin datos", never PAPER numbers. Shows "Día N de 30" and the daily-loss status."""
     states = {r['key']: r['value'] for r in records(db, 'system_state')}
     stats = demo['stats']
     known = stats is not None
@@ -432,7 +440,7 @@ def demo_overview(st, db, now, demo):
     start = demo['capital']['start']
     stale = ' · datos anteriores' if demo.get('stale') else ''
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
-             f'<div class="small">{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
+             f'<div class="small"><b>{escape(es.demo_day_text(day))}</b> · {escape(DEMO_ARCHIVE_NOTE)}</div></div>')
     tiles = [
         kpi('💰', 'Capital de la cuenta demo OANDA', escape(demo_money(demo['nav'])),
             technical=f'NAV · inicio del demo {demo_money(start)}{stale}', hint=es.TOOLTIPS['equity']),
@@ -468,6 +476,7 @@ def demo_overview(st, db, now, demo):
         else:
             card(st, tr('Open positions'), summary=DEMO_NO_DATA)
     with right:
+        card(st, es.DAILY_LOSS_TITLE, es.daily_loss_rows(demo.get('daily_loss')))
         side_panel(st, now, states)
 
 
@@ -493,9 +502,18 @@ def reason_cell(row):
     return f'<span title="{escape(str(raw or ""), quote=True)}">{escape(es.close_reason_text(raw))}</span>'
 
 
+def demo_r_cell(row):
+    """R of a routed demo trade (P/L / (|entry - initial stop| * units)); "—" when the initial stop is unknown."""
+    value = row.get('realized_r')
+    if not number(value):
+        return f'<span class="mute" title="{escape(row.get("realized_r_reason") or "", quote=True)}">{es.R_UNKNOWN}</span>'
+    return r_cell(row)
+
+
 POSITION_CELLS = {'side': lambda row: state_chip(row.get('side')), 'unrealized_pnl': money_cell('unrealized_pnl')}
 TRADE_CELLS = {'side': lambda row: state_chip(row.get('side')), 'net_pnl': money_cell('net_pnl'),
                'realized_r': r_cell, 'close_reason': reason_cell}
+DEMO_TRADE_CELLS = {**TRADE_CELLS, 'realized_r': demo_r_cell}
 
 
 def floor(st, db, symbols):
@@ -586,7 +604,7 @@ def demo_trades(st, demo):
         return
     closed = list(reversed(demo['closed_rows']))
     table(st, 'Operaciones cerradas del demo OANDA', closed, ['exited_at', 'symbol', 'side', 'quantity',
-          'entry_price', 'exit_price', 'net_pnl', 'realized_r'], render=TRADE_CELLS)
+          'entry_price', 'exit_price', 'net_pnl', 'realized_r'], render=DEMO_TRADE_CELLS)
     table(st, tr('Open positions'), demo['open_rows'], ['opened_at', 'symbol', 'side', 'quantity', 'entry_price',
           'stop', 'target', 'unrealized_pnl'], render=POSITION_CELLS)
 

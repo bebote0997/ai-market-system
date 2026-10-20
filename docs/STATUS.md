@@ -33,6 +33,7 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 - El paper trading sigue intacto y es la única ruta activa hasta que el owner active la demo de broker.
 - 2026-10-19 (`feat/demo-from-zero`): con el enrutado ON el dashboard (Overview/Trades/Decisions/experimento) muestra solo el demo OANDA desde 2026-10-18 18:25 ET (`AI_FLOOR_DEMO_EPOCH`), «Día N de 30» desde la primera operación enrutada; los datos PAPER previos se archivan (copia única en `archive/`, nunca se borran). Enrutado OFF ⇒ sin cambios.
 - 2026-10-19 (`feat/demo-gates-oanda`, DEC-DEMO-GATE-1): con el enrutado ON el gate PAPER de drawdown 5 % (Risk V2) usa solo el NAV OANDA practice vs la base del demo 99 999,98 (fail-closed si no se lee) y el resumen diario de Slack reporta cifras del demo OANDA. Enrutado OFF ⇒ sin cambios.
+- 2026-10-19 (`feat/ops-diag-fixes`, DEC-WATCHDOG-2 / DEC-LATCH-PERSIST-1): watchdog 300 s (volcado 240 s, heartbeat de progreso por símbolo), logs de cierre/breakeven del router, dashboard demo con límite de pérdida diaria, R por operación y «Día N de 30» (tope «completo»), tests de persistencia de latches (ya persistían en SQLite), log `DAILY_SUMMARY_SENT source=OANDA_DEMO`. Sin cambios de env/flags/fingerprint/preflight.
 - 2026-10-19 (`feat/pause-xauusd`, DEC-XAU-OFF-1): XAUUSD pausado en el motor PAPER por código (`runtime/symbol_pause.py`); su posición PAPER abierta se cierra a mercado (simulado) con `SYMBOL_PAUSED`. EURUSD, demo OANDA, fingerprint, preflight y env sin cambios.
 
 ## Abierto (ver `docs/issues.md`)

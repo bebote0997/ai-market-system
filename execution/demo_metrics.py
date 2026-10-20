@@ -15,6 +15,7 @@ import re
 import sqlite3
 from zoneinfo import ZoneInfo
 
+from execution import daily_loss_limit as dl
 from execution.demo_epoch import is_demo_trade, parse_aware
 
 ET = ZoneInfo("America/New_York")
@@ -163,12 +164,68 @@ def demo_capital(nav, balance, stats):
 
 
 def demo_day(first_open_at, now, length=DEMO_LENGTH_DAYS):
-    """1-based ET calendar day of the demo counted from the first routed trade (capped at ``length``); None if none."""
+    """1-based ET calendar day of the demo counted from the first routed trade (weekends count; capped at ``length``,
+    ``length=None`` = uncapped so callers can tell "complete"); None if none."""
     first = parse_time(first_open_at)
     if first is None or not isinstance(now, datetime) or now.tzinfo is None:
         return None
-    day = (now.astimezone(ET).date() - first.astimezone(ET).date()).days + 1
-    return max(1, min(int(length), day))
+    day = max(1, (now.astimezone(ET).date() - first.astimezone(ET).date()).days + 1)
+    return day if length is None else min(int(length), day)
+
+
+LOSS_FLAGS = (dl.DAY_FLAG, dl.E0_FLAG, dl.TRANSFERS_FLAG, dl.HALT_FLAG, dl.DD_HALT_FLAG)
+
+
+def load_loss_flags(path):
+    """The router's daily-loss / drawdown flags from ``broker_demo_flags`` opened read-only (``mode=ro``, never creates
+    the file). ``{}`` when the DB/table is missing (router never ran); None on any read error. Never raises."""
+    try:
+        target = Path(path)
+        if not target.is_file():
+            return {}
+        with closing(sqlite3.connect(target.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)) as con:
+            marks = ", ".join("?" * len(LOSS_FLAGS))
+            rows = con.execute(f"SELECT key, value FROM broker_demo_flags WHERE key IN ({marks})",
+                               LOSS_FLAGS).fetchall()
+    except sqlite3.OperationalError as exc:
+        return {} if "no such table" in str(exc) else None
+    except Exception:  # noqa: BLE001 - locked / corrupt: unknown state
+        return None
+    return {key: value for key, value in rows}
+
+
+def daily_loss_view(flags, nav, now, env=None):
+    """Daily-loss status of the OANDA demo for the dashboard (DEC-5.5a): today's realised + open loss (NAV-based, as
+    the router evaluates it) vs ``fraction`` of the day-start NAV ``dl_e0``. ``status``: ``OFF`` (limit not enabled),
+    ``NO_DATA`` (flags unreadable, or no valid day-start NAV / transfers / NAV), ``PENDING`` (not yet evaluated this trading day), ``TRIGGERED`` (latched for the
+    trading day), ``OK``. ``drawdown_halted`` mirrors the 5 % drawdown latch. Amounts None when unknown. Pure."""
+    env = env or {}
+    fraction = dl.fraction_setting(env)
+    view = {"status": "OFF", "fraction": float(fraction), "day_start_nav": None, "pnl": None, "loss": None,
+            "used_pct": None, "drawdown_halted": False}
+    if not dl.enabled_flag(env):
+        return view
+    if flags is None:
+        return {**view, "status": "NO_DATA"}
+    view["drawdown_halted"] = flags.get(dl.DD_HALT_FLAG) is not None
+    try:
+        key = dl.day_key(now)
+    except ValueError:
+        return {**view, "status": "NO_DATA"}
+    if flags.get(dl.DAY_FLAG) != key:
+        return {**view, "status": "PENDING"}
+    e0, transfers, nav = as_float(flags.get(dl.E0_FLAG)), as_float(flags.get(dl.TRANSFERS_FLAG)), as_float(nav)
+    view["status"] = "TRIGGERED" if flags.get(dl.HALT_FLAG) == key else "NO_DATA"
+    if e0 is None or e0 <= 0:
+        return view
+    view["day_start_nav"] = e0
+    if nav is not None and transfers is not None:
+        pnl = nav - e0 - transfers
+        loss = max(0.0, -pnl)
+        view.update(pnl=pnl, loss=loss, used_pct=100.0 * loss / (float(fraction) * e0))
+        if view["status"] != "TRIGGERED":
+            view["status"] = "OK"
+    return view
 
 
 def load_risk_rows(path):

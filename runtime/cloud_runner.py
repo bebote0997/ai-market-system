@@ -17,7 +17,7 @@ from runtime.paper_contracts import paper_instruments
 
 EXPERIMENT_BASELINE_SHA = "f5032baeb87766ad74905093c1b4195117995092"
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
-STALL_DUMP_SECONDS = 100  # dump all thread stacks to stderr if one tick hangs past this (before the 120 s watchdog)
+STALL_DUMP_SECONDS = 240  # dump all thread stacks to stderr if one tick hangs past this (before the 300 s watchdog)
 SLOW_TICK_SECONDS = 90
 LOGGER = logging.getLogger(__name__)
 
