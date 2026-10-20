@@ -79,15 +79,20 @@ class Scheduler:
                 close_paused(slot)
             except Exception as exc:  # noqa: BLE001
                 LOG.warning("component=symbol_pause event=PAUSED_CLOSE_FAILED error_type=%s", type(exc).__name__)
-        if gate is None:
-            results = [self.runtime.run_cycle(symbol, slot) for symbol in symbols]
-        else:
-            results = []
-            for symbol in symbols:
-                if gate.halted:  # design 3.8 row 6: no new claim once T_h happened (non-economic check)
-                    break
-                results.append(self.runtime.run_cycle(symbol, slot))
+        results = []
+        for symbol in symbols:
+            if gate is not None and gate.halted:  # design 3.8 row 6: no new claim once T_h happened (non-economic check)
+                break
+            results.append(self.runtime.run_cycle(symbol, slot))
+            self._progress_heartbeat()
         flush = getattr(self.runtime, "flush_evidence_observations", None)
         if flush is not None:  # Phase 13: catch-up-OFF observe-only evidence, after every cycle of the tick
             flush()
         return results
+
+    def _progress_heartbeat(self):
+        """DEC-WATCHDOG-2: a completed symbol cycle is real progress; a hung cycle never reaches this line."""
+        try:
+            self.runtime.store.heartbeat(self.clock(), "RUNNING")
+        except Exception as exc:  # noqa: BLE001 - the tick-start heartbeat stays the authoritative one
+            LOG.warning("component=scheduler event=PROGRESS_HEARTBEAT_FAILED error_type=%s", type(exc).__name__)

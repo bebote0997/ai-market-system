@@ -20,6 +20,8 @@ from ui.auth import MIN_PASSWORD_LENGTH, password_strong_enough, session_ttl_sec
 
 
 DISK_MOUNT = Path("/opt/render/project/src/data/runtime")
+WATCHDOG_STALE_SECONDS = 300  # DEC-WATCHDOG-2: heartbeat older than this (and startup grace) restarts the service
+WATCHDOG_CHECK_SECONDS = 30
 WATCHDOG_READ_RETRIES = 3  # an unreadable DB (transient lock) is re-read before the service is restarted
 WATCHDOG_RETRY_SECONDS = 2
 _sleep = time.sleep  # indirection so tests never really sleep
@@ -41,7 +43,7 @@ class CloudPreflight:
     experiment_ready: bool
 
 
-def scheduler_health_detail(path, now=None, limit_seconds=120):
+def scheduler_health_detail(path, now=None, limit_seconds=WATCHDOG_STALE_SECONDS):
     """Watchdog view of the heartbeat; ``error_type`` is set only when the DB could not be read."""
     now = now or datetime.now(timezone.utc)
     detail = {"healthy": False, "scheduler": None, "heartbeat_age_seconds": None, "error_type": None}
@@ -61,7 +63,7 @@ def scheduler_health_detail(path, now=None, limit_seconds=120):
     return detail
 
 
-def scheduler_healthy(path, now=None, limit_seconds=120):
+def scheduler_healthy(path, now=None, limit_seconds=WATCHDOG_STALE_SECONDS):
     return scheduler_health_detail(path, now=now, limit_seconds=limit_seconds)["healthy"]
 
 
@@ -333,7 +335,7 @@ def serve():
             if any(child.poll() is not None for child in children):
                 raise RuntimeError("cloud child process stopped")
             elapsed = time.monotonic() - started
-            if active and elapsed > 120 and elapsed - last_health_check >= 30:
+            if active and elapsed > WATCHDOG_STALE_SECONDS and elapsed - last_health_check >= WATCHDOG_CHECK_SECONDS:
                 last_health_check = elapsed
                 check_scheduler_or_raise(config.db_path)
             time.sleep(1)
