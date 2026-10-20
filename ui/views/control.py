@@ -142,11 +142,11 @@ def balance_lines(view, now=None):
         lines.append(("Falta en el entorno", missing))  # variable NAME only, never a value
     account = getattr(view, "account_masked", None)
     lines.append(("Cuenta", account if isinstance(account, str) and account else DASH))
-    for label, name in (("Balance", "balance"), ("NAV (valor neto)", "nav"), ("Margen usado", "margin_used"),
-                        ("Resultado abierto", "unrealized_pl")):
+    for label, name in (("Balance", "balance"), ("NAV", "nav"), ("Margin used", "margin_used"),
+                        ("Unrealized PnL", "unrealized_pl")):
         lines.append((label, money(getattr(view, name, None), currency)))
     trades = getattr(view, "open_trades", None)
-    lines.append(("Operaciones abiertas", str(trades) if type(trades) is int else DASH))
+    lines.append(("Open positions", str(trades) if type(trades) is int else DASH))
     as_of = getattr(view, "as_of", None)
     now = now or datetime.now(timezone.utc)
     if isinstance(as_of, datetime) and as_of.tzinfo is not None:
@@ -224,12 +224,12 @@ def history_lines(stats):
     pf = stats.get("profit_factor")
     rate = stats.get("win_rate")
     return [("Periodo", f"{period.get('from') or DASH} → {period.get('to') or DASH}"),
-            ("Operaciones", str(stats.get("trades", DASH))),
-            ("Ganadas / perdidas", f"{stats.get('wins', DASH)} / {stats.get('losses', DASH)}"),
-            ("Tasa de acierto", f"{rate * 100:.1f} %" if type(rate) in (int, float) else DASH),
-            ("Expectativa", r_text(stats.get("expectancy_r"))),
-            ("Factor de beneficio", f"{pf:.2f}" if type(pf) in (int, float) else DASH),
-            ("Máx. drawdown", r_text(stats.get("max_drawdown_r"), signed=False)),
+            ("Closed trades", str(stats.get("trades", DASH))),
+            ("Wins / losses", f"{stats.get('wins', DASH)} / {stats.get('losses', DASH)}"),
+            ("Win rate", f"{rate * 100:.1f} %" if type(rate) in (int, float) else DASH),
+            ("Expectancy", r_text(stats.get("expectancy_r"))),
+            ("Profit factor", f"{pf:.2f}" if type(pf) in (int, float) else DASH),
+            ("Max drawdown", r_text(stats.get("max_drawdown_r"), signed=False)),
             ("Media ganadora / perdedora",
              f"{r_text(stats.get('avg_r_win'))} / {r_text(stats.get('avg_r_loss'))}"),
             ("Generado", str(stats.get("generated_at") or DASH))]

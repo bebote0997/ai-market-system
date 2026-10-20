@@ -314,22 +314,22 @@ def overview(st, db, now):
     account = accounts[0] if accounts else {}
     equity = account.get('equity')
     total = stats['total_pnl'] if stats['trades'] else account.get('realized_pnl')
-    rate = f"{100*stats['wins']/stats['trades']:.0f}% ganadoras" if stats['trades'] else ''
+    rate = f"{100*stats['wins']/stats['trades']:.0f}%" if stats['trades'] else ''
     tiles = [
-        kpi('💰', 'Capital de tu cuenta de práctica', escape(es.money(equity)), technical='Capital (equity)',
+        kpi('💰', 'Equity · PAPER', escape(es.money(equity)), technical='Balance + unrealized PnL',
             hint=es.TOOLTIPS['equity']),
         kpi('📈' if not number(total) or total >= 0 else '📉', es.pnl_since_start(total),
-            escape(es.money(total, signed=True)), tone=es.tone(total), technical='Ganancia realizada (PnL)',
+            escape(es.money(total, signed=True)), tone=es.tone(total), technical='Net PnL · closed trades',
             hint=es.TOOLTIPS['pnl']),
         kpi('🎯', es.wins_phrase(stats['wins'], stats['trades']), escape(rate), tone='teal',
-            technical='Tasa de acierto (win rate)', hint=es.TOOLTIPS['win_rate']),
-        kpi('🛡️', es.drawdown_phrase(stats['max_drawdown']), tone='orange', technical='Máxima caída (max drawdown)',
+            technical='Wins / closed trades', hint=es.TOOLTIPS['win_rate']),
+        kpi('🛡️', es.drawdown_phrase(stats['max_drawdown']), tone='orange', technical='Max drawdown · peak-to-trough',
             hint=es.TOOLTIPS['drawdown']),
         kpi('📅', es.today_phrase(stats['today_pnl']), escape(es.money(stats['today_pnl'], signed=True)),
-            tone=es.tone(stats['today_pnl']), technical='Resultado de hoy (ET)', hint=es.TOOLTIPS['today']),
+            tone=es.tone(stats['today_pnl']), technical='Realized PnL · fecha NY', hint=es.TOOLTIPS['today']),
         kpi('⚖️', es.avg_r_phrase(stats['avg_r'], stats['avg_r_reason']),
             escape(f"{stats['avg_r']:+.2f} R") if number(stats['avg_r']) else '', tone=es.tone(stats['avg_r']),
-            technical='Promedio R realizado', hint=es.TOOLTIPS['avg_r']),
+            technical='Expectancy por trade (R)', hint=es.TOOLTIPS['avg_r']),
     ]
     for start in (0, 3):
         for col, tile in zip(st.columns(3), tiles[start:start+3]):
@@ -341,7 +341,7 @@ def overview(st, db, now):
             curve_chart(st, curve, tr('Closed-trade curve'),
                         tr('Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger'))
         else:
-            card(st, tr('Closed-trade curve'), summary='Aún no hay operaciones cerradas para dibujar la curva.')
+            card(st, tr('Closed-trade curve'), summary='Aún no hay closed trades.')
         opened = open_position_rows(db)
         table(st, tr('Open positions'), opened, ['symbol', 'side', 'quantity', 'entry_price', 'stop', 'target',
                                                  'unrealized_pnl'], render=POSITION_CELLS)
@@ -362,7 +362,7 @@ def curve_chart(st, curve, title, caption):
                       plot_bgcolor='#ffffff', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
                                                         color='#556070', size=12),
                       xaxis=dict(gridcolor='#eef2f6', tickformat='%d/%m %H:%M'),
-                      yaxis=dict(gridcolor='#eef2f6', automargin=True, tickprefix='$', title='Ganancia acumulada'))
+                      yaxis=dict(gridcolor='#eef2f6', automargin=True, tickprefix='$', title='Cumulative realized PnL'))
     with st.container(key='curve-card'):
         html(st, f'<h3 style="margin:0">{escape(title)}</h3><div class="small">{escape(caption)} · hora ET'
                  '</div>')
@@ -420,12 +420,8 @@ def demo_money(value, signed=False):
 
 def demo_pnl_phrase(total):
     if not number(total):
-        return f'Resultado desde el inicio del demo: {DEMO_NO_DATA}'
-    if total == 0:
-        return 'Desde el inicio del demo: sin ganancias ni pérdidas'
-    if total < 0:
-        return f'Perdiste {es.money(-total)} desde el inicio del demo'
-    return f'Ganaste {es.money(total)} desde el inicio del demo'
+        return f'Realized PnL: {DEMO_NO_DATA}'
+    return 'Realized PnL · desde el inicio del demo'
 
 
 def demo_overview(st, db, now, demo, day=None):
@@ -436,28 +432,28 @@ def demo_overview(st, db, now, demo, day=None):
     known = stats is not None
     total = stats['total_pnl'] if known else None
     trades_count = stats['trades'] if known else 0
-    rate = f"{100*stats['wins']/trades_count:.0f}% ganadoras" if known and trades_count else ''
+    rate = f"{100*stats['wins']/trades_count:.0f}%" if known and trades_count else ''
     start = demo['capital']['start']
     stale = ' · datos anteriores' if demo.get('stale') else ''
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
              f'<div class="small"><b>{escape(es.demo_day_text(day))}</b> · {escape(DEMO_ARCHIVE_NOTE)}</div></div>')
     tiles = [
-        kpi('💰', 'Capital de la cuenta demo OANDA', escape(demo_money(demo['nav'])),
-            technical=f'NAV · inicio del demo {demo_money(start)}{stale}', hint=es.TOOLTIPS['equity']),
+        kpi('💰', 'Equity (NAV) · OANDA demo', escape(demo_money(demo['nav'])),
+            technical=f'Start equity {demo_money(start)}{stale}', hint=es.TOOLTIPS['equity']),
         kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total),
-            escape(demo_money(total, signed=True)), tone=es.tone(total), technical='Ganancia realizada (PnL)',
+            escape(demo_money(total, signed=True)), tone=es.tone(total), technical='Net PnL · closed trades',
             hint=es.TOOLTIPS['pnl']),
-        kpi('🎯', es.wins_phrase(stats['wins'], trades_count) if known else f'Operaciones del demo: {DEMO_NO_DATA}',
-            escape(rate), tone='teal', technical='Tasa de acierto (win rate)', hint=es.TOOLTIPS['win_rate']),
-        kpi('🛡️', f'La mayor caída del resultado de operaciones cerradas: {demo_money(stats and stats["max_drawdown"])}',
-            tone='orange', technical='Máxima caída (max drawdown)', hint=es.TOOLTIPS['drawdown']),
-        kpi('📅', es.today_phrase(stats['today_pnl']) if known else f'Hoy: {DEMO_NO_DATA}',
+        kpi('🎯', es.wins_phrase(stats['wins'], trades_count) if known else f'Win rate: {DEMO_NO_DATA}',
+            escape(rate), tone='teal', technical='Wins / closed trades', hint=es.TOOLTIPS['win_rate']),
+        kpi('🛡️', f'Max drawdown (realized PnL): {demo_money(stats and stats["max_drawdown"])}',
+            tone='orange', technical='Max drawdown · peak-to-trough', hint=es.TOOLTIPS['drawdown']),
+        kpi('📅', es.today_phrase(stats['today_pnl']) if known else f'Today PnL (ET): {DEMO_NO_DATA}',
             escape(demo_money(stats and stats['today_pnl'], signed=True)), tone=es.tone(stats and stats['today_pnl']),
-            technical='Resultado de hoy (ET)', hint=es.TOOLTIPS['today']),
+            technical='Realized PnL · fecha NY', hint=es.TOOLTIPS['today']),
         kpi('⚖️', es.avg_r_phrase(stats['avg_r'], stats['avg_r_reason']) if known
-            else f'Promedio vs riesgo: {DEMO_NO_DATA}',
+            else f'Avg R (expectancy): {DEMO_NO_DATA}',
             escape(f"{stats['avg_r']:+.2f} R") if known and number(stats['avg_r']) else '',
-            tone=es.tone(stats and stats['avg_r']), technical='Promedio R realizado', hint=es.TOOLTIPS['avg_r']),
+            tone=es.tone(stats and stats['avg_r']), technical='Expectancy por trade (R)', hint=es.TOOLTIPS['avg_r']),
     ]
     for begin in (0, 3):
         for col, tile in zip(st.columns(3), tiles[begin:begin+3]):
@@ -465,11 +461,11 @@ def demo_overview(st, db, now, demo, day=None):
                 html(st, tile)
     left, right = st.columns([1.7, 1])
     with left:
-        title = 'Curva del demo OANDA (operaciones cerradas)'
+        title = 'Closed-trade curve · OANDA demo'
         if demo['curve']:
-            curve_chart(st, demo['curve'], title, 'Resultado realizado acumulado desde el inicio del demo')
+            curve_chart(st, demo['curve'], title, 'Cumulative realized PnL desde el inicio del demo')
         else:
-            card(st, title, summary='Aún no hay operaciones cerradas del demo.' if known else demo_no_data(demo))
+            card(st, title, summary='Aún no hay closed trades en el demo.' if known else demo_no_data(demo))
         if known:
             table(st, tr('Open positions'), demo['open_rows'], ['symbol', 'side', 'quantity', 'entry_price', 'stop',
                                                                 'target', 'unrealized_pnl'], render=POSITION_CELLS)
@@ -493,8 +489,7 @@ def r_cell(row):
     value, reason = row.get('realized_r'), row.get('realized_r_reason')
     if not number(value):
         return f'<span class="mute">{escape(reason or MISSING)}</span>'
-    return (f'<span class="{es.tone(value)}">{escape(es.r_phrase(value))}</span>'
-            f'<div class="small">{value:+.2f} R</div>')
+    return f'<span class="{es.tone(value)}">{escape(es.r_phrase(value))}</span>'
 
 
 def reason_cell(row):
@@ -526,11 +521,11 @@ def floor(st, db, symbols):
             vm = from_persisted_snapshot(snapshot) if snapshot is not None else None
             opened = [p for p in positions if p.get('symbol') == symbol]
             card(st, f'Mesa · {symbol}', [('Estado', state_chip(vm.state if vm else None)),
-                 ('Oportunidad', state_chip(vm.setup_status if vm else None)),
-                 ('Dirección', state_chip(vm.setup_side) if vm and vm.setup_side else MISSING),
+                 ('Setup', state_chip(vm.setup_status if vm else None)),
+                 ('Side', state_chip(vm.setup_side) if vm and vm.setup_side else MISSING),
                  (es.column('freshness'), state_chip(vm.freshness if vm else None)),
                  ('Última actualización', vm.as_of if vm else None),
-                 ('Operación abierta', ', '.join(es.status_text(p.get('side')) + ' · abierta' for p in opened)
+                 ('Open position', ', '.join(es.status_text(p.get('side')) + ' · open' for p in opened)
                   or tr('No open position'))])
     for symbol in symbols:
         snapshot = snapshots.get(symbol)
@@ -576,15 +571,15 @@ def slippage(trade, plan):
                                 plan.get('planned_entry'), plan.get('entry')) if number(v)), None)
     fill = trade.get('entry_price')
     if not number(planned) or not number(fill):
-        return [('Entrada planeada', MISSING), ('Entrada real (fill)', fill), ('Diferencia', 'sin entrada planeada guardada')]
+        return [('Planned entry', MISSING), ('Fill', fill), ('Slippage', 'sin planned entry guardada')]
     diff = fill - planned
     worse = diff > 0 if trade.get('side') == 'LONG' else diff < 0 if trade.get('side') == 'SHORT' else None
     text = f'{diff:+.5f}'.rstrip('0').rstrip('.') if abs(diff) < 10 else f'{diff:+,.2f}'
     if trade.get('symbol') == 'EURUSD':
         text += f' ({diff/0.0001:+.1f} pips)'
-    verdict = 'sin diferencia' if diff == 0 else 'en contra' if worse else 'a favor' if worse is False else ''
-    return [('Entrada planeada', planned), ('Entrada real (fill)', fill),
-            ('Diferencia', f'{text} · {verdict}' if verdict else text)]
+    verdict = '0 · sin slippage' if diff == 0 else 'adverse' if worse else 'favorable' if worse is False else ''
+    return [('Planned entry', planned), ('Fill', fill),
+            ('Slippage', f'{text} · {verdict}' if verdict else text)]
 
 
 def trade_label(row):
@@ -592,7 +587,7 @@ def trade_label(row):
     if row['record'] == 'closed':
         return (f"{row.get('symbol', '')} · {side} · {es.money(row.get('net_pnl'), signed=True)} · "
                 f"{display(row.get('exited_at'))}")
-    return f"{row.get('symbol', '')} · {side} · abierta desde {display(row.get('opened_at'))}"
+    return f"{row.get('symbol', '')} · {side} · open since {display(row.get('opened_at'))}"
 
 
 def demo_trades(st, demo):
@@ -600,10 +595,10 @@ def demo_trades(st, demo):
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
              f'<div class="small">{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
     if demo['stats'] is None:
-        card(st, 'Operaciones del demo OANDA', summary=demo_no_data(demo))
+        card(st, 'OANDA demo trades', summary=demo_no_data(demo))
         return
     closed = list(reversed(demo['closed_rows']))
-    table(st, 'Operaciones cerradas del demo OANDA', closed, ['exited_at', 'symbol', 'side', 'quantity',
+    table(st, 'Closed trades · OANDA demo', closed, ['exited_at', 'symbol', 'side', 'quantity',
           'entry_price', 'exit_price', 'net_pnl', 'realized_r'], render=DEMO_TRADE_CELLS)
     table(st, tr('Open positions'), demo['open_rows'], ['opened_at', 'symbol', 'side', 'quantity', 'entry_price',
           'stop', 'target', 'unrealized_pnl'], render=POSITION_CELLS)
@@ -633,24 +628,24 @@ def trades(st, db):
         target = plan.get('target', trade.get('position_target', trade.get('target')))
         entry = next((v for v in (plan.get('entry'), plan.get('planned_entry'), trade.get('planned_entry'),
                                   trade.get('position_planned_entry')) if number(v)), None)
-        card(st, tr('Plan'), [('Entrada planeada', entry),
-             ('Stop loss (límite de pérdida)', stop), ('Meta de ganancia (TP)', target),
-             ('Ganancia posible vs riesgo (R:R)', f"1 : {display(plan['risk_reward'])}" if number(plan.get('risk_reward')) else None)])
+        card(st, tr('Plan'), [('Planned entry', entry),
+             ('Stop loss (SL)', stop), ('Take profit (TP)', target),
+             ('R:R', f"1 : {display(plan['risk_reward'])}" if number(plan.get('risk_reward')) else None)])
         rows_html = ''.join(f'<div class="row"><span class="mute">{e(k)}</span><span>{e(v)}</span></div>'
                             for k, v in slippage(trade, plan))
         html(st, f'<div class="card"><h3>{escape(tr("Slippage · plan vs fill"))}</h3>{rows_html}'
                  f'<div class="meta">{es.tip(es.TOOLTIPS["slippage"])}</div></div>')
     with right:
         pnl = trade.get('net_pnl') if trade['record'] == 'closed' else trade.get('unrealized_pnl')
-        fields = [('Símbolo', escape(str(trade.get('symbol') or MISSING))), ('Dirección', state_chip(trade.get('side'))),
-                  ('Entrada real (fill)', e(trade.get('entry_price')))]
+        fields = [('Símbolo', escape(str(trade.get('symbol') or MISSING))), ('Side', state_chip(trade.get('side'))),
+                  ('Fill', e(trade.get('entry_price')))]
         if trade['record'] == 'closed':
-            fields += [('Salida', e(trade.get('exit_price'))), ('Resultado', money_cell('net_pnl')(trade)),
-                       ('Resultado vs riesgo', r_cell(trade)), ('Por qué se cerró', reason_cell(trade)),
-                       ('Cerrada', e(trade.get('exited_at')))]
+            fields += [('Exit', e(trade.get('exit_price'))), ('Net PnL', money_cell('net_pnl')(trade)),
+                       ('R realized', r_cell(trade)), ('Exit reason', reason_cell(trade)),
+                       ('Closed', e(trade.get('exited_at')))]
         else:
-            fields += [('Va ganando / perdiendo', money_cell('unrealized_pnl')(trade)),
-                       ('Abierta', e(trade.get('opened_at')))]
+            fields += [('Unrealized PnL', money_cell('unrealized_pnl')(trade)),
+                       ('Opened', e(trade.get('opened_at')))]
         big = (f'<div class="big num {es.tone(pnl)}">{escape(es.money(pnl, signed=True))}</div>' if number(pnl)
                else f'<div class="big mute" style="font-size:22px">{escape(es.NO_PRICE if trade["record"] == "open" else MISSING)}</div>')
         rows_html = ''.join(f'<div class="row"><span class="mute">{escape(k)}</span><span>{v}</span></div>' for k, v in fields)

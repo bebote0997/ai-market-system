@@ -82,9 +82,10 @@ def _slack_post(url, payload, timeout):
 class SlackNotificationSink:
     durable_delivery = True
 
-    def __init__(self, *, webhook_url=None, transport=None, timeout=10):
+    def __init__(self, *, webhook_url=None, transport=None, timeout=10, clock=None):
         self.webhook_url = webhook_url if webhook_url is not None else os.environ.get("SLACK_WEBHOOK_URL")
         self.transport = transport or _slack_post
+        self.clock = clock  # send time of the OANDA demo snapshot (NAV/balance/open/day counter); None = now
         self.timeout = float(timeout)
         if self.timeout <= 0:
             raise ValueError("invalid Slack timeout")
@@ -127,12 +128,14 @@ class SlackNotificationSink:
 
     def _deliver_daily_summary(self, event):
         """DEC-DEMO-GATE-1: OANDA demo figures while routing is ON (never PAPER numbers), else the PAPER summary.
-        One log line per attempt: source + NY date of the summary only (never the webhook URL or figures). The OANDA
-        figures are taken as of that NY date's 17:00 close, so "P&L de hoy (ET)" is the summary's NY date."""
+        One log line per attempt: source + NY date of the summary only (never the webhook URL or figures). Both
+        cover the summary's trading day [``window_start_utc``, ``close_at_utc``) = 17:00 -> 17:00 America/New_York."""
         source = "OANDA_DEMO" if _routing_on() else "PAPER"
         summary = event.daily_summary or {}
         if source == "OANDA_DEMO":
-            payload = {"text": oanda_demo_summary_text(summary.get("close_at_utc") or event.timestamp_utc)}
+            payload = {"text": oanda_demo_summary_text(summary.get("close_at_utc") or event.timestamp_utc,
+                                                       summary.get("window_start_utc"),
+                                                       self.clock() if self.clock else None)}
         else:
             payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
                        json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
@@ -161,40 +164,60 @@ def _amount(value, currency, signed=False):
     return (f"{value:+,.2f}" if signed else f"{value:,.2f}") + (f" {currency}" if currency else "")
 
 
-def oanda_demo_summary_text(timestamp_utc=None):
+def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=None):
     """Daily Slack summary of the OANDA practice demo (routing ON): figures since the demo epoch only, from
-    ``execution.demo_dashboard`` (read-only, never raises). A failed read reads "sin datos"; no ids or tokens."""
+    ``execution.demo_dashboard`` (read-only, never raises); the day's figures cover the trading day ending at
+    ``timestamp_utc`` (17:00 NY), from ``window_start_utc`` (default: the previous 17:00 NY). NAV, balance, open
+    trades and the demo day counter are the snapshot at ``sent_at`` (default: now), labelled with its ET time (a
+    catch-up summary of an older day is sent later). A failed read reads "sin datos"; no ids or tokens."""
     header = "AI Market System OANDA DEMO DAILY_SUMMARY"
     try:
-        return "\n".join([header, *_demo_lines(timestamp_utc)])
+        return "\n".join([header, *_demo_lines(timestamp_utc, window_start_utc, sent_at)])
     except Exception:  # noqa: BLE001 - no demo data: never PAPER numbers
         return header + "\nOANDA demo: sin datos"
 
 
-def _demo_lines(timestamp_utc):
+def _demo_lines(timestamp_utc, window_start_utc, sent_at=None):
     from datetime import datetime, timezone
     from execution.demo_dashboard import demo_progress, demo_snapshot
     from execution.demo_epoch import parse_aware
-    from execution.demo_metrics import DEMO_LENGTH_DAYS
+    from execution.demo_metrics import DEMO_LENGTH_DAYS, ET, window_statistics
+    from storage.daily_summary import summary_window, trading_day
     from ui.i18n_es import demo_day_text
-    now = parse_aware(timestamp_utc) or datetime.now(timezone.utc)
+    close = parse_aware(timestamp_utc) or datetime.now(timezone.utc)
+    label, start, end, _ = summary_window(trading_day(close))
+    start = parse_aware(window_start_utc) or start
+    now = sent_at if isinstance(sent_at, datetime) and sent_at.tzinfo else datetime.now(timezone.utc)
+    at = f"(a las {now.astimezone(ET):%H:%M} ET)"
     snapshot = demo_snapshot(now)
     stats, currency = snapshot.get("stats"), snapshot.get("currency")
     if stats is None and snapshot.get("nav") is None:
         return ["OANDA demo: sin datos"]
     day = demo_progress(now)[2]
-    avg_r = None if stats is None else stats.get("avg_r")
+    nav, balance, change = snapshot.get("nav"), snapshot.get("balance"), (snapshot.get("capital") or {}).get("change")
+    account_at = at
+    if snapshot.get("stale"):  # last good account read: never labelled as current
+        as_of = snapshot.get("as_of")
+        if isinstance(as_of, datetime) and as_of.tzinfo:
+            account_at = f"(a las {as_of.astimezone(ET):%Y-%m-%d %H:%M} ET, dato antiguo)"
+        else:
+            nav = balance = change = None
     lines = [demo_day_text(day, DEMO_LENGTH_DAYS),
-             "NAV: " + _amount(snapshot.get("nav"), currency),
-             "Balance: " + _amount(snapshot.get("balance"), currency),
-             "P&L desde el inicio del demo: " + _amount((snapshot.get("capital") or {}).get("change"), currency, True)]
+             f"Día de trading: {label} (17:00 a 17:00 ET)",
+             f"NAV {account_at}: " + _amount(nav, currency),
+             f"Balance {account_at}: " + _amount(balance, currency),
+             f"P&L desde el inicio del demo {account_at}: " + _amount(change, currency, True)]
     if stats is None:
         return lines + ["OANDA demo: sin datos de operaciones"]
-    return lines + [f"Operaciones cerradas: {stats.get('trades')} (ganadoras: {stats.get('wins')})",
-                    "R medio: " + (f"{avg_r:.2f}" if avg_r is not None else "sin datos" +
-                                   (f" ({stats['avg_r_reason']})" if stats.get("avg_r_reason") else "")),
-                    "P&L de hoy (ET): " + _amount(stats.get("today_pnl"), currency, True),
-                    f"Operaciones abiertas: {len(snapshot.get('open_rows') or ())}"]
+    window = window_statistics(snapshot.get("closed_rows") or [], start, end)
+    avg_r = window["avg_r"]
+    closed = ("sin datos" if window["trades"] is None else
+              f"{window['trades']} (ganadoras: {'—' if window['wins'] is None else window['wins']})")
+    return lines + ["P&L del día de trading: " + _amount(window["pnl"], currency, True),
+                    "Operaciones cerradas en el día: " + closed,
+                    "R medio del día: " + (f"{avg_r:.2f}" if avg_r is not None else "sin datos" +
+                                           (f" ({window['avg_r_reason']})" if window["avg_r_reason"] else "")),
+                    f"Operaciones abiertas {at}: {len(snapshot.get('open_rows') or ())}"]
 
 
 def send_slack(transport, url, payload, timeout):

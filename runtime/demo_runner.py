@@ -1,5 +1,6 @@
 """PAPER demo runner: durable cycles, preflight, and optional no-order diagnosis."""
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 import json
 import logging
 import os
@@ -8,15 +9,17 @@ import sqlite3
 
 from runtime.alert_hook import AlertHook
 from runtime.notification_extras import capture_ai_review_health, with_trade
-from runtime.notifications import NullNotificationSink
+from runtime.notifications import NotificationEvent, NullNotificationSink
 from runtime.scheduler import Scheduler, slot_at, slot_key
 from runtime.service import OperationalRuntime
+from storage.codec import utc
 from storage.database import Store
-from storage.daily_summary import build_daily_summary
+from storage.daily_summary import build_daily_summary, pending_summary_days
 from runtime.halt import HaltRefused, startup_write
 
 
 REAL_EXECUTION_ENABLED = False
+SUMMARY_CLAIM_GRACE = timedelta(minutes=15)  # a summary claim older than this without an outcome is a crash mid-send
 LOG = logging.getLogger("ai_floor.observability")
 
 
@@ -208,24 +211,61 @@ class DemoRunner:
         self.runtime.flush_evidence_observations()
 
     def daily_summary(self, at=None):
-        """Persist the latest NY date whose 17:00 America/New_York close has passed (first call at/after it), then
-        attempt notification once; deduped durably on that NY date (journal run_id ``daily:<date>``)."""
+        """Persist the summary of each forex trading day (17:00 -> 17:00 America/New_York, labelled by the NY date of
+        its 17:00 end) that has ended and was not summarized yet, then attempt notification once per day; deduped
+        durably on that label (journal run_id ``daily:<date>``, last label in state ``daily_summary_date``). Weekend
+        and catch-up rules: ``storage.daily_summary.pending_summary_days``."""
         gate = getattr(self, "halt_gate", None)  # None on legacy-built runners (flag OFF)
         if gate is not None and not gate.allow("S"):
             return False  # V2 P4a: summaries and notifications are suppressed after T_h
         at = at or self.clock()
+        persisted = []
         with self.store.transaction():
-            summary = build_daily_summary(self.store, at)
-            date = summary["date_ny"]
-            if self.store.db.execute(
-                "SELECT 1 FROM journal WHERE event_type='DAILY_SUMMARY' AND run_id=?",
-                (f"daily:{date}",)).fetchone():
-                return False
-            self.store.set_state("daily_summary_date", date)
-            self.store._event(at, f"daily:{date}", None, "demo_runner", "DAILY_SUMMARY", "INFO",
-                              summary)
-        self._capture_and_deliver(run_id=f"daily:{date}")
-        return True
+            for day in pending_summary_days(self.store.get_state("daily_summary_date"), at):
+                date = day.isoformat()
+                if self.store.db.execute(
+                        "SELECT 1 FROM journal WHERE event_type='DAILY_SUMMARY' AND run_id=?",
+                        (f"daily:{date}",)).fetchone():
+                    continue
+                summary = build_daily_summary(self.store, at, day)
+                self.store.set_state("daily_summary_date", date)
+                self.store._event(at, f"daily:{date}", None, "demo_runner", "DAILY_SUMMARY", "INFO",
+                                  summary)
+                persisted.append(date)
+        for date in persisted:
+            self._capture_and_deliver(run_id=f"daily:{date}")
+        self._summary_outbox(at)
+        return bool(persisted)
+
+    def _summary_outbox(self, at):
+        """Durable sinks only: deliver DAILY_SUMMARY journal rows / notification events a crash left uncaptured or
+        never claimed; a claim older than ``SUMMARY_CLAIM_GRACE`` without an outcome is marked UNKNOWN, not resent."""
+        if not getattr(self.sink, "durable_delivery", False):
+            return
+        db = self.store.db
+        summary = "json_extract(e.payload,'$.type')='DAILY_SUMMARY'"
+        try:
+            for (run_id,) in db.execute(
+                    "SELECT j.run_id FROM journal j WHERE j.event_type='DAILY_SUMMARY' AND NOT EXISTS ("
+                    "SELECT 1 FROM notification_events e WHERE e.journal_id=j.id) ORDER BY j.id").fetchall():
+                self._capture_and_deliver(run_id=run_id)  # crash between the journal commit and the capture
+            self._deliver([NotificationEvent(**json.loads(row[0])) for row in db.execute(
+                "SELECT e.payload FROM notification_events e LEFT JOIN notification_deliveries d USING(event_id) "
+                f"WHERE {summary} AND d.event_id IS NULL ORDER BY e.journal_id").fetchall()])  # never claimed
+            with self.store.transaction():  # claimed, no outcome: Slack cannot dedupe -> UNKNOWN, never resent
+                stale = db.execute(
+                    "SELECT d.event_id, json_extract(e.payload,'$.run_id') FROM notification_deliveries d "
+                    f"JOIN notification_events e USING(event_id) WHERE d.status='CLAIMED' AND {summary} "
+                    "AND datetime(d.attempted_at) <= datetime(?) ORDER BY e.journal_id",
+                    (utc(at - SUMMARY_CLAIM_GRACE),)).fetchall()
+                for event_id, _ in stale:
+                    db.execute("UPDATE notification_deliveries SET status='UNKNOWN' WHERE event_id=? "
+                               "AND status='CLAIMED'", (event_id,))
+            for _, run_id in stale:
+                LOG.warning("component=notifications event=DAILY_SUMMARY_UNKNOWN date=%s",
+                            str(run_id).removeprefix("daily:"))
+        except Exception as exc:
+            LOG.warning("component=notifications event=SUMMARY_OUTBOX_FAILED error_type=%s", type(exc).__name__)
 
     def close(self):
         gate = getattr(self, "halt_gate", None)

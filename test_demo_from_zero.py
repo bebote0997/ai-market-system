@@ -415,7 +415,7 @@ class DashboardTests(unittest.TestCase):
         os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
         with patch("execution.demo_dashboard.demo_snapshot", side_effect=AssertionError("demo read")):
             _app, content = self.page("Overview")
-        self.assertIn("Capital de tu cuenta de práctica", content)
+        self.assertIn("Equity · PAPER", content)
         self.assertIn("+$3.00", content)  # the PAPER fixture trade
         self.assertNotIn("Demo OANDA", content)
 
@@ -424,12 +424,12 @@ class DashboardTests(unittest.TestCase):
         with self.env():
             _app, content = self.page("Overview")
         self.assertIn("Demo OANDA (práctica) · desde 18 oct 2026 18:25 ET", content)
-        self.assertIn("Capital de la cuenta demo OANDA", content)
+        self.assertIn("Equity (NAV) · OANDA demo", content)
         self.assertIn("$100,012.25", content)
-        self.assertIn("inicio del demo $100,000.00", content)
+        self.assertIn("Start equity $100,000.00", content)
         self.assertIn("+$9.50", content)
         self.assertIn("archivados y no cuentan", content)
-        self.assertNotIn("Capital de tu cuenta de práctica", content)
+        self.assertNotIn("Equity · PAPER", content)
         self.assertNotIn("+$3.00", content)
         self.assertEqual(self.case.digest(), before)
         self.assertFalse(self.state.exists())  # read-only: the broker state DB is never created
@@ -440,7 +440,7 @@ class DashboardTests(unittest.TestCase):
             _app, content = self.page("Overview")
         self.assertIn("sin datos", content)
         self.assertNotIn("+$3.00", content)
-        self.assertNotIn("Capital de tu cuenta de práctica", content)
+        self.assertNotIn("Equity · PAPER", content)
 
     def test_routing_on_incomplete_or_slow_read_shows_sin_datos_for_totals(self):
         for code, reason in (("incomplete", "totales incompletos"), ("deadline", "OANDA tardó demasiado")):
@@ -448,11 +448,11 @@ class DashboardTests(unittest.TestCase):
             with self.subTest(code=code), self.env():
                 _app, content = self.page("Overview")
                 self.assertIn(f"sin datos ({reason}", content)
-                self.assertIn("Resultado desde el inicio del demo: sin datos", content)
+                self.assertIn("Realized PnL: sin datos", content)
                 self.assertNotIn("+$3.00", content)
                 _app, content = self.page("Trades")
                 self.assertIn(f"sin datos ({reason}", content)
-                self.assertNotIn("Operaciones cerradas del demo OANDA", content)
+                self.assertNotIn("Closed trades · OANDA demo", content)
 
     def test_routing_on_demo_module_unavailable_never_shows_paper(self):
         import sys
@@ -467,7 +467,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("sin datos", content)
             self.assertIn("Demo OANDA (práctica)", content)
             self.assertNotIn("+$3.00", content)
-            self.assertNotIn("Capital de tu cuenta de práctica", content)
+            self.assertNotIn("Equity · PAPER", content)
             _app, content = self.page("Trades")
             self.assertIn("sin datos (la vista del demo no está disponible)", content)
             self.assertNotIn("+$3.00", content)
@@ -482,15 +482,15 @@ class DashboardTests(unittest.TestCase):
         self.trades = {"closed": [], "open": []}
         with self.env():
             _app, content = self.page("Overview")
-        self.assertIn("Desde el inicio del demo: sin ganancias ni pérdidas", content)
-        self.assertIn("Aún no hay operaciones cerradas del demo.", content)
+        self.assertIn("Realized PnL · desde el inicio del demo", content)
+        self.assertIn("Aún no hay closed trades en el demo.", content)
         self.assertNotIn("+$3.00", content)
 
     def test_routing_on_trades_lists_oanda_demo(self):
         self.trades = {"closed": SCENARIO, "open": safe(*SCENARIO_RAW)}
         with self.env():
             _app, content = self.page("Trades")
-        self.assertIn("Operaciones cerradas del demo OANDA", content)
+        self.assertIn("Closed trades · OANDA demo", content)
         self.assertIn("−$40.00", content)
         self.assertIn("−$3.25", content)
         self.assertNotIn("+$3.00", content)

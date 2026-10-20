@@ -40,12 +40,12 @@ def _loss_flags(env):
 def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
     """Everything the demo screens need. ``stats`` is None when the OANDA trades read failed (``trades_error`` is
     ``deadline``/``incomplete`` when that was the cause: never partial totals); NAV/balance are None when the summary
-    read failed. Never raises."""
+    read failed; ``stale``/``as_of``: NAV/balance are the last good read, observed at ``as_of``. Never raises."""
     env = os.environ if env is None else env
     epoch = demo_epoch(env)
     snapshot = {"epoch": epoch, "stats": None, "curve": [], "open_rows": [], "closed_rows": [], "nav": None,
                 "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False,
-                "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {})}
+                "as_of": None, "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {})}
     try:
         if trades_reader is None or account_reader is None:
             from execution.oanda_readonly import cached_account_view, cached_demo_trades
@@ -63,7 +63,7 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
         view = account_reader("practice")
         if getattr(view, "status", None) == "OK":
             snapshot.update(nav=as_float(view.nav), balance=as_float(view.balance), currency=view.currency,
-                            stale=getattr(view, "stale", False) is True)
+                            stale=getattr(view, "stale", False) is True, as_of=getattr(view, "as_of", None))
         if snapshot["stats"] is not None:
             snapshot["capital"] = demo_capital(snapshot["nav"], snapshot["balance"], snapshot["stats"])
         snapshot["daily_loss"] = daily_loss_view(_loss_flags(env), snapshot["nav"], now, env)
