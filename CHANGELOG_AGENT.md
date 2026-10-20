@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-10-19 — DEC-SUMMARY-DAY-1: resumen diario por día de trading 17:00 → 17:00 NY (branch `feat/summary-trading-day`)
+
+- `storage/daily_summary.py`: `trading_day(at)` (fecha NY del último 17:00 NY ≤ `at`, vía `daily_loss_limit.day_key`), `summary_day(at)` (salta sábado/domingo ⇒ el viernes), `pending_summary_days(last_sent, at)` (días lun–vie pendientes tras el último enviado, del más antiguo al más reciente, máx. `MAX_CATCH_UP = 5`; sin registro ⇒ solo el último; reloj atrasado ⇒ ninguno), `summary_window(day)` ⇒ `(date_ny, start_utc, end_utc, trading_day_key)` = [día anterior 17:00, `day` 17:00) NY (23 h / 25 h con DST). `build_daily_summary(store, at, day=None)` agrega runs/órdenes/posiciones/cerradas/eventos sobre esa ventana; nuevos campos `trading_day_key`, `window_start_utc`, `wins_day`, `avg_r_day`, `avg_r_day_reason` (R como en el dashboard).
+- `runtime/demo_runner.py` `daily_summary`: persiste y notifica cada día pendiente una vez (journal `daily:<fecha>` + estado `daily_summary_date`); devuelve True si persistió alguno.
+- `runtime/notifications.py`: el texto OANDA añade «Día de trading: <fecha> (17:00 a 17:00 ET)» y calcula «P&L del día de trading», «Operaciones cerradas en el día (ganadoras)» y «R medio del día» sobre la misma ventana (`execution/demo_metrics.window_statistics`; cierre sin hora ⇒ «sin datos»). Se mantienen NAV, Balance, P&L desde el inicio, abiertas y los logs `DAILY_SUMMARY_SENT/FAILED`; con enrutado ON nunca cifras PAPER.
+- Compatibilidad: la clave anterior (fecha NY cuyo 17:00 ya pasó) coincide con la nueva para lun–vie ⇒ sin reenvío al desplegar.
+- Tests: `test_daily_summary.py` (ventana a través de 17:00 y medianoche UTC, fin de semana, DST, catch-up tras reinicio), `test_demo_gates_oanda.py` (cifras OANDA de la ventana). Sin env vars ni flags. REAL OFF.
+
 ## 2026-10-19 — Ops: holgura del watchdog, logs del router, dashboard demo, latches, resumen diario (branch `feat/ops-diag-fixes`)
 
 - DEC-WATCHDOG-2 (`runtime/cloud.py`, `runtime/cloud_runner.py`, `runtime/scheduler.py`): `WATCHDOG_STALE_SECONDS = 300` (antes 120; default de `scheduler_health_detail`/`scheduler_healthy`, gracia de arranque y comprobación de `serve()`, cada `WATCHDOG_CHECK_SECONDS = 30`), `STALL_DUMP_SECONDS = 240` (antes 100), `SLOW_TICK_SECONDS = 90` sin cambios. Heartbeat de progreso tras cada ciclo de símbolo completado (best-effort, `PROGRESS_HEARTBEAT_FAILED`); sin hilo de heartbeat en segundo plano: un ciclo colgado sigue disparando el watchdog. Ruta del tick revisada: todas las llamadas de red ya tienen timeout ⇒ sin cambios.

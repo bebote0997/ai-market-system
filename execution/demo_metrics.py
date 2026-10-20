@@ -154,6 +154,23 @@ def demo_statistics(trades, now, epoch, risk_rows=None):
             "avg_r_reason": f"{reason} en {unknown} de {count} operaciones" if unknown else None}, curve, opened
 
 
+def window_statistics(closed_rows, start, end):
+    """``{"trades", "wins", "pnl", "avg_r", "avg_r_reason"}`` of the closed demo rows with ``start <= exited_at < end``
+    (the daily summary's trading day). A row without a readable close time or P&L -> ``pnl`` None ("sin datos")."""
+    if any(row["exited_at"] is None for row in closed_rows):
+        return {"trades": None, "wins": None, "pnl": None, "avg_r": None,
+                "avg_r_reason": "datos de cierre incompletos en OANDA"}
+    rows = [row for row in closed_rows if start <= row["exited_at"] < end]
+    pnl = [row["net_pnl"] for row in rows]
+    known = [row["realized_r"] for row in rows if row["realized_r"] is not None]
+    reason = next((row["realized_r_reason"] for row in rows if row["realized_r"] is None), None)
+    return {"trades": len(rows), "wins": sum(v is not None and v > 0 for v in pnl),
+            "pnl": None if None in pnl else sum(pnl),
+            "avg_r": sum(known) / len(rows) if rows and len(known) == len(rows) else None,
+            "avg_r_reason": ("sin operaciones cerradas en el día" if not rows else
+                             f"{reason} en {len(rows) - len(known)} de {len(rows)} operaciones" if reason else None)}
+
+
 def demo_capital(nav, balance, stats):
     """``{"start", "change"}``: the demo's starting capital = balance - realized P&L since the epoch, and NAV - start
     (realized + open result since the demo began). Unknown inputs -> None values."""

@@ -1,31 +1,86 @@
 """Read-only daily aggregation of persisted evidence; never invokes the floor."""
 from collections import Counter
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import json
 from zoneinfo import ZoneInfo
 
+from execution.daily_loss_limit import RESET_HOUR, day_key
 from storage.codec import utc
 
 
 NEW_YORK = ZoneInfo("America/New_York")
-NY_CLOSE = time(17)
+NY_CLOSE = time(RESET_HOUR)
+MAX_CATCH_UP = 5  # trading days re-sent after a long downtime (oldest first); older missed days are not sent
 
 
-def summary_window(at):
-    """``(date_ny, start_utc, end_utc, close_utc)`` of the NY trading day the summary at ``at`` covers: the latest NY
-    calendar date whose 17:00 America/New_York close is <= ``at`` (DST-correct). Rows are aggregated over that whole NY
-    calendar date ([00:00, 24:00) NY, as UTC bounds), like the OANDA "P&L de hoy (ET)" figure."""
-    local = at.astimezone(NEW_YORK)
-    day = local.date() if local.time() >= NY_CLOSE else local.date() - timedelta(days=1)
-
-    def instant(d, t):
-        return datetime.combine(d, t, NEW_YORK).astimezone(timezone.utc)
-    return day.isoformat(), instant(day, time()), instant(day + timedelta(days=1), time()), instant(day, NY_CLOSE)
+def trading_day(at):
+    """NY date labelling the latest forex trading day that has ended at ``at``: the NY date of its 17:00
+    America/New_York end. Same boundary as ``execution.daily_loss_limit.day_key`` (which keys a day by its start)."""
+    return datetime.fromisoformat(day_key(at)).date()
 
 
-def build_daily_summary(store, at):
+def summary_day(at):
+    """Latest ended trading day with a weekday label. Fri 17:00 -> Sun 17:00 NY the market is closed: the Saturday-
+    and Sunday-labelled windows are never summarized, so from Friday's close until Monday's it is Friday's day."""
+    day = trading_day(at)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
+
+
+def pending_summary_days(last_sent, at):
+    """Weekday trading days after ``last_sent`` (ISO date or None) up to ``summary_day(at)``, oldest first, at most
+    ``MAX_CATCH_UP``. Nothing recorded yet -> only the latest; ``at`` before the last sent day -> nothing."""
+    latest = summary_day(at)
+    try:
+        day = date.fromisoformat(str(last_sent)[:10]) if last_sent else None
+    except ValueError:
+        day = None
+    if day is None:
+        return [latest]
+    days = []
+    while day < latest:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            days.append(day)
+    return days[-MAX_CATCH_UP:]
+
+
+def summary_window(day):
+    """``(date_ny, start_utc, end_utc, trading_day_key)`` of the trading day labelled ``day`` (NY date of its 17:00
+    end): [previous NY date 17:00, ``day`` 17:00) America/New_York as UTC bounds (23 h / 25 h across DST changes).
+    ``trading_day_key`` = ``daily_loss_limit.day_key`` of that day (ISO of its 17:00 start)."""
+    def instant(d):
+        return datetime.combine(d, NY_CLOSE, NEW_YORK)
+    start = instant(day - timedelta(days=1))
+    return (day.isoformat(), start.astimezone(timezone.utc), instant(day).astimezone(timezone.utc),
+            day_key(start))
+
+
+def _avg_r(store, closed):
+    """(avg R, None) or (None, reason) over the window's closed PAPER trades (R as on the dashboard)."""
+    from ui.views.luxury import realized_r_with_reason
+    if not closed:
+        return None, "sin operaciones cerradas"
+    values, reason = [], None
+    for trade in closed:
+        row = store.db.execute("SELECT payload FROM paper_positions WHERE position_id=?",
+                               (trade.get("position_id"),)).fetchone()
+        value, why = realized_r_with_reason(trade, json.loads(row[0]) if row else None)
+        if value is None:
+            reason = reason or why
+        else:
+            values.append(value)
+    if len(values) < len(closed):
+        return None, f"{reason} en {len(closed) - len(values)} de {len(closed)} operaciones"
+    return sum(values) / len(values), None
+
+
+def build_daily_summary(store, at, day=None):
+    """Summary of trading day ``day`` (default ``summary_day(at)``); rows are aggregated over its 17:00 -> 17:00 NY
+    window, ``*_current`` fields are the snapshot at ``at``."""
     captured_at = utc(at)
-    date, start, end, close = summary_window(at)
+    label, start, end, key = summary_window(day or summary_day(at))
     bounds = tuple(t.strftime("%Y-%m-%d %H:%M:%S") for t in (start, end))
     in_day = "datetime({0}) >= ? AND datetime({0}) < ?"  # datetime() normalises any stored offset to UTC
     runs = store.db.execute(
@@ -53,6 +108,7 @@ def build_daily_summary(store, at):
     closed = [json.loads(r[0]) for r in store.db.execute(
         "SELECT payload FROM closed_trades WHERE " + in_day.format("json_extract(payload,'$.exited_at')"), bounds)]
     pnl = [t.get("net_pnl") for t in closed]
+    avg_r, avg_r_reason = _avg_r(store, closed)
     account_row = store.db.execute("SELECT payload FROM paper_accounts WHERE account_id=?",
                                    (store.get_state("account_id"),)).fetchone()
     account = json.loads(account_row[0]) if account_row else {}
@@ -73,7 +129,8 @@ def build_daily_summary(store, at):
     policy_macro.discard(None)
     latest = store.latest_run()
     return {
-        "date_ny": date, "close_at_utc": utc(close), "snapshot_at_utc": captured_at,
+        "date_ny": label, "trading_day_key": key, "window_start_utc": utc(start), "close_at_utc": utc(end),
+        "snapshot_at_utc": captured_at,
         "cycles": len(runs), "cycles_by_symbol": by_symbol,
         **{status: setup_counts[status] for status in ("NO_SETUP", "WATCH", "VALID_SETUP")},
         "RISK_REJECTED": risk_rejected,
@@ -83,6 +140,8 @@ def build_daily_summary(store, at):
             "SELECT count(*) FROM paper_positions WHERE json_extract(payload,'$.status')='OPEN'").fetchone()[0],
         "positions_closed": len(closed),
         "realized_pnl_day": sum(pnl) if all(v is not None for v in pnl) else None,
+        "wins_day": sum(v is not None and v > 0 for v in pnl),
+        "avg_r_day": avg_r, "avg_r_day_reason": avg_r_reason,
         "unrealized_pnl_current": account.get("unrealized_pnl"),
         "equity_current": account.get("equity"),
         "provider_problems": len(problems),

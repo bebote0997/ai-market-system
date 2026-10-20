@@ -285,10 +285,21 @@ def event(kind="DAILY_SUMMARY"):
                              (), (), (), daily_summary={"paper_total_pnl": 1234.5, "account": "paper-main"})
 
 
+def closed_row(exited, pnl, r, reason=None):
+    return {"exited_at": datetime.fromisoformat(exited).replace(tzinfo=timezone.utc), "net_pnl": pnl,
+            "realized_r": r, "realized_r_reason": reason}
+
+
 SNAPSHOT = {"stats": {"trades": 3, "wins": 2, "total_pnl": 40.0, "today_pnl": -5.5, "avg_r": 0.4567,
                       "avg_r_reason": None},
             "nav": 100040.0, "balance": 100039.98, "currency": "USD", "capital": {"start": 99999.98, "change": 40.02},
-            "open_rows": [{"trade_id": "1"}]}
+            "open_rows": [{"trade_id": "1"}],
+            # Trading day 2026-10-20 = [2026-10-19 21:00Z, 2026-10-20 21:00Z) (17:00 -> 17:00 EDT).
+            "closed_rows": [closed_row("2026-10-19T20:59:59", 45.5, 1.0),
+                            closed_row("2026-10-19T21:00:00", 3.0, 0.5),
+                            closed_row("2026-10-20T03:30:00", 1.0, 0.25),  # after UTC midnight
+                            closed_row("2026-10-20T20:59:00", -9.5, -1.0),
+                            closed_row("2026-10-20T21:00:00", 7.0, 2.0)]}
 
 
 class SlackSummaryTests(unittest.TestCase):
@@ -312,9 +323,10 @@ class SlackSummaryTests(unittest.TestCase):
     def test_routing_on_oanda_figures(self):
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"})
         self.assertEqual(text.splitlines(), [
-            "AI Market System OANDA DEMO DAILY_SUMMARY", "Día 2 de 30", "NAV: 100,040.00 USD",
-            "Balance: 100,039.98 USD", "P&amp;L desde el inicio del demo: +40.02 USD", "Operaciones cerradas: 3 (ganadoras: 2)",
-            "R medio: 0.46", "P&amp;L de hoy (ET): -5.50 USD", "Operaciones abiertas: 1"])
+            "AI Market System OANDA DEMO DAILY_SUMMARY", "Día 2 de 30", "Día de trading: 2026-10-20 (17:00 a 17:00 ET)",
+            "NAV: 100,040.00 USD", "Balance: 100,039.98 USD", "P&amp;L desde el inicio del demo: +40.02 USD",
+            "P&amp;L del día de trading: -5.50 USD", "Operaciones cerradas en el día: 3 (ganadoras: 2)",
+            "R medio del día: -0.08", "Operaciones abiertas: 1"])
         self.assertNotIn("1234", text)
         self.assertNotIn("paper", text.lower())
 
@@ -327,7 +339,8 @@ class SlackSummaryTests(unittest.TestCase):
                 self.assertEqual(text, "AI Market System OANDA DEMO DAILY_SUMMARY\nOANDA demo: sin datos")
         nav_only = {**empty, "nav": 99990.0, "currency": "USD"}
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}, snapshot={"return_value": nav_only}, day=None)
-        self.assertEqual(text.splitlines()[1:], ["Demo OANDA: aún sin operaciones del demo", "NAV: 99,990.00 USD",
+        self.assertEqual(text.splitlines()[1:], ["Demo OANDA: aún sin operaciones del demo",
+                                                 "Día de trading: 2026-10-20 (17:00 a 17:00 ET)", "NAV: 99,990.00 USD",
                                                  "Balance: sin datos", "P&amp;L desde el inicio del demo: sin datos",
                                                  "OANDA demo: sin datos de operaciones"])
 
@@ -368,6 +381,25 @@ class SlackSummaryTests(unittest.TestCase):
                 patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
             sink.deliver(late)
         self.assertEqual(snap.call_args.args[0], datetime(2026, 10, 19, 21, 0, tzinfo=timezone.utc))
+
+    def test_day_figures_cover_the_window_and_flag_missing_data(self):
+        with patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
+            for rows, expected in (
+                    ([], ["+0.00 USD", "0 (ganadoras: 0)", "sin datos (sin operaciones cerradas en el día)"]),
+                    ([closed_row("2026-10-20T10:00:00", 2.0, None, "sin stop original"),
+                      closed_row("2026-10-20T11:00:00", None, 1.0)],
+                     ["sin datos", "2 (ganadoras: 1)", "sin datos (sin stop original en 1 de 2 operaciones)"]),
+                    ([{**closed_row("2026-10-20T10:00:00", 2.0, 1.0), "exited_at": None}],
+                     ["sin datos", "sin datos", "sin datos (datos de cierre incompletos en OANDA)"])):
+                with self.subTest(rows=len(rows)), \
+                        patch("execution.demo_dashboard.demo_snapshot", return_value={**SNAPSHOT, "closed_rows": rows}):
+                    lines = oanda_demo_summary_text("2026-10-20T21:00:00+00:00").splitlines()
+                self.assertEqual([line.split(": ", 1)[1] for line in lines[6:9]], expected)
+        # An explicit window start (from the persisted summary) is honoured.
+        with patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT), \
+                patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
+            lines = oanda_demo_summary_text("2026-10-20T21:00:00+00:00", "2026-10-20T00:00:00+00:00").splitlines()
+        self.assertEqual(lines[6:8], ["P&L del día de trading: -8.50 USD", "Operaciones cerradas en el día: 2 (ganadoras: 1)"])
 
     def test_summary_text_uses_event_time(self):
         with patch("execution.demo_dashboard.demo_snapshot", return_value=SNAPSHOT) as snap, \

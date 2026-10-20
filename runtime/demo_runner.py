@@ -12,7 +12,7 @@ from runtime.notifications import NullNotificationSink
 from runtime.scheduler import Scheduler, slot_at, slot_key
 from runtime.service import OperationalRuntime
 from storage.database import Store
-from storage.daily_summary import build_daily_summary
+from storage.daily_summary import build_daily_summary, pending_summary_days
 from runtime.halt import HaltRefused, startup_write
 
 
@@ -208,24 +208,30 @@ class DemoRunner:
         self.runtime.flush_evidence_observations()
 
     def daily_summary(self, at=None):
-        """Persist the latest NY date whose 17:00 America/New_York close has passed (first call at/after it), then
-        attempt notification once; deduped durably on that NY date (journal run_id ``daily:<date>``)."""
+        """Persist the summary of each forex trading day (17:00 -> 17:00 America/New_York, labelled by the NY date of
+        its 17:00 end) that has ended and was not summarized yet, then attempt notification once per day; deduped
+        durably on that label (journal run_id ``daily:<date>``, last label in state ``daily_summary_date``). Weekend
+        and catch-up rules: ``storage.daily_summary.pending_summary_days``."""
         gate = getattr(self, "halt_gate", None)  # None on legacy-built runners (flag OFF)
         if gate is not None and not gate.allow("S"):
             return False  # V2 P4a: summaries and notifications are suppressed after T_h
         at = at or self.clock()
+        persisted = []
         with self.store.transaction():
-            summary = build_daily_summary(self.store, at)
-            date = summary["date_ny"]
-            if self.store.db.execute(
-                "SELECT 1 FROM journal WHERE event_type='DAILY_SUMMARY' AND run_id=?",
-                (f"daily:{date}",)).fetchone():
-                return False
-            self.store.set_state("daily_summary_date", date)
-            self.store._event(at, f"daily:{date}", None, "demo_runner", "DAILY_SUMMARY", "INFO",
-                              summary)
-        self._capture_and_deliver(run_id=f"daily:{date}")
-        return True
+            for day in pending_summary_days(self.store.get_state("daily_summary_date"), at):
+                date = day.isoformat()
+                if self.store.db.execute(
+                        "SELECT 1 FROM journal WHERE event_type='DAILY_SUMMARY' AND run_id=?",
+                        (f"daily:{date}",)).fetchone():
+                    continue
+                summary = build_daily_summary(self.store, at, day)
+                self.store.set_state("daily_summary_date", date)
+                self.store._event(at, f"daily:{date}", None, "demo_runner", "DAILY_SUMMARY", "INFO",
+                                  summary)
+                persisted.append(date)
+        for date in persisted:
+            self._capture_and_deliver(run_id=f"daily:{date}")
+        return bool(persisted)
 
     def close(self):
         gate = getattr(self, "halt_gate", None)
