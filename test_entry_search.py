@@ -419,6 +419,28 @@ class InSampleSelection(unittest.TestCase):
         self.assertIn("| B | ", es.table(results, self.split))
 
 
+class PreviousRunComparison(unittest.TestCase):
+    def test_previous_report_table_is_parsed_by_header_and_compared(self):
+        import tempfile
+        text = ("| Variant | Trades/mo IS / OOS | Win % | Avg R | CI80 low |\n|---|---|---|---|---|\n"
+                "| A | 3.1 (25) / 0.3 (1) | 40 / 0 | +0.200 / -1.000 | +0.010 / – |\n"
+                "| B | 0.0 (0) / 0.0 (0) | – / – | – / – | – / – |\n\n"
+                "| Stage | no 1h-OB requirement | with 1h-OB confluence |\n|---|---|---|\n| sweep | 7 | 7 |\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
+            handle.write(text)
+        previous = es.parse_report_table(handle.name)
+        self.assertEqual(previous["A"], {"is_n": 25, "oos_n": 1, "is_r": 0.2, "oos_r": -1.0, "ci_is": 0.01,
+                                         "ci_oos": None})
+        self.assertEqual((previous["B"]["is_r"], previous["_sweeps"]), (None, 7))
+        split = es.Split(datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 1, tzinfo=UTC),
+                         datetime(2026, 9, 1, tzinfo=UTC))
+        trades = [fake_trade(datetime(2026, 2, 2, 9, tzinfo=UTC) + pd.Timedelta(days=d).to_pytimedelta(), 3, 0.2)
+                  for d in range(25)]
+        text = es.comparison(previous, {"A": (trades, None), "B": ([], None)}, split, "prev.md", 5)
+        self.assertIn("| A | 25 -> 25 | 1 -> 0 |", text)
+        self.assertIn("JT sweep ideas (funnel): 7 -> 5", text)
+
+
 class NewsAndSplit(unittest.TestCase):
     def test_news_days(self):
         self.assertEqual(es.first_friday(2026, 5), date(2026, 5, 1))

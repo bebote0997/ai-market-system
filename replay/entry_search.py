@@ -65,6 +65,7 @@ FOMC_DAYS = tuple(date.fromisoformat(d) for d in (
     "2025-10-29", "2025-12-10", "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17", "2026-07-29", "2026-09-16",
     "2026-10-28", "2026-12-09"))
 MIN_IS_TRADES_FOR_TOP = 20
+JT_PLOT = "JT:2R"  # the JT_SMC plan as specified (2R, no F80 / 1h-OB overlay): always plotted first
 LONG, SHORT = "LONG", "SHORT"
 
 
@@ -939,7 +940,7 @@ def plot_equity(path, results, names, split):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    colors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # categorical slots 1-4, fixed order
+    colors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]  # categorical slots 1-5, fixed order
     ink, muted, surface = "#0b0b0b", "#52514e", "#fcfcfb"
     fig, ax = plt.subplots(figsize=(10, 5), dpi=120, facecolor=surface)
     ax.set_facecolor(surface)
@@ -951,11 +952,11 @@ def plot_equity(path, results, names, split):
         xs = [split.start] + [t["exit_at"] for t in trades]
         ys = np.concatenate([[0.0], np.cumsum([t["r"] for t in trades])])
         ax.step(xs, ys, where="post", color=color, linewidth=2, label=name)
-        ax.annotate(f"{ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points", va="center",
+        ax.annotate(f"{name} {ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points", va="center",
                     fontsize=9, color=ink)
     ax.axhline(0, color=muted, linewidth=0.8)
-    ax.set_title("EURUSD entry search - cumulative R of the top-4 in-sample variants (shaded = out-of-sample)",
-                 loc="left", color=ink, fontsize=10)
+    ax.set_title(f"EURUSD entry search - cumulative R: {names[0]} (JT_SMC plan) first, then the top in-sample "
+                 "variants (shaded = out-of-sample)", loc="left", color=ink, fontsize=10)
     ax.set_ylabel("Cumulative R (net of spread + slippage)", color=muted)
     ax.tick_params(colors=muted)
     ax.grid(axis="y", color="#e8e8e6", linewidth=0.8)
@@ -1033,6 +1034,107 @@ E_DEFINITIONS = """\
 """
 
 
+CODEX_CHANGES = """\
+## Changes after Codex review (static review of `c7d3726`, six lookahead/bias findings, all fixed)
+
+1. **IS ranking no longer sees OOS outcomes (HIGH)**: in-sample = trades that both enter and exit by the split; trades
+   signalled before the split and still open at it are purged from IS and OOS (column `Purged`), so neither their
+   OOS returns nor their OOS MTM marks reach the ranking. The portfolio walk is unchanged (continuous).
+2. **JT trigger (HIGH)**: the bullish 5m close must be inside/at the 5m OB (OB low <= close <= OB high); before, a
+   close above the OB qualified.
+3. **One entry per sweep (MED)**: a sweep is identified by the 5m bar printing its extreme; later confirmations of
+   other levels by the same low join that idea even after it ended, so they cannot open a second idea/entry. Idea
+   IDs are now the sweep-low bar.
+4. **H4/D1 completeness (MED)**: a bucket is valid only when every expected 1h bar is present (DST-safe); partial
+   first buckets, buckets with missing hours and the in-progress last bucket never feed PDH/PDL, ADR20, EMA or
+   trend; PDH/PDL are unavailable (not replaced by an older day) after an incomplete day.
+5. **E5 session (MED)**: the 03:00-11:00 ET window applies to the decision/fill time (an 11:00 decision is out); the
+   spread still comes from the last closed 5m bar.
+6. **Bootstrap (MED)**: CI80 low is now a day-block bootstrap (circular blocks of 5 consecutive trading days, days
+   without trades included, all trades of a day kept together; assumes dependence shorter than ~a week and
+   stationarity within a segment). The IID trade bootstrap is kept as a secondary column. G3 uses the day-block CI.
+"""
+
+
+def parse_report_table(path):
+    """{variant: {"is_n", "oos_n", "is_r", "oos_r", "ci_is", "ci_oos"}} from the result tables of an earlier
+    entries_report.md (columns located by header name; '–' -> None), plus "_sweeps" = JT funnel sweep ideas."""
+    def num(cell):
+        cell = cell.strip()
+        return None if cell in ("–", "-", "") else float(cell)
+
+    out, head = {}, None
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.startswith("|"):
+                head = None  # a table ended
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells[0] == "sweep" and len(cells) == 3:  # JT funnel row (no 1h-OB requirement)
+                out["_sweeps"] = int(cells[1])
+                continue
+            if cells[0] == "Variant":
+                head = {name: i for i, name in enumerate(cells)}
+                continue
+            if head is None or "Avg R" not in head or cells[0].startswith("---"):
+                continue
+            trades = cells[head["Trades/mo IS / OOS"]].split(" / ")
+            avg = cells[head["Avg R"]].split(" / ")
+            ci = cells[head.get("CI80 low day-block", head.get("CI80 low"))].split(" / ")
+            out[cells[0]] = {"is_n": int(trades[0].split("(")[1].rstrip(")")),
+                             "oos_n": int(trades[1].split("(")[1].rstrip(")")), "is_r": num(avg[0]),
+                             "oos_r": num(avg[1]), "ci_is": num(ci[0]), "ci_oos": num(ci[1])}
+    return out
+
+
+def comparison(previous, results, split, label, sweeps=None):
+    """Markdown comparison of this run with an earlier report: every JT variant plus every variant whose trade
+    count or mean R changed; counts of OOS-positive and OOS CI80-low > 0 variants in both runs."""
+    previous = dict(previous)
+    sweeps_prev = previous.pop("_sweeps", None)
+    purged = sum(len(segment(trades, split)[2]) for trades, _ in results.values())
+    now = {}
+    for name, (trades, _) in results.items():
+        a, b = summarise(trades, split)
+        now[name] = {"is_n": a["trades"], "oos_n": b["trades"], "is_r": a["avg_r"] if a["trades"] else None,
+                     "oos_r": b["avg_r"] if b["trades"] else None, "ci_is": a["ci80_low"], "ci_oos": b["ci80_low"],
+                     "ci_oos_iid": b["ci80_low_iid"]}
+
+    def same(x, y):
+        return (x is None and y is None) or (x is not None and y is not None and abs(x - y) < 5e-4)
+
+    lines = [f"## 5. Comparison with the previous run (`{label}`, before the Codex fixes)", "",
+             "Previous CI80 low = IID bootstrap, trades assigned by signal time (crossers in IS). Now: day-block CI, "
+             "crossers purged. Rows: all JT variants and every variant whose trade count or mean R changed.", "",
+             "| Variant | IS n prev -> now | OOS n prev -> now | IS avg R prev -> now | OOS avg R prev -> now | "
+             "OOS CI80 low prev (IID) -> now (day-block / IID) |", "|---|---|---|---|---|---|"]
+    unchanged = 0
+    for name, cur in now.items():
+        old = previous.get(name)
+        if old is None:
+            continue
+        changed = (old["is_n"], old["oos_n"]) != (cur["is_n"], cur["oos_n"]) or not (
+            same(old["is_r"], cur["is_r"]) and same(old["oos_r"], cur["oos_r"]))
+        if not changed and not name.startswith("JT"):
+            unchanged += 1
+            continue
+        lines.append(f"| {name} | {old['is_n']} -> {cur['is_n']} | {old['oos_n']} -> {cur['oos_n']} | "
+                     f"{_f(old['is_r'], '+.3f')} -> {_f(cur['is_r'], '+.3f')} | {_f(old['oos_r'], '+.3f')} -> "
+                     f"{_f(cur['oos_r'], '+.3f')} | {_f(old['ci_oos'], '+.3f')} -> {_f(cur['ci_oos'], '+.3f')} / "
+                     f"{_f(cur['ci_oos_iid'], '+.3f')} |")
+
+    def count(rows, key, ci):
+        return sum(1 for r in rows.values() if r[key] is not None and r[ci] is not None and r[ci] > 0)
+    pos_prev = sum(1 for r in previous.values() if r["oos_n"] and r["oos_r"] is not None and r["oos_r"] > 0)
+    pos_now = sum(1 for r in now.values() if r["oos_n"] and r["oos_r"] is not None and r["oos_r"] > 0)
+    lines += ["", f"Unchanged trade counts and mean R (rows omitted): {unchanged} variants. OOS mean R > 0: "
+              f"{pos_prev} -> {pos_now} variants. OOS CI80 low > 0: {count(previous, 'oos_r', 'ci_oos')} (IID) -> "
+              f"{count(now, 'oos_r', 'ci_oos')} (day-block; {count(now, 'oos_r', 'ci_oos_iid')} with IID). "
+              f"JT sweep ideas (funnel): {sweeps_prev} -> {sweeps} (same-low confirmations merged). Trades purged "
+              f"at the split, all variants: {purged}.", ""]
+    return "\n".join(lines)
+
+
 def write_report(path, state):
     split, adr = state["split"], state["adr"]
     mi, mo = split.months
@@ -1059,7 +1161,8 @@ def write_report(path, state):
         f"{bt.BOOTSTRAP_BLOCK_DAYS} consecutive trading days (17:00->17:00 NY, days without trades included; all trades "
         "of a day stay together; assumes dependence shorter than ~a week and stationarity within each segment); "
         "`IID` = single-trade resampling (secondary, ignores clustering). Gates G3 (mean > +0.15R, CI low > 0, worst >= -1.2R), G4 (MTM DD <= 8R), G5 "
-        "(avg cost <= 0.10R and <= 25% of gross) from `replay.intraday_backtest.gates`; P = pass, F = fail.", ""]
+        "(avg cost <= 0.10R and <= 25% of gross) from `replay.intraday_backtest.gates`; P = pass, F = fail.", "",
+        CODEX_CHANGES]
     if "jt" in state:
         lines += ["## 1. JT_SMC — Jeferson's plan, mechanical (priority)", "", JT_DEFINITIONS,
                   "### Results", "", table(state["jt"], split), ""]
@@ -1094,7 +1197,8 @@ def write_report(path, state):
         top = top_variants(everything, split)
         lines += ["## 3. Top-4 variants by in-sample avg R", "",
                   f"Ranked over all {len(everything)} variants with >= {MIN_IS_TRADES_FOR_TOP} in-sample trades: "
-                  f"{', '.join(top) or 'none'}. Equity: `entries_equity_r.png`.", "",
+                  f"{', '.join(top) or 'none'}. Equity: `entries_equity_r.png` ({JT_PLOT} = the JT_SMC plan first, then "
+                  "these).", "",
                   "Monthly net R (by exit month, NY):", "", monthly(everything, top, split), ""]
         positive = oos_positive(everything, split)
         lines += ["## 4. Out-of-sample verdict", ""]
@@ -1111,6 +1215,9 @@ def write_report(path, state):
                   "edge (fewer in practice because the variants are strongly correlated, but the point stands). A "
                   "positive OOS result in one variant among many is NOT evidence of an edge; it needs a fresh, "
                   "pre-registered out-of-sample period (e.g. live paper) before any decision.", ""]
+        if state.get("previous"):
+            lines += [comparison(state["previous"], everything, split, state["previous_label"],
+                                 state["jt_funnel"][False].get("sweep"))]
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines))
 
@@ -1137,6 +1244,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--compare", help="earlier entries_report.md to compare with (section 5)")
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     report = os.path.join(args.out, "entries_report.md")
@@ -1153,6 +1261,8 @@ def main(argv=None):
     news_days = high_impact_days(split.start.date(), end.date())
     state = {"split": split, "adr": adr_stats(ctx, split), "status": "PARTIAL (JT_SMC running)",
              "data_start": frames["5m"].index[0].isoformat(), "data_end": end.isoformat()}
+    if args.compare:
+        state.update(previous=parse_report_table(args.compare), previous_label=os.path.basename(args.compare))
     log(f"split {split.start} | {split.split} | {split.end}; ADR20 {state['adr']}")
 
     jt, funnels = {}, {}
@@ -1194,7 +1304,9 @@ def main(argv=None):
 
     state.update(final=True, status="COMPLETE")
     everything = {**jt, **state["e"]}
-    plot_equity(os.path.join(args.out, "entries_equity_r.png"), everything, top_variants(everything, split), split)
+    top = top_variants(everything, split)
+    plot_equity(os.path.join(args.out, "entries_equity_r.png"), everything,
+                [JT_PLOT] + [n for n in top if n != JT_PLOT], split)
     write_report(report, state)
     log("done")
     return state
