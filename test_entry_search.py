@@ -303,6 +303,20 @@ class ExitGeometry(unittest.TestCase):
                          "no_opposite_liquidity")
 
 
+class JTTrigger(unittest.TestCase):
+    def test_trigger_close_must_be_inside_or_at_the_ob(self):
+        obs = [((1.1000, 1.1010), 5)]
+        for close, inside in ((1.1005, True), (1.1000, True), (1.1010, True), (1.1011, False), (1.0999, False)):
+            self.assertEqual(es._trigger_ob(obs, 9, close, 1.0990, 1.1020) is not None, inside, close)
+
+    def test_trigger_ob_formed_before_the_bar_and_overlapping_the_zone(self):
+        obs = [((1.1000, 1.1010), 9)]
+        self.assertIsNone(es._trigger_ob(obs, 9, 1.1005, 1.0990, 1.1020))  # formed on the trigger bar itself
+        self.assertIsNone(es._trigger_ob([((1.1000, 1.1010), 5)], 9, 1.1005, 1.1011, 1.1020))  # zone above the OB
+        newest = ((1.1002, 1.1008), 7)
+        self.assertEqual(es._trigger_ob([((1.1000, 1.1010), 5), newest], 9, 1.1005, 1.0990, 1.1020), newest[0])
+
+
 def fake_trade(signal_at, hours, r):
     exit_at = signal_at + pd.Timedelta(hours=hours).to_pytimedelta()
     return {"signal_at": signal_at, "fill_at": signal_at, "exit_at": exit_at, "r": r, "gross_r": r + 0.05,

@@ -544,6 +544,13 @@ def _ob_back(bars, bos, floor):
     return None
 
 
+def _trigger_ob(obs5, k, close, z_lo, z_hi):
+    """Most recent 5m OB (low, high) formed before bar ``k`` that holds the trigger close (OB low <= close <= OB high)
+    and overlaps the fib zone [z_lo, z_hi]; None if there is none."""
+    return next((ob for ob, formed in reversed(obs5)
+                 if formed < k and ob[0] <= close <= ob[1] and ob[0] <= z_hi and ob[1] >= z_lo), None)
+
+
 def _in_zone(retr):
     return next((z for z in JT_FIB_ZONES if z[0] <= retr <= z[1]), None)
 
@@ -621,8 +628,7 @@ def jt_candidates(ctx, view, require_conf, news_days, funnel, since=0):
             if zone is None:
                 continue
             z_lo, z_hi = idea.high - zone[1] * span, idea.high - zone[0] * span
-            ob5 = next((ob for ob, formed in reversed(idea.obs5)
-                        if formed < k and b.l[k] <= ob[1] and b.c[k] >= ob[0] and ob[0] <= z_hi and ob[1] >= z_lo), None)
+            ob5 = _trigger_ob(idea.obs5, int(k), float(b.c[k]), z_lo, z_hi)
             if ob5 is None:
                 continue
             idea.stage = max(idea.stage, 3)
@@ -941,8 +947,8 @@ Mechanical definitions (fixed before any run; long rules shown, shorts mirror th
 - **Fib**: from the sweep extreme to the impulse extreme (highest high since the trade-through, running, closed
   bars). The entry close must retrace 50-60% or 75-85%.
 - **5m OB / trigger**: every 5m BOS after the sweep (close above the last confirmed 5m swing high) defines a 5m OB =
-  last bearish 5m candle before it (up to 12 bars back). Trigger = a bullish 5m close with low <= OB high and
-  close >= OB low, for an OB formed before that bar and overlapping the fib zone that holds the close. Fill at the
+  last bearish 5m candle before it (up to 12 bars back). Trigger = a bullish 5m close inside/at the OB (OB low <=
+  close <= OB high), for an OB formed before that bar and overlapping the fib zone that holds the close. Fill at the
   next 5m open.
 - **1h FVG**: a bullish 3-candle 1h FVG (low[c] > high[a], consecutive hours) whose 3rd candle closed within the last
   24 h and that is unfilled (no 5m low <= high[a] since) at the trigger.
