@@ -276,6 +276,26 @@ TOOLTIPS = {
     "slippage": "Diferencia entre el precio que se planeó y el precio real al que se entró (slippage).",
 }
 
+# OANDA demo: "Día N de 30" counter and the daily-loss status card (DEC-5.5a).
+DEMO_LENGTH_DAYS = 30
+DEMO_NO_TRADES = "Demo OANDA: aún sin operaciones del demo"
+DAILY_LOSS_TITLE = "Límite de pérdida diaria"
+DAILY_LOSS_STATUS = {
+    "OK": "OK",
+    "TRIGGERED": "ACTIVADO · sin entradas nuevas hasta las 17:00 ET",
+    "PENDING": "OK · aún sin evaluar en este día de trading",
+    "OFF": "límite no activado",
+    "NO_DATA": "sin datos",
+}
+DAILY_LOSS_LABELS = {
+    "status": "Estado",
+    "loss": "Pérdida de hoy (realizada + abierta)",
+    "used": "Usado del límite",
+    "day_start_nav": "NAV al inicio del día (17:00 ET)",
+    "drawdown": "Freno por caída de la cuenta (5 %)",
+}
+R_UNKNOWN = "—"
+
 MONTHS = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 DAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 MONTHS_LONG = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
@@ -397,6 +417,33 @@ def avg_r_phrase(value, reason=None):
     if round(value, 1) == 0:
         return "En promedio, casi sin ganar ni perder"
     return "En promedio " + ("ganaste " if value > 0 else "perdiste ") + f"{times_text(value)} lo que arriesgabas"
+
+
+def demo_day_text(day, length=DEMO_LENGTH_DAYS):
+    """"Día N de 30" (day 1 = NY date of the first routed trade); past the end "Día 30 de 30 – completo"."""
+    if not isinstance(day, int) or isinstance(day, bool) or day < 1:
+        return DEMO_NO_TRADES
+    if day > length:
+        return f"Día {length} de {length} – completo"
+    return f"Día {day} de {length}"
+
+
+def daily_loss_rows(view):
+    """(label, text) rows of the daily-loss card from ``demo_metrics.daily_loss_view``; unknown amounts -> NO_DATA."""
+    view = view or {}
+    status = view.get("status") or "NO_DATA"
+    rows = [(DAILY_LOSS_LABELS["status"], DAILY_LOSS_STATUS.get(status, status))]
+    if status in ("OFF", "NO_DATA"):
+        return rows
+    fraction = view.get("fraction")
+    limit = f"{100 * fraction:.0f} %" if number(fraction) else "2 %"
+    loss, used = view.get("loss"), view.get("used_pct")
+    rows += [(DAILY_LOSS_LABELS["loss"], money(loss) if number(loss) else NO_DATA),
+             (f'{DAILY_LOSS_LABELS["used"]} ({limit})', f"{used:.0f} %" if number(used) else NO_DATA),
+             (DAILY_LOSS_LABELS["day_start_nav"],
+              money(view.get("day_start_nav")) if number(view.get("day_start_nav")) else NO_DATA),
+             (DAILY_LOSS_LABELS["drawdown"], "ACTIVADO" if view.get("drawdown_halted") else "OK")]
+    return rows
 
 
 def tip(text):

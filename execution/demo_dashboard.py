@@ -10,8 +10,8 @@ import os
 
 from execution.broker_demo_state import routing_flag
 from execution.demo_epoch import demo_epoch
-from execution.demo_metrics import (as_float, demo_capital, demo_day, demo_rows, demo_statistics, first_demo_open,
-                                    load_risk_rows)
+from execution.demo_metrics import (as_float, daily_loss_view, demo_capital, demo_day, demo_rows, demo_statistics,
+                                    first_demo_open, load_loss_flags, load_risk_rows)
 
 
 def demo_mode(env=None):
@@ -30,6 +30,13 @@ def _risk_rows(env):
         return {}
 
 
+def _loss_flags(env):
+    try:
+        return load_loss_flags(state_db_path(env))
+    except Exception:  # noqa: BLE001 - unreadable config/DB: unknown state
+        return None
+
+
 def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
     """Everything the demo screens need. ``stats`` is None when the OANDA trades read failed (``trades_error`` is
     ``deadline``/``incomplete`` when that was the cause: never partial totals); NAV/balance are None when the summary
@@ -38,7 +45,7 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
     epoch = demo_epoch(env)
     snapshot = {"epoch": epoch, "stats": None, "curve": [], "open_rows": [], "closed_rows": [], "nav": None,
                 "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False,
-                "trades_error": None}
+                "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {})}
     try:
         if trades_reader is None or account_reader is None:
             from execution.oanda_readonly import cached_account_view, cached_demo_trades
@@ -59,14 +66,17 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
                             stale=getattr(view, "stale", False) is True)
         if snapshot["stats"] is not None:
             snapshot["capital"] = demo_capital(snapshot["nav"], snapshot["balance"], snapshot["stats"])
+        snapshot["daily_loss"] = daily_loss_view(_loss_flags(env), snapshot["nav"], now, env)
     except Exception:  # noqa: BLE001 - the demo view is display only: anything unexpected => "sin datos"
-        return {**snapshot, "stats": None, "curve": [], "open_rows": [], "closed_rows": []}
+        return {**snapshot, "stats": None, "curve": [], "open_rows": [], "closed_rows": [],
+                "daily_loss": {**snapshot["daily_loss"], "status": "NO_DATA"}}
     return snapshot
 
 
 def demo_progress(now, env=None):
-    """(epoch, first routed trade opened_at or None, day number or None). Never raises."""
+    """(epoch, first routed trade opened_at or None, day number or None). The day is NOT capped (> 30 = the demo is
+    complete; display via ``ui.i18n_es.demo_day_text``). Never raises."""
     env = os.environ if env is None else env
     epoch = demo_epoch(env)
     first = first_demo_open(_risk_rows(env), epoch)
-    return epoch, first, demo_day(first, now)
+    return epoch, first, demo_day(first, now, length=None)

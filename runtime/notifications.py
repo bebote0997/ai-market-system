@@ -153,6 +153,7 @@ def _demo_lines(timestamp_utc):
     from execution.demo_dashboard import demo_progress, demo_snapshot
     from execution.demo_epoch import parse_aware
     from execution.demo_metrics import DEMO_LENGTH_DAYS
+    from ui.i18n_es import demo_day_text
     now = parse_aware(timestamp_utc) or datetime.now(timezone.utc)
     snapshot = demo_snapshot(now)
     stats, currency = snapshot.get("stats"), snapshot.get("currency")
@@ -160,7 +161,7 @@ def _demo_lines(timestamp_utc):
         return ["OANDA demo: sin datos"]
     day = demo_progress(now)[2]
     avg_r = None if stats is None else stats.get("avg_r")
-    lines = [f"Día {day} de {DEMO_LENGTH_DAYS}" if day else "Demo OANDA: aún sin operaciones del demo",
+    lines = [demo_day_text(day, DEMO_LENGTH_DAYS),
              "NAV: " + _amount(snapshot.get("nav"), currency),
              "P&L desde el inicio del demo: " + _amount((snapshot.get("capital") or {}).get("change"), currency, True)]
     if stats is None:

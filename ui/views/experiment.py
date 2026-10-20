@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import os
 
+from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.adapters import MARKETS
 
@@ -16,7 +17,8 @@ def demo_progress_text(now=None):
         _epoch, _first, day = demo_progress(now or datetime.now(timezone.utc))
     except Exception:  # noqa: BLE001 - routing ON but the demo view is unavailable: no day counter
         return "Demo OANDA: sin datos"
-    return f"Demo OANDA: Día {day} de {DEMO_LENGTH_DAYS}" if day else "Demo OANDA: aún sin operaciones del demo"
+    text = es.demo_day_text(day, DEMO_LENGTH_DAYS)
+    return text if text == es.DEMO_NO_TRADES else f"Demo OANDA: {text}"
 
 
 def render(st, vm, enabled_symbols):
