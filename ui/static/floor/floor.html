@@ -282,7 +282,7 @@ function rrBar(t){const sl=t.sl_actual!=null?t.sl_actual:t.sl_expected,tp=t.tp_a
  const pos=v=>Math.max(0,Math.min(100,100*(v-sl)/(tp-sl)));const e=pos(en);const now=ok(t.exit_price)?t.exit_price:t.last_price;
  return `<div class="rr"><div class="seg" style="left:0;width:${e}%;background:#8a2335"></div><div class="seg" style="left:${e}%;width:${100-e}%;background:#1f7a4a"></div>
  <div class="t l">SL ${px(sl)}</div><div class="t" style="left:${e}%">Entry ${px(en)}</div><div class="t r">TP ${px(tp)}</div>`+
- (ok(now)?`<div class="dot" style="left:${pos(now)}%"></div><div class="t t2" style="left:${pos(now)}%;color:var(--gold)">${px(now)} · ${esc(fR(t.r_realized))}</div>`:'')+`</div>`}
+ (ok(now)?`<div class="dot" style="left:${pos(now)}%"></div><div class="t t2" style="left:${pos(now)}%;transform:${pos(now)<15?'none':pos(now)>85?'translateX(-100%)':'translateX(-50%)'};color:var(--gold)">${px(now)} · ${esc(fR(t.r_realized))}</div>`:'')+`</div>`}
 const delta=(a,b)=>ok(a)&&ok(b)?(a===b?NA:px(b-a)):NA;
 function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${EMPTY}</div>`;
  const open=t.status==='OPEN',ex=badge('trades');
