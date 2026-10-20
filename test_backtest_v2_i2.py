@@ -164,6 +164,18 @@ class Simulation(unittest.TestCase):
         self.assertEqual(result["reason"], bt.BE)
         self.assertGreater(result["exit_at"], datetime(2026, 1, 13, 22, 0, tzinfo=UTC))
 
+    def test_evaluation_cutoff_closes_open_position_at_last_bar_ending_by_it(self):
+        market = flat_market(self.slot, 200, overrides={i: (1.1010, 1.1010, 1.1010, 1.1010) for i in range(5, 200)})
+        market.cutoff = self.slot + timedelta(minutes=60)
+        market.close[12] = 1.2  # bar ending after the cutoff (would hit TP) is never read
+        market.high[12] = 1.2
+        result = bt.simulate_trade(market, self.slot, "LONG", 1.0980, 1.1040, "I2")
+        self.assertEqual((result["reason"], result["exit_at"]), (bt.END, self.slot + timedelta(minutes=60)))
+        self.assertEqual(result["exit_index"], 11)
+        self.assertAlmostEqual(result["exit"], 1.1010 - 0.7 * bt.PIP)
+        self.assertEqual(bt.simulate_trade(market, self.slot + timedelta(minutes=60), "LONG", 1.0980, 1.1040, "I2"),
+                         {"rejected": "no_fill_data"})
+
     def test_f3_fill_gate_rejects_fill_below_2_5r(self):
         market = flat_market(self.slot, 20)
         self.assertEqual(bt.simulate_trade(market, self.slot, "LONG", 1.0990, 1.1020, "F3", 2.5),

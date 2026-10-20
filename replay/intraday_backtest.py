@@ -285,12 +285,20 @@ class Market:
     half_spread: float
     slippage: float
     frame_15m: pd.DataFrame = None
+    cutoff: datetime = None  # evaluation end: only bars ending at or before it are simulated
 
     @classmethod
-    def from_frames(cls, frames, spread_pips, slippage_pips=SLIPPAGE_PIPS):
+    def from_frames(cls, frames, spread_pips, slippage_pips=SLIPPAGE_PIPS, cutoff=None):
         f = frames["5m"]
         return cls(f.index.as_unit("ns").asi8.copy(), f["Open"].to_numpy(), f["High"].to_numpy(), f["Low"].to_numpy(),
-                   f["Close"].to_numpy(), spread_pips * PIP / 2, slippage_pips * PIP, frames.get("15m"))
+                   f["Close"].to_numpy(), spread_pips * PIP / 2, slippage_pips * PIP, frames.get("15m"), cutoff)
+
+    @property
+    def limit(self):
+        """Number of bars ending at or before ``cutoff`` (all bars when there is no cutoff)."""
+        if self.cutoff is None:
+            return len(self.starts)
+        return int(np.searchsorted(self.starts, _ns(self.cutoff - FIVE), side="right"))
 
     def stamp(self, i):
         return datetime.fromtimestamp(self.starts[i] / 1e9, timezone.utc)
@@ -336,7 +344,8 @@ def day2_structure_exit(position, frame_15m, day1, day2):
 def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None):
     """Dict with fill/exit/R, or {'rejected': reason}. ``policy`` is 'F3' (trade_duration rules) or 'I2' (hard close)."""
     i = int(np.searchsorted(market.starts, _ns(slot)))
-    if i >= len(market.starts):
+    limit = market.limit
+    if i >= limit:
         return {"rejected": "no_fill_data"}
     long = side == "LONG"
     sign = 1 if long else -1
@@ -372,7 +381,7 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
         return done(j, at, bid_ask - sign * slip, reason, detail)
 
     j = i
-    while j < len(market.starts):
+    while j < limit:
         bar_start = market.stamp(j)
         bar_end = bar_start + FIVE
         stop_reason = BE if current_stop == fill else SL
@@ -404,7 +413,7 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
         if sign * (favourable - target) >= 0:
             return done(j, bar_end, target, TP)
         j += 1
-    last = len(market.starts) - 1
+    last = limit - 1  # still open at the evaluation cutoff: last bar ending at or before it
     return market_exit(last, market.stamp(last) + FIVE, END, END)
 
 
@@ -711,7 +720,8 @@ def write_report(path, ctx):
               "- 5m bar granularity: intrabar ordering unknown (same-bar SL+TP assumed SL), fills at bar opens, "
               "15-min decision cadence.",
               "- F3 Day-2 structure check evaluated on each closed 15m bar; the runtime acts on its own cycle "
-              "cadence. Positions still open at the data end are closed at the last close (OPEN_AT_END).",
+              "cadence. Positions still open at the evaluation end (`--end`, default the data end) are closed at "
+              "the close of the last 5m bar ending at or before it (OPEN_AT_END); no bar after the cutoff is read.",
               "- Production risk sizing caps notional at 100 % of equity, so actual money risk per EURUSD trade is "
               "well below 1 %; results are reported in R.",
               "- Daily-loss rule simplified to a realised −2R halt (see Method).", ""]
@@ -720,8 +730,8 @@ def write_report(path, ctx):
 
 
 # ---------------------------------------------------------------- main
-def evaluate(signals, frames, spread_pips):
-    market = Market.from_frames(frames, spread_pips)
+def evaluate(signals, frames, spread_pips, cutoff=None):
+    market = Market.from_frames(frames, spread_pips, cutoff=cutoff)
     out = {}
     for variant in VARIANTS:
         trades, skips, unique_skips, halts = run_policy(signals, market, variant)
@@ -761,8 +771,12 @@ def main(argv=None):
     if os.path.exists(cache) and not args.refresh_signals:
         with open(cache, encoding="utf-8") as handle:
             signals = [json.loads(line) for line in handle]
-        if [s["slot"] for s in signals] != [s.isoformat() for s in slots]:
-            log("signals cache does not match the slot range; regenerating")
+        by_slot = {s["slot"]: s for s in signals}
+        wanted = [s.isoformat() for s in slots]
+        if all(slot in by_slot for slot in wanted):  # the cache may cover a wider range (e.g. a shorter --end)
+            signals = [by_slot[slot] for slot in wanted]
+        else:
+            log("signals cache does not cover the slot range; regenerating")
             signals = None
     if signals is None:
         log(f"generating signals for {len(slots)} slots {start} -> {end} with {args.workers} workers")
@@ -774,7 +788,7 @@ def main(argv=None):
     spread_mean = float(((frames["5m"]["AskClose"] - frames["5m"]["BidClose"]) / PIP).mean()) if spread else float("nan")
     spread = spread if spread is not None else DEFAULT_SPREAD_PIPS
     log(f"simulating (spread {spread:.2f} pip)")
-    base, sens = evaluate(signals, frames, spread), evaluate(signals, frames, DEFAULT_SPREAD_PIPS)
+    base, sens = evaluate(signals, frames, spread, end), evaluate(signals, frames, DEFAULT_SPREAD_PIPS, end)
     months = (end - start).total_seconds() / 86400 / (365.25 / 12)
     results = {}
     for variant in VARIANTS:
