@@ -17,11 +17,11 @@ STOP_UNKNOWN = "sin datos del stop original"
 # Navigation: internal page keys stay as identifiers; only the label is translated.
 PAGES = {
     "Overview": "📊 Resumen", "The Floor": "🏢 La mesa", "Process": "🔄 Proceso",
-    "Setups": "🎯 Oportunidades", "Trades": "💼 Operaciones", "Decisions": "🧠 Decisiones",
+    "Setups": "🎯 Setups", "Trades": "💼 Trades", "Decisions": "🧠 Decisiones",
     "Analysts · soon": "🔬 Analistas · pronto", "Control": "🎛️ Control",
 }
 LEGACY_PAGES = {
-    "OVERVIEW": "Resumen", "POSITIONS": "Posiciones", "SETUPS": "Oportunidades",
+    "OVERVIEW": "Resumen", "POSITIONS": "Posiciones", "SETUPS": "Setups",
     "DECISIONS": "Decisiones", "HEALTH": "Salud del sistema", "ALERTS": "Alertas",
     "HISTORY": "Historial", "ERRORS": "Errores", "FLOOR": "Mesa", "MARKETS": "Mercados",
     "JOURNAL": "Bitácora", "EXPERIMENT": "Experimento", "SYSTEM": "Sistema",
@@ -48,23 +48,23 @@ TEXT = {
     "Trading Floor": "AI Trading Floor",
     "PAPER · V2": "Práctica · PAPER · V2",
     # Overview
-    "Equity · PAPER": "Capital de la cuenta",
-    "Closed-trade curve": "Cómo ha ido tu ganancia",
+    "Equity · PAPER": "Equity · PAPER",
+    "Closed-trade curve": "Closed-trade curve",
     "Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger":
-        "Ganancia acumulada de las operaciones cerradas (últimos 200 puntos)",
+        "Cumulative realized PnL · closed trades (últimos 200 puntos)",
     "Session": "Sesión de mercado",
     "System": "Estado del sistema",
-    "Open positions": "Operaciones abiertas",
+    "Open positions": "Open positions",
     "Active policies": "Reglas activas",
     "Outside sessions": "Fuera de sesión",
-    "No open position": "Sin operación abierta",
+    "No open position": "No open position",
     # Trades
-    "Closed trades · latest published": "Operaciones cerradas",
-    "Trade detail": "Ver detalle de la operación",
-    "Plan": "El plan",
+    "Closed trades · latest published": "Closed trades",
+    "Trade detail": "Trade detail",
+    "Plan": "Trade plan",
     "Order planned entry": "Entrada planeada de la orden",
-    "Execution": "Lo que pasó",
-    "Slippage · plan vs fill": "Diferencia entre lo planeado y lo ejecutado",
+    "Execution": "Execution",
+    "Slippage · plan vs fill": "Slippage · plan vs fill",
     "Open Process · ": "Ver el proceso · ",
     # Decisions / Floor / Process / Setups / Analysts
     "Decision process": "Ver el proceso de una decisión",
@@ -88,11 +88,11 @@ TEXT = {
     "Gaps": "Datos que faltan",
     "None": "Ninguno",
     "Latest 200 setups · cache: closed 5m prices as of setup; OHLC only when persisted.":
-        "Últimas 200 oportunidades. Gráfico con precios de cierre de 5 min hasta el momento de la oportunidad.",
-    "Validated setups": "Oportunidades válidas",
+        "Últimos 200 setups. Gráfico con cierres de 5 min hasta el momento del setup.",
+    "Validated setups": "Valid setups",
     "Setups symbol": "Símbolo",
-    "Setup · newest first": "Oportunidad · la más reciente primero",
-    "Setup ID not persisted; setup email dedup unavailable": "La oportunidad no tiene identificador guardado",
+    "Setup · newest first": "Setup · más reciente primero",
+    "Setup ID not persisted; setup email dedup unavailable": "Setup ID no guardado",
     "Chart": "Gráfico",
     "chart unavailable: bars not persisted": "gráfico no disponible: no hay velas guardadas",
     "Exact-cycle 15m OHLC bars not persisted": "No hay velas de 15 min guardadas para este ciclo",
@@ -104,9 +104,9 @@ TEXT = {
     "Persisted PAPER evidence · SQLite read-only · missing evidence = NO_DATA":
         "Datos guardados de la cuenta de práctica · solo lectura · lo que falta se muestra como «Sin datos»",
     "Market state / charts": "Estado del mercado y gráficos",
-    "Open positions · all symbols": "Posiciones abiertas · todos los símbolos",
-    "Pending orders · all symbols": "Órdenes pendientes · todos los símbolos",
-    "Latest setup per symbol": "Última oportunidad por símbolo",
+    "Open positions · all symbols": "Open positions · todos los símbolos",
+    "Pending orders · all symbols": "Pending orders · todos los símbolos",
+    "Latest setup per symbol": "Último setup por símbolo",
     "AI decisions · interpretation": "Decisiones de la IA · interpretación",
     "Risk decisions · deterministic authority": "Decisiones del motor de riesgo · autoridad final",
     "System Health observations": "Observaciones de salud del sistema",
@@ -118,7 +118,7 @@ TEXT = {
     "Phase 9 alert deliveries": "Envíos de alertas (fase 9)",
     "V1 notification deliveries": "Envíos de notificaciones (V1)",
     "Run ID": "ID del ciclo",
-    "Setup ID": "ID de la oportunidad",
+    "Setup ID": "Setup ID",
     "History page": "Página del historial",
     "Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first.":
         "IDs exactos; si llenas ambos se combinan. Hasta 200 filas por tabla y página, lo más reciente primero.",
@@ -137,12 +137,12 @@ TEXT = {
     "FLOOR ASSISTANT": "ASISTENTE DE LA MESA",
     "Observation only. No authorization or execution controls.": "Solo observación. No autoriza ni ejecuta nada.",
     "AGENT CONSENSUS": "OPINIÓN DE LOS AGENTES",
-    "SETUP": "OPORTUNIDAD",
+    "SETUP": "SETUP",
     "DETERMINISTIC RISK ENGINE": "MOTOR DE RIESGO (REGLAS FIJAS)",
     "PYTHON DETERMINISTIC": "CALCULADO POR PYTHON, SIN IA",
-    "PAPER POSITION": "POSICIÓN DE PRÁCTICA",
+    "PAPER POSITION": "PAPER POSITION",
     "NO REAL MONEY": "SIN DINERO REAL",
-    "FLAT": "Sin posición",
+    "FLAT": "FLAT",
     "PIPELINE": "PASOS DEL ANÁLISIS",
     "AI MEETING": "REUNIÓN DE LA IA",
     "MACRO / NEWS · FACT vs AI INTERPRETATION": "NOTICIAS · HECHOS vs INTERPRETACIÓN DE LA IA",
@@ -178,31 +178,31 @@ TEXT = {
 
 # Table columns and field labels (data key -> Spanish header). Keys stay untranslated in the data itself.
 COLUMNS = {
-    "symbol": "Símbolo", "side": "Dirección", "quantity": "Cantidad", "entry_price": "Entrada (fill)",
-    "exit_price": "Salida", "stop": "Stop loss (SL)", "target": "Meta (TP)", "unrealized_pnl": "Va ganando / perdiendo",
-    "net_pnl": "Resultado", "realized_r": "Resultado vs riesgo", "close_reason": "Por qué se cerró",
-    "exited_at": "Cerrada (ET)", "opened_at": "Abierta (ET)", "trade_id": "ID operación", "position_id": "ID posición",
+    "symbol": "Símbolo", "side": "Side", "quantity": "Size", "entry_price": "Entry (fill)",
+    "exit_price": "Exit", "stop": "Stop loss (SL)", "target": "Take profit (TP)", "unrealized_pnl": "Unrealized PnL",
+    "net_pnl": "Net PnL", "realized_r": "R realized", "close_reason": "Exit reason",
+    "exited_at": "Exit time (ET)", "opened_at": "Entry time (ET)", "trade_id": "Trade ID", "position_id": "Position ID",
     "as_of": "Hora (ET)", "run_id": "ID del ciclo", "source": "Origen", "agent_name": "Agente", "status": "Estado",
-    "bias": "Tendencia", "confidence": "Confianza", "reasoning_summary": "Resumen", "reason": "Razón",
-    "error": "Error", "entry": "Entrada", "risk_reward": "Ganancia posible vs riesgo (R:R)", "planned_entry": "Entrada planeada",
-    "account_id": "Cuenta", "realized_pnl": "Ganancia realizada", "equity": "Capital", "setup_id": "ID oportunidad",
+    "bias": "Bias", "confidence": "Confianza", "reasoning_summary": "Resumen", "reason": "Razón",
+    "error": "Error", "entry": "Entry", "risk_reward": "R:R", "planned_entry": "Planned entry",
+    "account_id": "Cuenta", "realized_pnl": "Realized PnL", "equity": "Equity", "setup_id": "Setup ID",
     "timestamp": "Hora", "service": "Servicio", "event": "Evento", "details": "Detalles", "experiment": "Experimento",
-    "analysis_state": "Estado del análisis", "AI contextual bias": "Tendencia según la IA", "risk_state": "Riesgo",
+    "analysis_state": "Estado del análisis", "AI contextual bias": "AI bias", "risk_state": "Riesgo",
     "freshness": "Actualidad de datos", "timestamp_utc": "Hora (UTC)", "type": "Tipo", "severity": "Gravedad",
-    "state": "Estado", "setup": "Oportunidad", "open_position": "Operación abierta", "scheduler": "Programador",
+    "state": "Estado", "setup": "Setup", "open_position": "Open position", "scheduler": "Programador",
     "last_success": "Último ciclo exitoso", "heartbeat": "Última señal de vida", "last_run": "Último ciclo",
     "market_data_provider": "Proveedor de precios", "ai_provider": "Proveedor de IA", "decision": "Decisión",
-    "risk_fraction": "Riesgo propuesto", "equity_at_decision": "Capital al decidir", "capital_at_risk": "Dinero en riesgo",
+    "risk_fraction": "Risk per trade (fracción)", "equity_at_decision": "Equity at decision", "capital_at_risk": "Cash at risk",
     "contract_multiplier": "Multiplicador", "Status": "Estado", "Timestamp": "Hora (ET)",
 }
 
 # Persisted states/values -> plain Spanish (the original stays visible as a tooltip/small text).
 STATUS = {
-    "OPEN": "Abierta", "CLOSED": "Cerrada", "PENDING": "Pendiente", "FILLED": "Ejecutada", "CANCELLED": "Cancelada",
-    "LONG": "Compra (LONG)", "SHORT": "Venta (SHORT)", "BULLISH": "Alcista", "BEARISH": "Bajista",
+    "OPEN": "Abierta", "CLOSED": "Cerrada", "PENDING": "Pendiente", "FILLED": "Filled", "CANCELLED": "Cancelada",
+    "LONG": "LONG", "SHORT": "SHORT", "BULLISH": "Alcista", "BEARISH": "Bajista",
     "NEUTRAL": "Neutral", "UNKNOWN": "Desconocida", "MIXED": "Mixta",
-    "NO_SETUP": "Sin oportunidad", "WATCH": "En observación", "VALID_SETUP": "Oportunidad válida",
-    "PLAN_READY": "Plan listo", "PAPER PLAN READY": "Plan de práctica listo", "AI_CAUTION": "La IA pide cautela",
+    "NO_SETUP": "No setup", "WATCH": "Watch", "VALID_SETUP": "Valid setup",
+    "PLAN_READY": "Plan listo", "PAPER PLAN READY": "PAPER plan ready", "AI_CAUTION": "La IA pide cautela",
     "RISK_REJECTED": "Rechazada por riesgo", "APPROVED": "Aprobada", "REJECTED": "Rechazada",
     "NOT CALLED": "No consultado", "NOT_REQUIRED": "No hacía falta", "MISSING": "Sin respuesta",
     "OK": "Bien", "PARTIAL": "Parcial", "ERROR": "Error", "FAILED": "Falló", "COMPLETED": "Completado",
@@ -219,23 +219,23 @@ STATUS = {
 
 # Stored close reason -> one plain sentence. Unknown reasons are shown as stored.
 CLOSE_REASONS = {
-    "STOP": "Tocó el stop loss (límite de pérdida)",
-    "STOP_HIT": "Tocó el stop loss (límite de pérdida)",
-    "STOPPED": "Tocó el stop loss (límite de pérdida)",
-    "TARGET": "Llegó a la meta de ganancia",
-    "TIME_EXIT_DAY1_BELOW_0_5R": "Se cerró al final del primer día porque avanzó menos de media vez el riesgo",
-    "TIME_EXIT_DAY2_STRUCTURE_CHANGE": "Se cerró el segundo día porque el mercado cambió de dirección",
-    "TIME_EXIT_DAY2_NY_CLOSE": "Se cerró al final del segundo día (cierre de Nueva York)",
-    "TIME_EXIT_FRIDAY_NY_CLOSE": "Se cerró el viernes al cierre de Nueva York para no pasar el fin de semana",
-    "EXIT_STRUCTURE_CHANGE": "Se cerró porque el mercado cambió de dirección",
-    "EXIT_SESSION": "Se cerró al terminar la sesión de mercado",
-    "EXIT_HALT": "Se cerró porque el sistema se detuvo",
-    "EXIT_DATA": "Se cerró por un problema con los datos de precios",
-    "EXIT_NO_PROVIDER": "Se cerró porque no había proveedor de precios",
-    "EXIT_PROVIDER_ERROR": "Se cerró por un error del proveedor de precios",
-    "EXIT_EXECUTION_GATE": "Se cerró por una regla de seguridad de ejecución",
-    "EXIT_ERROR": "Se cerró por un error del sistema",
-    "SYMBOL_PAUSED": "Se cerró porque el mercado se pausó por decisión del dueño",
+    "STOP": "Stop loss hit (SL)",
+    "STOP_HIT": "Stop loss hit (SL)",
+    "STOPPED": "Stop loss hit (SL)",
+    "TARGET": "Take profit hit (TP)",
+    "TIME_EXIT_DAY1_BELOW_0_5R": "Time exit · día 1 < 0.5R",
+    "TIME_EXIT_DAY2_STRUCTURE_CHANGE": "Time exit · día 2 · cambio de estructura",
+    "TIME_EXIT_DAY2_NY_CLOSE": "Time exit · día 2 · cierre NY",
+    "TIME_EXIT_FRIDAY_NY_CLOSE": "Time exit · viernes · cierre NY (sin exposición de fin de semana)",
+    "EXIT_STRUCTURE_CHANGE": "Exit · cambio de estructura",
+    "EXIT_SESSION": "Exit · fin de sesión",
+    "EXIT_HALT": "Exit · halt del sistema",
+    "EXIT_DATA": "Exit · datos de mercado inválidos",
+    "EXIT_NO_PROVIDER": "Exit · sin proveedor de precios",
+    "EXIT_PROVIDER_ERROR": "Exit · error del proveedor de precios",
+    "EXIT_EXECUTION_GATE": "Exit · execution gate",
+    "EXIT_ERROR": "Exit · error del sistema",
+    "SYMBOL_PAUSED": "Exit · símbolo pausado (decisión del owner)",
 }
 
 COMPONENTS = {
@@ -266,33 +266,33 @@ SESSIONS = {"LONDON": "Londres", "NEW_YORK": "Nueva York"}
 POLICIES = {"V2_PLANNER_POLICY": "Regla del planificador", "V2_OPPOSITE_SETUP_POLICY": "Regla ante señales opuestas"}
 
 TOOLTIPS = {
-    "equity": "Cuánto vale tu cuenta de práctica ahora, contando las operaciones abiertas.",
-    "pnl": "Suma de lo que ganaste o perdiste en las operaciones ya cerradas (PnL realizado).",
-    "today": "Lo que ganaste o perdiste hoy (hora de Nueva York) en operaciones cerradas.",
-    "win_rate": "Cuántas de tus operaciones cerradas terminaron con ganancia (win rate).",
-    "drawdown": "La caída más grande desde un máximo de ganancia hasta un punto más bajo (max drawdown).",
-    "avg_r": "R = cuántas veces ganaste o perdiste lo que arriesgabas. 1 = ganaste lo mismo que arriesgaste.",
-    "unrealized": "Ganancia o pérdida de operaciones que siguen abiertas; cambia con el precio.",
-    "slippage": "Diferencia entre el precio que se planeó y el precio real al que se entró (slippage).",
+    "equity": "Equity = balance + unrealized PnL de las open positions.",
+    "pnl": "Realized PnL = suma del net PnL de los closed trades.",
+    "today": "Realized PnL de los closed trades de hoy (fecha de Nueva York).",
+    "win_rate": "Win rate = closed trades con net PnL > 0 / total de closed trades.",
+    "drawdown": "Max drawdown = mayor caída pico-valle del realized PnL acumulado.",
+    "avg_r": "Avg R (expectancy) = media del R realizado; R = net PnL / riesgo inicial (|entry − SL| × size).",
+    "unrealized": "Unrealized PnL de las open positions (mark-to-market).",
+    "slippage": "Slippage = diferencia entre la entrada planeada y el fill.",
 }
 
 # OANDA demo: "Día N de 30" counter and the daily-loss status card (DEC-5.5a).
 DEMO_LENGTH_DAYS = 30
 DEMO_NO_TRADES = "Demo OANDA: aún sin operaciones del demo"
-DAILY_LOSS_TITLE = "Límite de pérdida diaria"
+DAILY_LOSS_TITLE = "Daily loss limit"
 DAILY_LOSS_STATUS = {
     "OK": "OK",
-    "TRIGGERED": "ACTIVADO · sin entradas nuevas hasta las 17:00 ET",
-    "PENDING": "OK · aún sin evaluar en este día de trading",
-    "OFF": "límite no activado",
-    "NO_DATA": "sin datos",
+    "TRIGGERED": "TRIGGERED · sin nuevas entradas hasta las 17:00 ET",
+    "PENDING": "OK · pending (aún sin evaluar en este trading day)",
+    "OFF": "OFF",
+    "NO_DATA": "NO DATA",
 }
 DAILY_LOSS_LABELS = {
     "status": "Estado",
-    "loss": "Pérdida de hoy (realizada + abierta)",
-    "used": "Usado del límite",
-    "day_start_nav": "NAV al inicio del día (17:00 ET)",
-    "drawdown": "Freno por caída de la cuenta (5 %)",
+    "loss": "Daily loss (realized + unrealized)",
+    "used": "Limit used",
+    "day_start_nav": "Start-of-day NAV (17:00 ET)",
+    "drawdown": "Max drawdown halt (5 %)",
 }
 R_UNKNOWN = "—"
 
@@ -366,57 +366,39 @@ def long_date_et(value):
     return f"{DAYS[local.weekday()]} {local.day} de {MONTHS_LONG[local.month-1]} de {local.year} · {local:%H:%M} ET"
 
 
-def times_text(value):
-    value = abs(value)
-    rounded = round(value, 1)
-    return "1 vez" if rounded == 1 else f"{rounded:g} veces"
-
-
-# Plain-language phrases for the main metrics.
+# Metric labels for the KPI tiles (standard trading terminology).
 def pnl_since_start(total):
     if not number(total):
-        return f"Ganancia desde el inicio del historial: {MISSING}"
-    if total < 0:
-        return f"Perdiste {money(-total)} desde el inicio del historial"
-    return f"Ganaste {money(total)} desde el inicio del historial"
+        return f"Realized PnL: {MISSING}"
+    return "Realized PnL · desde el inicio del historial"
 
 
 def today_phrase(value):
     if not number(value):
-        return f"Hoy: {MISSING}"
-    if value == 0:
-        return "Hoy: sin ganancias ni pérdidas"
-    return f"Hoy ganaste {money(value)}" if value > 0 else f"Hoy perdiste {money(-value)}"
+        return f"Today PnL (ET): {MISSING}"
+    return "Today PnL (ET)"
 
 
 def wins_phrase(wins, total):
     if not total:
-        return "Aún no hay operaciones cerradas"
-    if total == 1:
-        return "De 1 operación, " + ("1 ganó" if wins else "ninguna ganó")
-    if wins == 0:
-        return f"De {total} operaciones, ninguna ganó"
-    return f"De {total} operaciones, {wins} " + ("ganó" if wins == 1 else "ganaron")
+        return "Closed trades: 0"
+    return f"Win rate · {wins}/{total} closed trades"
 
 
 def drawdown_phrase(value):
-    return f"La mayor caída del resultado de operaciones cerradas: {money(value) if number(value) else MISSING}"
+    return f"Max drawdown (realized PnL): {money(value) if number(value) else MISSING}"
 
 
 def r_phrase(value, reason=None):
     if not number(value):
-        return f"Resultado vs riesgo: {reason or MISSING}"
-    if round(value, 1) == 0:
-        return "terminó casi sin ganar ni perder"
-    return ("ganaste " if value > 0 else "perdiste ") + f"{times_text(value)} lo que arriesgabas"
+        return f"R: {reason or MISSING}"
+    return f"{value:+.2f}R"
 
 
 def avg_r_phrase(value, reason=None):
     if not number(value):
-        return f"Promedio vs riesgo: {reason or MISSING}"
-    if round(value, 1) == 0:
-        return "En promedio, casi sin ganar ni perder"
-    return "En promedio " + ("ganaste " if value > 0 else "perdiste ") + f"{times_text(value)} lo que arriesgabas"
+        return f"Avg R (expectancy): {reason or MISSING}"
+    return "Avg R (expectancy)"
 
 
 def demo_day_text(day, length=DEMO_LENGTH_DAYS):
@@ -442,7 +424,7 @@ def daily_loss_rows(view):
              (f'{DAILY_LOSS_LABELS["used"]} ({limit})', f"{used:.0f} %" if number(used) else NO_DATA),
              (DAILY_LOSS_LABELS["day_start_nav"],
               money(view.get("day_start_nav")) if number(view.get("day_start_nav")) else NO_DATA),
-             (DAILY_LOSS_LABELS["drawdown"], "ACTIVADO" if view.get("drawdown_halted") else "OK")]
+             (DAILY_LOSS_LABELS["drawdown"], "TRIGGERED" if view.get("drawdown_halted") else "OK")]
     return rows
 
 

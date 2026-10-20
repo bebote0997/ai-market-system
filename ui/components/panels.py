@@ -74,10 +74,10 @@ def setup(st, vm):
     st.subheader(tr("SETUP"))
     st.write("Estado:", tr("CRITICAL — STALE DATA") if vm.freshness == "STALE_DATA" else
              status_text(state_label(vm.state)) if vm.state == "PLAN_READY" else status_text(vm.setup_status))
-    st.write("Dirección:", status_text(vm.setup_side) if vm.setup_side else "—")
-    for label, value in (("Entrada", getattr(vm.plan, "entry", None)), ("Stop loss", getattr(vm.plan, "stop", None)),
-                         ("Meta (TP)", getattr(vm.plan, "target", None)), ("R:R", getattr(vm.plan, "risk_reward", None)),
-                         ("Invalidación", vm.setup_invalidation)):
+    st.write("Side:", status_text(vm.setup_side) if vm.setup_side else "—")
+    for label, value in (("Entry", getattr(vm.plan, "entry", None)), ("Stop loss", getattr(vm.plan, "stop", None)),
+                         ("Take profit (TP)", getattr(vm.plan, "target", None)), ("R:R", getattr(vm.plan, "risk_reward", None)),
+                         ("Invalidation", vm.setup_invalidation)):
         st.write(f"{label}:", show_value(value))
     st.caption("Evidencia: " + (", ".join(map(str, vm.setup_evidence)) or "—"))
 
@@ -87,10 +87,10 @@ def risk(st, vm):
     st.caption(tr("PYTHON DETERMINISTIC"))
     st.write("Decisión:", status_text(vm.risk_status))
     d = vm.risk_decision
-    for label, value in (("Riesgo máximo", "≤ 1%"), (column("risk_fraction"), getattr(d, "risk_fraction", None)),
+    for label, value in (("Max risk per trade", "≤ 1%"), (column("risk_fraction"), getattr(d, "risk_fraction", None)),
                          (column("equity_at_decision"), getattr(d, "equity_at_decision", None)),
                          (column("capital_at_risk"), getattr(d, "capital_at_risk", None)),
-                         ("Tamaño de la posición", getattr(d, "quantity", None)),
+                         ("Position size", getattr(d, "quantity", None)),
                          (column("reason"), getattr(d, "reason", None))):
         st.write(f"{label}:", show_value(value))
 
@@ -101,14 +101,14 @@ def positions(st, vm):
     if not vm.positions and not vm.orders:
         st.write(tr("FLAT"))
     for order in vm.orders:
-        st.write(f"{order.symbol} · {status_text(order.status)} · planeada {show_value(order.planned_entry)} · "
-                 f"cantidad {show_value(order.quantity)}")
+        st.write(f"{order.symbol} · {status_text(order.status)} · planned entry {show_value(order.planned_entry)} · "
+                 f"size {show_value(order.quantity)}")
     for position in vm.positions:
         st.write(f"{position.symbol} · {status_text(position.status)} · fill {show_value(position.entry_price)} · "
                  f"SL {show_value(position.stop)} · TP {show_value(position.target)}")
     if vm.account is not None:
-        st.write("Ganancia/pérdida abierta:", show_value(vm.account.unrealized_pnl))
-        st.write("Ganancia realizada:", show_value(vm.account.realized_pnl))
+        st.write("Unrealized PnL:", show_value(vm.account.unrealized_pnl))
+        st.write("Realized PnL:", show_value(vm.account.realized_pnl))
 
 
 def pipeline(st, vm):

@@ -77,7 +77,7 @@ class DailyLossViewTests(unittest.TestCase):
     def test_off_unless_enabled(self):
         view = daily_loss_view(self.flags(), 99000, NOW, {})
         self.assertEqual((view["status"], view["used_pct"]), ("OFF", None))
-        self.assertEqual(es.daily_loss_rows(view), [("Estado", "límite no activado")])
+        self.assertEqual(es.daily_loss_rows(view), [("Estado", "OFF")])
 
     def test_ok_with_percent_used(self):
         view = daily_loss_view(self.flags(), 99500.0, NOW, ON)  # -500 of a 2 000 limit
@@ -85,10 +85,10 @@ class DailyLossViewTests(unittest.TestCase):
         self.assertAlmostEqual(view["used_pct"], 25.0)
         rows = dict(es.daily_loss_rows(view))
         self.assertEqual(rows["Estado"], "OK")
-        self.assertEqual(rows["Usado del límite (2 %)"], "25 %")
-        self.assertEqual(rows["Pérdida de hoy (realizada + abierta)"], "$500.00")
-        self.assertEqual(rows["NAV al inicio del día (17:00 ET)"], "$100,000.00")
-        self.assertEqual(rows["Freno por caída de la cuenta (5 %)"], "OK")
+        self.assertEqual(rows["Limit used (2 %)"], "25 %")
+        self.assertEqual(rows["Daily loss (realized + unrealized)"], "$500.00")
+        self.assertEqual(rows["Start-of-day NAV (17:00 ET)"], "$100,000.00")
+        self.assertEqual(rows["Max drawdown halt (5 %)"], "OK")
 
     def test_gain_is_zero_used_and_transfers_excluded(self):
         view = daily_loss_view(self.flags(**{dl.TRANSFERS_FLAG: "1000"}), 100500, NOW, ON)  # +1000 deposit, -500
@@ -99,7 +99,7 @@ class DailyLossViewTests(unittest.TestCase):
     def test_triggered_is_latched_even_after_recovery(self):
         view = daily_loss_view(self.flags(**{dl.HALT_FLAG: KEY}), 100100, NOW, ON)
         self.assertEqual(view["status"], "TRIGGERED")
-        self.assertIn("ACTIVADO", dict(es.daily_loss_rows(view))["Estado"])
+        self.assertIn("TRIGGERED", dict(es.daily_loss_rows(view))["Estado"])
 
     def test_previous_day_halt_is_not_today(self):
         old = dl.day_key(NOW - timedelta(days=1))
@@ -130,8 +130,8 @@ class DailyLossViewTests(unittest.TestCase):
         self.assertTrue(view["drawdown_halted"])
         self.assertAlmostEqual(view["used_pct"], 50.0)
         rows = dict(es.daily_loss_rows(view))
-        self.assertEqual(rows["Usado del límite (1 %)"], "50 %")
-        self.assertEqual(rows["Freno por caída de la cuenta (5 %)"], "ACTIVADO")
+        self.assertEqual(rows["Limit used (1 %)"], "50 %")
+        self.assertEqual(rows["Max drawdown halt (5 %)"], "TRIGGERED")
 
 
 class LoadLossFlagsTests(unittest.TestCase):
@@ -173,7 +173,7 @@ class DemoRCellTests(unittest.TestCase):
         html = cell({"realized_r": None, "realized_r_reason": "sin datos del stop original"})
         self.assertIn(">—<", html)
         self.assertIn('title="sin datos del stop original"', html)
-        self.assertIn("+1.50 R", cell({"realized_r": 1.5}))
+        self.assertIn("+1.50R", cell({"realized_r": 1.5}))
 
 
 class OverviewCardTests(unittest.TestCase):
@@ -194,9 +194,9 @@ class OverviewCardTests(unittest.TestCase):
             con.commit()
         with case.env(**ON):
             _app, content = case.page("Overview")
-        self.assertIn("Límite de pérdida diaria", content)
-        self.assertIn("ACTIVADO", content)
-        self.assertIn("NAV al inicio del día", content)
+        self.assertIn("Daily loss limit", content)
+        self.assertIn("TRIGGERED", content)
+        self.assertIn("Start-of-day NAV", content)
         self.assertRegex(content, r"Día \d+ de 30")
 
 

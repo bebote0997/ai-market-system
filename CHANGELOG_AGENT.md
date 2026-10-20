@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-19 — Dashboard: terminología profesional de trading (branch `feat/summary-trading-day`, orden del owner 22:39 ET)
+
+- Revierte las frases en español simple de `e672c51` a términos estándar (como antes de esa reescritura): PnL (Realized / Unrealized / Net / Today PnL), Equity, Balance, NAV, Max drawdown, Win rate, Avg R (expectancy), R realized, Open positions, Closed trades, Daily loss limit, Setup, Side, Size, Entry / Fill / Exit, Stop loss (SL), Take profit (TP), R:R, Slippage, Exit reason. Español solo donde es neutral (navegación, estados del sistema, fechas). Se mantienen «AI Trading Floor» y «Día N de 30»; el texto Slack no cambia.
+- Archivos: `ui/i18n_es.py` (etiquetas, columnas, estados LONG/SHORT/setup, exit reasons, tooltips, tarjeta Daily loss limit, frases de los KPI; se elimina `times_text`, solo usado por las frases), `ui/views/luxury.py` (KPI, curva, detalle de trade, slippage, demo OANDA; la celda R muestra «+0.40R»), `ui/views/control.py`, `ui/components/panels.py`, `ui/components/setup_chart.py`, `docs/ui_glosario_es.md`. Solo texto: sin cambios de lógica, datos ni cálculos.
+- Tests con textos actualizados: `test_ui_redesign.py`, `test_dashboard_luxury.py`, `test_demo_from_zero.py`, `test_demo_ops_dashboard.py`. Lista antes → después: `/workspace/oanda-task/ui_terms_changes.md` (fuera del repo). REAL OFF.
+
 ## 2026-10-19 — DEC-SUMMARY-DAY-1: resumen diario por día de trading 17:00 → 17:00 NY (branch `feat/summary-trading-day`)
 
 - `storage/daily_summary.py`: `trading_day(at)` (fecha NY del último 17:00 NY ≤ `at`, vía `daily_loss_limit.day_key`), `summary_day(at)` (salta sábado/domingo ⇒ el viernes), `pending_summary_days(last_sent, at)` (días lun–vie pendientes tras el último enviado, del más antiguo al más reciente, máx. `MAX_CATCH_UP = 5`; sin registro ⇒ solo el último; reloj atrasado ⇒ ninguno), `summary_window(day)` ⇒ `(date_ny, start_utc, end_utc, trading_day_key)` = [día anterior 17:00, `day` 17:00) NY (23 h / 25 h con DST). `build_daily_summary(store, at, day=None)` agrega runs/órdenes/posiciones/cerradas/eventos sobre esa ventana; nuevos campos `trading_day_key`, `window_start_utc`, `wins_day`, `avg_r_day`, `avg_r_day_reason` (R como en el dashboard).

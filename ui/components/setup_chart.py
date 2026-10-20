@@ -77,8 +77,8 @@ def build_setup_figure(bars, plan, symbol):
 
 # Dashboard-only light restyle. build_setup_figure (shared with the setup e-mail PNG) is left unchanged.
 LIGHT = {'bg': '#ffffff', 'grid': '#eef2f6', 'text': '#334155', 'entry': '#2459d6', 'up': '#16a34a', 'down': '#dc2626'}
-LABELS_ES = (('TAKE PROFIT', 'META (TP)'), ('STOP LOSS', 'STOP LOSS'), ('ENTRY', 'ENTRADA'),
-             ('price distance', 'de distancia de precio'), (' risk', ' en riesgo'), (' reward', ' de ganancia posible'),
+LABELS_ES = (('TAKE PROFIT', 'TAKE PROFIT (TP)'), ('STOP LOSS', 'STOP LOSS'), ('ENTRY', 'ENTRY'),
+             ('price distance', 'de distancia de precio'), (' risk', ' risk'), (' reward', ' reward'),
              ('R:R unavailable', 'R:R no disponible'), ('Plan levels not persisted', 'Niveles del plan no guardados'),
              ('5m closes · no OHLC', 'cierres de 5 min · sin velas completas'), ('Last:', 'Último:'),
              ('5m close', 'cierre 5 min'))
