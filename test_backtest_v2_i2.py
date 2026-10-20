@@ -176,6 +176,32 @@ class Simulation(unittest.TestCase):
         self.assertEqual(bt.simulate_trade(market, self.slot + timedelta(minutes=60), "LONG", 1.0980, 1.1040, "I2"),
                          {"rejected": "no_fill_data"})
 
+    def test_boundary_at_the_cutoff_is_a_time_exit_not_open_at_end(self):
+        market = flat_market(self.slot, 144)  # last bar 21:55-22:00 = the I2 NY 17:00 close
+        market.cutoff = datetime(2026, 1, 13, 22, 0, tzinfo=UTC)
+        result = bt.simulate_trade(market, self.slot, "LONG", 1.0980, 1.1040, "I2")
+        self.assertEqual((result["reason"], result["exit_at"], result["stale_exit"]),
+                         (bt.TIME, market.cutoff, False))
+
+    def test_boundary_priced_by_last_bar_ending_before_it_across_a_data_gap(self):
+        before = pd.date_range(self.slot, datetime(2026, 1, 13, 20, 55, tzinfo=UTC), freq="5min")
+        starts = before.append(pd.date_range("2026-01-13 23:00", periods=20, freq="5min", tz=UTC))
+        closes = np.full(len(starts), 1.1)
+        closes[len(before) - 1] = 1.1010
+        market = bt.Market(starts.as_unit("ns").asi8.copy(), closes.copy(), closes.copy(), closes.copy(), closes,
+                           half_spread=0.5 * bt.PIP, slippage=0.2 * bt.PIP)
+        result = bt.simulate_trade(market, self.slot, "LONG", 1.0980, 1.1040, "I2")
+        self.assertEqual((result["exit_at"], result["exit_index"], result["stale_exit"]),
+                         (datetime(2026, 1, 13, 22, 0, tzinfo=UTC), len(before) - 1, False))
+        self.assertAlmostEqual(result["exit"], 1.1010 - 0.7 * bt.PIP)
+
+    def test_boundary_without_a_bar_before_it_uses_first_bar_after_and_is_flagged_stale(self):
+        fill = datetime(2026, 1, 16, 21, 58, tzinfo=UTC)  # Friday 16:58 NY, Friday close at 17:00 NY
+        market = flat_market(fill, 10)
+        result = bt.simulate_trade(market, fill, "LONG", 1.0980, 1.1040, "I2")
+        self.assertEqual((result["reason"], result["exit_at"], result["stale_exit"]),
+                         (bt.FRIDAY, fill + bt.FIVE, True))
+
     def test_f3_fill_gate_rejects_fill_below_2_5r(self):
         market = flat_market(self.slot, 20)
         self.assertEqual(bt.simulate_trade(market, self.slot, "LONG", 1.0990, 1.1020, "F3", 2.5),

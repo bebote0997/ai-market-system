@@ -321,8 +321,8 @@ def _memo_structure(function):
     return wrapped
 
 
-def day2_structure_exit(position, frame_15m, day1, day2):
-    """First 15m bar end in (day1, day2) at which ``td.adverse_structure`` reports an adverse BOS, each check seeing
+def day2_structure_exit(position, frame_15m, day1, day2, cutoff=None):
+    """First 15m bar end in (day1, day2) (and <= ``cutoff``) at which ``td.adverse_structure`` reports an adverse BOS, each check seeing
     only the last 500 15m bars closed by then (runtime window). None if never."""
     from unittest.mock import patch
 
@@ -333,7 +333,8 @@ def day2_structure_exit(position, frame_15m, day1, day2):
     frame_15m = frame_15m[[c for c in columns if c in frame_15m.columns]]
     ends = frame_15m.index + FIFTEEN
     with patch.object(structure_agent, "analizar_estructura", _memo_structure(structure_agent.analizar_estructura)):
-        for end in ends[(ends > day1) & (ends < day2)]:
+        mask = (ends > day1) & (ends < day2) & ((ends <= cutoff) if cutoff is not None else True)
+        for end in ends[mask]:
             moment = end.to_pydatetime()
             window = frame_15m.loc[ends <= end].iloc[-500:]
             if td.adverse_structure(position, window, moment) is not None:
@@ -369,52 +370,59 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
         boundary = td.day1_close(position)
     structure_at = None
     current_stop = stop
+    five = pd.Timedelta(FIVE).value
+    horizon = market.cutoff if market.cutoff is not None else market.stamp(len(market.starts) - 1) + FIVE
 
-    def done(j, exit_at, price, reason, detail=None):
+    def done(j, exit_at, price, reason, detail=None, stale=False):
         net = sign * (price - fill) / risk
         return {"fill_at": opened, "fill": fill, "mid_fill": mid_fill, "stop": stop, "target": target,
                 "exit_at": exit_at, "exit": price, "reason": reason, "detail": detail or reason, "r": net,
-                "risk_pips": risk / PIP, "tp_pips": reward / PIP, "exit_index": j}
+                "risk_pips": risk / PIP, "tp_pips": reward / PIP, "exit_index": j, "stale_exit": stale}
 
-    def market_exit(j, at, reason, detail):
+    def market_exit(j, at, reason, detail, stale=False):
         bid_ask = float(market.close[j]) - sign * hs  # exit on bid (LONG) / ask (SHORT)
-        return done(j, at, bid_ask - sign * slip, reason, detail)
+        return done(j, at, bid_ask - sign * slip, reason, detail, stale)
+
+    def price_bar(j, at):
+        """(index, exit time, stale) pricing a boundary ``at`` once bars ending <= ``at`` are walked (``j`` = the first
+        bar ending after it): the last bar ending in (fill, at]; else the first bar after it, flagged stale."""
+        return (j - 1, at, False) if j > i else (j, market.stamp(j) + FIVE, True)
 
     j = i
-    while j < limit:
-        bar_start = market.stamp(j)
-        bar_end = bar_start + FIVE
-        stop_reason = BE if current_stop == fill else SL
-        if structure_at is not None and bar_end > structure_at:
-            return market_exit(j - 1, structure_at, TIME, td.CLOSE_DAY2_STRUCTURE)
-        if bar_end > boundary:
-            price_index = max(j - 1, i)
-            if policy == "I2":
-                return market_exit(price_index, boundary, boundary_reason, f"I2_{boundary_reason}")
-            action, reason = td.boundary_decision(position, boundary, float(market.close[price_index]))
-            if action == "CLOSE":
-                return market_exit(price_index, boundary, FRIDAY if reason == td.CLOSE_FRIDAY else TIME, reason)
-            day1 = boundary
-            td.move_stop_to_entry(position)
-            current_stop = fill
-            boundary = td.day2_close(position)
-            structure_at = day2_structure_exit(position, market.frame_15m, day1, boundary)
-            continue  # re-evaluate this bar with the Day-2 stop / boundary
-        o = float(market.open[j]) - sign * hs
-        hi = float(market.high[j]) - sign * hs
-        lo = float(market.low[j]) - sign * hs
-        adverse, favourable = (lo, hi) if long else (hi, lo)
-        if j > i and sign * (o - current_stop) <= 0:
-            return done(j, bar_start, o - sign * slip, stop_reason, "GAP_" + stop_reason)
-        if j > i and sign * (o - target) >= 0:
-            return done(j, bar_start, o, TP, "GAP_TP")
-        if sign * (adverse - current_stop) <= 0:  # SL first on a same-bar double hit (conservative)
-            return done(j, bar_end, current_stop - sign * slip, stop_reason)
-        if sign * (favourable - target) >= 0:
-            return done(j, bar_end, target, TP)
-        j += 1
-    last = limit - 1  # still open at the evaluation cutoff: last bar ending at or before it
-    return market_exit(last, market.stamp(last) + FIVE, END, END)
+    while True:
+        event = boundary if structure_at is None else min(boundary, structure_at)
+        event_ns = _ns(event)
+        while j < limit and int(market.starts[j]) + five <= event_ns:  # bars ending at or before the boundary
+            o = float(market.open[j]) - sign * hs
+            hi = float(market.high[j]) - sign * hs
+            lo = float(market.low[j]) - sign * hs
+            adverse, favourable = (lo, hi) if long else (hi, lo)
+            stop_reason = BE if current_stop == fill else SL
+            if j > i and sign * (o - current_stop) <= 0:
+                return done(j, market.stamp(j), o - sign * slip, stop_reason, "GAP_" + stop_reason)
+            if j > i and sign * (o - target) >= 0:
+                return done(j, market.stamp(j), o, TP, "GAP_TP")
+            if sign * (adverse - current_stop) <= 0:  # SL first on a same-bar double hit (conservative)
+                return done(j, market.stamp(j) + FIVE, current_stop - sign * slip, stop_reason)
+            if sign * (favourable - target) >= 0:
+                return done(j, market.stamp(j) + FIVE, target, TP)
+            j += 1
+        if event > horizon:  # still open at the evaluation cutoff: last bar ending at or before it
+            last = limit - 1
+            return market_exit(last, market.stamp(last) + FIVE, END, END)
+        index, at, stale = price_bar(j, event)  # the boundary is processed at its own time
+        if structure_at is not None and event == structure_at:
+            return market_exit(index, at, TIME, td.CLOSE_DAY2_STRUCTURE, stale)
+        if policy == "I2":
+            return market_exit(index, at, boundary_reason, f"I2_{boundary_reason}", stale)
+        action, reason = td.boundary_decision(position, boundary, float(market.close[index]))
+        if action == "CLOSE":
+            return market_exit(index, at, FRIDAY if reason == td.CLOSE_FRIDAY else TIME, reason, stale)
+        day1 = boundary
+        td.move_stop_to_entry(position)
+        current_stop = fill
+        boundary = td.day2_close(position)
+        structure_at = day2_structure_exit(position, market.frame_15m, day1, boundary, horizon)
 
 
 def day_key(at):
@@ -520,6 +528,7 @@ def metrics(trades, months):
         "worst_r": float(rs.min()) if n else float("nan"),
         "ci80_low": bootstrap_lower(rs),
         "exits": {k: reasons.get(k, 0) / n * 100 if n else 0.0 for k in (TP, SL, TIME, FRIDAY, BE, END)},
+        "stale_exits": sum(1 for t in trades if t.get("stale_exit")),
     }
 
 
@@ -574,7 +583,8 @@ def gates(m, spread_pips):
 # ---------------------------------------------------------------- outputs
 def write_trades_csv(path, trades):
     columns = ["variant", "setup_id", "side", "signal_at", "fill_at", "planned_entry", "fill", "stop", "target",
-               "sl_source", "risk_pips", "tp_pips", "units", "exit_at", "exit", "reason", "detail", "r", "gross_r"]
+               "sl_source", "risk_pips", "tp_pips", "units", "exit_at", "exit", "reason", "detail", "stale_exit", "r",
+               "gross_r"]
     pd.DataFrame([{c: t.get(c) for c in columns} for t in trades], columns=columns).to_csv(path, index=False)
 
 
@@ -651,6 +661,7 @@ def write_report(path, ctx):
     row("Bootstrap 80% CI lower (mean R)", lambda m: "n/a" if m["ci80_low"] is None else f"{m['ci80_low']:+.3f}")
     for key in (TP, SL, TIME, FRIDAY, BE, END):
         row(f"% exits {key}", lambda m, key=key: f"{m['exits'][key]:.1f}%")
+    row("Stale boundary exits (no bar ending in (fill, boundary])", lambda m: str(m["stale_exits"]))
     lines.append("| Daily 2R halt triggers | " + " | ".join(
         (", ".join(f"{d} ({x:+.2f}R)" for d, x in r[v]["halts"]) or "never") for v in variants) + " |")
     lines += ["", "Units: risk sized by the production Risk engine (1 % of USD 10 000, capped by `maximo_capital_pct` "
@@ -703,8 +714,11 @@ def write_report(path, ctx):
               "walked from the fill bar itself (inclusive): the fill is at that bar's open, so its whole high/low "
               "range happens after the fill and is admissible (no gap check on the fill bar — the open *is* the "
               "fill). SL/TP on the bid (LONG) / ask (SHORT) = mid ∓ half spread; same-bar SL+TP → "
-              "SL; gap through the stop → bar open − slippage; gap through TP → bar open. Time exits at the close "
-              "of the last 5m bar ending at the boundary (bid/ask − slippage). BE = stop moved to entry and hit.",
+              "SL; gap through the stop → bar open − slippage; gap through TP → bar open. Time / Friday / Day-2 "
+              "structure boundaries are processed explicitly at the boundary time, after walking only the bars "
+              "ending at or before it, priced at the close of the last 5m bar ending in (fill, boundary] "
+              "(bid/ask − slippage); if there is none, the first bar after it is used and the exit is counted as "
+              "stale (row in Results). BE = stop moved to entry and hit.",
               "- Portfolio: one position per policy, signals skipped while open; one entry per production setup_id "
               "(a fill-gate rejection does not consume it). Daily halt: realised R of the 17:00→17:00 NY day ≤ −2R "
               "blocks new entries until the next day (open-P&L flatten and the pre-entry remaining-budget rule of "
