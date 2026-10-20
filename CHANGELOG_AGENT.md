@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-10-20 — Backtest V2_I2: correcciones de la revisión Codex de lookahead (branch `feat/backtest-v2-i2`)
+
+- `replay/intraday_backtest.py` (solo replay): (1) SL/TP desde la vela del fill documentado en Method (fill = open de esa vela); (2) `--end` aplicado en la simulación: posiciones abiertas al corte cerradas en la última vela 5m que termina ≤ corte (OPEN_AT_END), nunca se lee una vela posterior; la caché de señales admite un subconjunto; (3) drawdown mark-to-market en R (cierres 5m a bid/ask) junto al realizado, G4 usa el MTM; (4) spread causal por trade: mediana de los 30 días anteriores al fill (redondeado a 0,01 pip, fallback 1,6 pip), la mediana de toda la muestra solo se informa; (5) deadline I2 desde la hora real del fill, fills fuera de sesión se descartan; (6) límites de tiempo/viernes/estructura procesados en su propia hora con la última vela que termina ≤ límite (si no hay, la primera posterior, contada como `stale`).
+- Resultado (mismas señales en caché, sin regenerar): V2_F3 202 trades −0,046R (−9,24R, DD realizado 11,74R / MTM 12,98R); V2_I2 253 trades −0,134R (−33,84R, DD 38,10R / MTM 38,68R); V2_I2_15 270 trades −0,091R (−24,50R, DD 32,42R / MTM 32,89R). 0 salidas `stale`, 0 trades con spread de fallback. Ninguna variante pasa G3/G4. REAL OFF.
+
 ## 2026-10-20 — Backtest 1 año EURUSD V2_F3 vs V2_I2 / V2_I2_15 (branch `feat/backtest-v2-i2`, orden del owner 15:21 ET)
 
 - `replay/intraday_backtest.py` (solo replay; producción sin cambios: floor/orchestrator, RuntimeConfig, fingerprint, planners, env): floor de producción una vez por slot (ventanas de 500 velas cerradas, IA excluida, `NoMacroDataProvider`), señales en caché (`signals.jsonl`, fuera del repo), planner I2 solo-replay (SL en swing 15m/5m ± 0,2×ATR14 H1, 15–30 pips, TP 2R / 1,5R), ejecución 5m con spread mediano bid/ask + 0,2 pip de slippage, salidas de `execution/trade_duration` para F3, cierre al final de la 2.ª sesión para I2, cierre del viernes, halt diario 2R. Ejecutar: `python -m replay.intraday_backtest --data <dir> --out <dir>`.
