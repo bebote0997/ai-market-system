@@ -790,7 +790,13 @@ def make_split(ctx):
 
 
 def segment(trades, split):
-    return ([t for t in trades if t["signal_at"] < split.split], [t for t in trades if t["signal_at"] >= split.split])
+    """(IS, OOS, purged). IS = trades that both enter and exit by the split; OOS = trades signalled at or after it;
+    purged = trades signalled before the split and still open at it (part of their outcome and MTM marks are OOS):
+    excluded from both, so no OOS bar can influence the in-sample ranking. The portfolio walk stays continuous."""
+    is_t = [t for t in trades if t["signal_at"] < split.split and t["exit_at"] <= split.split]
+    oos_t = [t for t in trades if t["signal_at"] >= split.split]
+    purged = [t for t in trades if t["signal_at"] < split.split < t["exit_at"]]
+    return is_t, oos_t, purged
 
 
 GATE_ROWS = {"G3": ("G3 mean R", "G3 bootstrap", "G3 worst"), "G4": ("G4 max DD",),
@@ -810,7 +816,7 @@ def gate_flags(m):
 
 
 def summarise(trades, split):
-    is_t, oos_t = segment(trades, split)
+    is_t, oos_t, _ = segment(trades, split)
     mi, mo = split.months
     return bt.metrics(is_t, mi), bt.metrics(oos_t, mo)
 
@@ -820,11 +826,12 @@ def _f(x, fmt):
 
 
 def table(results, split):
-    head = ("| Variant | Trades/mo IS / OOS | Win % | Avg R | Total R | MTM DD R | Med hold h | Exits TP/SL/TIME/FRI % "
-            "IS ; OOS | CI80 low | G3 G4 G5 |\n|---|---|---|---|---|---|---|---|---|---|")
+    head = ("| Variant | Trades/mo IS / OOS | Purged | Win % | Avg R | Total R | MTM DD R | Med hold h | "
+            "Exits TP/SL/TIME/FRI % IS ; OOS | CI80 low | G3 G4 G5 |\n|---|---|---|---|---|---|---|---|---|---|---|")
     rows = [head]
     for name, (trades, _) in results.items():
         a, b = summarise(trades, split)
+        purged = len(segment(trades, split)[2])
 
         def pair(key, fmt, scale=1.0):
             return " / ".join(_f(m[key] * scale if m[key] is not None and m["trades"] else None, fmt) for m in (a, b))
@@ -833,7 +840,7 @@ def table(results, split):
             e = m["exits"]
             return "/".join(f"{e[k]:.0f}" for k in (bt.TP, bt.SL, bt.TIME, bt.FRIDAY)) if m["trades"] else "–"
         rows.append(f"| {name} | {a['trades_per_month']:.1f} ({a['trades']}) / {b['trades_per_month']:.1f} "
-                    f"({b['trades']}) | {pair('win_rate', '.0f', 100)} | {pair('avg_r', '+.3f')} | "
+                    f"({b['trades']}) | {purged} | {pair('win_rate', '.0f', 100)} | {pair('avg_r', '+.3f')} | "
                     f"{pair('total_r', '+.1f')} | {pair('max_dd_mtm_r', '.1f')} | "
                     f"{' / '.join(_f(m['hold_h'][0], '.1f') for m in (a, b))} | {exits(a)} ; {exits(b)} | "
                     f"{pair('ci80_low', '+.3f')} | {gate_flags(a)} / {gate_flags(b)} |")
@@ -980,8 +987,10 @@ def write_report(path, state):
         "H4/D1 resampled causally from closed 1h bars.",
         f"- Tradable from {split.start:%Y-%m-%d %H:%M} UTC (20 completed trading days for ADR20 / D1 EMA20). "
         f"**In-sample** {split.start:%Y-%m-%d} -> {split.split:%Y-%m-%d} ({mi:.2f} months), **out-of-sample** "
-        f"{split.split:%Y-%m-%d} -> {split.end:%Y-%m-%d} ({mo:.2f} months). Trades are assigned by signal time; "
-        "the portfolio walk is continuous. All parameters fixed upfront (no tuning).",
+        f"{split.split:%Y-%m-%d} -> {split.end:%Y-%m-%d} ({mo:.2f} months). IS = trades that enter AND exit by "
+        "the split; OOS = trades signalled at or after it; trades signalled before the split and still open at it "
+        "are purged from both (column `Purged`), so the in-sample ranking never sees an OOS bar. The portfolio walk "
+        "is continuous. All parameters fixed upfront (no tuning).",
         "- Costs: causal per-trade spread (median AskClose-BidClose of the 30 days before the fill bar, fallback 1.6 "
         "pip), 0.2 pip adverse slippage on entry/stop/time exits, 0 on TP. Same-bar SL first. Exit at TP/SL, the end "
         "of the 2nd session counted from the fill (TIME) or Friday 17:00 NY (FRIDAY). 2R/day realised halt, one "

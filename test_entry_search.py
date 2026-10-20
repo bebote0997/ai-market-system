@@ -303,6 +303,39 @@ class ExitGeometry(unittest.TestCase):
                          "no_opposite_liquidity")
 
 
+def fake_trade(signal_at, hours, r):
+    exit_at = signal_at + pd.Timedelta(hours=hours).to_pytimedelta()
+    return {"signal_at": signal_at, "fill_at": signal_at, "exit_at": exit_at, "r": r, "gross_r": r + 0.05,
+            "reason": bt.TP if r > 0 else bt.SL, "risk_pips": 15.0, "tp_pips": 30.0, "spread_pips": 1.5,
+            "marks": np.array([r / 2])}
+
+
+class InSampleSelection(unittest.TestCase):
+    def setUp(self):
+        self.split = es.Split(datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 1, 21, tzinfo=UTC),
+                              datetime(2026, 9, 1, tzinfo=UTC))
+        self.inside = [fake_trade(datetime(2026, 2, 2, 9, tzinfo=UTC) + pd.Timedelta(days=d).to_pytimedelta(), 3,
+                                  0.1) for d in range(25)]
+        # signalled 1 h before the split, exits 5 h after it: its outcome is mostly out-of-sample
+        self.crosser = fake_trade(self.split.split - pd.Timedelta(hours=1).to_pytimedelta(), 6, 50.0)
+        self.oos = fake_trade(self.split.split + pd.Timedelta(days=3).to_pytimedelta(), 2, -1.0)
+
+    def test_trades_crossing_the_split_are_purged_from_both_segments(self):
+        at_split = fake_trade(self.split.split - pd.Timedelta(hours=2).to_pytimedelta(), 2, 1.0)  # exits AT it
+        is_t, oos_t, purged = es.segment(self.inside + [at_split, self.crosser, self.oos], self.split)
+        self.assertEqual((len(is_t), oos_t, purged), (26, [self.oos], [self.crosser]))
+        self.assertTrue(all(t["exit_at"] <= self.split.split for t in is_t))
+
+    def test_in_sample_ranking_ignores_out_of_sample_outcomes(self):
+        losers = [dict(t, r=-0.05, reason=bt.SL) for t in self.inside]
+        results = {"A": (self.inside, None), "B": (losers + [self.crosser], None)}
+        self.assertEqual(es.top_variants(results, self.split, n=1), ["A"])  # B's +50R crosser would rank it first
+        a, _ = es.summarise(results["B"][0], self.split)
+        self.assertEqual(a["trades"], 25)
+        self.assertAlmostEqual(a["avg_r"], -0.05)
+        self.assertIn("| B | ", es.table(results, self.split))
+
+
 class NewsAndSplit(unittest.TestCase):
     def test_news_days(self):
         self.assertEqual(es.first_friday(2026, 5), date(2026, 5, 1))
