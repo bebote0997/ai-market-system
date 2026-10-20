@@ -194,12 +194,19 @@ def _demo_lines(timestamp_utc, window_start_utc, sent_at=None):
     if stats is None and snapshot.get("nav") is None:
         return ["OANDA demo: sin datos"]
     day = demo_progress(now)[2]
+    nav, balance, change = snapshot.get("nav"), snapshot.get("balance"), (snapshot.get("capital") or {}).get("change")
+    account_at = at
+    if snapshot.get("stale"):  # last good account read: never labelled as current
+        as_of = snapshot.get("as_of")
+        if isinstance(as_of, datetime) and as_of.tzinfo:
+            account_at = f"(a las {as_of.astimezone(ET):%Y-%m-%d %H:%M} ET, dato antiguo)"
+        else:
+            nav = balance = change = None
     lines = [demo_day_text(day, DEMO_LENGTH_DAYS),
              f"Día de trading: {label} (17:00 a 17:00 ET)",
-             f"NAV {at}: " + _amount(snapshot.get("nav"), currency),
-             f"Balance {at}: " + _amount(snapshot.get("balance"), currency),
-             f"P&L desde el inicio del demo {at}: " + _amount((snapshot.get("capital") or {}).get("change"),
-                                                               currency, True)]
+             f"NAV {account_at}: " + _amount(nav, currency),
+             f"Balance {account_at}: " + _amount(balance, currency),
+             f"P&L desde el inicio del demo {account_at}: " + _amount(change, currency, True)]
     if stats is None:
         return lines + ["OANDA demo: sin datos de operaciones"]
     window = window_statistics(snapshot.get("closed_rows") or [], start, end)
