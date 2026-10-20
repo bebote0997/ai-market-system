@@ -202,6 +202,16 @@ class Simulation(unittest.TestCase):
         self.assertEqual((result["reason"], result["exit_at"], result["stale_exit"]),
                          (bt.FRIDAY, fill + bt.FIVE, True))
 
+    def test_i2_deadline_from_actual_fill_time_and_fill_outside_session_skipped(self):
+        slot = datetime(2026, 1, 13, 16, 55, tzinfo=UTC)  # London open at the signal -> 22:00 UTC same day
+        market = flat_market(datetime(2026, 1, 13, 17, 30, tzinfo=UTC), 400)  # slot bar missing; fill NY-only
+        result = bt.simulate_trade(market, slot, "LONG", 1.0980, 1.1040, "I2")
+        self.assertEqual(result["fill_at"], datetime(2026, 1, 13, 17, 30, tzinfo=UTC))
+        self.assertEqual(result["exit_at"], datetime(2026, 1, 14, 17, 0, tzinfo=UTC))  # next weekday 17:00 London
+        late = flat_market(datetime(2026, 1, 13, 22, 30, tzinfo=UTC), 50)  # fill after the NY close
+        self.assertEqual(bt.simulate_trade(late, slot, "LONG", 1.0980, 1.1040, "I2"),
+                         {"rejected": "fill_outside_session"})
+
     def test_f3_fill_gate_rejects_fill_below_2_5r(self):
         market = flat_market(self.slot, 20)
         self.assertEqual(bt.simulate_trade(market, self.slot, "LONG", 1.0990, 1.1020, "F3", 2.5),

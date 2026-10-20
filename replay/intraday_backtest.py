@@ -363,9 +363,10 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
     position = SimpleNamespace(symbol=SYMBOL, side=side, entry_price=fill, stop=stop, initial_stop=None,
                                duration_stage=None, opened_at=opened)
     if policy == "I2":
-        boundary, boundary_reason = i2_exit(slot)  # session of the signal (the fill bar normally starts at it)
-        if opened >= boundary:
-            return {"rejected": "fill_after_session_close"}
+        try:  # deadline from the actual fill time (normally = the slot; later if the slot's 5m bar is missing)
+            boundary, boundary_reason = i2_exit(opened)
+        except ValueError:
+            return {"rejected": "fill_outside_session"}
     else:
         boundary = td.day1_close(position)
     structure_at = None
@@ -708,8 +709,9 @@ def write_report(path, ctx):
               "`tecnico.calcular_atr`); < 15 pips → 15; > 30 → most recent confirmed 5m swing giving 15–30 pips, "
               "else skip. TP = entry ± k×risk (k = 2 / 1.5, grid-rounded away from entry). Risk: production "
               "`evaluar_trade_plan` (V1 branch with ratio_minimo = k). No fill gate. Hard close at the end of the "
-              "2nd session (London-open entry → 17:00 NY same day; NY-only entry → next weekday 17:00 London); "
-              "Friday 17:00 NY overrides (labelled FRIDAY).",
+              "2nd session counted from the actual fill time (London-open fill → 17:00 NY same day; NY-only fill → "
+              "next weekday 17:00 London); Friday 17:00 NY overrides (labelled FRIDAY); a fill outside the "
+              "London/New York sessions (slot bar missing, next bar later) is skipped (`fill_outside_session`).",
               "- Execution: fill at the open of the 5m bar starting at the slot ± (half spread + 0.2 pip). SL/TP are "
               "walked from the fill bar itself (inclusive): the fill is at that bar's open, so its whole high/low "
               "range happens after the fill and is admissible (no gap check on the fill bar — the open *is* the "
