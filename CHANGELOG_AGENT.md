@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-20 — Backtest 1 año EURUSD V2_F3 vs V2_I2 / V2_I2_15 (branch `feat/backtest-v2-i2`, orden del owner 15:21 ET)
+
+- `replay/intraday_backtest.py` (solo replay; producción sin cambios: floor/orchestrator, RuntimeConfig, fingerprint, planners, env): floor de producción una vez por slot (ventanas de 500 velas cerradas, IA excluida, `NoMacroDataProvider`), señales en caché (`signals.jsonl`, fuera del repo), planner I2 solo-replay (SL en swing 15m/5m ± 0,2×ATR14 H1, 15–30 pips, TP 2R / 1,5R), ejecución 5m con spread mediano bid/ask + 0,2 pip de slippage, salidas de `execution/trade_duration` para F3, cierre al final de la 2.ª sesión para I2, cierre del viernes, halt diario 2R. Ejecutar: `python -m replay.intraday_backtest --data <dir> --out <dir>`.
+- Resultado (2025-11-03 → 2026-10-20, spread 1,6 pip): V2_F3 202 trades −0,046R/trade (−9,2R, DD 11,7R); V2_I2 253 trades −0,128R (−32,5R, DD 36,7R); V2_I2_15 270 trades −0,086R (−23,1R, DD 31,1R). Ninguna variante pasa G3/G4 (DEC-LIVE-1). Informe y CSV en `/workspace/backtest/` (no se commitean datos de mercado).
+- Tests: `test_backtest_v2_i2.py` (no-lookahead, clamp/skip del SL I2, horas de cierre por sesión con DST, viernes, SL primero en la misma vela, gap, BE Day-2, gate de fill F3, un trade por setup_id). REAL OFF.
+
 ## 2026-10-19 — DEC-SUMMARY-DAY-1: correcciones de revisión Codex (branch `feat/summary-trading-day`)
 
 - HIGH `runtime/demo_runner.py` `daily_summary`: cada pase (sink durable únicamente) entrega también los DAILY_SUMMARY persistidos que un crash dejó sin capturar (journal sin `notification_events`) o sin reclamar (sin fila en `notification_deliveries`). Un envío reclamado sin resultado durante más de `SUMMARY_CLAIM_GRACE = 15 min` (crash a mitad del envío) no se reenvía (Slack no deduplica): estado `UNKNOWN` y una sola línea `component=notifications event=DAILY_SUMMARY_UNKNOWN date=<fecha>`. `storage/database.py` sin cambios (módulo congelado por hash).
