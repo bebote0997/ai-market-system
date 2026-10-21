@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7, paso 4: HOLDOUT (una sola ejecución), chequeo CONTAMINADO y veredicto (branch `feat/backtest-v2-i2`)
+
+- `replay.round7 --sections holdout,contaminated,final` con el mapa congelado commiteado (sha256 `6af65281…`): holdout 2018-01-01..2021-09-30 (frames y macro recortados < 2021-10-01) **C_RAW 41 trades (0,9/mes), −0,090R, PF 0,81, DD MTM 11,8R, CI80 −0,295, 3/4 años positivos (2019 −7,5R) → FAIL** (R medio, PF, frecuencia). C_OANDA −0,091R, C_RAW_STRESS −0,093R; estrés de carry 3 %/año −0,196R. CONTAMINADO 2021-10..2026-10: +0,006R, PF 1,02 (61 trades). Comprobación de causalidad: los 41 trades coinciden con la ejecución continua salvo la posición abierta en el corte (OPEN_AT_END). Tests: 6 mappers (86 conservador); acumulado 450 (530 conservador). Sin plan demo; propuesta: abandonar la rotación de módulos EURUSD (decisión del owner). Informe, `round7_equity_r.png` y resultados en `/workspace/backtest/` (no se commitean). Corrección menor: la etiqueta del chequeo contaminado dice "Reference only (not a test)".
+
 ## 2026-10-21 — Ronda 7, paso 3: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
 
 - `replay.round7 --sections select` (frames y macro recortados < 2018-01-01, C_RAW). Módulos aislados 2010-2017: E3 −0,085R (1230), F2 −0,006R (865), JT −0,223R (46), **T1 +0,063R (90, PF 1,16)**, T1F +0,011R (55). Walk-forward anual 2013-2017 (media de R medio anual): **BASE +0,086**, M_vol+rate −0,078, M_vol −0,081, M_cal −0,106, M_cot −0,164, M_rate −0,216: ningún mapper de régimen supera al módulo único. Congelado **BASE = siempre T1** en `replay/round7_frozen.json` (= `/workspace/backtest/round7_frozen.json`), commiteado antes del holdout. Anotado antes del holdout: T1 opera ~0,9 trades/mes, no puede cumplir el umbral de ≥ 3/mes.

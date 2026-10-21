@@ -818,14 +818,14 @@ def plot(path, curves, spans, title):
     for (label, a, b, color, hatch) in spans:
         ax.axvspan(a, b, facecolor=color, alpha=0.8, linewidth=0, hatch=hatch, edgecolor="#c9c8c4")
         ax.text(a, 1.0, f" {label}", transform=ax.get_xaxis_transform(), va="top", fontsize=8, color=muted)
-    for name, trades in curves.items():
+    for n, (name, trades) in enumerate(curves.items()):
         trades = sorted(trades, key=lambda t: t["exit_at"])
         if not trades:
             continue
         xs = [spans[0][1]] + [t["exit_at"] for t in trades]
         ys = np.concatenate([[0.0], np.cumsum([t["r"] for t in trades])])
         ax.step(xs, ys, where="post", color=colors.get(name, ink), linewidth=1.8, label=name)
-        ax.annotate(f"{name} {ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points",
+        ax.annotate(f"{name} {ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(6, 7 - 14 * n), textcoords="offset points",
                     va="center", fontsize=9, color=ink)
     ax.axhline(0, color=muted, linewidth=0.8)
     ax.set_title(title, loc="left", color=ink, fontsize=10)
@@ -974,7 +974,7 @@ def run_frozen(args, cutoff, windows, log):
     return payload, out, min(cutoff, system.end)
 
 
-def result_lines(title, payload, runs, a, b, years, args):
+def result_lines(title, payload, runs, a, b, years, args, bar="Pass bar"):
     rows = {m: summarize(t, a, b) for m, t in runs.items()}
     ys = {m: yearly(t, years) for m, t in runs.items()}
     verdict, fails = holdout_pass(rows["C_RAW"], ys["C_RAW"])
@@ -986,7 +986,7 @@ def result_lines(title, payload, runs, a, b, years, args):
              f"Map read from `{args.frozen}` (sha256 `{file_sha(args.frozen)}`, equal to the committed copy): mapper "
              f"`{payload['mapper']}`, `{json.dumps(payload['mapping'], sort_keys=True)}`.", "",
              summary_table({**rows, **info}), "", "Yearly (avg R / total R (n)):", "", year_table(ys), "",
-             f"**Pass bar (C_RAW: avg R >= +0.08, PF > 1.15, MTM DD < 12R, >= 3 trades/month, >= 3 positive years): "
+             f"**{bar} (C_RAW: avg R >= +0.08, PF > 1.15, MTM DD < 12R, >= 3 trades/month, >= 3 positive years): "
              f"{'PASS' if verdict else 'FAIL'}**" + ("" if verdict else f" ({'; '.join(fails)})") + ".", "",
              "Per cell / module contribution (C_RAW):", "", cell_table(by_cell(runs["C_RAW"], tuple(payload["keys"])))]
     return lines, rows, ys, verdict, fails
@@ -1015,8 +1015,7 @@ def contaminated_section(args, log):
     years = [("2021Q4", 2021), ("2022", 2022), ("2023", 2023), ("2024", 2024), ("2025", 2025), ("2026YTD", 2026)]
     lines, rows, ys, verdict, fails = result_lines(
         "## 6. Secondary check 2021-10-01 .. 2026-10-19 - CONTAMINATED (rounds 1-6 selected on these years)",
-        payload, runs, CONTAM_START, b, years, args)
-    lines[-3] = lines[-3].replace("**Pass bar", "**(Reference only, not a test) bar")
+        payload, runs, CONTAM_START, b, years, args, bar="Reference only (not a test): bar")
     save(args.out, "contaminated", {"rows": rows, "years": ys, "trades": {m: _ser(t) for m, t in runs.items()},
                                     "curves": {m: _ser(curves[m]) for m in ("C_RAW", "C_OANDA")}})
     fy.append(args.report, "\n".join(lines))
