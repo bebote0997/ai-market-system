@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Rerun a 5 años + ronda 3, R3a: módulos JT solos, pares y ALL (branch `feat/backtest-v2-i2`)
+
+- `replay.fiveyear --sections modules,pairs` (solo replay): M1–M5b × 4 salidas (24) y pares AND de los 4 mejores módulos por R medio FIX2 a 5 años (M2, M4, M3, M1; M5/M5b nunca juntos) + ALL × 4 salidas (28). **Ninguna pasa**: todos los módulos solos negativos (−0,03 a −0,16R; M5 31 trades/mes −0,14R); mejor par M2&M4:SL25 +0,104R con 80 trades (0/5 años, DD 8,4R); ALL = 1–3 trades. Informe incremental en `/workspace/backtest/5y_report.md` (no se commitea). REAL OFF.
+
 ## 2026-10-21 — Rerun a 5 años + ronda 3, paso 1: señales rápidas y walk-forward anual (branch `feat/backtest-v2-i2`)
 
 - `replay/fast_scouts.py` (solo replay): equivalentes numpy exactos de `_swings`, `_break_of_structure` y `_confirmed_pivots` de los scouts de producción, aplicados con `patch` solo dentro de los workers de señales y de la simulación F3 (producción sin cambios). ~50× más rápido (≈ 0,05 s por slot); igualdad comprobada en `test_fast_scouts.py` y en 300 slots del caché de 1 año (153 VALID_SETUP, 0 diferencias). Las señales de 5 años (72 216 slots) se generan en ≈ 8 min.
