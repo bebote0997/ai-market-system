@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7, paso 1: datos 2010-2021, macro y diseño declarado (branch `feat/backtest-v2-i2`)
+
+- Datos (fuera del repo): EURUSD 5m/15m/1h/D1 OANDA práctica 2010-01..2021-09 (`/workspace/backtest/dl10y.py`, chunks mensuales reanudables, solo lectura de velas) fusionados con `data5y` en `/workspace/backtest/data10y`; cobertura completa 2010+ (solo cierres de Navidad/Año Nuevo; barras de fin de semana de 2011 descartadas). Macro en `/workspace/backtest/macro`: COT CFTC legacy EURO FX (099741), US 2Y (curva par del Tesoro = fuente de DGS2; FRED no accesible desde este host), ECB DFR y Euribor 3M (ECB Data Portal), días FOMC programados 2009-2021 (Fed). Sentimiento minorista OANDA omitido (sin histórico).
+- `replay/round7.py` (solo replay): carga sin fin de semana, cobertura, parsers macro con disponibilidad causal explícita (COT: día hábil siguiente al viernes de publicación 17:00 NY, cotas tardías en cierres del gobierno 2013 y 2018-19; tipos: día hábil siguiente 17:00 NY; Euribor mensual con 1 mes de retraso), estados (trimestre, percentil COT 3 años, tendencia 60 obs. del diferencial 2Y−DFR, vol realizada 20d vs mediana 1 año), pool (E3/JT[R1+R5]/F2 regla relajada TP2 predeclarada, T1 Donchian D1, T1F filtrado por tipos, FLAT), libro enrutado, 6 mappers, walk-forward anual 2013-2017, congelación y runner de holdout que falla en cerrado. Tests: `test_round7.py`. Diseño, protocolo y rejilla declarados en la sección 1 de `/workspace/backtest/report_round7.md` antes de cualquier selección.
+
 ## 2026-10-21 — Ronda 6: correcciones de la revisión Codex (2 MEDIUM) (branch `feat/backtest-v2-i2`)
 
 - `replay/round6.py`: `load_frozen` falla en cerrado si `committed_frozen()` no puede verificar (git no disponible o `replay/round6_frozen.json` ausente de HEAD); el holdout recorta los frames en el corte declarado (`HOLDOUT_END` = 2026-10-20, `load_frames(end=...)`) antes de construir `System`. Tests nuevos en `test_round6.py`.
