@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7, paso 3: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
+
+- `replay.round7 --sections select` (frames y macro recortados < 2018-01-01, C_RAW). Módulos aislados 2010-2017: E3 −0,085R (1230), F2 −0,006R (865), JT −0,223R (46), **T1 +0,063R (90, PF 1,16)**, T1F +0,011R (55). Walk-forward anual 2013-2017 (media de R medio anual): **BASE +0,086**, M_vol+rate −0,078, M_vol −0,081, M_cal −0,106, M_cot −0,164, M_rate −0,216: ningún mapper de régimen supera al módulo único. Congelado **BASE = siempre T1** en `replay/round7_frozen.json` (= `/workspace/backtest/round7_frozen.json`), commiteado antes del holdout. Anotado antes del holdout: T1 opera ~0,9 trades/mes, no puede cumplir el umbral de ≥ 3/mes.
+
 ## 2026-10-21 — Ronda 7, paso 2: pool fijo y disponibilidad (branch `feat/backtest-v2-i2`)
 
 - Pool fijo E3 / JT[R1+R5] / F2 (regla relajada TP2), T1 Donchian D1, T1F, FLAT: 5m/15m/1h disponibles todos los años desde 2010, **ningún módulo se descarta**. Candidatos 2010-2017 por año: E3 136-173, F2 107-125, T1 18-30, JT[R1+R5] 3-9 (con el mínimo de 20 trades por celda JT casi nunca es elegible). Solo conteos, sin resultados (sección 3 del informe, fuera del repo).
