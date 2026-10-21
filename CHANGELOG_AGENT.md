@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7b, NAS100USD: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
+
+- Datos OANDA NAS100 desde 2010-01-03 (D1 237-251/año). Aislados 2010-2017 (C_IBKR): todos negativos (E3 −0,332R, JT −0,296R, F2 −0,085R, T1/T1F −0,063R). Walk-forward: M_rate +0,152 (solo 14 trades), BASE 0 (sin trades), resto negativos. Congelado **M_rate {DOWN: T1F, UP: FLAT}** en `replay/round7_frozen_NAS100USD.json`, commiteado antes del holdout; anotado: elección frágil, ~0,3 trades/mes.
+
 ## 2026-10-21 — Ronda 7b, XAUUSD: HOLDOUT (una vez) y chequeo CONTAMINADO (branch `feat/backtest-v2-i2`)
 
 - Mapa congelado BASE = T1F: **C_IBKR 23 trades (0,5/mes), +0,348R, PF 2,04, DD MTM 5,0R, 3/4 años positivos → FAIL solo por frecuencia** (< 3 trades/mes). C_OANDA +0,349R, C_IBKR_STRESS +0,341R, carry 3 % +0,288R. Buy-and-hold oro holdout +34,6 % (DD 19 %) = +69R-equiv. vs estrategia +8,0R = +4,0 %. CONTAMINADO 2021-10..2026-10: +0,459R (28 trades), solo referencia. Informe sección 8.3.

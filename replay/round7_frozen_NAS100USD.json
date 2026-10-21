@@ -1,0 +1,49 @@
+{
+  "bar_model": "C_IBKR",
+  "cot_code": "209742",
+  "frozen_at": "2026-10-21T22:33:07+00:00",
+  "keys": [
+    "RATE"
+  ],
+  "mapper": "M_rate",
+  "mapping": {
+    "RATE=DOWN": "T1F",
+    "RATE=UP": "FLAT"
+  },
+  "min_cell_trades": 20,
+  "pool": [
+    "E3",
+    "JT[R1+R5]",
+    "F2",
+    "T1",
+    "T1F"
+  ],
+  "rate_driver": "US2Y",
+  "rate_side": -1,
+  "rule_tp": "TP2",
+  "selection": {
+    "data_last_bar": "2017-12-29T21:55:00+00:00",
+    "macro_cutoff": "2018-01-01T00:00:00+00:00",
+    "scores": {
+      "BASE": 0.0,
+      "M_cal": -0.06294992624226398,
+      "M_cot": -0.1193083235953982,
+      "M_rate": 0.15184290530252667,
+      "M_vol": -0.0036378190063506175,
+      "M_vol+rate": -0.06625360544612854
+    },
+    "wf_years": [
+      2013,
+      2014,
+      2015,
+      2016,
+      2017
+    ],
+    "window": [
+      "2010-01-01T00:00:00+00:00",
+      "2018-01-01T00:00:00+00:00"
+    ]
+  },
+  "symbol": "NAS100USD",
+  "system": "ROUND7_ROTATION"
+}
