@@ -46,6 +46,14 @@ class RelaxedJT(unittest.TestCase):
         self.assertTrue(funnel_es["candidate"])
         self.assertEqual(dict(funnel_r2), dict(funnel_es))
 
+    def test_round_one_recomputed_at_full_precision(self):
+        market = bt.Market.from_frames(self.frames, bt.FALLBACK_SPREAD_PIPS, causal=True)
+        everything = es.round1_results(self.ctx, market, {}, 0)
+        self.assertEqual(len(everything), r2.ROUND1_VARIANTS)
+        jt = es.jt_round1(self.ctx, market, {}, 0)[0]
+        self.assertEqual({n: [t["r"] for t in v[0]] for n, v in jt.items()},
+                         {n: [t["r"] for t in everything[n][0]] for n in jt})
+
     def test_relaxations_open_the_funnel(self):
         base = r2.jt_relaxed_all(self.ctx, r2.Relax(), {}, half)[1]
         h4 = r2.jt_relaxed_all(self.ctx, r2.Relax.parse("R2"), {}, half)[1]
@@ -151,10 +159,17 @@ class Evaluation(unittest.TestCase):
         self.assertTrue(r2.strict_pass(*es.summarise(good, self.split)))
         short = good[:150] + good[150:170]  # 20 OOS trades
         self.assertFalse(r2.strict_pass(*es.summarise(short, self.split)))
-        self.assertTrue(r2.strict_pass_row({"is_n": 50, "oos_n": 30, "is_r": 0.2, "oos_r": 0.11, "ci_is": 0.01,
-                                            "ci_oos": 0.02}))
-        self.assertFalse(r2.strict_pass_row({"is_n": 50, "oos_n": 30, "is_r": 0.2, "oos_r": 0.10, "ci_is": 0.01,
-                                             "ci_oos": 0.02}))
+
+    def test_strict_bar_uses_full_precision_metrics(self):
+        # avg R 0.1004 would print as "+0.100" in a report table; the bar must see the unrounded value
+        def segment(start, n):
+            return self.series(start, n, [1.1004, -0.9]) + self.series(start + pd.Timedelta(hours=1).to_pytimedelta(),
+                                                                         n, [1.1004, -0.9])
+        rows = segment(datetime(2026, 1, 5, 9, tzinfo=UTC), 150) + segment(datetime(2026, 7, 2, 9, tzinfo=UTC), 40)
+        a, b = es.summarise(rows, self.split)
+        self.assertEqual(format(a["avg_r"], "+.3f"), "+0.100")
+        self.assertGreater(a["avg_r"], r2.STRICT_AVG_R)
+        self.assertTrue(r2.strict_pass(a, b))  # a parsed "+0.100" would have failed the > +0.10 test
 
     def test_three_contiguous_folds_purge_crossers(self):
         edges = r2.folds(self.split)
@@ -173,9 +188,19 @@ class Evaluation(unittest.TestCase):
         results = {r2.variant_name(combos[0], "SL25"): (self.series(start, 25, [0.2]) + self.series(oos, 5, [-1]), 0),
                    r2.variant_name(combos[1], "SL25"): (self.series(start, 25, [0.1]) + self.series(oos, 5, [5]), 0),
                    r2.variant_name(combos[2], "SL25"): (self.series(start, 5, [3.0]), 0)}
-        self.assertEqual(r2.select_best(results, combos, self.split), [("R1", True), ("R2", True)])
-        results.pop(r2.variant_name(combos[1], "SL25"))
-        self.assertEqual(r2.select_best(results, [combos[0], combos[2]], self.split), [("R1", True), ("R4", False)])
+        # ranked solely by IS avg R (R4: 5 IS trades at +3R ranks first); OOS outcomes never matter
+        self.assertEqual(r2.select_best(results, combos, self.split), [("R4", 5), ("R1", 25)])
+        results.pop(r2.variant_name(combos[2], "SL25"))
+        self.assertEqual(r2.select_best(results, combos[:2], self.split), [("R1", 25), ("R2", 25)])
+
+    def test_walk_forward_covers_every_given_passer(self):
+        start = datetime(2026, 1, 5, 9, tzinfo=UTC)
+        steady = (self.series(start, 270, [0.5]), Counter())
+        late = (self.series(datetime(2026, 7, 2, 9, tzinfo=UTC), 80, [0.5]), Counter())
+        walk = r2.walk_forward({"E2:FIX2": steady, "JT[R1]:2R:SL25": late}, ["E2:FIX2", "JT[R1]:2R:SL25"],
+                               self.split)
+        self.assertEqual([(name, ok) for name, _, ok in walk], [("E2:FIX2", True), ("JT[R1]:2R:SL25", False)])
+        self.assertEqual([m["trades"] for m in walk[1][1]][:2], [0, 0])
 
 
 if __name__ == "__main__":

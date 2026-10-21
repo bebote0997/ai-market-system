@@ -1,8 +1,13 @@
 # Agent Changelog
 
+## 2026-10-20 — Ronda 2: correcciones de las 3 notas Codex (branch `feat/backtest-v2-i2`)
+
+- `replay/round2.py` (solo replay): (1) paso 2 ordena las combinaciones JT únicamente por R medio IS de su variante SL25 (el nº de trades IS se informa, no ordena); (2) walk-forward de 3 folds también para los que pasen la barra estricta en la ronda 1; (3) la barra estricta de la ronda 1 se calcula a precisión completa desde sus trades (`entry_search.round1_results`, mismo código que `entry_search.main`), sin parsear valores redondeados del informe (`strict_pass_row` eliminado). Re-ejecución sobre el año original: veredicto sin cambios (ninguna pasa en ronda 1 ni 2); el paso 2 selecciona ahora R1+R5 y R1+R3+R4+R5. Tests en `test_round2.py`. Producción sin cambios, REAL OFF.
+
 ## 2026-10-20 — Búsqueda de entradas, ronda 2: ablación JT_SMC, SL 25–30, pruebas múltiples (branch `feat/backtest-v2-i2`)
 
 - `replay/round2.py` (solo replay; producción sin cambios) reutiliza `entry_search` / `intraday_backtest` (mismos datos, costes, salidas, split con purga, bootstrap por días). Paso 1: rejilla predeclarada de 12 combinaciones R1–R6 (R1 sin FVG 1h, R2 tendencia solo H4, R3 solo H1, R4 fib 50–85 %, R5 orden límite en el borde proximal del OB 15m sin trigger 5m, R6 solo PDL/rango asiático sin regla de nivel intacto) × SL 15–30 / 25–30, TP 2R; sin relajaciones reproduce exactamente JT_SMC de la ronda 1 (test). Ninguna combinación llega a 8 trades/mes (máx. 2,3: R1+R2, R1+R2+R4). Paso 2: E2/E3 con SL 25–30 y las 2 mejores JT por R medio IS (R1+R2+R4, R1+R2): el SL 25 baja el coste de ≈ 0,13R a ≈ 0,08R por trade; E2 SL25 −0,350R IS / +0,021R OOS, E3 SL25 −0,082R / +0,226R; JT negativas en IS y OOS.
+- Paso 3: 86 variantes probadas (60 ronda 1 + 26 ronda 2). Barra estricta (R medio IS y OOS > +0,10, CI80 inferior por días > 0 en ambos, ≥ 30 trades OOS): **ninguna pasa** (ronda 1 ni ronda 2), sin walk-forward. Más cercana: E3:2R:SL25 (IS −0,082R, OOS +0,226R, CI80 OOS +0,090, 44 trades). Gates G3/G4/G5 por variante, informe incremental `round2_report.md` y `round2_equity_r.png` en `/workspace/backtest/` (no se commitean). Tests: `test_round2.py` (equivalencia con la ronda 1, invariancia por prefijo con R2/R3/R5/R6, espejo de cortos, fills límite, SL 25, barra estricta, folds, selección solo IS). REAL OFF.
 
 ## 2026-10-20 — Búsqueda de entradas: correcciones de la revisión Codex (6 hallazgos de lookahead/sesgo, branch `feat/backtest-v2-i2`)
 

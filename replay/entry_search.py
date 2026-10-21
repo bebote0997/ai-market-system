@@ -1241,6 +1241,49 @@ def e_variants(family, e5=False):
             for x in ("FIX2", "FIX15", "ADR") for f80 in (False, True)]
 
 
+E_FAMILIES = ("E1", "E2", "E3", "E4", "E5")
+
+
+def jt_round1(ctx, market, news_days, start_ns, log=None):
+    """The 12 round-1 JT_SMC variants: ({name: (trades, skips)}, {conf: funnel}, {conf: candidates})."""
+    jt, funnels, cands = {}, {}, {}
+    for conf in (False, True):
+        found, funnels[conf] = jt_all(ctx, conf, news_days, start_ns)
+        cands[conf] = [c for c in found if c.t >= start_ns]
+        if log:
+            log(f"JT conf={conf}: {len(cands[conf])} candidates, funnel {dict(funnels[conf])}")
+    for variant in jt_variants():
+        jt[variant.name] = run_variant(cands[variant.conf], ctx, market, variant)
+        if log:
+            log(f"{variant.name}: {len(jt[variant.name][0])} trades")
+    return jt, funnels, cands
+
+
+def e_round1(ctx, market, cands, family, start_ns, log=None):
+    """Round-1 variants of one family E1-E4 (6 each) or E5 (E5.E1-E5.E4, 24); ``cands`` caches E1-E4 candidates
+    (E5 needs them first)."""
+    out = {}
+    if family == "E5":
+        for base in ("E1", "E2", "E3", "E4"):
+            for variant in e_variants(base, e5=True):
+                out[variant.name] = run_variant(cands[base], ctx, market, variant)
+        return out
+    cands[family] = [c for c in entry_candidates(ctx, family) if c.t >= start_ns]
+    if log:
+        log(f"{family}: {len(cands[family])} candidates")
+    for variant in e_variants(family):
+        out[variant.name] = run_variant(cands[family], ctx, market, variant)
+    return out
+
+
+def round1_results(ctx, market, news_days, start_ns, log=None):
+    """All 60 round-1 variants {name: (trades, skips)} at full precision (12 JT + 24 E1-E4 + 24 E5)."""
+    everything, _, cands = jt_round1(ctx, market, news_days, start_ns, log)
+    for family in E_FAMILIES:
+        everything.update(e_round1(ctx, market, cands, family, start_ns, log))
+    return everything
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--data", required=True)
@@ -1266,16 +1309,7 @@ def main(argv=None):
         state.update(previous=parse_report_table(args.compare), previous_label=os.path.basename(args.compare))
     log(f"split {split.start} | {split.split} | {split.end}; ADR20 {state['adr']}")
 
-    jt, funnels = {}, {}
-    cands = {}
-    for conf in (False, True):
-        found, funnel = jt_all(ctx, conf, news_days, start_ns)
-        cands[conf] = [c for c in found if c.t >= start_ns]
-        funnels[conf] = funnel
-        log(f"JT conf={conf}: {len(cands[conf])} candidates, funnel {dict(funnel)}")
-    for variant in jt_variants():
-        jt[variant.name] = run_variant(cands[variant.conf], ctx, market, variant)
-        log(f"{variant.name}: {len(jt[variant.name][0])} trades")
+    jt, funnels, cands = jt_round1(ctx, market, news_days, start_ns, log)
     spread = np.round((frames["5m"]["AskClose"] - frames["5m"]["BidClose"]).to_numpy() / PIP, 2)
     state["spread_note"] = (
         f"**E5 note**: the 5m BidClose/AskClose spread in this data is never below {spread.min():.1f} pip (median "
@@ -1289,16 +1323,8 @@ def main(argv=None):
                            if max(rates) < 4 else "Some JT variants trade >= 4/month; others may not."))
     write_report(report, state)
 
-    for family in ("E1", "E2", "E3", "E4", "E5"):
-        if family == "E5":
-            for base in ("E1", "E2", "E3", "E4"):
-                for variant in e_variants(base, e5=True):
-                    state["e"][variant.name] = run_variant(cands[base], ctx, market, variant)
-        else:
-            cands[family] = [c for c in entry_candidates(ctx, family) if c.t >= start_ns]
-            log(f"{family}: {len(cands[family])} candidates")
-            for variant in e_variants(family):
-                state["e"][variant.name] = run_variant(cands[family], ctx, market, variant)
+    for family in E_FAMILIES:
+        state["e"].update(e_round1(ctx, market, cands, family, start_ns, log))
         state["e_done"].append(family)
         log(f"{family} done")
         write_report(report, state)

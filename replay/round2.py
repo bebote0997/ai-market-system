@@ -9,7 +9,8 @@ Everything reuses ``replay.entry_search`` (features, sweeps, OBs, split + purge,
 17:00 NY close, MTM drawdown, day-block bootstrap, gates). One position at a time, 2R/day realised halt. Nothing here
 is wired into the runtime.
 
-Run: ``python -m replay.round2 --data /workspace/backtest/data --out /workspace/backtest``.
+Run: ``python -m replay.round2 --data /workspace/backtest/data --out /workspace/backtest``. Step 3 recomputes the 60
+round-1 variants from their trades (full precision) for the strict bar and the walk-forward.
 Market data and outputs live outside the repository and are never committed.
 """
 import argparse
@@ -37,7 +38,6 @@ TP_R = 2.0
 R4_ZONES = ((0.50, 0.85),)
 STAGES = ("sweep", "trend", "ob15", "trigger", "fvg1h", "news", "candidate")
 TARGET_TRADES_PER_MONTH = 8.0
-MIN_IS_FOR_SELECTION = 20  # step 2: JT combos ranked by IS avg R among those with >= 20 IS trades
 STRICT_AVG_R = 0.10
 STRICT_MIN_OOS = 30
 FOLDS = 3
@@ -395,24 +395,25 @@ def strict_pass(a, b):
                 and b["ci80_low"] is not None and b["ci80_low"] > 0)
 
 
-def strict_pass_row(row):
-    """Same bar on a parsed round-1 report row (``es.parse_report_table``)."""
-    return bool(row["is_n"] and row["oos_n"] >= STRICT_MIN_OOS and row["is_r"] is not None
-                and row["oos_r"] is not None and row["is_r"] > STRICT_AVG_R and row["oos_r"] > STRICT_AVG_R
-                and row["ci_is"] is not None and row["ci_is"] > 0 and row["ci_oos"] is not None
-                and row["ci_oos"] > 0)
-
-
 def select_best(results, combos, split, n=2):
-    """Step 2: the ``n`` combos with the highest IS avg R of their SL25 variant among those with >= 20 IS trades;
-    if fewer qualify, the rest by IS avg R among combos with >= 1 IS trade (flagged). [(combo name, qualified)]."""
+    """Step 2: the ``n`` combos with the highest IS avg R of their SL25 variant (solely that; combos without an IS
+    trade are not ranked). [(combo name, IS trades)], the sample size reported alongside, never used to rank."""
     ranked = []
     for relax in combos:
         a, _ = es.summarise(results[variant_name(relax, "SL25")][0], split)
         if a["trades"]:
-            ranked.append((a["trades"] >= MIN_IS_FOR_SELECTION, a["avg_r"], relax.name))
-    ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return [(name, ok) for ok, _, name in ranked[:n]]
+            ranked.append((a["avg_r"], relax.name, a["trades"]))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [(name, n_is) for _, name, n_is in ranked[:n]]
+
+
+def walk_forward(results, names, split):
+    """[(name, fold metrics, all folds avg R > 0)] for ``names`` (strict-bar passers of any round)."""
+    out = []
+    for name in names:
+        rows = [fold_metrics(results[name][0], a, b) for a, b in folds(split)]
+        out.append((name, rows, all(m["trades"] and m["avg_r"] > 0 for m in rows)))
+    return out
 
 
 def table(results, split):
@@ -492,14 +493,16 @@ confluence overlay, F80 or E5 filters. TP = 2R on every variant.
 
 **Step 2**: `E2:2R:SL25`, `E3:2R:SL25` (round-1 E2/E3 candidates; stop = structure -/+ 0.2 ATR widened to 25, skip
 > 30, TP 2R) with the round-1 `E2:FIX2` / `E3:FIX2` as references, plus the two JT combos with the highest IS avg R
-of their `SL25` variant among combos with >= {MIN_IS_FOR_SELECTION} IS trades (fallback: highest IS avg R with >= 1
-IS trade, flagged). Selection on IS only. Cost per R = avg (gross mid-price R - net R) per trade.
+of their `SL25` variant (ranked solely by IS avg R among combos with >= 1 IS trade; the IS trade count is reported
+next to it, not used to rank; Codex note 1). Selection on IS only. Cost per R = avg (gross mid-price R - net R) per trade.
 
 **Step 3**: variants tried = {ROUND1_VARIANTS} (round 1) + 24 (step 1) + 2 (step 2 E2/E3; the step-2 JT rows are
 step-1 variants, not new). Strict bar: IS avg R > +{STRICT_AVG_R:.2f} AND OOS avg R > +{STRICT_AVG_R:.2f} AND day-block
 CI80 low > 0 in both AND >= {STRICT_MIN_OOS} OOS trades. Any passer gets a walk-forward with {FOLDS} contiguous
 equal-time folds over the whole tradable period (each fold = trades signalled in it that exit by its end; avg R, CI80
-low, trades); it passes only if all {FOLDS} folds have avg R > 0. The bar is also applied to the round-1 table.
+low, trades); it passes only if all {FOLDS} folds have avg R > 0. The bar and the walk-forward are also applied to
+the 60 round-1 variants, recomputed here at full precision from their trades (same code as `replay.entry_search`;
+no rounded report values are parsed; Codex notes 2-3).
 """
 
 
@@ -561,8 +564,8 @@ def write_report(path, state):
     if "s2" in state:
         best = state["s2_best"]
         lines += ["## 2. 25-30 pip stops, TP 2R", "",
-                  "JT combos selected on IS avg R of their SL25 variant: " + (", ".join(
-                      f"{n}{'' if ok else ' (fewer than 20 IS trades: fallback)'}" for n, ok in best) or "none")
+                  "JT combos selected solely on IS avg R of their SL25 variant: " + (", ".join(
+                      f"{n} ({k} IS trades)" for n, k in best) or "none")
                   + ". Their SL15 rows and the round-1 E2/E3 FIX2 rows are shown for comparison.", "",
                   table(state["s2"], split), "", "### Cost per R", "", cost_table(state["s2"], list(state["s2"]), split),
                   ""]
@@ -579,14 +582,14 @@ def write_report(path, state):
                   f"Strict bar (IS and OOS avg R > +{STRICT_AVG_R:.2f}, day-block CI80 low > 0 in both, >= "
                   f"{STRICT_MIN_OOS} OOS trades):", "",
                   f"- Round 2 ({s3['round2']} variants): **{', '.join(s3['passers']) or 'none pass'}**.",
-                  f"- Round 1 ({s3['round1_n']} variants parsed from `entries_report.md`): "
+                  f"- Round 1 ({s3['round1_n']} variants recomputed at full precision): "
                   f"**{', '.join(s3['round1_passers']) or 'none pass'}**.", "",
                   "Closest round-2 variants (the bar's conditions met, of 5):", "",
                   "| Variant | IS avg R | OOS avg R | IS CI80 low | OOS CI80 low | OOS n | conditions met |",
                   "|---|---|---|---|---|---|---|"]
         for row in s3["closest"]:
             lines.append("| " + " | ".join(row) + " |")
-        lines += ["", "### Walk-forward (passers only)", ""]
+        lines += ["", "### Walk-forward (strict-bar passers of round 1 and round 2)", ""]
         if s3["walk"]:
             fold_head = " | ".join(f"Fold {q + 1} {a:%Y-%m-%d}->{b:%Y-%m-%d} avg R / CI80 low / n"
                                    for q, (a, b) in enumerate(folds(split)))
@@ -629,12 +632,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--round1", help="round-1 entries_report.md (strict bar on its table)")
     parser.add_argument("--steps", type=int, default=3, help="run steps 1..N")
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     report = os.path.join(args.out, "round2_report.md")
-    round1 = args.round1 or os.path.join(args.out, "entries_report.md")
 
     def log(message):
         print(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {message}", flush=True)
@@ -685,19 +686,17 @@ def main(argv=None):
 
     new = {**results, "E2:2R:SL25": s2["E2:2R:SL25"], "E3:2R:SL25": s2["E3:2R:SL25"]}
     passers = [n for n, (trades, _) in new.items() if strict_pass(*es.summarise(trades, split))]
-    previous = es.parse_report_table(round1) if os.path.exists(round1) else {}
-    previous.pop("_sweeps", None)
-    walk = []
-    for name in passers:
-        rows = [fold_metrics(new[name][0], a, b) for a, b in folds(split)]
-        walk.append((name, rows, all(m["trades"] and m["avg_r"] > 0 for m in rows)))
+    round1 = es.round1_results(ctx, market, news_days, start_ns)
+    passers1 = [n for n, (trades, _) in round1.items() if strict_pass(*es.summarise(trades, split))]
+    walk = walk_forward({**round1, **new}, passers1 + passers, split)
     survivors = [n for n, _, ok in walk if ok]
+    every = passers1 + passers
     if survivors:
         verdict = (f"**{len(survivors)} variant(s) pass the strict bar and the walk-forward: {', '.join(survivors)}.** "
                    f"Still {len(new) + ROUND1_VARIANTS} variants were tried on the same year; a fresh pre-registered "
                    "period (live paper) is required before any decision.")
-    elif passers:
-        verdict = (f"{len(passers)} variant(s) pass the strict bar ({', '.join(passers)}) but none passes the "
+    elif every:
+        verdict = (f"{len(every)} variant(s) pass the strict bar ({', '.join(every)}) but none passes the "
                    "walk-forward (every fold avg R > 0). **No passer.**")
     else:
         verdict = "**No variant passes the strict bar. No passer.**"
@@ -705,7 +704,7 @@ def main(argv=None):
     plot = [n for n in dict.fromkeys(passers + plot)][:5]
     state.update(all=new, plot=plot, status="COMPLETE", s3={
         "total": ROUND1_VARIANTS + len(new), "round2": len(new), "passers": passers,
-        "round1_n": len(previous), "round1_passers": [n for n, row in previous.items() if strict_pass_row(row)],
+        "round1_n": len(round1), "round1_passers": passers1,
         "closest": closest_rows(new, split), "walk": walk, "verdict": verdict})
     es.plot_equity(os.path.join(args.out, "round2_equity_r.png"), new, plot, split,
                    title="EURUSD entry search round 2 - cumulative R, TP 2R, SL 25-30 pips (shaded = out-of-sample)")
