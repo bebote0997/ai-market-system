@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 5, paso 4: otros instrumentos bajo C_RAW (branch `feat/backtest-v2-i2`)
+
+- `replay.round5 --sections others`: top 5 transferibles en EURUSD (RX:JT[R1+R5]:TP3, A:SW:TP3, E3:ADR, RX:F2:TP1.5, RX:M1:ADR0.6) + RX:E3:TP3 (RX:JT[R1+R5] ya estaba en el top) en GBPUSD, USDJPY, XAUUSD, US30, NAS100: 30 tests C_RAW (declarados 35; 5 duplicados) + 13 C_RAW_STRESS. **Ninguna pasa.** Más cercanas: NAS100USD:A:SW:TP3 +0,230R (46 trades, 2/5, segunda mitad −0,016R), XAUUSD:A:SW:TP3 +0,250R (1/5), US30USD:RX:F2:TP1.5 +0,074R (518 trades, 1/5, DD 19,4R), GBPUSD:RX:E3:TP3 +0,088R pero DD 45R y 0/5.
+
 ## 2026-10-21 — Ronda 5, paso 3: rejilla relajada (Jeferson) en EURUSD (branch `feat/backtest-v2-i2`)
 
 - `replay.round5 --sections relaxed`: 12 familias × 4 TP (hold 5 días NY, SL estructura 15–50 pips, TP 1,5R/2R/3R/0,6 ADR20, cierre viernes ON) = 48 bajo C_RAW + 48 bajo C_OANDA + 13 C_RAW_STRESS (R total > 0). **Ninguna pasa.** Mejor R medio RX:JT[R1+R5]:TP3 +0,157 (35 trades, 0/5 años); la más cercana RX:F2:TP1.5 +0,038R, 520 trades, 2/5 años, DD MTM 22,7R (estrés +0,033R, 2/5; C_OANDA +0,012R). RX:E3 +0,008 a +0,016R. Informe en `/workspace/backtest/report_round5.md` (no se commitea).
