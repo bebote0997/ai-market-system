@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7b, GBPUSD: HOLDOUT (una vez) y chequeo CONTAMINADO (branch `feat/backtest-v2-i2`)
+
+- Mapa congelado M_cot (sha256 `f8a5115a…`, igual al commiteado), 2018-01..2021-09: **C_RAW 311 trades (6,9/mes), −0,078R, PF 0,88, DD MTM 32,1R, 2/4 años positivos → FAIL** (C_OANDA −0,064R, C_RAW_STRESS −0,078R). 2020 −25,0R. CONTAMINADO 2021-10..2026-10: −0,001R (453 trades), solo referencia. Informe sección 8.1 (fuera del repo).
+
 ## 2026-10-21 — Ronda 7b, GBPUSD: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
 
 - Datos 2010-01..2026-10 completos (solo cierres festivos). Aislados 2010-2017 (C_RAW): E3 −0,130R (1362), F2 **+0,096R (930, PF 1,16)**, T1 −0,058R (91), T1F +0,013R, JT −0,003R (56). Walk-forward 2013-2017: **M_cot +0,145**, M_vol+rate +0,069, M_cal +0,062, M_vol −0,009, BASE −0,035, M_rate −0,092. Congelado **M_cot {HI: FLAT, LO: F2, MID: F2}** en `replay/round7_frozen_GBPUSD.json`, commiteado antes del holdout.
