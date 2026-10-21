@@ -160,7 +160,8 @@ def stub_system(states):
     for fam in r7.SWING:
         items += [(s.t, fam, s) for s in r7.t1_setups(d1, fam)]
     items.sort(key=lambda x: (x[0], r7.POOL.index(x[1])))
-    return SimpleNamespace(tape=lambda m: tape, ctx=None, items=lambda m: items, state=states, rule=None)
+    return SimpleNamespace(tape=lambda m: tape, ctx=None, items=lambda m: items, state=states, rule=None,
+                           pip=r7.PIP, ref=None, t1f_allowed=r7.t1f_allowed)
 
 
 class Book(unittest.TestCase):

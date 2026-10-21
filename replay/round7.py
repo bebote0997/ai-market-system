@@ -352,6 +352,8 @@ def t1_setups(d1, family="T1"):
 class System:
     """EURUSD frames (sliced at ``cutoff``) + features + per-cost-model tapes / merged module candidates."""
 
+    pip, ref = PIP, None  # instrument pip; causal EURUSD reference ADR for the relaxed clamps (None: pip units)
+
     def __init__(self, frames, macro_dir, cutoff):
         self.frames, self.cutoff = frames, cutoff
         self.end = frames["5m"].index[-1].to_pydatetime() + timedelta(minutes=5)
@@ -397,6 +399,9 @@ class System:
             self._items[key] = [(t, fam, c) for t, _, fam, c in out]
         return self._items[key]
 
+    def t1f_allowed(self, state, side):
+        return t1f_allowed(state, side)
+
 
 def t1f_allowed(state, side):
     """T1F: long only when the rate differential (US 2Y - ECB DFR) trend is DOWN (EUR-supportive), short only UP."""
@@ -422,7 +427,7 @@ def run_book(system, model, route, a, b):
         if route(state) != fam:
             continue
         side = cand.side if fam in SWING else (1 if cand.side == es.LONG else -1)
-        if fam == "T1F" and not t1f_allowed(state, side):
+        if fam == "T1F" and not system.t1f_allowed(state, side):
             skips["t1f_against_rate_trend"] += 1
             continue
         idea = f"{fam}|{cand.idea}"
@@ -438,8 +443,8 @@ def run_book(system, model, route, a, b):
         if fam in SWING:
             got, sk = r4.run([cand], tape, fam)
         else:
-            with r4.instrument_pip(PIP):
-                got, sk = r5.run_rule([cand], ctx, tape, fam, system.rule)
+            with r4.instrument_pip(system.pip):
+                got, sk = r5.run_rule([cand], ctx, tape, fam, system.rule, ref=system.ref)
         if not got:
             skips.update(sk)
             continue
@@ -491,13 +496,13 @@ def year_bounds(y):
     return datetime(y, 1, 1, tzinfo=UTC), datetime(y + 1, 1, 1, tzinfo=UTC)
 
 
-def walk_forward(system, standalone, keys):
-    """Anchored yearly walk-forward: fit on [SEL_START, Y) (purged), test on Y with a routed book (C_RAW)."""
+def walk_forward(system, standalone, keys, model=r5.C_RAW):
+    """Anchored yearly walk-forward: fit on [SEL_START, Y) (purged), test on Y with a routed book (``model``)."""
     out = {}
     for y in WF_YEARS:
         a, b = year_bounds(y)
         mapping, _ = fit(keys, standalone, SEL_START, a)
-        trades, _ = run_book(system, r5.C_RAW, mapped(keys, mapping), a, min(b, system.end))
+        trades, _ = run_book(system, model, mapped(keys, mapping), a, min(b, system.end))
         out[y] = {"mapping": mapping, "trades": trades}
     return out
 
