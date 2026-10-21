@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7b: resumen multi-instrumento y veredicto (branch `feat/backtest-v2-i2`)
+
+- `replay.round7b --sections final`: sección 8.5-8.6 del informe y `round7_multi_equity_r.png` (un panel por instrumento; fuera del repo). **Ningún instrumento pasa** (0/5 con EURUSD). XAUUSD siempre-T1F +0,348R, PF 2,04, DD 5R falla solo por frecuencia (0,5/mes); NAS100 +0,316R falla por frecuencia y años; GBPUSD −0,078R; USDJPY −0,849R. Buy-and-hold muy superior en retorno (oro +34,6 %, NAS100 +130,7 % vs +4,0 % / +3,0 %). Tests múltiples: ronda 7 total 30 mappers (430 conservador); acumulado 474 (874 conservador); 5 holdouts. Propuesta: no bajar el umbral; si se sigue, test nuevo predeclarado de T1F en oro con ventana fuera de muestra nueva (decisión del owner). Validación: unittest 2569 OK (41 skipped, 1 expected failure); ruff PASS.
+
 ## 2026-10-21 — Ronda 7b, NAS100USD: HOLDOUT (una vez) y chequeo CONTAMINADO (branch `feat/backtest-v2-i2`)
 
 - Mapa congelado M_rate {DOWN: T1F, UP: FLAT}: **C_IBKR 19 trades (0,4/mes), +0,316R, PF 2,40, DD MTM 2,6R, 2/4 años positivos (2018 sin trades) → FAIL** (frecuencia, años). Buy-and-hold NAS100 holdout +130,7 % (DD 32 %) = +261R-equiv. vs estrategia +6,0R = +3,0 %. CONTAMINADO: +0,367R (17 trades), solo referencia. Informe sección 8.4.
