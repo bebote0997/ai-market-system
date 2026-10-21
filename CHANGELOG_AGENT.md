@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7b, XAUUSD: HOLDOUT (una vez) y chequeo CONTAMINADO (branch `feat/backtest-v2-i2`)
+
+- Mapa congelado BASE = T1F: **C_IBKR 23 trades (0,5/mes), +0,348R, PF 2,04, DD MTM 5,0R, 3/4 años positivos → FAIL solo por frecuencia** (< 3 trades/mes). C_OANDA +0,349R, C_IBKR_STRESS +0,341R, carry 3 % +0,288R. Buy-and-hold oro holdout +34,6 % (DD 19 %) = +69R-equiv. vs estrategia +8,0R = +4,0 %. CONTAMINADO 2021-10..2026-10: +0,459R (28 trades), solo referencia. Informe sección 8.3.
+
 ## 2026-10-21 — Ronda 7b, XAUUSD: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
 
 - Aislados 2010-2017 (C_IBKR): E3 −0,116R (1009), F2 −0,077R (799), JT −0,140R (44), T1 +0,107R (83), **T1F +0,271R (51, PF 1,67)**. Walk-forward: solo BASE positivo (+0,177); mappers de régimen −0,037..−0,241. Congelado **BASE = siempre T1F** (filtro por tendencia del tipo real 10Y) en `replay/round7_frozen_XAUUSD.json`, commiteado antes del holdout; anotado: ~0,5 trades/mes, no puede cumplir ≥ 3/mes.
