@@ -1,0 +1,46 @@
+{
+  "bar_model": "C_IBKR",
+  "cot_code": "088691",
+  "frozen_at": "2026-10-21T22:23:47+00:00",
+  "keys": [],
+  "mapper": "BASE",
+  "mapping": {
+    "ALL": "T1F"
+  },
+  "min_cell_trades": 20,
+  "pool": [
+    "E3",
+    "JT[R1+R5]",
+    "F2",
+    "T1",
+    "T1F"
+  ],
+  "rate_driver": "US10Y_REAL",
+  "rate_side": -1,
+  "rule_tp": "TP2",
+  "selection": {
+    "data_last_bar": "2017-12-29T21:55:00+00:00",
+    "macro_cutoff": "2018-01-01T00:00:00+00:00",
+    "scores": {
+      "BASE": 0.1765562597906741,
+      "M_cal": -0.10254434304576995,
+      "M_cot": -0.03720705751559965,
+      "M_rate": -0.24070331701592945,
+      "M_vol": -0.09175685078822712,
+      "M_vol+rate": -0.13503225910283292
+    },
+    "wf_years": [
+      2013,
+      2014,
+      2015,
+      2016,
+      2017
+    ],
+    "window": [
+      "2010-01-01T00:00:00+00:00",
+      "2018-01-01T00:00:00+00:00"
+    ]
+  },
+  "symbol": "XAUUSD",
+  "system": "ROUND7_ROTATION"
+}
