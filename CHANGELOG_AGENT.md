@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 4, cierre: robustez, tests múltiples y lista corta (branch `feat/backtest-v2-i2`)
+
+- `replay.round4 --sections robust,final`: **37 tests en la ronda 4, 182 acumulados, ninguno pasa** (sin aprobados no se dispara el análisis de vecindad ±25 %). Años con R medio > +0,10 y CI80 > 0: 3 variantes con 2/5, 5 con 1/5, 29 con 0/5. Las 3 más cercanas: NAS100USD:A:SW:TP3 (+0,228R, 2/5 años, segunda mitad −0,017R), GBPUSD:JT[R1+R5]:SLADR (+0,047R, 32 trades) y XAUUSD:A:SW:TP3 (+0,247R, 1/5, segunda mitad +0,492R; mayoría de largos en tendencia alcista del oro). Informe y `round4_equity_r.png` en `/workspace/backtest/` (no se commitean). Validación: unittest 2500 OK (41 skipped, 1 expected failure); ruff PASS.
+
 ## 2026-10-21 — Ronda 4, paso 3: filtros (d), viernes ON y otros instrumentos (e) (branch `feat/backtest-v2-i2`)
 
 - Mejores familias por R medio: A (A:SW:TP3 +0,115) y C2 (−0,036). (d) A:SW:TP3+d1 +0,215R (27 trades, 2/5 años), +d2 +0,140R (0/5); C2+d1/d2 negativos. Viernes ON en A:SW:TP3: −0,035R. (e) A:SW:TP3 en XAUUSD +0,247R (1/5 años) y NAS100 +0,228R (2/5); C2 negativo salvo GBPUSD +0,029; JT[R1+R5]:SLADR 18–52 trades por instrumento (mejor USDJPY +0,219R, 1/5); E3:SLADR plano o negativo en los seis. **Ninguna variante pasa** (22 + 4 + 1).
