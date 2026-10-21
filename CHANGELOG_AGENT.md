@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7, paso 2: pool fijo y disponibilidad (branch `feat/backtest-v2-i2`)
+
+- Pool fijo E3 / JT[R1+R5] / F2 (regla relajada TP2), T1 Donchian D1, T1F, FLAT: 5m/15m/1h disponibles todos los años desde 2010, **ningún módulo se descarta**. Candidatos 2010-2017 por año: E3 136-173, F2 107-125, T1 18-30, JT[R1+R5] 3-9 (con el mínimo de 20 trades por celda JT casi nunca es elegible). Solo conteos, sin resultados (sección 3 del informe, fuera del repo).
+
 ## 2026-10-21 — Ronda 7, paso 1: datos 2010-2021, macro y diseño declarado (branch `feat/backtest-v2-i2`)
 
 - Datos (fuera del repo): EURUSD 5m/15m/1h/D1 OANDA práctica 2010-01..2021-09 (`/workspace/backtest/dl10y.py`, chunks mensuales reanudables, solo lectura de velas) fusionados con `data5y` en `/workspace/backtest/data10y`; cobertura completa 2010+ (solo cierres de Navidad/Año Nuevo; barras de fin de semana de 2011 descartadas). Macro en `/workspace/backtest/macro`: COT CFTC legacy EURO FX (099741), US 2Y (curva par del Tesoro = fuente de DGS2; FRED no accesible desde este host), ECB DFR y Euribor 3M (ECB Data Portal), días FOMC programados 2009-2021 (Fed). Sentimiento minorista OANDA omitido (sin histórico).
