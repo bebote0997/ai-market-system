@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 6, paso 2: selección en TRAIN y congelación (branch `feat/backtest-v2-i2`)
+
+- `replay.round6 --sections select` (datos recortados < 2025-01-01, C_RAW): 16 combos × 4 pliegues. Seleccionado **a20_k1.5_t1.5_H5** (media test de pliegues +0,105R; TRAIN 175 trades, 4,5/mes, +0,074R, PF 1,20, DD MTM 9,7R; C_OANDA +0,035R; C_RAW_STRESS +0,063R). WF OOS de los ganadores por pliegue: 129 trades, +0,085R, PF 1,25, CI80 −0,016. Vecinos: 4/4 con R medio > 0 (+0,045 a +0,087). Frecuencia en train (4,5/mes) ya por debajo del umbral de 6/mes del holdout (anotado antes del holdout). Config congelada en `replay/round6_frozen.json` (= `/workspace/backtest/round6_frozen.json`), commiteada antes de ejecutar el holdout.
+
 ## 2026-10-21 — Ronda 6, paso 1: sistema combinado EURUSD (COMBO) — código y diseño (branch `feat/backtest-v2-i2`)
 
 - `replay/round6.py` (solo replay): COMBO = E3 + JT[R1+R5] + F2 con router causal D1 (ADX14 ≥ a y pendiente SMA20 de 5 barras de acuerdo con cierre vs SMA50 → TREND: E3/JT solo a favor; ADX < a → RANGE: F2), filtro percentil ATR14(D1) ≤ 0,9 (últimos 250), SL = max(estructura, k × ATR14 D1) recortado a 40–60 pips, BE a +1R y trailing t × ATR14(H1) en cierres H1, sin TP, salida a los H días NY, cierre del viernes, 0,5 % de riesgo (R y % compuesto), halt diario 4R (= 2 %). Rejilla de 16 combos (a, k, t, H); selección solo en TRAIN 2021-10..2024-12 con datos recortados < 2025-01-01, walk-forward anclado de 4 pliegues bajo C_RAW; congelado en `round6_frozen.json` antes del holdout; el runner del holdout solo lee el fichero congelado (y rechaza uno distinto del commiteado). Tests: `test_round6.py` (causalidad del régimen por prefijo, router, stop, BE/trailing, salidas por tiempo/viernes, halt, sin lookahead, selección, runner del holdout). Diseño declarado en `/workspace/backtest/report_round6.md` (no se commitea).

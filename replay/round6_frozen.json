@@ -1,0 +1,45 @@
+{
+  "config": {
+    "H": 5,
+    "a": 20,
+    "be_r": 1.0,
+    "cap_r": null,
+    "clamp": [
+      40.0,
+      60.0
+    ],
+    "friday": true,
+    "halt_r": 4.0,
+    "k": 1.5,
+    "modules": [
+      "E3",
+      "JT[R1+R5]",
+      "F2"
+    ],
+    "name": "a20_k1.5_t1.5_H5",
+    "risk": 0.005,
+    "t": 1.5,
+    "v": 0.9
+  },
+  "frozen_at": "2026-10-21T18:45:38+00:00",
+  "selection": {
+    "data_last_bar": "2024-12-31T21:55:00+00:00",
+    "mean_fold_test_avg_r": 0.10492255339635478,
+    "per_fold_winner": {
+      "F1": "a20_k1.5_t2.5_H3",
+      "F2": "a20_k1.5_t1.5_H3",
+      "F3": "a20_k1.5_t1.5_H3",
+      "F4": "a20_k1.5_t1.5_H3"
+    },
+    "selected": "a20_k1.5_t1.5_H5",
+    "selection_cost_model": "C_RAW",
+    "train_avg_r_c_raw": 0.07448095238094866,
+    "train_trades": 175
+  },
+  "symbol": "EURUSD",
+  "system": "COMBO",
+  "train": [
+    "2021-10-01T00:00:00+00:00",
+    "2025-01-01T00:00:00+00:00"
+  ]
+}
