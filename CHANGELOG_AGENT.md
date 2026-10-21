@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 4, paso 2: (a)–(c) en EURUSD (branch `feat/backtest-v2-i2`)
+
+- `replay.round4 --sections declare,a,b,c`: diseño de 37 tests declarado antes de resultados (acumulado 182). **Ninguna variante pasa**; 0/5 años en las 10. Mejor R medio: A:SW:TP3 +0,115 (41 trades, ningún año con CI80 > 0; con estrés de carry +0,048), A:SW:TP2 +0,092. Tendencia B1–B4 negativas (B4 −29,6R, DD 48R); C1 RSI(2) −0,068R en 1 602 trades (coste 0,12R), C2 −0,036R. Resultados en `/workspace/backtest/report_round4.md` (no se commitea).
+
 ## 2026-10-21 — Ronda 4, paso 1: familias multi-día, filtros y otros instrumentos — código (branch `feat/backtest-v2-i2`)
 
 - `replay/round4.py` (solo replay): D1/H4 remuestreados de velas 1h cerradas (completitud según horario del instrumento: XAU/índices sin la hora 17:00-18:00 NY), indicadores en barras cerradas, decisión al cierre → fill en la apertura del siguiente 5m; recorrido 5m con SL primero en la misma vela, gaps a la apertura, stops que solo se ajustan a favor; coste = mediana causal de 30 días del spread del instrumento + slippage 0,1 × spread (mín. 0,2 pip FX); financiación 0 % (regla) y estrés −3 %/año del nocional en R por día. Familias (a) swing, (b) tendencia B1–B4, (c) reversión C1–C2, (d) filtros d1/d2, viernes ON, (e) otros instrumentos + JT[R1+R5]/E3 con stop relativo a ADR20 (0,25–0,5). Regla de paso y años = `replay.fiveyear`. `fiveyear.plot_equity` acepta `title`.
