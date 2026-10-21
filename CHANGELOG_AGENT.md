@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 6, paso 1: sistema combinado EURUSD (COMBO) — código y diseño (branch `feat/backtest-v2-i2`)
+
+- `replay/round6.py` (solo replay): COMBO = E3 + JT[R1+R5] + F2 con router causal D1 (ADX14 ≥ a y pendiente SMA20 de 5 barras de acuerdo con cierre vs SMA50 → TREND: E3/JT solo a favor; ADX < a → RANGE: F2), filtro percentil ATR14(D1) ≤ 0,9 (últimos 250), SL = max(estructura, k × ATR14 D1) recortado a 40–60 pips, BE a +1R y trailing t × ATR14(H1) en cierres H1, sin TP, salida a los H días NY, cierre del viernes, 0,5 % de riesgo (R y % compuesto), halt diario 4R (= 2 %). Rejilla de 16 combos (a, k, t, H); selección solo en TRAIN 2021-10..2024-12 con datos recortados < 2025-01-01, walk-forward anclado de 4 pliegues bajo C_RAW; congelado en `round6_frozen.json` antes del holdout; el runner del holdout solo lee el fichero congelado (y rechaza uno distinto del commiteado). Tests: `test_round6.py` (causalidad del régimen por prefijo, router, stop, BE/trailing, salidas por tiempo/viernes, halt, sin lookahead, selección, runner del holdout). Diseño declarado en `/workspace/backtest/report_round6.md` (no se commitea).
+
 ## 2026-10-21 — Ronda 5, corrección post-revisión Codex (branch `feat/backtest-v2-i2`)
 
 - HIGH: `replay/round5.py` ya no usa la constante 74,3 pips (mediana ADR20 EURUSD de toda la muestra) para escalar los clamps en pips a otros instrumentos; nuevo `ReferenceADR` causal (mediana de los últimos 250 ADR20 EURUSD conocidos en la decisión). MED: la rejilla relajada recorta el stop de estructura a [15, 50] pips en vez de saltar los > 50 (las reglas intradía previas siguen saltando). Re-ejecución de los pasos 3–4 (`report_round5_fix.md`, fuera del repo): **sigue sin aprobados**; RX:F2:TP1.5 +0,040R (544 trades, 2/5), NAS100USD:RX:E3:TP3 +0,073R (1/5). Tests nuevos en `test_round5.py` (clamp, causalidad de la referencia por prefijo).
