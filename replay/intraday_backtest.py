@@ -68,7 +68,7 @@ def load_csv_frames(data_dir, symbol=SYMBOL):
         frame = pd.DataFrame({c: raw[c].astype(float).to_numpy() for c in ("Open", "High", "Low", "Close")}, index=index)
         frame["symbol"], frame["is_closed"] = symbol, True
         if timeframe == "5m":
-            for column in ("BidClose", "AskClose"):
+            for column in ("BidClose", "AskClose", "Volume"):
                 if column in raw.columns:
                     frame[column] = raw[column].astype(float).to_numpy()
         frames[timeframe] = frame[~frame.index.duplicated()].sort_index()
@@ -188,8 +188,10 @@ _FRAMES = None
 
 def _init_worker(data_dir):
     global _FRAMES
+    from replay import fast_scouts
     logging.disable(logging.WARNING)
     _FRAMES = load_csv_frames(data_dir)
+    fast_scouts.patched().__enter__()  # worker-process lifetime: exact numpy equivalents of the scout loops
 
 
 def signal_at(frames, slot):
@@ -244,6 +246,36 @@ def generate_signals(data_dir, slots, workers, log, chunk=96):
             elapsed = wall.time() - started
             log(f"signals {done}/{len(chunks)} chunks ({len(out)} slots) up to {records[-1]['slot']} "
                 f"elapsed {elapsed:.0f}s eta {elapsed / done * (len(chunks) - done):.0f}s")
+    return out
+
+
+def signals_by_year(data_dir, out_dir, slots, workers, log, prefix="signals"):
+    """``generate_signals`` checkpointed per calendar year (UTC slot year): ``<prefix>_<YYYY>.jsonl`` in ``out_dir``
+    is written atomically once the year is complete, and a rerun loads finished years instead of recomputing them
+    (resumable). A year file is reused only if it holds exactly the requested slots of that year."""
+    by_year = defaultdict(list)
+    for slot in slots:
+        by_year[slot.year].append(slot)
+    out = []
+    for year in sorted(by_year):
+        wanted = [s.isoformat() for s in by_year[year]]
+        path = os.path.join(out_dir, f"{prefix}_{year}.jsonl")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as handle:
+                records = [json.loads(line) for line in handle]
+            if [r["slot"] for r in records] == wanted:
+                log(f"signals {year}: {len(records)} slots loaded from checkpoint")
+                out.extend(records)
+                continue
+            log(f"signals {year}: checkpoint does not match the slot range; regenerating")
+        log(f"signals {year}: generating {len(wanted)} slots with {workers} workers")
+        records = generate_signals(data_dir, by_year[year], workers, log)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+        out.extend(json.loads(json.dumps(r, sort_keys=True)) for r in records)
     return out
 
 
@@ -850,6 +882,8 @@ def main(argv=None):
     parser.add_argument("--end")
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     parser.add_argument("--refresh-signals", action="store_true", help="ignore the cached signals.jsonl")
+    parser.add_argument("--yearly-checkpoints", action="store_true",
+                        help="cache signals per calendar year (signals_<YYYY>.jsonl, resumable; for multi-year data)")
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     log_path = os.path.join(args.out, "run.log")
@@ -880,6 +914,8 @@ def main(argv=None):
         else:
             log("signals cache does not cover the slot range; regenerating")
             signals = None
+    if signals is None and args.yearly_checkpoints:
+        signals = signals_by_year(args.data, args.out, slots, args.workers, log)
     if signals is None:
         log(f"generating signals for {len(slots)} slots {start} -> {end} with {args.workers} workers")
         signals = generate_signals(args.data, slots, args.workers, log)
@@ -889,6 +925,9 @@ def main(argv=None):
     spread = median_spread_pips(frames["5m"])  # full sample: reported only
     spread_mean = float(((frames["5m"]["AskClose"] - frames["5m"]["BidClose"]) / PIP).mean()) if spread else float("nan")
     spread = spread if spread is not None else float("nan")
+    from replay import fast_scouts
+    scouts = fast_scouts.patched()  # F3 Day-2 structure checks call the structure scout (exact equivalents)
+    scouts.__enter__()
     log(f"simulating (causal {CAUSAL_SPREAD_DAYS}-day spread, fallback {FALLBACK_SPREAD_PIPS} pip; full-sample "
         f"median {spread:.2f} pip) up to {end}")
     base = evaluate(signals, frames, FALLBACK_SPREAD_PIPS, end, causal=True)
@@ -915,6 +954,7 @@ def main(argv=None):
            "monthly": monthly_table({v: results[v]["trades"] for v in VARIANTS})}
     plot_equity(os.path.join(args.out, "equity_r.png"), {v: results[v]["trades"] for v in VARIANTS})
     write_report(os.path.join(args.out, "report.md"), ctx)
+    scouts.close()
     log("done")
     return ctx
 
