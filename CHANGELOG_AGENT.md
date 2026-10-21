@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 5, paso 2: familias previas en EURUSD bajo C_RAW / C_RAW_STRESS / C_FUT (branch `feat/backtest-v2-i2`)
+
+- `replay.round5 --sections declare,prior,fut` (sin cambio de código): 81 variantes previas bajo C_RAW, **ninguna pasa** (0–1/5 años). Reproducción C_OANDA idéntica (E3:FIX2 −0,0387, A:SW:TP3 +0,1155). R total > 0 en 8 → C_RAW_STRESS: ninguna pasa. Top 5 por R medio (JT[R1+R5]:SL25 +0,157, A:SW:TP3 +0,121, E3:ADR +0,056 con 766 trades, M3:SL25, F4:SL25) bajo C_FUT: ninguna pasa (E3:ADR +0,056, DD 31R, 0/5). Informe en `/workspace/backtest/report_round5.md` (no se commitea).
+
 ## 2026-10-21 — Ronda 5, paso 1: modelos de coste de broker de bajo coste — código y diseño (branch `feat/backtest-v2-i2`)
 
 - `replay/round5.py` (solo replay): modelos de coste constantes declarados antes de resultados — `C_RAW` (FX spread bruto 0,2 pip + comisión USD 7/100k ida y vuelta = 0,7 pip EURUSD/GBPUSD, USDJPY 7 × precio/1000 pips con el cierre 5m anterior (causal), slippage 0,1 pip en entradas, stops y salidas por tiempo, 0 en TP/límites; XAUUSD 0,10 USD + 0,07 USD/oz; US30/NAS100 1,0/0,8 pt sin comisión), `C_RAW_STRESS` (0,4 pip + misma comisión + 0,2 pip), `C_FUT` (6E: 1 tick 0,5 pip + 0,36 pip + 0,5 tick; sin financiación; sin gaps de roll) y `C_OANDA` (costes causales previos, referencia). La comisión se cobra una sola vez en R (también en las marcas MTM) y no ensancha el bid/ask (los toques de límite R5 y los TP solo ven el spread bruto).
