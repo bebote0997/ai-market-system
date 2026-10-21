@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-10-21 — Rerun a 5 años + ronda 3, R3b + F80 + cierre (branch `feat/backtest-v2-i2`)
+
+- `replay.fiveyear --sections families,f80,final` (solo replay): F1 ORB Londres, F1b ORB NY, F2 reversión al rango del día previo, F3 pullback a VWAP de sesión, F4 momentum tras vela 1h ≥ 1,5 ATR × 4 salidas: **todas negativas** (−0,04 a −0,11R, 0/5 años). F80 sobre las 3 mejores familias (JT[R1+R5], M2&M4, JT[R1+R3+R4+R5]; las familias con fills límite R5 solo admiten FIX2/SL25): 8 variantes, ninguna pasa. Shortlist = la variante más cercana por familia.
+- Total: **145 tests** (declarados 149; F80 8 en vez de 12 por los fills límite), **ninguno pasa**; 24 cumplen 1/5 años, ninguno 2+. Falsos positivos esperados con independencia ≈ 145 × 0,00046 ≈ 0,07. Las 3 más cercanas (JT[R1+R5]:SL25 +0,23R/31 trades, JT[R1+R3+R4+R5]:SL25 +0,07R/92, JT[R1+R2+R5]:SL25 +0,05R/72) comparten R1+R5, son escasas y fallan 4 de 5 años. Informe `/workspace/backtest/5y_report.md` y `5y_equity_r.png` (no se commitean). REAL OFF.
+
 ## 2026-10-21 — Rerun a 5 años + ronda 3, R3a: módulos JT solos, pares y ALL (branch `feat/backtest-v2-i2`)
 
 - `replay.fiveyear --sections modules,pairs` (solo replay): M1–M5b × 4 salidas (24) y pares AND de los 4 mejores módulos por R medio FIX2 a 5 años (M2, M4, M3, M1; M5/M5b nunca juntos) + ALL × 4 salidas (28). **Ninguna pasa**: todos los módulos solos negativos (−0,03 a −0,16R; M5 31 trades/mes −0,14R); mejor par M2&M4:SL25 +0,104R con 80 trades (0/5 años, DD 8,4R); ALL = 1–3 trades. Informe incremental en `/workspace/backtest/5y_report.md` (no se commitea). REAL OFF.

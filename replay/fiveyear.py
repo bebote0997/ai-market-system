@@ -464,12 +464,14 @@ def main(argv=None):
         for fam, _ in top:
             cands = family_cands(ctx, fam, news_days, start_ns, market, mods)
             e5 = fam.startswith("E5.")
-            for x in EXITS:
+            limit = any(isinstance(c, r2.LimitCandidate) for c in cands)  # R5 limit fills: FIX2 / SL25 only
+            for x in (("FIX2", "SL25") if limit else EXITS):
                 variants[f"{fam}:{x}:F80"] = (cands, x, {"f80": True, "e5": e5})
         rows, skips = evaluate_all(variants)
         section("f80", "F80 overlay on the top families (5 years)", rows, skips,
                 ["Top families by best 5-year avg R (>= 30 trades): "
-                 + ", ".join(f"{fam} ({name} {r:+.3f})" for fam, (r, name) in top) + "."])
+                 + ", ".join(f"{fam} ({name} {r:+.3f})" for fam, (r, name) in top) + ". Families with R5 limit "
+                 "fills only have the FIX2 (SL15) / SL25 exits."])
 
     if "v2" in sections:
         from data.market_evidence import TIMEFRAMES
@@ -528,8 +530,12 @@ def final(args, ctx, years, log):
     def closeness(s):
         return (s["years_ok"], s["total_r"] > 0, s["dd"] <= MAX_DD_R, s["cost"] is not None and s["cost"] <= MAX_COST_R,
                 s["avg_r"] if s["avg_r"] is not None else -math.inf)
-    ranked = sorted((n for n, s in everything.items() if s["trades"] >= MIN_TRADES_TOP),
-                    key=lambda n: closeness(everything[n]), reverse=True)
+    ranked, seen = [], set()  # closest first, one variant per family (exits / F80 of a family are siblings)
+    for n in sorted((n for n, s in everything.items() if s["trades"] >= MIN_TRADES_TOP),
+                    key=lambda n: closeness(everything[n]), reverse=True):
+        if family_of(n) not in seen:
+            seen.add(family_of(n))
+            ranked.append(n)
     yearly = Counter(s["years_ok"] for s in everything.values())
     lines = ["## Multiple testing", "",
              f"**Tests run: {total}** ({', '.join(f'{k} {v}' for k, v in groups.items())}; declared "
@@ -547,8 +553,8 @@ def final(args, ctx, years, log):
                      "period (live paper) before any decision.")
         shortlist = passers[:3] + [n for n in ranked if n not in passers][:max(0, 3 - len(passers))]
     else:
-        lines.append("**No variant passes.** The 3 closest (most years passing, then total R > 0, DD, cost, avg "
-                     "R; >= 30 trades):")
+        lines.append("**No variant passes.** The 3 closest, one per family (most years passing, then total R > 0, "
+                     "DD, cost, avg R; >= 30 trades):")
         shortlist = ranked[:3]
     lines += ["", table({n: everything[n] for n in shortlist}), ""]
     for n in shortlist:
