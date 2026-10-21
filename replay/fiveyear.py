@@ -570,7 +570,7 @@ def final(args, ctx, years, log):
     log(f"final: {total} tests, passers {passers}, shortlist {shortlist}")
 
 
-def plot_equity(path, rows, names, years):
+def plot_equity(path, rows, names, years, title=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -592,7 +592,7 @@ def plot_equity(path, rows, names, years):
         ax.annotate(f"{name} {ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points",
                     va="center", fontsize=9, color=ink)
     ax.axhline(0, color=muted, linewidth=0.8)
-    ax.set_title("EURUSD 5-year replay - cumulative R (net of spread + slippage): shortlist and references",
+    ax.set_title(title or "EURUSD 5-year replay - cumulative R (net of spread + slippage): shortlist and references",
                  loc="left", color=ink, fontsize=10)
     ax.set_ylabel("Cumulative R", color=muted)
     ax.tick_params(colors=muted)
