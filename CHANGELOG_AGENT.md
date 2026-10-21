@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 6, paso 3: HOLDOUT (una sola ejecución) y veredicto (branch `feat/backtest-v2-i2`)
+
+- `replay.round6 --sections holdout,final` con la config congelada (sha256 `b24238cf…`, igual a la commiteada), 2025-01-01..2026-10-19: **C_RAW 96 trades (4,4/mes), −0,056R, PF 0,86, DD MTM 11,99R, CI80 −0,170 → FAIL** (R medio, PF y frecuencia). C_OANDA −0,063R (DD 12,2R), C_RAW_STRESS −0,060R. 2025 −0,066R, 2026YTD −0,042R; E3 −2,2R, F2 −3,2R, JT 1 trade. Solo informativo: viernes OFF +0,050R (83 trades, PF 1,11), sin clamp −0,056R, tope 4R idéntico. Tests: 16 variantes nuevas (16 × 4 pliegues = 64 evaluaciones) + 1 holdout; 444 acumuladas. Sin cambios tras ver el holdout. Informe y `round6_equity_r.png` en `/workspace/backtest/` (no se commitean). Validación: unittest 2535 OK (41 skipped, 1 expected failure); ruff PASS.
+
 ## 2026-10-21 — Ronda 6, paso 2: selección en TRAIN y congelación (branch `feat/backtest-v2-i2`)
 
 - `replay.round6 --sections select` (datos recortados < 2025-01-01, C_RAW): 16 combos × 4 pliegues. Seleccionado **a20_k1.5_t1.5_H5** (media test de pliegues +0,105R; TRAIN 175 trades, 4,5/mes, +0,074R, PF 1,20, DD MTM 9,7R; C_OANDA +0,035R; C_RAW_STRESS +0,063R). WF OOS de los ganadores por pliegue: 129 trades, +0,085R, PF 1,25, CI80 −0,016. Vecinos: 4/4 con R medio > 0 (+0,045 a +0,087). Frecuencia en train (4,5/mes) ya por debajo del umbral de 6/mes del holdout (anotado antes del holdout). Config congelada en `replay/round6_frozen.json` (= `/workspace/backtest/round6_frozen.json`), commiteada antes de ejecutar el holdout.
