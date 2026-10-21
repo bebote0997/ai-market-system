@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 6: correcciones de la revisión Codex (2 MEDIUM) (branch `feat/backtest-v2-i2`)
+
+- `replay/round6.py`: `load_frozen` falla en cerrado si `committed_frozen()` no puede verificar (git no disponible o `replay/round6_frozen.json` ausente de HEAD); el holdout recorta los frames en el corte declarado (`HOLDOUT_END` = 2026-10-20, `load_frames(end=...)`) antes de construir `System`. Tests nuevos en `test_round6.py`.
+- Holdout re-ejecutado con la misma config congelada commiteada (sin cambios) solo como verificación mecánica: **números idénticos** (C_RAW 96 trades, −0,056R, PF 0,86 → FAIL; todos los trades iguales). No es una nueva evaluación ni selección; 444 variantes acumuladas. Sección 4 en `report_round6.md`. Validación: unittest 2537 OK (41 skipped, 1 expected failure); ruff PASS.
+
 ## 2026-10-21 — Ronda 6, paso 3: HOLDOUT (una sola ejecución) y veredicto (branch `feat/backtest-v2-i2`)
 
 - `replay.round6 --sections holdout,final` con la config congelada (sha256 `b24238cf…`, igual a la commiteada), 2025-01-01..2026-10-19: **C_RAW 96 trades (4,4/mes), −0,056R, PF 0,86, DD MTM 11,99R, CI80 −0,170 → FAIL** (R medio, PF y frecuencia). C_OANDA −0,063R (DD 12,2R), C_RAW_STRESS −0,060R. 2025 −0,066R, 2026YTD −0,042R; E3 −2,2R, F2 −3,2R, JT 1 trade. Solo informativo: viernes OFF +0,050R (83 trades, PF 1,11), sin clamp −0,056R, tope 4R idéntico. Tests: 16 variantes nuevas (16 × 4 pliegues = 64 evaluaciones) + 1 holdout; 444 acumuladas. Sin cambios tras ver el holdout. Informe y `round6_equity_r.png` en `/workspace/backtest/` (no se commitean). Validación: unittest 2535 OK (41 skipped, 1 expected failure); ruff PASS.

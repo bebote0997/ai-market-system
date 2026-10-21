@@ -44,6 +44,7 @@ TRAIN_START = datetime(2021, 10, 1, tzinfo=UTC)
 TRAIN_END = datetime(2025, 1, 1, tzinfo=UTC)  # exclusive: selection data are sliced to bars starting before it
 HOLDOUT_START = TRAIN_END
 HOLDOUT_LAST_DAY = datetime(2026, 10, 19, tzinfo=UTC)
+HOLDOUT_END = datetime(2026, 10, 20, tzinfo=UTC)  # exclusive: holdout frames are sliced to bars starting before it
 FOLDS = [  # anchored: train = [TRAIN_START, test start), test = [test start, test end)
     ("F1", datetime(2023, 1, 1, tzinfo=UTC), datetime(2023, 7, 1, tzinfo=UTC)),
     ("F2", datetime(2023, 7, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC)),
@@ -442,12 +443,14 @@ def freeze(path, cfg, selection):
 
 def load_frozen(path):
     """The frozen config: the holdout runner's only source of parameters. The file must equal the committed
-    ``replay/round6_frozen.json`` (refuses an edited / uncommitted freeze)."""
+    ``replay/round6_frozen.json`` (fails closed: refuses an edited / uncommitted freeze or an unavailable git)."""
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     payload = json.loads(text)
     committed = committed_frozen()
-    if committed is not None and committed != text:
+    if committed is None:
+        raise RuntimeError("cannot verify the frozen file: git unavailable or replay/round6_frozen.json not in HEAD")
+    if committed != text:
         raise RuntimeError("frozen file differs from the committed replay/round6_frozen.json")
     cfg = payload["config"]
     missing = [k for k in ("a", "k", "t", "H", "v", "clamp", "friday", "risk", "halt_r", "name") if k not in cfg]
@@ -457,7 +460,8 @@ def load_frozen(path):
 
 
 def committed_frozen():
-    """HEAD content of replay/round6_frozen.json, None outside a git checkout or when not committed."""
+    """HEAD content of replay/round6_frozen.json; None when git is unavailable, outside a checkout or not committed
+    (``load_frozen`` then refuses)."""
     repo = os.path.dirname(os.path.dirname(FROZEN_REPO))
     try:
         out = subprocess.run(["git", "-C", repo, "show", "HEAD:replay/round6_frozen.json"], capture_output=True,
@@ -468,7 +472,7 @@ def committed_frozen():
 
 
 def holdout_runs(frozen_path, system, models=MODELS):
-    """Run the frozen config once per cost model on ``system`` (full data); config read only from ``frozen_path``.
+    """Run the frozen config once per cost model on ``system`` (frames sliced before HOLDOUT_END); config read only from ``frozen_path``.
     Info variants (Friday close OFF, no clamp, TP cap 4R) under C_RAW, never used for selection."""
     cfg = load_frozen(frozen_path)
     runs = {m: run_system(system, model, cfg)[0] for m, model in models.items()}
@@ -748,10 +752,12 @@ def select_section(args, log):
 
 
 def holdout_section(args, log):
-    log("holdout: loading full frames (frozen config only)")
-    system = System(load_frames(args.data))
+    log("holdout: loading frames sliced before 2026-10-20 (frozen config only)")
+    frames = load_frames(args.data, end=HOLDOUT_END)
+    assert frames["5m"].index[-1] < pd.Timestamp(HOLDOUT_END), "data after the holdout cutoff"
+    system = System(frames)
     cfg, runs, info = holdout_runs(args.frozen, system)
-    end = min(system.end, datetime(2026, 10, 20, tzinfo=UTC))
+    end = min(system.end, HOLDOUT_END)
     rows = {m: summarize(window(t, HOLDOUT_START, end), HOLDOUT_START, end) for m, t in runs.items()}
     info_rows = {k: summarize(window(t, HOLDOUT_START, end), HOLDOUT_START, end) for k, t in info.items()}
     verdict, fails = holdout_pass(rows["C_RAW"])
@@ -761,7 +767,7 @@ def holdout_section(args, log):
     periods = {m: per_period(t) for m, t in runs.items()}
     lines = ["## 2. HOLDOUT (2025-01-01 .. 2026-10-19) - frozen config, run once", "",
              f"Config read from `{args.frozen}` (sha256 `{file_sha(args.frozen)}`, equal to the committed copy): "
-             f"`{cfg['name']}`. Full data (features causal), trades with decision >= 2025-01-01.", "",
+             f"`{cfg['name']}`. Frames sliced before 2026-10-20 (features causal), trades with decision >= 2025-01-01.", "",
              summary_table(rows), "",
              f"**Holdout pass bar (C_RAW: avg R >= +0.08, PF > 1.15, MTM DD < 12R, >= 6 trades/month): "
              f"{'PASS' if verdict else 'FAIL'}**" + ("" if verdict else f" ({'; '.join(fails)})") + ".", "",

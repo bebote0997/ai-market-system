@@ -324,6 +324,39 @@ class Protocol(unittest.TestCase):
             with mock.patch.object(r6, "committed_frozen", return_value=text.replace('"H": 5', '"H": 3')):
                 with self.assertRaises(RuntimeError):
                     r6.load_frozen(path)
+            with mock.patch.object(r6, "committed_frozen", return_value=None):  # fails closed
+                with self.assertRaises(RuntimeError):
+                    r6.load_frozen(path)
+
+    def test_committed_frozen_fails_closed(self):
+        with mock.patch.object(r6.subprocess, "run", side_effect=OSError("no git")):
+            self.assertIsNone(r6.committed_frozen())
+        absent = mock.Mock(returncode=128, stdout="")
+        with mock.patch.object(r6.subprocess, "run", return_value=absent):
+            self.assertIsNone(r6.committed_frozen())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "frozen.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"config": {}}, handle)
+            for effect in ({"side_effect": OSError("no git")}, {"return_value": absent}):
+                with mock.patch.object(r6.subprocess, "run", **effect), self.assertRaises(RuntimeError):
+                    r6.load_frozen(path)
+
+    def test_holdout_frames_sliced_before_system(self):
+        seen = {}
+
+        class Stop(Exception):
+            pass
+
+        def fake_system(frames):
+            seen.update(frames)
+            raise Stop
+        with mock.patch.object(bt, "load_csv_frames", return_value=FRAMES), \
+                mock.patch.object(r6, "HOLDOUT_END", datetime(2022, 6, 1, tzinfo=UTC)), \
+                mock.patch.object(r6, "System", side_effect=fake_system), self.assertRaises(Stop):
+            r6.holdout_section(mock.Mock(data="unused"), lambda m: None)
+        for f in seen.values():
+            self.assertLess(f.index[-1], pd.Timestamp("2022-06-01", tz="UTC"))
 
 
 if __name__ == "__main__":
