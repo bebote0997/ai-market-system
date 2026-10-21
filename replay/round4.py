@@ -438,6 +438,8 @@ class Tape:
     spread: np.ndarray  # causal spread (price) for a fill / exit priced on bar i; NaN when unavailable
     pip: float
     fx: bool
+    slip: float = None  # fixed slippage (price) of a constant cost model; None -> 0.1 x spread (min 0.2 pip FX)
+    commission: np.ndarray = None  # round-turn commission (price) for a trade filled on bar i; None -> 0
 
     @classmethod
     def from_frame(cls, f5, pip, fx):
@@ -454,14 +456,20 @@ class Tape:
         sp = float(self.spread[i])
         if not math.isfinite(sp):
             return None
+        if self.slip is not None:
+            return sp / 2, self.slip
         return sp / 2, max(SLIP_SHARE * sp, MIN_SLIP_FX_PIPS * self.pip if self.fx else 0.0)
+
+    def commission_at(self, i):
+        return 0.0 if self.commission is None else float(self.commission[i])
 
     def stamp(self, i):
         return datetime.fromtimestamp(int(self.start[i]) / 1e9, timezone.utc)
 
 
-def walk(tape, i, side, fill, stop, target, hs, slip, events):
-    """Walk a position filled on 5m bar ``i``. ``events`` (sorted): (t, 'stop', level) ratchets the stop from the
+def walk(tape, i, side, fill, stop, target, hs, slip, events, no_tp_on_fill=False):
+    """Walk a position filled on 5m bar ``i`` (``no_tp_on_fill``: a limit fill inside bar ``i``, whose target is not
+    credited on that bar since the intrabar order is unknown; its stop is). ``events`` (sorted): (t, 'stop', level) ratchets the stop from the
     bar starting at t; (t, 'exit', reason) = market exit at the open of the first bar starting at or after t;
     (t, 'close', reason) = market exit at the close of the last bar ending by t. Between events: gap through the
     stop / target -> filled at the open; else same-bar SL first, then TP. Returns the exit fields."""
@@ -475,7 +483,10 @@ def walk(tape, i, side, fill, stop, target, hs, slip, events):
             favour = (tape.h[j:jj] if s > 0 else tape.l[j:jj]) - s * hs
             hit = s * (adverse - cur) <= 0
             if target is not None:
-                hit |= s * (favour - target) >= 0
+                tp_hit = s * (favour - target) >= 0
+                if no_tp_on_fill and j == i:
+                    tp_hit[0] = False
+                hit |= tp_hit
             idx = np.flatnonzero(hit)
             if len(idx):
                 x = j + int(idx[0])
@@ -500,6 +511,27 @@ def walk(tape, i, side, fill, stop, target, hs, slip, events):
             reason = END if kind != "close" else value
             return last, at, float(tape.c[last]) - s * hs - s * slip, reason, reason, at
     raise AssertionError("unreachable")
+
+
+def walk_trade(tape, i, s, fill, mid_fill, stop, target, hs, slip, events, name, signal_ns, idea,
+               no_tp_on_fill=False):
+    """(trade dict, free_ns) of a position filled on bar ``i`` (``walk`` + R, gross mid R, the tape's round-turn
+    commission charged once in R, also on the open marks)."""
+    x, exit_ns, price, reason, detail, free_ns = walk(tape, i, s, fill, stop, target, hs, slip, events, no_tp_on_fill)
+    risk = s * (fill - stop)
+    if reason == TP:
+        mid_exit = price + s * hs
+    else:
+        mid_exit = price + s * (hs + slip)
+    fee = tape.commission_at(i) / risk
+    trade = {"variant": name, "signal_at": _dt(signal_ns), "fill_at": tape.stamp(i), "exit_at": _dt(exit_ns),
+             "side": "LONG" if s > 0 else "SHORT", "idea": idea, "fill": fill, "mid_fill": mid_fill, "stop": stop,
+             "target": target, "exit": price, "reason": reason, "detail": detail, "r": s * (price - fill) / risk - fee,
+             "gross_r": s * (mid_exit - mid_fill) / risk, "risk_price": risk, "risk_pips": risk / tape.pip,
+             "tp_pips": abs(target - fill) / tape.pip if target is not None else math.nan,
+             "spread_pips": 2 * hs / tape.pip, "spread_fallback": False, "slip": slip, "commission_r": fee,
+             "marks": s * (tape.c[i:x] - s * hs - fill) / risk - fee, "mark_ns": tape.start[i:x] + 5 * es.MINUTE}
+    return trade, free_ns
 
 
 def plan_stop(setup, fill):
@@ -579,18 +611,7 @@ def run(setups, tape, name, entry_filter=None, friday=False):
         if friday:
             events.append((bt._ns(bt.friday_close_after(fill_at)), "close", FRIDAY))
         events.sort(key=lambda e: (e[0], e[1] != "stop"))
-        x, exit_ns, price, reason, detail, free_ns = walk(tape, i, s, fill, stop, target, hs, slip, events)
-        if reason == TP:
-            mid_exit = price + s * hs
-        else:
-            mid_exit = price + s * (hs + slip)
-        trade = {"variant": name, "signal_at": _dt(st.t), "fill_at": fill_at, "exit_at": _dt(exit_ns), "side":
-                 "LONG" if s > 0 else "SHORT", "idea": st.idea, "fill": fill, "mid_fill": mid_fill, "stop": stop,
-                 "target": target, "exit": price, "reason": reason, "detail": detail, "r": s * (price - fill) / risk,
-                 "gross_r": s * (mid_exit - mid_fill) / risk, "risk_price": risk, "risk_pips": risk / tape.pip,
-                 "tp_pips": abs(target - fill) / tape.pip if target is not None else math.nan,
-                 "spread_pips": 2 * hs / tape.pip, "spread_fallback": False, "slip": slip,
-                 "marks": s * (tape.c[i:x] - s * hs - fill) / risk, "mark_ns": tape.start[i:x] + 5 * es.MINUTE}
+        trade, free_ns = walk_trade(tape, i, s, fill, mid_fill, stop, target, hs, slip, events, name, st.t, st.idea)
         trades.append(trade)
         used.add(st.idea)
         free_at = free_ns

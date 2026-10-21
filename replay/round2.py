@@ -292,12 +292,14 @@ def simulate_limit(market, i, side, fill, stop, target):
     limit = market.limit
     horizon = market.cutoff if market.cutoff is not None else market.stamp(len(market.starts) - 1) + bt.FIVE
 
+    fee = market.commission_at(i) / risk  # round-turn commission in R (0 without one)
+
     def done(j, exit_at, price, reason, detail=None, stale=False):
-        marks = sign * (market.close[i:j] - sign * hs - fill) / risk
+        marks = sign * (market.close[i:j] - sign * hs - fill) / risk - fee
         return {"marks": marks, "fill_at": opened, "fill": fill, "mid_fill": fill - sign * hs, "stop": stop,
                 "target": target, "exit_at": exit_at, "exit": price, "reason": reason, "detail": detail or reason,
-                "r": sign * (price - fill) / risk, "risk_pips": risk / PIP, "tp_pips": reward / PIP, "exit_index": j,
-                "stale_exit": stale, "spread_pips": 2 * hs / PIP, "spread_fallback": spread_fallback,
+                "r": sign * (price - fill) / risk - fee, "risk_pips": risk / PIP, "tp_pips": reward / PIP,
+                "exit_index": j, "stale_exit": stale, "spread_pips": 2 * hs / PIP, "spread_fallback": spread_fallback,
                 "entry": "LIMIT"}
 
     j, event_ns = i, bt._ns(boundary)

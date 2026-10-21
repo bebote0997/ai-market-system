@@ -331,6 +331,7 @@ class Market:
     frame_15m: pd.DataFrame = None
     cutoff: datetime = None  # evaluation end: only bars ending at or before it are simulated
     half_spreads: np.ndarray = None  # causal half spread per fill bar (NaN -> ``half_spread`` fallback)
+    commissions: np.ndarray = None  # round-turn commission (price) for a trade filled at bar i; None -> 0
 
     @classmethod
     def from_frames(cls, frames, spread_pips, slippage_pips=SLIPPAGE_PIPS, cutoff=None, causal=False):
@@ -347,6 +348,10 @@ class Market:
             return self.half_spread, False
         value = float(self.half_spreads[i])
         return (self.half_spread, True) if not math.isfinite(value) else (value, False)
+
+    def commission_at(self, i):
+        """Round-turn commission (price per unit) charged once on a trade filled at bar ``i`` (0 without one)."""
+        return 0.0 if self.commissions is None else float(self.commissions[i])
 
     @property
     def limit(self):
@@ -429,9 +434,11 @@ def simulate_trade(market, slot, side, stop, target, policy, fill_rr_floor=None)
     five = pd.Timedelta(FIVE).value
     horizon = market.cutoff if market.cutoff is not None else market.stamp(len(market.starts) - 1) + FIVE
 
+    fee = market.commission_at(i) / risk  # round-turn commission in R, charged once (also on the open marks)
+
     def done(j, exit_at, price, reason, detail=None, stale=False):
-        net = sign * (price - fill) / risk
-        marks = sign * (market.close[i:j] - sign * hs - fill) / risk  # open R on each 5m close before the exit bar
+        net = sign * (price - fill) / risk - fee
+        marks = sign * (market.close[i:j] - sign * hs - fill) / risk - fee  # open R on each 5m close before the exit
         return {"marks": marks, "fill_at": opened, "fill": fill, "mid_fill": mid_fill, "stop": stop, "target": target,
                 "exit_at": exit_at, "exit": price, "reason": reason, "detail": detail or reason, "r": net,
                 "risk_pips": risk / PIP, "tp_pips": reward / PIP, "exit_index": j, "stale_exit": stale,
