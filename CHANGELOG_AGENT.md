@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7b, NAS100USD: HOLDOUT (una vez) y chequeo CONTAMINADO (branch `feat/backtest-v2-i2`)
+
+- Mapa congelado M_rate {DOWN: T1F, UP: FLAT}: **C_IBKR 19 trades (0,4/mes), +0,316R, PF 2,40, DD MTM 2,6R, 2/4 años positivos (2018 sin trades) → FAIL** (frecuencia, años). Buy-and-hold NAS100 holdout +130,7 % (DD 32 %) = +261R-equiv. vs estrategia +6,0R = +3,0 %. CONTAMINADO: +0,367R (17 trades), solo referencia. Informe sección 8.4.
+
 ## 2026-10-21 — Ronda 7b, NAS100USD: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
 
 - Datos OANDA NAS100 desde 2010-01-03 (D1 237-251/año). Aislados 2010-2017 (C_IBKR): todos negativos (E3 −0,332R, JT −0,296R, F2 −0,085R, T1/T1F −0,063R). Walk-forward: M_rate +0,152 (solo 14 trades), BASE 0 (sin trades), resto negativos. Congelado **M_rate {DOWN: T1F, UP: FLAT}** en `replay/round7_frozen_NAS100USD.json`, commiteado antes del holdout; anotado: elección frágil, ~0,3 trades/mes.
