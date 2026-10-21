@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 5, cierre: robustez, tests múltiples y lista corta (branch `feat/backtest-v2-i2`)
+
+- `replay.round5 --sections robust,final`: **246 tests en la ronda 5** (C_RAW 159, C_OANDA 48, C_RAW_STRESS 34, C_FUT 5), **428 acumulados, ninguno pasa** (sin aprobados no se dispara la vecindad ±25 %). Falsos positivos esperados con independencia: 0,113 en la ronda, 0,197 acumulado (p = 0,00046). Años con R medio > +0,10 y CI80 > 0: 7 variantes con 2/5, 31 con 1/5, 208 con 0/5. Las 3 más cercanas: NAS100USD:A:SW:TP3 (+0,230R, 46 trades, 2/5, segunda mitad −0,016R), RX:F2:TP1.5 en EURUSD (+0,038R, 520 trades, 2/5, DD 22,7R, segunda mitad +0,032R) y XAUUSD:A:SW:TP3 (+0,250R, 41 trades, 1/5, segunda mitad +0,496R). Los costes bajos no convierten ninguna familia en aprobada. Informe y `round5_equity_r.png` en `/workspace/backtest/` (no se commitean). Validación: unittest 2516 OK (41 skipped, 1 expected failure); ruff PASS.
+
 ## 2026-10-21 — Ronda 5, paso 4: otros instrumentos bajo C_RAW (branch `feat/backtest-v2-i2`)
 
 - `replay.round5 --sections others`: top 5 transferibles en EURUSD (RX:JT[R1+R5]:TP3, A:SW:TP3, E3:ADR, RX:F2:TP1.5, RX:M1:ADR0.6) + RX:E3:TP3 (RX:JT[R1+R5] ya estaba en el top) en GBPUSD, USDJPY, XAUUSD, US30, NAS100: 30 tests C_RAW (declarados 35; 5 duplicados) + 13 C_RAW_STRESS. **Ninguna pasa.** Más cercanas: NAS100USD:A:SW:TP3 +0,230R (46 trades, 2/5, segunda mitad −0,016R), XAUUSD:A:SW:TP3 +0,250R (1/5), US30USD:RX:F2:TP1.5 +0,074R (518 trades, 1/5, DD 19,4R), GBPUSD:RX:E3:TP3 +0,088R pero DD 45R y 0/5.
