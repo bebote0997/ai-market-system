@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 4, paso 3: filtros (d), viernes ON y otros instrumentos (e) (branch `feat/backtest-v2-i2`)
+
+- Mejores familias por R medio: A (A:SW:TP3 +0,115) y C2 (−0,036). (d) A:SW:TP3+d1 +0,215R (27 trades, 2/5 años), +d2 +0,140R (0/5); C2+d1/d2 negativos. Viernes ON en A:SW:TP3: −0,035R. (e) A:SW:TP3 en XAUUSD +0,247R (1/5 años) y NAS100 +0,228R (2/5); C2 negativo salvo GBPUSD +0,029; JT[R1+R5]:SLADR 18–52 trades por instrumento (mejor USDJPY +0,219R, 1/5); E3:SLADR plano o negativo en los seis. **Ninguna variante pasa** (22 + 4 + 1).
+
 ## 2026-10-21 — Ronda 4, paso 2: (a)–(c) en EURUSD (branch `feat/backtest-v2-i2`)
 
 - `replay.round4 --sections declare,a,b,c`: diseño de 37 tests declarado antes de resultados (acumulado 182). **Ninguna variante pasa**; 0/5 años en las 10. Mejor R medio: A:SW:TP3 +0,115 (41 trades, ningún año con CI80 > 0; con estrés de carry +0,048), A:SW:TP2 +0,092. Tendencia B1–B4 negativas (B4 −29,6R, DD 48R); C1 RSI(2) −0,068R en 1 602 trades (coste 0,12R), C2 −0,036R. Resultados en `/workspace/backtest/report_round4.md` (no se commitea).
