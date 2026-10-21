@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7b, USDJPY: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
+
+- Aislados 2010-2017 (C_RAW): E3 −0,111R (830), F2 −0,056R (714), T1 −0,023R (90), T1F −0,002R, JT[R1+R5] +0,185R (24). Walk-forward: todos negativos (BASE −0,056 mejor; M_vol −0,206 peor). Congelado **BASE = siempre JT[R1+R5]** (`replay/round7_frozen_USDJPY.json`), commiteado antes del holdout; anotado: ~0,3 trades/mes, no puede cumplir ≥ 3/mes.
+
 ## 2026-10-21 — Ronda 7b, GBPUSD: HOLDOUT (una vez) y chequeo CONTAMINADO (branch `feat/backtest-v2-i2`)
 
 - Mapa congelado M_cot (sha256 `f8a5115a…`, igual al commiteado), 2018-01..2021-09: **C_RAW 311 trades (6,9/mes), −0,078R, PF 0,88, DD MTM 32,1R, 2/4 años positivos → FAIL** (C_OANDA −0,064R, C_RAW_STRESS −0,078R). 2020 −25,0R. CONTAMINADO 2021-10..2026-10: −0,001R (453 trades), solo referencia. Informe sección 8.1 (fuera del repo).

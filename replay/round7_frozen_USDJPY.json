@@ -1,0 +1,46 @@
+{
+  "bar_model": "C_RAW",
+  "cot_code": "097741",
+  "frozen_at": "2026-10-21T22:19:55+00:00",
+  "keys": [],
+  "mapper": "BASE",
+  "mapping": {
+    "ALL": "JT[R1+R5]"
+  },
+  "min_cell_trades": 20,
+  "pool": [
+    "E3",
+    "JT[R1+R5]",
+    "F2",
+    "T1",
+    "T1F"
+  ],
+  "rate_driver": "US2Y-JP3M",
+  "rate_side": 1,
+  "rule_tp": "TP2",
+  "selection": {
+    "data_last_bar": "2017-12-29T21:55:00+00:00",
+    "macro_cutoff": "2018-01-01T00:00:00+00:00",
+    "scores": {
+      "BASE": -0.05631429121282501,
+      "M_cal": -0.13914683889609014,
+      "M_cot": -0.13535875995320995,
+      "M_rate": -0.13308963028252255,
+      "M_vol": -0.20609873371724302,
+      "M_vol+rate": -0.09647231803372588
+    },
+    "wf_years": [
+      2013,
+      2014,
+      2015,
+      2016,
+      2017
+    ],
+    "window": [
+      "2010-01-01T00:00:00+00:00",
+      "2018-01-01T00:00:00+00:00"
+    ]
+  },
+  "symbol": "USDJPY",
+  "system": "ROUND7_ROTATION"
+}
