@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 7b, GBPUSD: selección 2010-2017 y congelación (branch `feat/backtest-v2-i2`)
+
+- Datos 2010-01..2026-10 completos (solo cierres festivos). Aislados 2010-2017 (C_RAW): E3 −0,130R (1362), F2 **+0,096R (930, PF 1,16)**, T1 −0,058R (91), T1F +0,013R, JT −0,003R (56). Walk-forward 2013-2017: **M_cot +0,145**, M_vol+rate +0,069, M_cal +0,062, M_vol −0,009, BASE −0,035, M_rate −0,092. Congelado **M_cot {HI: FLAT, LO: F2, MID: F2}** en `replay/round7_frozen_GBPUSD.json`, commiteado antes del holdout.
+
 ## 2026-10-21 — Ronda 7b, paso 0: multi-instrumento, diseño declarado (branch `feat/backtest-v2-i2`)
 
 - `replay/round7b.py` (solo replay): mismo protocolo de la ronda 7 por instrumento (GBPUSD, USDJPY, XAUUSD, NAS100USD): fusión `data10y_multi` (<2021-10) + `data5y` en `data10y`, D1 = días 17:00 NY desde barras 1h cerradas (XAU/NAS100: la hora 17-18 NY se ignora para el cubo), COT propio (096742, 097741, 088691, 209742 E-mini), driver de tipos propio (US2Y−UK3M y US2Y−JP3M OECD IR3TIB con 1 mes de retraso; real 10Y del Tesoro = DFII10 para oro; US2Y para NAS100), costes C_RAW (FX) / C_IBKR MGC- y MNQ-like (XAU, NAS100) + C_OANDA, archivo congelado por instrumento que falla en cerrado, comparación con buy-and-hold. `round7.py`: generalizaciones sin cambio de comportamiento EURUSD (pip/ref/dirección T1F en `System`, modelo del walk-forward). Tests: `test_round7b.py`. Declaración = sección 8.0 del informe (fuera del repo), antes de cualquier selección. Macro nueva en `/workspace/backtest/macro/raw` (OECD, BoE, real yields del Tesoro; no se commitea).
