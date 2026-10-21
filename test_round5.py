@@ -139,7 +139,11 @@ class RelaxedRules(unittest.TestCase):
         self.assertIsNone(why)
         self.assertAlmostEqual((1.1 - stop) / PIP, 15.0)
         self.assertAlmostEqual((target - 1.1) / PIP, 30.0)
-        self.assertEqual(r5.rule_levels(rule, 1, 1.1, 1.0940, 0.0005, 0.0070, PIP)[2], "sl_wider_than_hi")
+        stop, _, why = r5.rule_levels(rule, 1, 1.1, 1.0940, 0.0005, 0.0070, PIP)  # 61 pips: clamped to 50
+        self.assertIsNone(why)
+        self.assertAlmostEqual((1.1 - stop) / PIP, 50.0)
+        self.assertEqual(r5.rule_levels(r5.intraday_rule("FIX2"), 1, 1.1, 1.0960, 0.0005, 0.0070, PIP)[2],
+                         "sl_wider_than_hi")  # prior intraday rules keep skipping
         self.assertEqual(r5.rule_levels(rule, -1, 1.1, 1.0990, 0.0005, 0.0070, PIP)[2], "structure_beyond_fill")
         stop, target, _ = r5.rule_levels(r5.relaxed_rule("ADR0.6"), -1, 1.1, 1.1030, 0.0005, 0.0070, PIP)
         self.assertAlmostEqual((stop - 1.1) / PIP, 31.0)  # 30 pips + 0.2 ATR buffer
@@ -147,9 +151,21 @@ class RelaxedRules(unittest.TestCase):
         stop, target, _ = r5.rule_levels(r5.intraday_rule("ADR"), 1, 1.1, math.nan, math.nan, 0.0070, PIP)
         self.assertAlmostEqual((1.1 - stop) / PIP, 21.0)
         self.assertAlmostEqual((target - 1.1) / PIP, min(max(0.58 * 70, 1.5 * 21), 2.0 * 21))
-        scale = 0.0070 / r5.EURUSD_ADR_PIPS  # other instruments: pip clamps as ADR multiples
+        scale = 0.0070 / 70.0  # other instruments: pip clamps as ADR multiples of a 70-pip reference
         stop, _, _ = r5.rule_levels(rule, 1, 1.1, 1.0999, 0.0, 0.0070, scale)
-        self.assertAlmostEqual(1.1 - stop, 15.0 / r5.EURUSD_ADR_PIPS * 0.0070)
+        self.assertAlmostEqual(1.1 - stop, 15.0 / 70.0 * 0.0070)
+
+    def test_reference_adr_is_causal(self):
+        ctx = es.Context(FRAMES)
+        ref = r5.ReferenceADR(ctx)
+        t = int(pd.Timestamp("2022-06-15 12:00", tz="UTC").value)
+        i = ctx.d1.asof(t)
+        known = ctx.adr[max(0, i - r5.REF_ADR_DAYS + 1):i + 1]
+        known = known[np.isfinite(known)]
+        self.assertAlmostEqual(ref(t), float(np.median(known)))
+        self.assertTrue(math.isfinite(ref(t)))
+        prefix = cut(FRAMES, pd.Timestamp("2022-06-20 00:00", tz="UTC"))
+        self.assertAlmostEqual(r5.ReferenceADR(es.Context(prefix))(t), ref(t))  # later data cannot move it
 
 
 def london_candidates(ctx, frames, n=60, seed=5):

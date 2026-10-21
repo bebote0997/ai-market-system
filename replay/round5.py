@@ -118,12 +118,13 @@ def model_name(model):
 
 
 # ---------------------------------------------------------------- relaxed rules and transfers
-EURUSD_ADR_PIPS = 74.3  # median ADR20 of EURUSD over the 5-year sample: pip clamps -> ADR multiples elsewhere
-RELAX_LO, RELAX_HI = 15.0, 50.0  # pips (EURUSD); other instruments: / EURUSD_ADR_PIPS x ADR20
+REF_ADR_DAYS = 250  # causal reference: trailing median of EURUSD ADR20 over the last 250 completed D1 bars
+REF_ADR_MIN = 20  # fewer ADR20 values known -> no reference (skip; never a full-sample constant)
+RELAX_LO, RELAX_HI = 15.0, 50.0  # pips (EURUSD); other instruments: / EURUSD reference ADR20 x ADR20
 RELAX_DAYS = 5
 RELAX_TPS = {"TP1.5": ("R", 1.5), "TP2": ("R", 2.0), "TP3": ("R", 3.0), "ADR0.6": ("ADR", 0.6)}
 RELAX_FAMILIES = ("E3", "JT[R1+R5]", "M1", "M2", "M3", "M4", "M5", "F1", "F1b", "F2", "F3", "F4")
-EXIT_RULES = {  # prior intraday exits as rules (pips on EURUSD; ADR multiples elsewhere via EURUSD_ADR_PIPS)
+EXIT_RULES = {  # prior intraday exits as rules (pips on EURUSD; ADR multiples elsewhere via ``ReferenceADR``)
     "FIX2": {"stop": "struct", "lo": 15.0, "hi": 30.0, "tp": ("R", 2.0)},
     "FIX15": {"stop": "struct", "lo": 15.0, "hi": 30.0, "tp": ("R", 1.5)},
     "SL15": {"stop": "struct", "lo": 15.0, "hi": 30.0, "tp": ("R", 2.0)},
@@ -133,8 +134,23 @@ EXIT_RULES = {  # prior intraday exits as rules (pips on EURUSD; ADR multiples e
 
 
 def relaxed_rule(tp):
-    return {"stop": "struct", "lo": RELAX_LO, "hi": RELAX_HI, "tp": RELAX_TPS[tp], "hold": "DAYS",
+    """Relaxed grid: structure stop clamped to [15, 50] pips (wider structures are clamped, not skipped)."""
+    return {"stop": "struct", "lo": RELAX_LO, "hi": RELAX_HI, "clamp_hi": True, "tp": RELAX_TPS[tp], "hold": "DAYS",
             "days": RELAX_DAYS, "friday": True}
+
+
+class ReferenceADR:
+    """Causal EURUSD ADR20 reference (pips) for pip -> ADR-multiple clamps on other instruments: the median of the
+    last ``REF_ADR_DAYS`` ADR20 values known at t (``Context.adr_at`` semantics). Replaces the earlier full-sample
+    74.3-pip constant, which leaked later years into earlier folds."""
+
+    def __init__(self, ctx, days=REF_ADR_DAYS, min_values=REF_ADR_MIN):
+        self.ctx = ctx
+        self.ref = pd.Series(ctx.adr).rolling(days, min_periods=min_values).median().to_numpy()
+
+    def __call__(self, t):
+        i = self.ctx.d1.asof(t)
+        return float(self.ref[i]) if i >= 0 else float("nan")
 
 
 def intraday_rule(exit_model):
@@ -149,7 +165,8 @@ def nth_trading_close(fill_at, days):
 
 def rule_levels(rule, s, fill, struct, atr, adr, scale):
     """(stop, target, None) or (None, None, skip). ``adr`` ADR20 in price; ``scale`` = price per rule unit (pip on
-    EURUSD, ADR20 / EURUSD_ADR_PIPS elsewhere)."""
+    EURUSD, ADR20 / causal EURUSD reference ADR20 elsewhere). A structure wider than ``hi`` is skipped, or clamped to
+    ``hi`` when ``rule['clamp_hi']`` (relaxed rules)."""
     lo, hi = rule["lo"] * scale, rule["hi"] * scale
     if rule["stop"] == "adr":
         dist = min(max(rule["sl_adr"] * adr, lo), hi)
@@ -159,9 +176,9 @@ def rule_levels(rule, s, fill, struct, atr, adr, scale):
         dist = s * (fill - (struct - s * bt.BUFFER_ATR * atr))
         if dist <= 0:
             return None, None, "structure_beyond_fill"
-        if dist > hi:
+        if dist > hi and not rule.get("clamp_hi"):
             return None, None, "sl_wider_than_hi"
-        dist = max(dist, lo)
+        dist = min(max(dist, lo), hi)
     kind, value, *clamp = rule["tp"]
     if kind == "R":
         reward = value * dist
@@ -172,12 +189,13 @@ def rule_levels(rule, s, fill, struct, atr, adr, scale):
     return fill - s * dist, fill + s * reward, None
 
 
-def run_rule(cands, ctx, tape, name, rule, pip_units=True):
+def run_rule(cands, ctx, tape, name, rule, ref=None):
     """Sequential walk of intraday candidates under an exit ``rule``: (trades, skips). Fill at the open of the 5m bar
     starting at the decision close (``LimitCandidate``: ``round2.limit_fill`` semantics, no slippage, target not
     credited on the fill bar); stop/target from the fill (``rule_levels``); hold 'I2' (``bt.i2_exit``) or 'DAYS'
     (close of the ``days``-th NY trading day); Friday 17:00 NY close if ``friday``. One position at a time, one entry
-    per idea, 2R/day realised halt, the tape's costs (commission once, in R)."""
+    per idea, 2R/day realised halt, the tape's costs (commission once, in R). ``ref``: None = pip units (EURUSD),
+    else a causal EURUSD reference ADR20 (``ReferenceADR``) for the ADR-relative clamps."""
     trades, skips = [], Counter()
     free_at, used, halted = -1, set(), set()
     day_r = defaultdict(float)
@@ -217,7 +235,14 @@ def run_rule(cands, ctx, tape, name, rule, pip_units=True):
             skips["adr_unavailable"] += 1
             continue
         adr = adr_pips * tape.pip
-        scale = tape.pip if pip_units else adr / EURUSD_ADR_PIPS
+        if ref is None:
+            scale = tape.pip
+        else:
+            ref_pips = ref(cand.t)
+            if not math.isfinite(ref_pips) or ref_pips <= 0:
+                skips["reference_adr_unavailable"] += 1
+                continue
+            scale = adr / ref_pips
         stop, target, why = rule_levels(rule, s, fill, cand.struct, ctx.atr_at(cand.t), adr, scale)
         if stop is None:
             skips[why] += 1
@@ -348,8 +373,8 @@ def evaluate(trades, years, model):
 class Book:
     """One instrument: frames, bars, context and lazily built per-model tapes / markets / candidates."""
 
-    def __init__(self, data, symbol, log=print):
-        self.symbol, self.log = symbol, log
+    def __init__(self, data, symbol, log=print, ref=None):
+        self.symbol, self.log, self.ref = symbol, log, ref  # ref: causal EURUSD ReferenceADR (non-EURUSD only)
         self.ins = r4.Instrument(data, symbol)
         self.pip, self.fx, self.years = self.ins.pip, self.ins.fx, self.ins.years
         self.start_ns = int(self.years[0][0].timestamp() * 1e9)
@@ -414,7 +439,8 @@ class Book:
                                    runner_exit(exit_model))
             rule = rule or intraday_rule(exit_model)
         with r4.instrument_pip(self.pip):
-            return run_rule(self.candidates(fam, model), self.ctx, self.tape(model), name, rule, pip_units=home)
+            return run_rule(self.candidates(fam, model), self.ctx, self.tape(model), name, rule,
+                            ref=None if home else self.ref)
 
 
 # ---------------------------------------------------------------- report
@@ -452,7 +478,7 @@ runs with multi-day holds (round-4 and relaxed runners).
   (new variants, so counted): families {relax_families} (`JT[R1+R5]` = JT_SMC, no 1h-FVG requirement, limit at the
   15m OB edge; modules / F-families as in the 5-year round); entry = the family's candidate (fill at the open of the
   5m bar starting at the decision close; R5 limit fills), stop = structure -/+ 0.2 ATR14(H1) from the fill, < 15 pips
-  widened to 15, > 50 pips skipped; TP in {{1.5R, 2R, 3R, 0.6 x ADR20 from the fill (no R clamp)}}; time exit at the
+  widened to 15, > 50 pips clamped to 50 (post-review fix; first run skipped them); TP in {{1.5R, 2R, 3R, 0.6 x ADR20 from the fill (no R clamp)}}; time exit at the
   close (17:00 NY) of the 5th NY trading day counting the fill's day; **Friday 17:00 NY close ON** (so the 5-day exit
   only binds for Monday fills); no I2 session close; one position at a time, one entry per idea, 2R/day halt.
   `C_RAW_STRESS` for those with C_RAW total R > 0. Names `RX:<family>:<TP>`.
@@ -460,7 +486,8 @@ runs with multi-day holds (round-4 and relaxed runners).
   steps 2-3 (>= 30 trades, one per family; V2_* excluded: production signals exist for EURUSD only, the next one
   fills in) + `RX:E3` and `RX:JT[R1+R5]` at their best EURUSD C_RAW TP, under C_RAW; C_RAW_STRESS when total R > 0.
   Round-4 families run unchanged (ATR-based). Pip-denominated stop clamps become ADR-relative: x pips -> x /
-  {adr:.1f} x ADR20 (EURUSD median ADR20 over the sample = {adr:.1f} pips; e.g. FIX2 0.20-0.40 ADR20, relaxed
+  R x ADR20 with R = the causal EURUSD reference ADR20 (median of the last {ref_days} EURUSD ADR20 values known at the
+  decision; post-review fix of the earlier full-sample 74.3-pip constant; at R = 74 pips e.g. FIX2 0.20-0.40 ADR20, relaxed
   0.20-0.67 ADR20); intraday exits keep their TP and hold rules (I2 for FIX2/FIX15/SL25/ADR; ADR exit: SL 0.3 ADR20
   clamped to the scaled 15-30, TP 0.58 ADR20 clamped 1.5-2.0R); candidate pip thresholds scale with the instrument
   pip as in round 4.
@@ -491,7 +518,7 @@ def declaration(home, present, missing):
     return DECLARATION.format(
         present=", ".join(present), missing=", ".join(missing) or "none", years=years, n_prior=len(PRIOR),
         prior=", ".join(PRIOR), top=TOP_N, n_relax=counts["relaxed C_RAW"], relax_families=", ".join(RELAX_FAMILIES),
-        others=", ".join(s for s in OTHERS if s in present), adr=EURUSD_ADR_PIPS, fixed=fixed,
+        others=", ".join(s for s in OTHERS if s in present), ref_days=REF_ADR_DAYS, fixed=fixed,
         breakdown=" + ".join(f"{k} {v}" for k, v in counts.items()), cum=PREVIOUS_TESTS + fixed, p=p, fp=fixed * p,
         fpc=(PREVIOUS_TESTS + fixed) * p), fixed
 
@@ -579,7 +606,8 @@ def main(argv=None):
     def book(symbol):
         if symbol not in books:
             log(f"loading {symbol}")
-            books[symbol] = Book(args.data, symbol, log)
+            ref = None if symbol == r4.HOME else ReferenceADR(book(r4.HOME).ctx)
+            books[symbol] = Book(args.data, symbol, log, ref)
         return books[symbol]
 
     def signals():

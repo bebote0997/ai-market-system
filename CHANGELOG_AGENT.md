@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 5, corrección post-revisión Codex (branch `feat/backtest-v2-i2`)
+
+- HIGH: `replay/round5.py` ya no usa la constante 74,3 pips (mediana ADR20 EURUSD de toda la muestra) para escalar los clamps en pips a otros instrumentos; nuevo `ReferenceADR` causal (mediana de los últimos 250 ADR20 EURUSD conocidos en la decisión). MED: la rejilla relajada recorta el stop de estructura a [15, 50] pips en vez de saltar los > 50 (las reglas intradía previas siguen saltando). Re-ejecución de los pasos 3–4 (`report_round5_fix.md`, fuera del repo): **sigue sin aprobados**; RX:F2:TP1.5 +0,040R (544 trades, 2/5), NAS100USD:RX:E3:TP3 +0,073R (1/5). Tests nuevos en `test_round5.py` (clamp, causalidad de la referencia por prefijo).
+
 ## 2026-10-21 — Ronda 5, cierre: robustez, tests múltiples y lista corta (branch `feat/backtest-v2-i2`)
 
 - `replay.round5 --sections robust,final`: **246 tests en la ronda 5** (C_RAW 159, C_OANDA 48, C_RAW_STRESS 34, C_FUT 5), **428 acumulados, ninguno pasa** (sin aprobados no se dispara la vecindad ±25 %). Falsos positivos esperados con independencia: 0,113 en la ronda, 0,197 acumulado (p = 0,00046). Años con R medio > +0,10 y CI80 > 0: 7 variantes con 2/5, 31 con 1/5, 208 con 0/5. Las 3 más cercanas: NAS100USD:A:SW:TP3 (+0,230R, 46 trades, 2/5, segunda mitad −0,016R), RX:F2:TP1.5 en EURUSD (+0,038R, 520 trades, 2/5, DD 22,7R, segunda mitad +0,032R) y XAUUSD:A:SW:TP3 (+0,250R, 41 trades, 1/5, segunda mitad +0,496R). Los costes bajos no convierten ninguna familia en aprobada. Informe y `round5_equity_r.png` en `/workspace/backtest/` (no se commitean). Validación: unittest 2516 OK (41 skipped, 1 expected failure); ruff PASS.
