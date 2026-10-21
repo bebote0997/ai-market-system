@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 5, paso 3: rejilla relajada (Jeferson) en EURUSD (branch `feat/backtest-v2-i2`)
+
+- `replay.round5 --sections relaxed`: 12 familias × 4 TP (hold 5 días NY, SL estructura 15–50 pips, TP 1,5R/2R/3R/0,6 ADR20, cierre viernes ON) = 48 bajo C_RAW + 48 bajo C_OANDA + 13 C_RAW_STRESS (R total > 0). **Ninguna pasa.** Mejor R medio RX:JT[R1+R5]:TP3 +0,157 (35 trades, 0/5 años); la más cercana RX:F2:TP1.5 +0,038R, 520 trades, 2/5 años, DD MTM 22,7R (estrés +0,033R, 2/5; C_OANDA +0,012R). RX:E3 +0,008 a +0,016R. Informe en `/workspace/backtest/report_round5.md` (no se commitea).
+
 ## 2026-10-21 — Ronda 5, paso 2: familias previas en EURUSD bajo C_RAW / C_RAW_STRESS / C_FUT (branch `feat/backtest-v2-i2`)
 
 - `replay.round5 --sections declare,prior,fut` (sin cambio de código): 81 variantes previas bajo C_RAW, **ninguna pasa** (0–1/5 años). Reproducción C_OANDA idéntica (E3:FIX2 −0,0387, A:SW:TP3 +0,1155). R total > 0 en 8 → C_RAW_STRESS: ninguna pasa. Top 5 por R medio (JT[R1+R5]:SL25 +0,157, A:SW:TP3 +0,121, E3:ADR +0,056 con 766 trades, M3:SL25, F4:SL25) bajo C_FUT: ninguna pasa (E3:ADR +0,056, DD 31R, 0/5). Informe en `/workspace/backtest/report_round5.md` (no se commitea).
