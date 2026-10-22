@@ -2078,3 +2078,10 @@ No Render/env change; no deploy.
 - Límite de pérdida diaria 2 % (equity NAV, día 17:00 NY, flatten ON, gate de drawdown 5 %, transferencias vía consulta de solo lectura `TRANSFER_FUNDS`, latches persistentes): `execution/daily_loss_limit.py`, flag `AI_FLOOR_DAILY_LOSS_LIMIT=1` (OFF por defecto). DEC-5.5a.
 - Botón de parada de emergencia cableado al kill switch (confirmación escrita `PARAR TODO`, auditoría, solicitud de flatten consumida por el router, router close-only tras reinicio); drift-clear verificado por episodio (`AI_FLOOR_DRIFT_CLEAR_BUTTON=1`, OFF); cierre previo del viernes (`AI_FLOOR_FRIDAY_PREFLATTEN=1`, OFF); alertas Slack del broker (usa `AI_FLOOR_ALERTS_ENABLED` + webhook existentes).
 - Historial (referencia V1/PAPER, separado de OANDA) y textos 30 días en la UI. Sin cambios de entorno de Render; enrutado OFF.
+
+## 2026-10-22 · Codex review fixes on feat/fx-sl-week-hold (demo router reversal, Floor cache)
+- HIGH `execution/broker_demo_router.py`: in dry-run a DEC-REVERSAL-1 reversal never closes nor sends; it logs `REVERSAL_DRY_RUN` and returns (no intent row). Sizing + daily-loss gate moved into `_sized()`.
+- MEDIUM same file: after the reversal close + reconcile, NAV is re-read, units re-computed and the daily-loss/risk gates re-run; a refusal stays flat with a `REVERSAL_FLAT` event.
+- MEDIUM `ui/floor_cache.py`: peeked demo trades carry `observed_at` (read `as_of`, else cache store time); `demo_snapshot` exposes `trades_as_of`; the Floor header gets `trades_stale`/`trades_as_of` (same 120 s rule as the NAV) and the page shows "(dato antiguo · HH:MM ET)" on PnL, R, win rate, drawdown, curve, trades and hit rate. Still peek-only, no extra network call.
+- LOW `ui/floor_payload.py`: breakeven trades (PnL 0) are neutral and excluded from the agents' hit rate.
+Tests: `test_reversal.py` (+3), `test_floor_view.py` (+3). Baseline 2435 tests OK; final `/workspace/venv-oanda/bin/python -m unittest discover -p "test_*.py"`: 2441 tests OK (41 skipped, 1 expected failure). `ruff check .` PASS. REAL stays off; no push, no Render change.
