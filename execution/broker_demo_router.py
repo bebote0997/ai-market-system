@@ -32,7 +32,9 @@ UNKNOWN row left; ``drift_clear_request`` is bound to the current ``drift_episod
 when that same pass verifies the broker and the local state match (clear + request consumption + audit event in one
 transaction). With an emergency active ``router_from_env`` returns None, unless a flatten request or routed rows
 remain: then it builds a ``closing_only`` router on a ``close_only`` OandaBroker (entries refused ``emergency_active``,
-every routed OPEN trade closed on every tick; the switch is never turned ON). Optional Friday pre-flatten (``execution/friday_close.py``, OFF unless
+every routed OPEN trade closed on every tick; the switch is never turned ON). DEC-REVERSAL-1 (ON unless
+``AI_FLOOR_DEMO_REVERSAL == "0"``): an approved opposite-direction plan while the single routed trade is in profit
+closes it (reason ``REVERSAL_IN_PROFIT``) and routes the new direction after every entry gate. Optional Friday pre-flatten (``execution/friday_close.py``, OFF unless
 ``AI_FLOOR_FRIDAY_PREFLATTEN == "1"``) closes routed trades before the 17:00 NY Friday halt and refuses entries
 until the market reopens. The optional ``on_alert`` hook (Slack, ``runtime/broker_alerts.py``; set by
 ``runtime/service.py`` only when alerts are ON) receives the ``ALERT_KINDS`` events; it is best effort and never alters
@@ -83,6 +85,15 @@ DRIFT_EPISODE_FLAG = "drift_episode"
 EMERGENCY_ACTIVE = "EMERGENCY_ACTIVE"
 EMERGENCY_BUTTON = "EMERGENCY_BUTTON"
 FRIDAY_PREFLATTEN = "FRIDAY_PREFLATTEN"
+# DEC-REVERSAL-1: an approved opposite-direction plan while the routed trade is in profit closes it and routes the new
+# direction (every entry gate still applies). ON by default whenever routing is ON; ``AI_FLOOR_DEMO_REVERSAL=0`` = OFF.
+REVERSAL = "REVERSAL_IN_PROFIT"
+REVERSAL_ENV = "AI_FLOOR_DEMO_REVERSAL"
+
+
+def reversal_flag(env):
+    """Demo-profile default ON; only the exact value ``0`` turns the reversal off."""
+    return (env or {}).get(REVERSAL_ENV) != "0"
 FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
 PENDING_EVENT_CAP = 50  # FLATTEN_REQUEST_PENDING (and dry-run previews) per request: the events table is append-only
 FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(minutes=30)}
@@ -195,7 +206,7 @@ _ACTION_LOG_OK = frozenset({"CLOSED", CLOSED_AT_BROKER, "BREAKEVEN"})
 
 # Only these controlled reason codes reach the log; "EMERGENCY:<free text>" -> EMERGENCY, anything else (broker
 # reject text, unexpected exception names, ...) -> OTHER, so a reason can never leak an id or token.
-_LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN,
+_LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN, REVERSAL,
                           EMERGENCY_ACTIVE, EMERGENCY_BUTTON, "BrokerAuthError", "BrokerRateLimited",
                           "BrokerGuardError", "BrokerMalformedResponse", "no_open_position"})
 
@@ -225,13 +236,14 @@ def _not_routed(reason):
 
 class BrokerDemoRouter:
     def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None,
-                 friday_minutes=None, closing_only=False, on_alert=None, env=None):
+                 friday_minutes=None, closing_only=False, on_alert=None, env=None, reversal=True):
         self._broker = broker
         self._env = env  # demo_start_equity source (None: os.environ)
         self.closing_only = bool(closing_only)  # emergency restart: closes routed trades, never opens
         self._loss_limit = loss_limit
         self._friday_minutes = friday_minutes  # None: Friday pre-flatten OFF (behaviour unchanged)
         self._friday_alerted = None
+        self.reversal = bool(reversal)  # DEC-REVERSAL-1
         self._flatten_ticks = 0
         self.on_alert = on_alert  # optional callable(kind, detail dict | message str); see ALERT_KINDS
         if loss_limit is not None:
@@ -362,8 +374,11 @@ class BrokerDemoRouter:
             return self._refuse(client_id, "unresolved_submission")
         if not self.dry_run and not self._open_allowed():
             return self._refuse(client_id, "broker_demo_not_allowed")
+        reversing = None
         if self._store.trades(LIVE_STATUSES) or any(t.instrument == INSTRUMENTS[symbol] for t in report):
-            return self._refuse(client_id, "position_already_open")
+            reversing, reason = self._reversal_row(decision, symbol, report)
+            if reversing is None:
+                return self._refuse(client_id, reason)
         try:
             balance = self._broker.get_balance()
         except Exception as exc:  # noqa: BLE001 - nothing sent
@@ -381,6 +396,15 @@ class BrokerDemoRouter:
             loss = self._loss_check(at, Decimal(units) * abs(entry - stop), balance=balance)[0]
             if not loss.entry_allowed:
                 return self._refuse(client_id, loss.reason)
+        if reversing is not None:  # every entry gate above passed: close the profitable opposite trade first
+            closed = self._close(reversing, REVERSAL, f"{reversing['client_id']}-rev")
+            self._event(REVERSAL, client_id, closed_client_id=reversing["client_id"], outcome=closed)
+            if closed not in ("CLOSED", CLOSED_AT_BROKER):
+                return self._refuse(client_id, f"reversal_close_{closed.lower()}")
+            report = self.reconcile()
+            if (report is None or self.blocked_reason or self._store.trades(LIVE_STATUSES)
+                    or any(t.instrument == INSTRUMENTS[symbol] for t in report)):
+                return self._refuse(client_id, "reversal_not_flat")
         try:  # A re-sized approval derived from the APPROVED decision: only the quantity differs.
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), entry, stop, target, client_id=client_id,
                                    source_run_id=run_id, risk_policy_version=getattr(plan, "policy_version", None))
@@ -392,6 +416,30 @@ class BrokerDemoRouter:
         if self.dry_run:
             return self._dry_run(order_plan, units, row)
         return self._send(order_plan, approval, row, at)
+
+    def _reversal_row(self, decision, symbol, report):
+        """(routed row to close, None) when DEC-REVERSAL-1 applies, else (None, refusal reason). Applies only to exactly
+        one OPEN routed trade of ``symbol`` (no pending action), on the opposite side of ``decision``, matching the
+        only broker trade of the instrument, and in profit on a valid tradeable quote (LONG: bid > fill; SHORT: ask <
+        fill). In loss or at zero -> keep; same direction -> no action (both ``position_already_open``)."""
+        live = self._store.trades(LIVE_STATUSES)
+        if not self.reversal or len(live) != 1:
+            return None, "position_already_open"
+        row = live[0]
+        broker = [t for t in report if t.instrument == INSTRUMENTS[symbol]]
+        if (row["status"] != OPEN or row["symbol"] != symbol or row.get("action_status") or row["side"] == decision.side
+                or len(broker) != 1 or len(report) != 1 or str(broker[0].trade_id) != str(row.get("trade_id"))):
+            return None, "position_already_open"
+        quote, problem = self._quote(symbol, None)
+        if problem is not None:
+            return None, f"reversal_{problem}"
+        _tradeable, bid, ask = quote
+        fill = _dec(row.get("fill_price")) or _dec(row["entry"])
+        in_profit = bid > fill if row["side"] == "LONG" else ask < fill
+        if not in_profit:
+            self._event("REVERSAL_SKIPPED", row["client_id"], reason="not_in_profit")
+            return None, "position_already_open"
+        return row, None
 
     def _refuse(self, client_id, reason):
         self._event("NOT_ROUTED", client_id, reason=reason)
@@ -1039,7 +1087,8 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     loss_limit = limit_from_env(env, store, clock=now)
     router = BrokerDemoRouter(broker, store, registry=registry, dry_run=dry_run_flag(env),
                               max_units=max_units_setting(env), clock=now, loss_limit=loss_limit,
-                              friday_minutes=fc.minutes_from_env(env), closing_only=closing_only, env=env)
+                              friday_minutes=fc.minutes_from_env(env), closing_only=closing_only, env=env,
+                              reversal=reversal_flag(env))
     router._heartbeat()
     if closing_only:
         LOG.warning("component=broker_demo event=ROUTER_CLOSING_ONLY reason=emergency_stop")
@@ -1048,4 +1097,5 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
         LOG.info("component=broker_demo event=DAILY_LOSS_LIMIT_ON limit=%r", loss_limit)
     if router._friday_minutes is not None:
         LOG.info("component=broker_demo event=FRIDAY_PREFLATTEN_ON minutes=%d", router._friday_minutes)
+    LOG.info("component=broker_demo event=REVERSAL_%s", "ON" if router.reversal else "OFF")
     return router

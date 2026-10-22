@@ -1340,7 +1340,7 @@ class OperationalRuntime:
                 execution_reason = "TRADE_DURATION_EXIT"  # no new entry in the cycle that time-closed a position
             elif deterministic.final_status == "PLAN_READY" and entries_blocked(execution_at):
                 execution_reason = FRIDAY_FLATTEN_WINDOW  # DEC-HOLD-WEEK-1: Friday 16:45 NY -> Sunday 17:00 NY
-            elif (self.config.v2_opposite_setup_policy == "STRUCTURE_CHANGE"
+            elif (self.config.v2_opposite_setup_policy in ("STRUCTURE_CHANGE", "REVERSE_IN_PROFIT")
                   and deterministic.final_status == "PLAN_READY" and self.paper_enabled
                   and paper_blocked is None
                   and symbol in broker.account.open_positions

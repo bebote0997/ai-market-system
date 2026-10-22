@@ -15,6 +15,8 @@ CATCH_UP_SYMBOLS_ENV = "AI_FLOOR_V2_POSITION_CATCH_UP_SYMBOLS"
 REX_ENV = "AI_FLOOR_V2_REX"  # V2 Phase 8 / P3: REX evidence flag (OFF by default)
 SEALED_GENESIS_ENV = "AI_FLOOR_V2_SEALED_GENESIS"  # V2 Phase 8 / P2b: sealed genesis (OFF; ON requires REX ON)
 RHALT_ENV = "AI_FLOOR_V2_RHALT"  # V2 Phase 8 / P4a: R-HALT admission gate (OFF by default; ON requires REX ON)
+# DEC-14.1 / DEC-REVERSAL-1: BLOCK (default) | STRUCTURE_CHANGE | REVERSE_IN_PROFIT; anything else fails closed to BLOCK.
+OPPOSITE_SETUP_POLICIES = ("BLOCK", "STRUCTURE_CHANGE", "REVERSE_IN_PROFIT")
 BLOCKED_SYMBOLS = ("NAS100",)  # hard-blocked: never an enabled runtime symbol, whatever AI_FLOOR_ENABLED_SYMBOLS says
 CATCH_UP_EXCLUDED_SYMBOLS = ("NAS100",)  # never in the catch-up scope, even if a future config enables it
 _SCOPE_TOKEN = re.compile(r"[A-Z0-9]+")
@@ -92,7 +94,7 @@ class RuntimeConfig:
             logging.getLogger("ai_floor.runtime").warning(
                 "V2_PLANNER_POLICY=%r unknown; fail closed to V1", self.v2_planner_policy)
             object.__setattr__(self, "v2_planner_policy", "V1")
-        if self.v2_opposite_setup_policy not in {"BLOCK", "STRUCTURE_CHANGE"}:
+        if self.v2_opposite_setup_policy not in OPPOSITE_SETUP_POLICIES:
             object.__setattr__(self, "v2_opposite_setup_policy", "BLOCK")
             object.__setattr__(self, "v2_opposite_setup_policy_warning", True)
             logging.getLogger("ai_floor.runtime").warning("V2_OPPOSITE_SETUP_POLICY_INVALID: fail closed to BLOCK")

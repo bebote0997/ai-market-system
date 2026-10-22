@@ -229,6 +229,8 @@ CLOSE_REASONS = {
     "TIME_EXIT_FRIDAY_NY_CLOSE": "Time exit · viernes 16:45 ET (sin exposición de fin de semana)",
     "TIME_EXIT_MAX_HOLD": "Time exit · máximo de días de trading",
     "EXIT_STRUCTURE_CHANGE": "Exit · cambio de estructura",
+    "EXIT_REVERSAL_IN_PROFIT": "Exit · reversión en beneficio (setup opuesto)",
+    "REVERSAL_IN_PROFIT": "Exit · reversión en beneficio (setup opuesto)",
     "EXIT_SESSION": "Exit · fin de sesión",
     "EXIT_HALT": "Exit · halt del sistema",
     "EXIT_DATA": "Exit · datos de mercado inválidos",
