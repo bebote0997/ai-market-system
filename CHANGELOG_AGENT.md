@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8: declaración (branch `feat/backtest-v2-i2`)
+
+- `replay/round8.py` + `test_round8.py` (15 tests): motor M1 de sesión única (fills sobre mid + costes por barra, stop gana empates, límite exige atravesar, OCO mismo bar = sin trade, stops acotados 5-15 pips FX / [1,5; 4,5] x mediana ATR14(M5) 20 d en XAU/NAS100), 70 variantes fijas (S1-S3 reconstruidas, L1-L7 de la adición de literatura), costes C_RAW / C_IBKR + stress + C_OANDA observado.
+- Declaración previa a toda selección en `replay/round8_declaration.md` (copia de la sección 1 de `report_round8.md`). La sección base del brief de la ronda 8 falta en `spec_round8.md`: se reconstruye desde el protocolo de las rondas 6/7 y `scalping_references.md` (declarado). TRAIN 2021-10..2024-12, HOLDOUT 2025-01..2026-10-19.
+
 ## 2026-10-21 — Ronda 7b: resumen multi-instrumento y veredicto (branch `feat/backtest-v2-i2`)
 
 - `replay.round7b --sections final`: sección 8.5-8.6 del informe y `round7_multi_equity_r.png` (un panel por instrumento; fuera del repo). **Ningún instrumento pasa** (0/5 con EURUSD). XAUUSD siempre-T1F +0,348R, PF 2,04, DD 5R falla solo por frecuencia (0,5/mes); NAS100 +0,316R falla por frecuencia y años; GBPUSD −0,078R; USDJPY −0,849R. Buy-and-hold muy superior en retorno (oro +34,6 %, NAS100 +130,7 % vs +4,0 % / +3,0 %). Tests múltiples: ronda 7 total 30 mappers (430 conservador); acumulado 474 (874 conservador); 5 holdouts. Propuesta: no bajar el umbral; si se sigue, test nuevo predeclarado de T1F en oro con ventana fuera de muestra nueva (decisión del owner). Validación: unittest 2569 OK (41 skipped, 1 expected failure); ruff PASS.
