@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8b, bloque 3: selección NAS100USD (motor corregido)
+
+- TRAIN (C_IBKR), 17 variantes: positivas S1a ORB5 +0,144R (DD 45R), S3b IB +0,165R (DD 33R), L1 momentum +0,110R (DD 25R), L3:NR4 +0,454R (DD 14,3R), L3:NR7 +0,506R (2,69/mes); nuevas S4 +0,023R / +0,028R y S5 +0,065R (DD 19-36R). Ninguna cumple DD < 12R y ≥ 3/mes → **FLAT** (sin holdout). Ronda 8b: 0/4 elegibles; el bloque 4 (holdout) no se ejecuta.
+
 ## 2026-10-21 — Ronda 8b, bloque 3: selección XAUUSD (motor corregido)
 
 - TRAIN (C_IBKR), 21 variantes: solo L7 Raschke 80-20 es positiva tras la corrección causal (+0,536R, 111 trades, PF 1,66), pero 2,84 tr/mes < 3 y DD 21,1R. Nuevas: S4 −0,065R / −0,155R, S5 −0,192R. Ninguna elegible → **FLAT** (sin holdout).
