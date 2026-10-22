@@ -260,6 +260,27 @@ def summarize_status(rows, events, *, routing, dry_run, blocked_reason, max_unit
     return out if extra is None else {**out, "loss_limit": extra}
 
 
+RUN_TRADE_FIELDS = ("client_id", "symbol", "side", "units", "entry", "stop", "target", "trade_id", "fill_price",
+                    "opened_at", "status", "closed_reason", "updated_at")
+
+
+def read_run_trades(run_id, path=None, *, env=None):
+    """Read-only OANDA-demo rows routed from one cycle (``run_id``), oldest first, for the Process view.
+    Missing/unreadable DB or tables -> ``None`` (unknown, shown as NO_DATA); never raises, never creates the DB."""
+    env = os.environ if env is None else env
+    try:
+        target = Path(path) if path is not None else Path(load_broker_config(env).state_db_path)
+        if not target.is_file():
+            return None
+        with closing(sqlite3.connect(target.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute("SELECT * FROM broker_demo_trades WHERE run_id = ? ORDER BY created_at, client_id",
+                               (str(run_id),)).fetchall()
+    except Exception:  # noqa: BLE001 - router never ran, locked or corrupt: nothing trustworthy to show
+        return None
+    return [{key: row[key] for key in RUN_TRADE_FIELDS} for row in rows]
+
+
 def _recent(value, now):
     try:
         seen = datetime.fromisoformat(str(value))

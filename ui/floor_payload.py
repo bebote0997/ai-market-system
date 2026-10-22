@@ -410,10 +410,11 @@ def cycle_view(run, evidence, trades):
 
 
 def journal_feed(db):
-    from ui.views.dashboard import records
+    from ui.views.dashboard import PAPER_RESULT_EVENTS, paper_hidden, records
+    hidden = paper_hidden()
     lines = []
     for row in records(db, 'journal'):
-        if row.get('symbol') not in SYMBOLS:
+        if row.get('symbol') not in SYMBOLS or (hidden and row.get('event_type') in PAPER_RESULT_EVENTS):
             continue
         at = et_text(row.get('timestamp'), with_date=False)
         lines.append(f"{at or '—'}  {row['symbol']}  {es.status_text(row.get('event_type'))}")

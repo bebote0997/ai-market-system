@@ -3,7 +3,8 @@
 ``AI_FLOOR_RESULTS_SOURCE=OANDA_DEMO`` (exact) = OANDA-demo-only mode: the dashboard (Overview / Trades / Decisions /
 Command Center / luxury Floor), the animated Floor page and the daily Slack summary show ONLY the OANDA practice demo
 results, even while broker-demo routing is OFF (then "sin datos", never PAPER numbers); the PAPER ledger / P&L sections
-are hidden. Unset or any other value = current behaviour (OANDA results while ``AI_FLOOR_BROKER_DEMO_ROUTING == "1"``,
+are hidden, and so are PAPER fill / close journal events and P&L keys in History, Errors, the Process view (its entry /
+exit / outcome steps show the OANDA demo rows of the same run, or NO_DATA) and the Floor journal feed. Unset or any other value = current behaviour (OANDA results while ``AI_FLOOR_BROKER_DEMO_ROUTING == "1"``,
 else PAPER).
 
 The PAPER engine keeps running internally (planner, Risk Engine V2 open-risk / sizing state, conflict engine, durable

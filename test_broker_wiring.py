@@ -46,9 +46,13 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     ("runtime/trade_alert_source.py", "oanda_readonly"),
                     # Floor page: peek-only reader of the oanda_readonly TTL caches via sys.modules (never imports or
                     # fetches; no network, no orders), plugged into demo_dashboard.demo_snapshot readers.
+                    # DEC-OANDA-ONLY-1 Process view: OANDA-demo rows of one run (state DB mode=ro; no writes): lazy.
+                    ("ui/views/process.py", "execution.broker_demo_state"), ("ui/views/process.py", "broker_demo_state"),
                     ("ui/floor_cache.py", "execution.oanda_readonly"), ("ui/floor_cache.py", "oanda_readonly"),
                     ("ui/floor_cache.py", "execution.demo_dashboard"), ("ui/floor_cache.py", "demo_dashboard")}
-LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
+LAZY_IMPORTS = {"ui/views/process.py": {"execution.broker_demo_state": [["CLOSED", "CLOSED_AT_BROKER",
+                                                                          "read_run_trades"]]},
+                "ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
                                         "execution.broker_demo_state": [["read_router_status"]],
                                         "execution.oanda_readonly": [["cached_account_view"]],
                                         "execution.historial": [["load_baselines"]],

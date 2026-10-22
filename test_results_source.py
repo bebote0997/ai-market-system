@@ -108,5 +108,103 @@ class DashboardOnlyTests(unittest.TestCase):
         self.assertIn("Equity · PAPER", content)
 
 
+class ProcessHistoryOnlyTests(unittest.TestCase):
+    """Process / History / Errors / Floor feed hide PAPER entries, exits and P&L (journal side included); the Process
+    entry / exit / outcome steps come from the OANDA demo rows of the same run, or NO_DATA."""
+
+    def setUp(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from storage.database import Store
+        import test_floor_view as fv
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.db_path, self.state = Path(tmp.name) / "t.db", Path(tmp.name) / "broker_state.db"
+        fv.seed(self.db_path)
+        store = Store(self.db_path)
+        try:
+            store.db.execute("INSERT INTO closed_trades VALUES(?,?)", ("trade-e1", json.dumps({
+                "trade_id": "trade-e1", "position_id": "pos-open", "run_id": "run-e1", "symbol": "EURUSD",
+                "entry_price": 1.1002, "exit_price": 1.1060, "net_pnl": 5.8, "reason": "TARGET"})))
+            for event, payload in (("POSITION_CLOSED", {"net_pnl": 5.8, "exit_price": 1.106}),
+                                   ("STATE_INCONSISTENCY", {"detail": "x", "equity": 10055.5})):
+                store.db.execute("INSERT INTO journal(timestamp,run_id,symbol,source,event_type,severity,payload) "
+                                 "VALUES(?,?,?,?,?,?,?)", (fv.T_OPEN, "run-e1", "EURUSD", "paper", event,
+                                                           "ERROR", json.dumps(payload)))
+        finally:
+            store.close()
+
+    def env(self, **extra):
+        os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
+        return patch.dict(os.environ, {"AI_FLOOR_DB_PATH": str(self.db_path),
+                                       "AI_FLOOR_BROKER_STATE_DB_PATH": str(self.state), **extra})
+
+    def evidence(self):
+        from ui.state import dashboard_database
+        from ui.views.process import cycle_evidence
+        with dashboard_database(self.db_path) as db:
+            run = dashboard.records(db, "runs", run_id="run-e1")[0]
+            return cycle_evidence(db, run)[0]
+
+    def route(self, status="CLOSED"):
+        from execution.broker_demo_state import DemoStateStore
+        store = DemoStateStore(self.state)
+        store.insert_intent({"client_id": "aif-run-e1", "run_id": "run-e1", "symbol": "EURUSD", "side": "LONG",
+                             "units": 5000, "entry": "1.1", "stop": "1.098", "target": "1.106",
+                             "status": "PENDING_SEND"})
+        store.update("aif-run-e1", trade_id="77", fill_price="1.10013", status=status, closed_reason="TP")
+
+    def test_default_process_still_shows_paper(self):
+        with self.env(AI_FLOOR_RESULTS_SOURCE="PAPER"):
+            evidence = self.evidence()
+        self.assertTrue(evidence["Paper Broker entry"])
+        self.assertIn({"net_pnl": 5.8}, evidence["Final outcome"])
+
+    def test_process_hides_paper_and_shows_no_data_without_oanda(self):
+        with self.env(**ONLY):
+            evidence = self.evidence()
+        self.assertEqual(evidence["Paper Broker entry"], [])
+        self.assertEqual(evidence["Paper Broker exit"], [])
+        self.assertIn({"source": "OANDA_DEMO", "outcome": "Sin datos"}, evidence["Final outcome"])
+        text = str(evidence)
+        for leaked in ("net_pnl", "5.8", "exit_price", "equity", "POSITION_CLOSED", "POSITION_OPENED", "pos-open"):
+            self.assertNotIn(leaked, text)
+
+    def test_process_shows_the_oanda_outcome_of_the_same_run(self):
+        self.route()
+        with self.env(**ONLY):
+            evidence = self.evidence()
+        self.assertEqual([(r["trade_id"], r["fill_price"]) for r in evidence["Paper Broker entry"]], [("77", "1.10013")])
+        self.assertEqual([r["status"] for r in evidence["Paper Broker exit"]], ["CLOSED"])
+        self.assertIn({"source": "OANDA_DEMO", "client_id": "aif-run-e1", "status": "CLOSED",
+                       "closed_reason": "TP"}, evidence["Final outcome"])
+        self.assertNotIn("net_pnl", str(evidence))
+
+    def test_history_and_errors_hide_journal_results(self):
+        from streamlit.testing.v1 import AppTest
+        def page(name):
+            app = AppTest.from_string(
+                "import streamlit as st\nfrom ui.views import dashboard\ndashboard.render(st, %r)\n" % name)
+            return app.run(timeout=30)
+        with self.env(**ONLY):
+            history, errors = page("HISTORY"), page("ERRORS")
+        for app in (history, errors):
+            text = "\n".join(frame.value.to_csv() for frame in app.dataframe)
+            for leaked in ("net_pnl", "exit_price", "POSITION_CLOSED", "POSITION_OPENED", "10055.5"):
+                self.assertNotIn(leaked, text)
+        self.assertIn("STATE_INCONSISTENCY", "\n".join(f.value.to_csv() for f in errors.dataframe))
+        with self.env(AI_FLOOR_RESULTS_SOURCE="PAPER"):
+            text = "\n".join(frame.value.to_csv() for frame in page("HISTORY").dataframe)
+        self.assertIn("POSITION_CLOSED", text)
+
+    def test_floor_feed_drops_paper_events(self):
+        from ui.floor_payload import journal_feed
+        from ui.state import dashboard_database
+        with self.env(**ONLY), dashboard_database(self.db_path) as db:
+            lines = journal_feed(db)
+        self.assertFalse([line for line in lines or () if "cerrada" in line.lower() or "abierta" in line.lower()])
+
+
 if __name__ == "__main__":
     unittest.main()

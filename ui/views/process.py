@@ -1,11 +1,13 @@
 """Per-cycle evidence, joined only by persisted identities."""
 import json
 
-from ui.views.dashboard import history, payloads, records
+from ui.views.dashboard import hide_paper_results, history, paper_hidden, payloads, records
 
 STEPS = ('Data intake', 'Agent outputs', 'Setup reviewer + deterministic setup',
          'Conflict engine / opposite-setup policy', 'Planner R:R and plan',
          'Risk Engine', 'Paper Broker entry', 'Paper Broker exit', 'Final outcome')
+
+OANDA_LABELS = {'Paper Broker entry': 'Entrada en la demo OANDA', 'Paper Broker exit': 'Salida en la demo OANDA'}
 
 
 def decoded(row):
@@ -16,9 +18,26 @@ def decoded(row):
     return result
 
 
+def oanda_steps(run_id):
+    """OANDA-demo entry / exit / outcome rows routed from this cycle (DEC-OANDA-ONLY-1); unreadable => NO_DATA."""
+    from execution.broker_demo_state import CLOSED, CLOSED_AT_BROKER, read_run_trades
+    from ui.i18n_es import NO_DATA
+    trades = read_run_trades(run_id)
+    if trades is None:
+        return [], [], [{'source': 'OANDA_DEMO', 'outcome': NO_DATA}]
+    entry = [{'source': 'OANDA_DEMO', **t} for t in trades if t.get('trade_id') or t.get('fill_price')]
+    exits = [{'source': 'OANDA_DEMO', **t} for t in trades if t.get('status') in (CLOSED, CLOSED_AT_BROKER)]
+    outcome = [{'source': 'OANDA_DEMO', 'client_id': t['client_id'], 'status': t['status'],
+                'closed_reason': t.get('closed_reason')} for t in trades]
+    return entry, exits, outcome or [{'source': 'OANDA_DEMO', 'outcome': NO_DATA}]
+
+
 def cycle_evidence(db, run):
     run_id = run['run_id']
+    hidden = paper_hidden()
     linked = history(db, run_id=run_id)
+    if hidden:  # OANDA-demo-only: PAPER fills / exits / P&L never reach the owner; persisted evidence untouched
+        linked = hide_paper_results(linked)
     reviews = payloads(db, 'review_reports', run_id=run_id)
     snapshots = [s for s in payloads(db, 'ui_snapshots', run_id=run_id)
                  if s.get('run_id') == run_id]
@@ -46,11 +65,16 @@ def cycle_evidence(db, run):
     setups.extend(r for r in journal if r.get('source') == 'setup')
     entry = [r for r in linked if r['record'] in ('paper_orders', 'paper_fills', 'paper_positions')]
     exits = [r for r in linked if r['record'] == 'closed_trades']
+    outcome = [{'net_pnl': (r.get('payload') or {}).get('net_pnl')} for r in exits]
     result = dict(zip(STEPS, (intake, agents or snapshot.get('agents') or review.get('agents', []),
         setups + ([{'review': review['setup']}] if review.get('setup') else []), conflict,
         plans, [decoded(r) for r in records(db, 'risk_decisions', run_id=run_id)]
         + [r for r in journal if r.get('event_type') == 'RISK_V2_DECISION' or r.get('source') == 'risk'],
-        entry, exits, [decoded(run)] + [{'net_pnl': (r.get('payload') or {}).get('net_pnl')} for r in exits])))
+        entry, exits, [decoded(run)] + outcome)))
+    if hidden:
+        result = {step: hide_paper_results(rows) for step, rows in result.items()}
+        entry, exits, outcome = oanda_steps(run_id)  # after the scrub: OANDA fill prices are owner-facing results
+        result.update(zip(STEPS[-3:], (entry, exits, result[STEPS[-1]] + outcome)))
     gaps = [step for step, rows in result.items() if not rows]
     if not snapshot.get('bars'):
         gaps.append('Cycle OHLC bars')
@@ -109,7 +133,8 @@ def render(st, db):
             statuses.extend(str(value[k]) for k in ('status', 'final_status', 'decision', 'execution_status') if value.get(k))
         status = ', '.join(status_text(s) for s in dict.fromkeys(statuses)) or (tr('Persisted evidence') if rows else pending)
         from ui.views.luxury import display
-        card(st, f'{index}. {LABELS[step]}', [('Estado', status),
+        label = OANDA_LABELS.get(step, LABELS[step]) if paper_hidden() else LABELS[step]
+        card(st, f'{index}. {label}', [('Estado', status),
              ('Hora', ', '.join(dict.fromkeys(display(t) for t in timestamps)) or pending)],
              summary=rows or pending)
         if step == 'Agent outputs':

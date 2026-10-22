@@ -24,12 +24,41 @@ ROW_LIMIT = 200
 PAPER_LEDGER_TABLES = frozenset({"paper_accounts", "paper_orders", "paper_fills", "paper_positions", "closed_trades"})
 
 
+# PAPER fills / opens / closes and the PAPER daily summary are PAPER results too (journal side of the ledger).
+PAPER_RESULT_EVENTS = frozenset({"ORDER_SUBMITTED", "ORDER_FILLED", "POSITION_OPENED", "ORDER_REJECTED",
+                                 "ORDER_CANCELLED", "STOP_HIT", "TARGET_HIT", "POSITION_CLOSED", "DAILY_SUMMARY"})
+# P&L / fill / exit keys stripped from every other displayed row (any depth).
+PAPER_RESULT_KEYS = frozenset({"net_pnl", "gross_pnl", "pnl", "realized_pnl", "unrealized_pnl", "total_pnl",
+                               "today_pnl", "equity", "starting_equity", "balance", "fill_price", "exit_price",
+                               "costs", "r_multiple", "realized_r"})
+
+
 def paper_hidden():
     try:
         from execution.results_source import oanda_only
         return oanda_only(os.environ)
     except Exception:  # noqa: BLE001 - unreadable flag: current behaviour
         return False
+
+
+def scrub_paper_results(value):
+    if isinstance(value, dict):
+        return {k: scrub_paper_results(v) for k, v in value.items() if k not in PAPER_RESULT_KEYS}
+    if isinstance(value, list):
+        return [scrub_paper_results(item) for item in value]
+    if isinstance(value, str) and value[:1] == "{" and any(f'"{key}"' in value for key in PAPER_RESULT_KEYS):
+        try:
+            return json.dumps(scrub_paper_results(json.loads(value)), sort_keys=True)
+        except ValueError:
+            return value
+    return value
+
+
+def hide_paper_results(rows):
+    """DEC-OANDA-ONLY-1 presentation filter over ``history()``/``records()`` rows: drops PAPER ledger rows and PAPER
+    result journal events, strips P&L / fill / exit keys from the rest. The persisted evidence is untouched."""
+    return [scrub_paper_results(row) for row in rows
+            if row.get("record") not in PAPER_LEDGER_TABLES and row.get("event_type") not in PAPER_RESULT_EVENTS]
 
 
 def records(db, table, *, run_id="", setup_id="", offset=0, statuses=(), failed=False):
@@ -220,7 +249,7 @@ def render(st, page):
                 st.caption(tr("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first."))
                 rows = history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT)
                 if hidden:
-                    rows = [row for row in rows if row["record"] not in PAPER_LEDGER_TABLES]
+                    rows = hide_paper_results(rows)
                 if not rows:
                     st.info(es.NO_DATA)
                 for record_type, group in groupby(rows, key=lambda row: row["record"]):
@@ -230,6 +259,7 @@ def render(st, page):
                 st.subheader(tr("Failed runs"))
                 table(st, records(db, "runs", failed=True))
                 st.subheader(tr("Error journal"))
-                table(st, records(db, "journal", statuses=("ERROR", "CRITICAL")))
+                errors = records(db, "journal", statuses=("ERROR", "CRITICAL"))
+                table(st, hide_paper_results(errors) if hidden else errors)
     except (sqlite3.DatabaseError, ValueError, TypeError, KeyError) as exc:
         st.error(f"{tr('DASHBOARD_ERROR')} ({type(exc).__name__}).")
