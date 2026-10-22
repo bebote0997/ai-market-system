@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8: selección XAUUSD
+
+- TRAIN (C_IBKR), 18 variantes: 17 negativas o ~0; L7 Raschke 80-20 +0,551R (110 trades, 4/4 semestres) pero 2,82 tr/mes < 3 y DD 20,6R, y dos operaciones (+32R, +26R) explican casi todo. Ninguna elegible → **FLAT** (`replay/round8_frozen_XAUUSD.json`, sin holdout). GBPUSD registrado FLAT.
+
 ## 2026-10-21 — Ronda 8: selección GBPUSD
 
 - TRAIN (C_RAW), 19 variantes: mejor L3:NR4 +0,049R (DD 28R), L3:NR7 +0,035R, L1 invertido (Seeck) +0,018R, S3b IB +0,001R; resto negativas. Ninguna elegible → **FLAT** (`replay/round8_frozen_GBPUSD.json`, sin holdout). EURUSD registrado como FLAT en `round8/EURUSD.json`.
