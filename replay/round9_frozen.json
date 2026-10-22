@@ -1,0 +1,62 @@
+{
+  "bar_info_r7": {
+    "avg_r": 0.08,
+    "dd": 12.0,
+    "pf": 1.15,
+    "tr_mo": 3.0
+  },
+  "bar_strict": {
+    "avg_r": 0.08,
+    "dd": 12.0,
+    "min_pos_quarters": 5,
+    "pf": 1.15,
+    "quarters": 8,
+    "tr_mo": 15.0
+  },
+  "engine": "replay/round8.py",
+  "engine_blob": "f78e5f24745b7cd3a0c3259ffd879b6f8d47a9c5",
+  "holdout": [
+    "2025-01-01",
+    "2026-10-20"
+  ],
+  "holdout_last_day": "2026-10-19",
+  "main_cost": "C_IBKR",
+  "primary": "L3:NR4",
+  "reference_costs": [
+    "C_OANDA"
+  ],
+  "round": 9,
+  "secondary": [
+    "L3:NR7",
+    "S1a:ORB5"
+  ],
+  "symbol": "NAS100USD",
+  "tests_after": 629,
+  "tests_before": 626,
+  "train_metrics_r8b": {
+    "L3:NR4": {
+      "avg_r": 0.4543,
+      "mtm_dd_r": 14.27,
+      "pf": 1.793,
+      "tr_mo": 4.71,
+      "trades": 184,
+      "win_pct": 41.3
+    },
+    "L3:NR7": {
+      "avg_r": 0.5058,
+      "mtm_dd_r": 9.85,
+      "pf": 1.977,
+      "tr_mo": 2.69,
+      "trades": 105,
+      "win_pct": 46.7
+    },
+    "S1a:ORB5": {
+      "avg_r": 0.144,
+      "mtm_dd_r": 45.24,
+      "pf": 1.179,
+      "tr_mo": 20.27,
+      "trades": 791,
+      "win_pct": 21.7
+    }
+  }
+}

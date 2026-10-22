@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-10-22 — Ronda 9, bloque 1: congelado y declaración (antes del holdout)
+
+- `replay/round9_frozen.json` (copia de `/workspace/backtest/round9_frozen.json`): NAS100USD, configuraciones exactas de la ronda 8b sin reajuste. PRIMARIA L3:NR4; SECUNDARIAS L3:NR7 y S1a:ORB5. Coste principal C_IBKR, referencia C_OANDA. Registra el blob git de `replay/round8.py`.
+- Declaración en `report_round9.md` sección 1 (copia `replay/round9_declaration.md`). Holdout 2025-01-01..2026-10-19 una sola vez. Barra estricta: avg R ≥ +0,08, PF > 1,15, DD MTM < 12R, ≥ 15 tr/mes, ≥ 5 de 8 trimestres positivos. Barra ronda 7 (≥ 3 tr/mes) solo informativa. 3 tests nuevos: 626 → 629.
+
 ## 2026-10-21 — Ronda 8b, bloques 4-5: sin holdout, gráfico y cierre
 
 - Bloque 4 no ejecutado: ninguna variante es elegible en ningún instrumento. Los cuatro siguen **FLAT** y 2025-01..2026-10 sigue sin usar.
