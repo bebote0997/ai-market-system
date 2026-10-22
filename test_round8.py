@@ -96,6 +96,117 @@ class Fills(unittest.TestCase):
         self.assertEqual(len(r8.run_orders(m, f, [a, b])), 1)
 
 
+SPREAD = r8.Cost("SPREAD", {"EURUSD": 0.0002}, {"EURUSD": 0.0}, {"EURUSD": 0.0})  # half spread 1 pip, no slip
+
+
+def segments(*parts):
+    """Concatenated 1-min frames: each part is (NY start, rows)."""
+    return pd.concat([frame(rows, start=start) for start, rows in parts])
+
+
+def flat(n, px=1.1):
+    return [(px, px, px, px)] * n
+
+
+class BidAsk(unittest.TestCase):
+    """Codex finding (a): every touch on the side that fills it (half spread 1 pip)."""
+
+    def test_buy_limit_needs_the_ask_through_the_level(self):
+        # mid low 1.0948 -> ask low 1.0949: not through 1.0949; next bar mid low 1.0947 -> ask 1.0948 < 1.0949
+        m = mk([(1.1, 1.1, 1.1, 1.1), (1.0960, 1.0960, 1.0948, 1.0955), (1.0955, 1.0955, 1.0947, 1.0955),
+                (1.0955, 1.0955, 1.0955, 1.0955)])
+        f = r8.Fills(SPREAD, "EURUSD", m.spread)
+        od = r8.Order(m.days[0], [r8.Leg(+1, "limit", 1.0949, stop=1.0939)], 1, 3, 3)
+        tr = r8.simulate(m, f, od)
+        self.assertEqual(tr["k"], 2)
+        self.assertAlmostEqual(tr["risk"], 0.0010)  # filled at the limit itself, never above it
+
+    def test_buy_stop_triggers_on_the_ask(self):
+        # mid high 1.10095 never reaches 1.1010, but the ask (1.10105) does
+        m = mk([(1.1, 1.1, 1.1, 1.1), (1.1, 1.10095, 1.1, 1.1), (1.1, 1.1, 1.1, 1.1)])
+        f = r8.Fills(SPREAD, "EURUSD", m.spread)
+        od = r8.Order(m.days[0], [r8.Leg(+1, "stop", 1.1010, stop=1.1000)], 1, 2, 2)
+        self.assertEqual(r8.simulate(m, f, od)["k"], 1)
+        f0 = r8.Fills(ZERO, "EURUSD", m.spread)
+        self.assertIsNone(r8.simulate(m, f0, od))
+
+    def test_long_stop_hit_on_the_bid_when_mid_stays_above(self):
+        # entry ask 1.1001, stop 1.0990 (mid open - 10 pips); mid low 1.09905 -> bid 1.09895 <= stop
+        m = mk([(1.1, 1.1, 1.1, 1.1), (1.1, 1.1, 1.1, 1.1), (1.1, 1.1, 1.09905, 1.1), (1.1, 1.1, 1.1, 1.1)])
+        f = r8.Fills(SPREAD, "EURUSD", m.spread)
+        od = r8.Order(m.days[0], [r8.Leg(+1, "market", 0.0, stop=1.0990)], 1, 2, 3)
+        tr = r8.simulate(m, f, od)
+        self.assertEqual((tr["reason"], tr["j"]), ("SL", 2))
+        self.assertAlmostEqual(tr["r"], -1.0)  # risk = ask entry - stop; exit at the stop on the bid
+
+    def test_long_tp_needs_the_bid_through_the_target(self):
+        # TP 1R at mid 1.1010; mid high 1.1011 -> bid 1.1010 (touch, no fill); next bar bid high 1.10105 > TP
+        m = mk([(1.1, 1.1, 1.1, 1.1), (1.1, 1.1, 1.1, 1.1), (1.1, 1.1011, 1.1, 1.1), (1.1, 1.10115, 1.1, 1.1)])
+        f = r8.Fills(SPREAD, "EURUSD", m.spread)
+        od = r8.Order(m.days[0], [r8.Leg(+1, "market", 0.0, stop=1.0990, tp_r=1.0)], 1, 2, 3)
+        tr = r8.simulate(m, f, od)
+        self.assertEqual((tr["reason"], tr["j"]), ("TP", 3))
+
+    def test_short_stop_hit_on_the_ask(self):
+        m = mk([(1.1, 1.1, 1.1, 1.1), (1.1, 1.1, 1.1, 1.1), (1.1, 1.10095, 1.1, 1.1), (1.1, 1.1, 1.1, 1.1)])
+        f = r8.Fills(SPREAD, "EURUSD", m.spread)
+        od = r8.Order(m.days[0], [r8.Leg(-1, "market", 0.0, stop=1.1010)], 1, 2, 3)
+        tr = r8.simulate(m, f, od)
+        self.assertEqual((tr["reason"], tr["j"]), ("SL", 2))
+
+
+class Causality(unittest.TestCase):
+    def l7_market(self, session_rows):
+        prev = [(1.11 - 0.0001 * q / 1.19, 1.11 - 0.0001 * q / 1.19, 1.11 - 0.0001 * (q + 1) / 1.19,
+                 1.11 - 0.0001 * (q + 1) / 1.19) for q in range(119)]  # opens at the high, closes at the low
+        return r8.Market(segments(("2024-03-04 08:00", prev), ("2024-03-05 03:00", session_rows)), "EURUSD")
+
+    def test_l7_order_placed_after_breach_with_known_stop(self):
+        """Codex finding (b): the stop order starts at kb + 1 and its stop ignores lower lows after kb."""
+        lo = 1.11 - 0.0001 * 119 / 1.19  # previous D1 low = the level
+        rows = [(lo + 0.0005,) * 4, (lo + 0.0005, lo + 0.0005, lo - 0.0010, lo - 0.0008),
+                (lo - 0.0008, lo - 0.0008, lo - 0.0020, lo - 0.0015), (lo - 0.0015, lo + 0.0005, lo - 0.0015, lo)]
+        m = self.l7_market(rows + flat(480, lo))
+        day = date(2024, 3, 5)
+        (od,) = r8.f_l7(m, day)
+        kb = int(np.searchsorted(m.t, m.ts(day, (3, 0)))) + 1
+        self.assertEqual(od.start, kb + 1)
+        self.assertEqual(od.legs[0].kind, "stop")
+        self.assertAlmostEqual(od.legs[0].stop, lo - 0.0010)  # not the later low lo - 0.0020
+
+    def test_silver_bullet_ignores_fvgs_after_the_mss(self):
+        """Codex finding (c): an FVG completed at or before the MSS bar wins over a later one."""
+        m = mk(flat(20))
+        m.h, m.l = np.full(20, 1.1), np.full(20, 1.099)
+        ks, j = 2, 8
+        m.l[3], m.h[5] = 1.0985, 1.0980  # bearish FVG completed at bar 5 (h[5] < l[3])
+        m.l[8], m.h[10] = 1.0970, 1.0960  # another one completing at bar 10, after the MSS at bar 8
+        self.assertEqual(r8.sb_fvg_bar(m, -1, ks, j, 20), 5)
+        m.h[5] = 1.1
+        self.assertEqual(r8.sb_fvg_bar(m, -1, ks, j, 20), 10)  # only then a later (forward-scanned) FVG
+        self.assertIsNone(r8.sb_fvg_bar(m, -1, ks, j, 11))  # it would complete on the window's last bar
+
+    def l1_market(self, before, entry_open):
+        rows = flat(120) + flat(29) + [(1.1, 1.1, before, before)] + [(entry_open,) * 4] + flat(449, entry_open)
+        return r8.Market(frame(rows, start="2024-03-05 01:00"), "EURUSD")
+
+    def test_l1_direction_from_closed_bars_entry_next_open(self):
+        """Codex finding (d): sign from the close of the last bar before +30 min, not the entry bar's open."""
+        day = date(2024, 3, 5)
+        m = self.l1_market(before=1.0990, entry_open=1.1020)  # down in the first 30 min, gap up at the entry open
+        (od,) = r8.f_l1(+1)(m, day)
+        self.assertEqual(od.legs[0].side, -1)
+        self.assertEqual(m.t[od.start], m.ts(day, (3, 30)))
+
+    def test_l1b_direction_from_closed_bars(self):
+        day = date(2024, 3, 5)
+        rows = flat(359) + [(1.1, 1.1, 1.0990, 1.0990)] + [(1.1020,) * 4] * 31  # down bar at 15:59
+        m = r8.Market(segments(("2024-03-04 11:00", flat(361)), ("2024-03-05 10:00", rows)), "EURUSD")
+        (od,) = r8.f_l1b(m, day)
+        self.assertEqual(od.legs[0].side, -1)
+        self.assertEqual(m.t[od.start], m.ts(day, (16, 0)))
+
+
 class Clamp(unittest.TestCase):
     def test_index_clamp_uses_prior_days_median(self):
         m = mk([(1.1, 1.1, 1.1, 1.1)] * 3)

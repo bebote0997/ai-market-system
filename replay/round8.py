@@ -238,35 +238,45 @@ def resolve(m, day, leg):
     return stop, tp
 
 
-def first_trigger(m, leg, a, b):
-    """First bar index in [a, b) where a pending leg fills, and the mid fill price."""
+def first_trigger(m, fills, leg, a, b):
+    """First bar index in [a, b) where a pending leg fills, and the fill price on its own side (buy orders on the ask
+    = mid + half spread, sell orders on the bid = mid - half spread): a buy stop triggers when the ask high reaches the
+    level and fills at max(ask open, level); a buy limit needs the ask low to trade through the level and fills at
+    min(ask open, level) (never above the limit). Mirror for sells. Slippage is added by ``simulate``."""
     if b <= a:
         return None
+    hs = fills.hs[a:b]
+    if leg.side > 0:
+        hi_s, lo_s, o_s = m.h[a:b] + hs, m.l[a:b] + hs, m.o[a:b] + hs  # ask
+    else:
+        hi_s, lo_s, o_s = m.h[a:b] - hs, m.l[a:b] - hs, m.o[a:b] - hs  # bid
     if leg.kind == "stop":
-        hit = m.h[a:b] >= leg.level if leg.side > 0 else m.l[a:b] <= leg.level
+        hit = hi_s >= leg.level if leg.side > 0 else lo_s <= leg.level
     else:  # limit: price must trade through
-        hit = m.l[a:b] < leg.level if leg.side > 0 else m.h[a:b] > leg.level
+        hit = lo_s < leg.level if leg.side > 0 else hi_s > leg.level
     idx = np.flatnonzero(hit)
     if not len(idx):
         return None
-    k = a + int(idx[0])
-    o = m.o[k]
+    q = int(idx[0])
+    o = o_s[q]
     if leg.kind == "stop":
         px = max(o, leg.level) if leg.side > 0 else min(o, leg.level)
     else:
         px = min(o, leg.level) if leg.side > 0 else max(o, leg.level)
-    return k, float(px)
+    return a + q, float(px)
 
 
 def simulate(m, fills, order, busy_until=-1):
-    """One trade dict, or None (no fill / overlap / not computable). Stop wins a same-bar stop/TP tie; a pending
-    fill bar can stop out but never takes profit."""
+    """One trade dict, or None (no fill / overlap / not computable). Every touch is checked on the side that fills it:
+    a long exits on the bid (SL when the bid low reaches the stop, TP when the bid high trades through the target),
+    a short on the ask. Stop wins a same-bar stop/TP tie; a pending fill bar can stop out but never takes profit."""
     if order.legs[0].kind == "market":
         leg = order.legs[0]
         k, px = order.start, float(m.o[order.start])
         leg = Leg(leg.side, leg.kind, px, leg.stop, leg.stop_dist, leg.tp_r, leg.tp_price)
+        entry = px + leg.side * (fills.hs[k] + fills.slip[k])
     else:
-        hits = [(first_trigger(m, lg, order.start, order.end), lg) for lg in order.legs]
+        hits = [(first_trigger(m, fills, lg, order.start, order.end), lg) for lg in order.legs]
         hits = [(h, lg) for h, lg in hits if h is not None]
         if not hits:
             return None
@@ -274,6 +284,7 @@ def simulate(m, fills, order, busy_until=-1):
         if len(hits) > 1 and hits[0][0][0] == hits[1][0][0]:
             return None
         (k, px), leg = hits[0]
+        entry = px + leg.side * (0 if leg.kind == "limit" else fills.slip[k])  # px is already on the ask / bid
     if k <= busy_until or k > order.exit:
         return None
     levels = resolve(m, order.day, leg)
@@ -281,11 +292,14 @@ def simulate(m, fills, order, busy_until=-1):
         return None
     stop, tp = levels
     side = leg.side
-    entry = px + side * (fills.hs[k] + (0 if leg.kind == "limit" else fills.slip[k]))
     risk = side * (entry - stop)
     if risk <= 0:
         return None
-    hi, lo = m.h[k:order.exit + 1], m.l[k:order.exit + 1]
+    hs = fills.hs[k:order.exit + 1]
+    exit_side = -side  # a long exits by selling on the bid, a short by buying on the ask
+    hi = m.h[k:order.exit + 1] + exit_side * hs
+    lo = m.l[k:order.exit + 1] + exit_side * hs
+    op = m.o[k:order.exit + 1] + exit_side * hs
     adverse = lo if side > 0 else hi
     s_hit = np.flatnonzero(adverse <= stop if side > 0 else adverse >= stop)
     t_hit = np.array([], dtype=int)
@@ -297,21 +311,21 @@ def simulate(m, fills, order, busy_until=-1):
     i_t = int(t_hit[0]) if len(t_hit) else None
     if i_s is not None and (i_t is None or i_s <= i_t):
         j = k + i_s
-        gap = m.o[j] if i_s > 0 else stop
+        gap = op[i_s] if i_s > 0 else stop
         xp = min(gap, stop) if side > 0 else max(gap, stop)
-        exit_px, reason = xp - side * (fills.hs[j] + fills.slip[j]), "SL"
+        exit_px, reason = xp - side * fills.slip[j], "SL"
         last = i_s
     elif i_t is not None:
         j = k + i_t
-        exit_px, reason, last = tp - side * fills.hs[j], "TP", i_t
+        exit_px, reason, last = tp, "TP", i_t
     else:
         j = order.exit
         exit_px, reason, last = m.c[j] - side * (fills.hs[j] + fills.slip[j]), "TIME", order.exit - k
     r = (side * (exit_px - entry) - fills.comm) / risk
-    worst_mid = adverse[:last + 1].min() if side > 0 else adverse[:last + 1].max()
+    worst_px = adverse[:last + 1].min() if side > 0 else adverse[:last + 1].max()
     if reason == "SL":
-        worst_mid = max(worst_mid, stop) if side > 0 else min(worst_mid, stop)
-    worst = (side * (worst_mid - entry) - fills.hs[k] - fills.comm) / risk
+        worst_px = max(worst_px, stop) if side > 0 else min(worst_px, stop)
+    worst = (side * (worst_px - entry) - fills.comm) / risk
     return {"day": str(order.day), "side": side, "entry_t": int(m.t[k]), "exit_t": int(m.t[j]), "k": k, "j": j,
             "r": float(r), "worst": float(min(worst, r)), "reason": reason, "risk": float(risk)}
 
@@ -461,19 +475,21 @@ def f_s3b(m, day):
 def f_l1(direction):
     def fn(m, day):
         """L1 session-open momentum: sign of the first 30 min of the session (London 03:00-03:30 NY; NAS100 09:30-10:00
-        ET) traded at +30 min in that direction (``direction`` = +1) or reversed (-1), ATR stop, exit at session end."""
+        ET; closed bars only) traded at the next bar open (+30 min) in that direction (``direction`` = +1) or reversed (-1), ATR stop, exit at session end."""
         op, end = session(m, day)
         i = m.entry_at(op)
         if i is None:
             return []
-        od = timed(m, day, op + 30 * MINUTE, end, lambda k: direction * sign(m.o[k] - m.o[i]))
+        # direction from closed bars only (close of the last bar before +30 min vs the session open), entry at the
+        # next bar open
+        od = timed(m, day, op + 30 * MINUTE, end, lambda k: direction * sign(m.c[k - 1] - m.o[i]) if k - 1 >= i else 0)
         return [od] if od else []
     return fn
 
 
 def f_l1b(m, day):
-    """L1b last-30-min momentum (Baltussen et al.): sign of prior 17:00 NY -> 16:00 NY (NAS100 15:30 ET) traded to
-    16:30 (NAS100 16:00), ATR stop."""
+    """L1b last-30-min momentum (Baltussen et al.): sign of prior 17:00 NY -> 16:00 NY (NAS100 15:30 ET), i.e. the
+    close of the last bar before the entry, traded at the next bar open to 16:30 (NAS100 16:00), ATR stop."""
     prev = m.prev_d1(day)
     if prev is None:
         return []
@@ -481,7 +497,7 @@ def f_l1b(m, day):
     t_in = m.ts(day, (15, 30) if m.symbol == "NAS100USD" else (16, 0))
     if p0 is None:
         return []
-    od = timed(m, day, t_in, t_in + 30 * MINUTE, lambda k: sign(m.o[k] - m.c[p0]))
+    od = timed(m, day, t_in, t_in + 30 * MINUTE, lambda k: sign(m.c[k - 1] - m.c[p0]) if k - 1 > p0 else 0)
     return [od] if od else []
 
 
@@ -533,10 +549,30 @@ def fractal_hl(m, k, look):
     return float(m.h[max(k - look, 0):k].max()), float(m.l[max(k - look, 0):k].min())
 
 
+def is_fvg(m, side, i):
+    """3-bar FVG completed at the close of bar ``i`` (bars i-2, i-1, i) in the direction of ``side``."""
+    return m.h[i] < m.l[i - 2] if side < 0 else m.l[i] > m.h[i - 2]
+
+
+def sb_fvg_bar(m, side, ks, j, b):
+    """Completion bar of the FVG used after an MSS confirmed at the close of bar ``j`` (sweep at ``ks``): the most
+    recent FVG completed at or before ``j`` (bars ks..j, all closed); if none, the first one completing in the next 3
+    bars, scanned forward (the order is placed after it completes). None if none, or if placement falls outside the
+    window."""
+    for i in range(j, ks + 1, -1):
+        if is_fvg(m, side, i):
+            return i if j + 1 < b else None
+    for i in range(j + 1, min(j + 4, b - 1)):
+        if is_fvg(m, side, i):
+            return i
+    return None
+
+
 def silver_bullet(m, day, w_start, sess_end, liq, strict):
     """L4 one window: liquidity sweep -> market-structure shift (M1 close beyond the 10-bar extreme before the sweep)
-    -> 3-bar FVG in the displacement leg -> limit at the FVG midpoint until the window ends; stop at the sweep extreme;
-    TP 2R; exit at session end."""
+    -> 3-bar FVG in the displacement leg completed before the order is placed (``sb_fvg_bar``) -> limit at the FVG
+    midpoint from the next bar until the window ends; stop at the sweep extreme known at placement; TP 2R; exit at
+    session end."""
     a, b = m.span(w_start, w_start + 60 * MINUTE)
     x = m.exit_at(sess_end)
     if b - a < 30 or x is None:
@@ -557,17 +593,11 @@ def silver_bullet(m, day, w_start, sess_end, liq, strict):
             mss_level = pre_lo if side < 0 else pre_hi
             for j in range(ks + 1, b):
                 if (m.c[j] < mss_level) if side < 0 else (m.c[j] > mss_level):
-                    fvg = None
-                    for i in range(min(j + 3, b - 1), ks + 1, -1):
-                        if side < 0 and m.h[i] < m.l[i - 2]:
-                            fvg = (m.l[i - 2] + m.h[i]) / 2
-                        elif side > 0 and m.l[i] > m.h[i - 2]:
-                            fvg = (m.h[i - 2] + m.l[i]) / 2
-                        if fvg is not None:
-                            place = max(i, j) + 1
-                            break
-                    if fvg is None or place >= b:
+                    i = sb_fvg_bar(m, side, ks, j, b)
+                    if i is None:
                         return None
+                    fvg = (m.l[i - 2] + m.h[i]) / 2 if side < 0 else (m.h[i - 2] + m.l[i]) / 2
+                    place = max(i, j) + 1
                     ext = float(m.h[ks:place].max() if side < 0 else m.l[ks:place].min())
                     return Order(day, [Leg(side, "limit", float(fvg), stop=ext, tp_r=2.0)], place, b, x)
             return None
@@ -610,8 +640,8 @@ def f_l6(kind):
 
 def f_l7(m, day):
     """L7 Raschke 80-20: previous D1 opened in its top 20 % and closed in its bottom 20 % (-> long; mirror -> short);
-    in the session price first trades beyond the previous low (high), then a stop order back at that level; stop at
-    the session extreme so far; exit at session end."""
+    in the session price first trades beyond the previous low (high) on bar kb; from kb + 1 a stop order back at that
+    level (live to session end); stop at the session extreme through kb; exit at session end."""
     prev = m.prev_d1(day)
     op, end = session(m, day)
     x = m.exit_at(end)
@@ -632,12 +662,10 @@ def f_l7(m, day):
     if not len(beyond):
         return []
     kb = i + int(beyond[0])
-    trig = np.flatnonzero(m.h[kb + 1:j] >= level if side > 0 else m.l[kb + 1:j] <= level)
-    if not len(trig):
-        return []
-    kt = kb + 1 + int(trig[0])
-    ext = float(m.l[i:kt].min() if side > 0 else m.h[i:kt].max())
-    return [Order(day, [Leg(side, "stop", level, stop=ext)], kt, kt + 1, x)]
+    # the stop order is placed at kb + 1 with the structure known then (session extreme through the breach bar kb);
+    # it is not amended by later extremes
+    ext = float(m.l[i:kb + 1].min() if side > 0 else m.h[i:kb + 1].max())
+    return [Order(day, [Leg(side, "stop", level, stop=ext)], kb + 1, j, x)] if kb + 1 < j else []
 
 
 def variants(symbol):

@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8b, bloque 1: corrección de los 4 hallazgos de Codex (branch `feat/backtest-v2-i2`)
+
+- (a) Bid/ask: los disparos de órdenes stop/límite se evalúan en su lado (compras en ask = mid + medio spread, ventas en bid), así que una compra límite nunca se llena por encima del límite. SL/TP se evalúan en el lado de salida (largo en bid, corto en ask); el TP se llena al precio objetivo y los gaps de stop, en la apertura del lado de salida.
+- (b) L7 Raschke: la orden stop se coloca en kb+1 con el stop = extremo de la sesión hasta la barra de ruptura kb (sin enmiendas posteriores) y queda viva hasta el final de la sesión.
+- (c) Silver Bullet: `sb_fvg_bar` usa el FVG más reciente completado hasta la barra del MSS; si no hay, toma el primero que se complete en las 3 barras siguientes, buscando hacia adelante. Ya no se buscan hacia atrás barras futuras.
+- (d) L1/L1b: la dirección sale del cierre de la última barra cerrada antes de la entrada, y la entrada es a la apertura de la barra siguiente.
+- `test_round8.py`: 9 tests de frontera nuevos (fallan con el código anterior). unittest 2593 OK (41 skipped, 1 expected failure); ruff PASS. Los resultados de la ronda 8 quedan sustituidos por la re-ejecución del bloque 3.
+
 ## 2026-10-21 — Ronda 8: resumen final y veredicto (branch `feat/backtest-v2-i2`)
 
 - **0/4 instrumentos pasan**: ninguna de las 70 variantes fue elegible en TRAIN (umbral + ≥ 3/4 semestres positivos); los cuatro congelados FLAT y commiteados; **no se ejecutó ningún holdout** (2025-01..2026-10 queda limpio). FX: costes de 1,1 pip contra stops de 5-15 pips anulan los efectos de la literatura (−0,24R..+0,05R). XAU: solo Raschke 80-20 (+0,55R, dos outliers). NAS100: varias positivas (NR4 +0,449R, NR7 +0,501R, ORB5 +0,154R, IB +0,159R) pero todas con DD > 12R o < 3 trades/mes; posible sesgo alcista 2022-2024.
