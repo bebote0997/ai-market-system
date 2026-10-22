@@ -12,6 +12,7 @@ import uuid
 from ai.orchestrator import run as run_ai
 from ai.provider import DeterministicAIProvider
 from ai.runtime import AuditLog
+from core.risk_policy import stamp_fx_order
 from core.rr_contract import POLICY_V2_F3
 from data.macro_news import InMemoryMacroNewsProvider, NoMacroDataProvider
 from data.market_evidence import EvidenceError, MarketEvidenceEngine, bars_from_frame
@@ -1401,7 +1402,8 @@ class OperationalRuntime:
                     if (any(o.symbol == symbol and o.status == "PENDING" for o in fresh.orders.values())
                             or symbol in fresh.account.open_positions or fresh.account.equity != decision_equity):
                         return False, STALE_PAPER_STATE
-                    order = fresh.submit_plan(deterministic, snapshot, slot)
+                    order = stamp_fx_order(fresh.submit_plan(deterministic, snapshot, slot),
+                                           deterministic.trade_plan)  # DEC-FX-SL-1
                     return order is not None, order
                 self._rex_context(rex, "ST9", lambda: {"decision_equity": decision_equity, "slot": slot})
                 fresh, order = self._guarded_paper_write(symbol, key, submit, rex_store, "submit")

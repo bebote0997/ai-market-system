@@ -592,13 +592,20 @@ class CompatibilityTests(unittest.TestCase):
         service = (ROOT / "runtime" / "service.py").read_text(encoding="utf-8")
         self.assertNotIn("conflict_path", service)
         self.assertNotIn("risk_reservation", service)
-        done = subprocess.run([freeze_amendment._git(), "-C", str(ROOT), "diff", "--name-only", "979e1e6", "HEAD",
-                               "--", "execution/conflict_path.py", "execution/risk_reservation.py", "riesgo.py",
-                               "runtime/paper_contracts.py", "core/"],
-                              capture_output=True, text=True)
+        def git(*args):
+            return subprocess.run([freeze_amendment._git(), "-C", str(ROOT), *args], capture_output=True, text=True)
+        done = git("diff", "--name-only", "979e1e6", "HEAD", "--", "execution/conflict_path.py",
+                   "execution/risk_reservation.py", "riesgo.py", "runtime/paper_contracts.py", "core/")
         if done.returncode != 0:  # e.g. a shallow CI checkout without the P3 base: not checked, never a vacuous pass
             self.skipTest("the P3 base commit is not available in this checkout")
-        self.assertEqual(done.stdout.strip(), "")  # Phase 6 engine, risk and adapter untouched since P3
+        # Phase 6 engine, risk and adapter untouched since P3, except the owner-authorized DEC-FX-SL-1 amendment
+        # (FX SL clamp + fixed 2R policy identity), whose every amended file carries the decision tag.
+        amended = {"core/fx_policy.py", "core/risk_policy.py", "core/rr_contract.py", "execution/conflict_path.py",
+                   "execution/risk_reservation.py", "riesgo.py"}
+        changed = set(done.stdout.split())
+        self.assertLessEqual(changed, amended)
+        for path in changed:
+            self.assertIn("DEC-FX-SL-1", git("diff", "979e1e6", "HEAD", "--", path).stdout, path)
         frozen = subprocess.run([freeze_amendment._git(), "-C", str(ROOT), "show",
                                  "979e1e6:execution/paper_broker.py"], capture_output=True, text=True, check=True).stdout
         # DEC-14.1 permits only this explicit PAPER exit; every other broker byte remains frozen.

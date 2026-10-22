@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-10-22 — DEC-FX-SL-1: SL FX ajustado a 45–60 pips y TP fijo 2R (branch `feat/fx-sl-week-hold`, chunk 1)
+
+- Nuevo `core/fx_policy.py` (config central): `FX_SL_MIN_PIPS=45`, `FX_SL_MAX_PIPS=60`, `FX_TP_RR=2.0` (override opcional por env `AI_FLOOR_FX_SL_MIN_PIPS` / `_MAX_PIPS` / `AI_FLOOR_FX_TP_RR`; inválido ⇒ defaults + warning), `is_fx` (par de dos divisas fiat; XAUUSD/índices no), `pip_size` (0.0001; JPY 0.01), `clamp_stop` (WIDENED / NARROWED / UNCHANGED).
+- `core/rr_contract.py`: `POLICY_FX = "V2_FX_SL_CLAMP_2R"` (LIMITS exactamente 2R, FILL_LIMITS ≥ 1.5R), `FIXED_RR_POLICIES`. `core/risk_policy.py`: `RISK_POLICY_V2_FX` registrada (`V2_P5_RISK_1_FX_2R`, factor 6/5), `risk_policy_for(plan)`, `stamp_fx_order(order, plan)`.
+- `agents/target_planner.py`: `plan_fixed_3r` y el nuevo `plan_fx_fixed_rr` comparten `_plan_fixed_rr` (mismo flujo y redondeo; el FX ajusta el SL y registra `structural_stop`, `structural_sl_pips`, `sl_clamp`). `floor/orchestrator.py`: FX ⇒ `plan_fx_fixed_rr` con V1 y V2_F3.
+- Gates: `riesgo.evaluar_trade_plan` (plan FX ⇒ contrato FX), `ai/provider._rr_rejected`, `execution/risk_engine_v2.evaluate` (identidad del plan = la de la política), `execution/conflict_path.candidate`, `execution/risk_reservation` (PaperBroker con el R:R de la política), `execution/opposite_policy.execute` (política FX para un plan FX). `runtime/service.py`: las órdenes PAPER de un plan FX se sellan con la política FX. `execution/paper_broker.py` sin cambios (congelado).
+- `replay/rex_oracle.py`: plan FX ⇒ `UNSUPPORTED_RR_POLICY`. `test_phase12_e2e.py` mantiene EURUSD en el planner V1 (cadena del oráculo V1); `test_phase8_p4b.py` admite solo los archivos etiquetados DEC-FX-SL-1.
+- Tests: `test_fx_sl_clamp.py` (bajo el mínimo ⇒ ensanchado, sobre el máximo ⇒ estrechado, en rango sin cambio, TP = 2 × SL, LONG/SHORT, V1 y V2_F3, no-FX intacto, configurable incl. TP 2.5R en un intérprete nuevo, gates de riesgo/IA/Risk V2, suelo de fill 1.5R). Sin cambios de fingerprint, env obligatoria, Render ni flags. REAL OFF.
+
 ## 2026-10-19 — DEC-SUMMARY-DAY-1: correcciones de revisión Codex (branch `feat/summary-trading-day`)
 
 - HIGH `runtime/demo_runner.py` `daily_summary`: cada pase (sink durable únicamente) entrega también los DAILY_SUMMARY persistidos que un crash dejó sin capturar (journal sin `notification_events`) o sin reclamar (sin fila en `notification_deliveries`). Un envío reclamado sin resultado durante más de `SUMMARY_CLAIM_GRACE = 15 min` (crash a mitad del envío) no se reenvía (Slack no deduplica): estado `UNKNOWN` y una sola línea `component=notifications event=DAILY_SUMMARY_UNKNOWN date=<fecha>`. `storage/database.py` sin cambios (módulo congelado por hash).

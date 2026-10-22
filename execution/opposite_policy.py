@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from core.risk_policy import RISK_POLICY_V2_P5
+from core.risk_policy import risk_policy_for
 from execution.candidate_identity import CLAIMED, SAME, candidate_fields, claim_run
 from execution.conflict_path import candidate
 from execution.risk_engine_v2 import drawdown_basis_scope
@@ -114,8 +114,9 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, draw
         store.event(at, run_id, symbol, "opposite_policy", DECISION, "WARNING",
                     {"status": "SKIPPED", "reason": invalid})
         return Outcome("SKIPPED", invalid)
+    policy = risk_policy_for(report.trade_plan)  # DEC-FX-SL-1: an FX plan is reserved under the FX risk policy
     fields = candidate_fields(report, instrument, account_id=runtime.config.account_id, setup_id=setup_id,
-                              policy=RISK_POLICY_V2_P5, conflict_policy_version=VERSION)
+                              policy=policy, conflict_policy_version=VERSION)
     claim = runtime._persist("D", lambda: claim_run(
         store, run_id=run_id, symbol=symbol, fields=fields, as_of=at, owner_key=key,
         has_history=lambda s: prior(s, run_id) is not None or any(
@@ -188,7 +189,7 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, draw
         else:
             with drawdown_basis_scope(drawdown_basis):  # risk_reservation.py is frozen: the basis is scoped
                 prepared = prepare_reservation(report, instrument, broker.account, broker.orders, broker.fills,
-                                               as_of=at, setup_id=setup_id, stamp_setup_id=True)
+                                               as_of=at, setup_id=setup_id, policy=policy, stamp_setup_id=True)
             if prepared.status == "APPROVED":
                 broker.journal.extend(prepared.broker.journal)
                 outcome = Outcome("SUBMITTED", "STRUCTURE_REVERSE_SUBMITTED" if reversing else "ORDER_SUBMITTED",

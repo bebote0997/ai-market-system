@@ -206,7 +206,29 @@ def plan_fixed_3r(setup, datos_5m, symbol, run_id, as_of, instrument):
     beyond the entry are recorded as OBSERVATIONAL context only: they never move TP or SL and never reject.
     """
     from core.rr_contract import POLICY_V2_F3
-    decision = {"policy_version": POLICY_V2_F3, "status": None, "reason": None, "run_id": run_id,
+    return _plan_fixed_rr(setup, datos_5m, symbol, run_id, as_of, instrument, policy=POLICY_V2_F3, multiple=3,
+                          not_exact="planned_rr_not_exactly_3", ready="fixed_3r_from_structural_invalidation")
+
+
+def plan_fx_fixed_rr(setup, datos_5m, symbol, run_id, as_of, instrument):
+    """DEC-FX-SL-1 (FX symbols only): (TradePlan or None, target_decision).
+
+    Same authority order and grid rounding as ``plan_fixed_3r``, then the structural SL distance is clamped into
+    [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS] (widened below the minimum, narrowed above the maximum, unchanged inside) and
+    TP = entry +/- FX_TP_RR x the clamped risk (2R by default), exactly on the grid. The structural stop, its pip
+    distance and the clamp action are recorded in the decision."""
+    from core import fx_policy
+    from core.rr_contract import POLICY_FX
+    if not fx_policy.is_fx(symbol):
+        raise ValueError(f"{symbol!r} is not an FX symbol")
+    return _plan_fixed_rr(setup, datos_5m, symbol, run_id, as_of, instrument, policy=POLICY_FX,
+                          multiple=fx_policy.FX_TP_RR, not_exact="planned_rr_not_exactly_fx_tp_rr",
+                          ready="fx_fixed_rr_from_clamped_structural_invalidation", clamp=fx_policy.clamp_stop)
+
+
+def _plan_fixed_rr(setup, datos_5m, symbol, run_id, as_of, instrument, *, policy, multiple, not_exact, ready,
+                   clamp=None):
+    decision = {"policy_version": policy, "status": None, "reason": None, "run_id": run_id,
                 "setup_id": (getattr(setup, "explanation", None) or {}).get("setup_id"), "symbol": symbol,
                 "side": getattr(setup, "side", None), "entry": None, "stop": None, "entry_raw": None, "stop_raw": None,
                 "price_increment": None, "risk": None, "reward": None, "target": None, "planned_rr": None,
@@ -236,13 +258,25 @@ def plan_fixed_3r(setup, datos_5m, symbol, run_id, as_of, instrument):
     decision.update(entry=None if entry is None else str(entry), stop=None if stop is None else str(stop))
     if entry is None or stop is None or (side == "LONG" and not stop < entry) or (side == "SHORT" and not stop > entry):
         return done(INVALID_GEOMETRY, "invalid_entry_stop_geometry")
+    if clamp is not None:
+        structural = stop
+        stop, action, pips = clamp(symbol, side, entry, structural)
+        stop = normalize(stop, increment, ROUND_FLOOR if side == "LONG" else ROUND_CEILING)
+        decision.update(structural_stop=str(structural), structural_sl_pips=str(pips), sl_clamp=action,
+                        stop=None if stop is None else str(stop))
+        if stop is None or (side == "LONG" and not stop < entry) or (side == "SHORT" and not stop > entry):
+            return done(INVALID_GEOMETRY, "invalid_clamped_stop_geometry")
     risk = abs(entry - stop)
-    target = entry + 3 * risk if side == "LONG" else entry - 3 * risk
+    target = entry + multiple * risk if side == "LONG" else entry - multiple * risk
+    on_grid = normalize(target, increment, ROUND_FLOOR)
+    if on_grid != target:
+        return done(INVALID_GEOMETRY, "target_not_on_price_grid")  # only a non-grid FX_TP_RR multiple can do this
+    target = on_grid  # canonical instrument decimals (a Decimal multiple such as 2.0 adds a trailing digit)
     shape, why = geometry(side, entry, stop, target)
     if shape is None:
         return done(INVALID_GEOMETRY, why)  # e.g. a SHORT target at or below zero
-    if classify(shape.rr, POLICY_V2_F3) != WITHIN_POLICY:
-        return done(INVALID_GEOMETRY, "planned_rr_not_exactly_3")
+    if classify(shape.rr, policy) != WITHIN_POLICY:
+        return done(INVALID_GEOMETRY, not_exact)
     candidates, _ = _candidates(setup, side, entry, increment, as_of)
     decision["observational_context"] = [
         {**c, "rr_at_level": str(abs(Decimal(c["target_price"]) - entry) / risk),
@@ -253,9 +287,9 @@ def plan_fixed_3r(setup, datos_5m, symbol, run_id, as_of, instrument):
                     declared_rr=float(shape.rr))
     plan = TradePlan("1.0", symbol, side, "5m", float(entry), float(stop), float(target), float(shape.rr),
                      evidence=setup.evidence, invalidation=str(stop), run_id=run_id, as_of=as_of,
-                     policy_version=POLICY_V2_F3)
-    return done(PLAN_READY, "fixed_3r_from_structural_invalidation", plan)
+                     policy_version=policy)
+    return done(PLAN_READY, ready, plan)
 
 
 __all__ = ["INSUFFICIENT_TARGET_EVIDENCE", "INVALID_GEOMETRY", "NOT_A_VALID_SETUP", "NO_VALID_TARGET", "PLAN_READY",
-           "POLICY_VERSION", "UNSUPPORTED_PRECISION", "plan_fixed_3r", "plan_policy_d"]
+           "POLICY_VERSION", "UNSUPPORTED_PRECISION", "plan_fixed_3r", "plan_fx_fixed_rr", "plan_policy_d"]

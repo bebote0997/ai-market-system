@@ -33,7 +33,7 @@ from fractions import Fraction
 
 from core.contracts import RiskDecision
 from core.risk_policy import RISK_POLICY_V2_P5, registered_risk_policy, stamps_registered_semantics
-from core.rr_contract import POLICY_V2_F3, WITHIN_POLICY, classify, declared_matches, geometry, to_decimal
+from core.rr_contract import FIXED_RR_POLICIES, WITHIN_POLICY, classify, declared_matches, geometry, to_decimal
 
 
 _DRAWDOWN_BASIS = contextvars.ContextVar("risk_v2_drawdown_basis", default=None)
@@ -149,15 +149,15 @@ def evaluate(plan, account, orders, instrument, policy=RISK_POLICY_V2_P5, *, set
     if current is None or starting is None or realized is None or not isinstance(account.open_positions, dict):
         return reject("INVALID_ACCOUNT_STATE")
     # 2 plan geometry (fixed 3R, recomputed; declared R:R cannot override)
-    if getattr(plan, "policy_version", None) != POLICY_V2_F3:
+    if getattr(plan, "policy_version", None) != policy.rr_policy or policy.rr_policy not in FIXED_RR_POLICIES:
         return reject("rr_policy_mismatch")
     shape, why = geometry(plan.side, plan.entry, plan.stop, plan.target)
     if shape is None:
         return reject({"invalid_numeric": "invalid_numeric_value"}.get(why, why))
     if not declared_matches(plan.risk_reward, shape.rr):
         return reject("rr_declared_mismatch")
-    if classify(shape.rr, POLICY_V2_F3) != WITHIN_POLICY:
-        return reject("rr_below_minimum" if shape.rr < 3 else "rr_above_maximum")
+    if classify(shape.rr, policy.rr_policy) != WITHIN_POLICY:
+        return reject("rr_below_minimum" if shape.rr < policy.planned_rr else "rr_above_maximum")
     record.update(planned_entry=str(shape.entry), sl=str(shape.stop), tp=str(shape.target))
     mult = _f(getattr(instrument, "contract_multiplier", None))
     increment = _f(getattr(instrument, "quantity_increment", None))

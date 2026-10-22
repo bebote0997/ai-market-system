@@ -414,6 +414,8 @@ def risk_v1(plan, capital, instrument, config):
     policy = config.get("rr_policy", POLICY_V1)
     if policy != POLICY_V1:
         raise EvidenceError("UNSUPPORTED_RR_POLICY", str(policy))
+    if plan.get("policy_version") not in (None, "V1"):  # DEC-FX-SL-1 FX plans: outside the V1 oracle, like F3
+        raise EvidenceError("UNSUPPORTED_RR_POLICY", str(plan.get("policy_version")))
     if not _finite(rr) or rr < config["ratio_minimo"]:
         return rejected(plan["symbol"], side, entry, stop, target, "rr_below_minimum")
     shape_rr = _geometry(side, entry, stop, target)

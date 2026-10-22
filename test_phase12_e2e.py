@@ -108,6 +108,9 @@ class Phase12E2ETests(unittest.TestCase):
         self.enterContext(patch("socket.create_connection", side_effect=AssertionError("network forbidden")))
         self.enterContext(patch("socket.socket.connect", side_effect=AssertionError("network forbidden")))
         self.enterContext(patch.dict("os.environ", {"AI_FLOOR_ALERTS_ENABLED": "0"}))
+        # DEC-FX-SL-1: this E2E certifies the V1 3R chain with the V1-only REX oracle, which reports FX plans as
+        # UNSUPPORTED_RR_POLICY; EURUSD is kept on the V1 planner here. The FX path: test_fx_sl_clamp.py.
+        self.enterContext(patch("core.fx_policy.is_fx", return_value=False))
 
     def replay(self, name, *, rex=True):
         path = self.root / f"{name}.db"

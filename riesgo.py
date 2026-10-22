@@ -148,12 +148,15 @@ def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=Non
 		return RiskDecision("1.0", "REJECTED", plan_data.get("symbol", ""), side, None, None, entry, stop, target, "instrument_contract_data_unavailable")
 	if (side == "LONG" and not stop < entry < target) or (side == "SHORT" and not target < entry < stop):
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_level_order")
-	from core.rr_contract import POLICY_V1, POLICY_V2_D, POLICY_V2_F3, RR_BELOW_FLOOR, WITHIN_POLICY, classify, declared_matches, geometry
+	from core.fx_policy import is_fx
+	from core.rr_contract import POLICY_FX, POLICY_V1, POLICY_V2_D, POLICY_V2_F3, RR_BELOW_FLOOR, WITHIN_POLICY, classify, declared_matches, geometry
 	policy = configuracion.get("rr_policy", POLICY_V1)
+	if plan_data.get("policy_version") == POLICY_FX and is_fx(plan_data.get("symbol")) and policy in (POLICY_V1, POLICY_V2_F3):
+		policy = POLICY_FX  # DEC-FX-SL-1: an FX plan is judged by its own fixed-R contract (exactly FX_TP_RR)
 	if policy == POLICY_V1:
 		if not _finito(rr) or rr < configuracion["ratio_minimo"]:
 			return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_below_minimum")
-	elif policy in (POLICY_V2_D, POLICY_V2_F3):
+	elif policy in (POLICY_V2_D, POLICY_V2_F3, POLICY_FX):
 		if plan_data.get("policy_version") != policy:
 			return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_policy_mismatch")
 	else:
@@ -164,7 +167,7 @@ def evaluar_trade_plan(plan, capital_actual, instrumento, configuracion, atr=Non
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "invalid_level_order")
 	if not declared_matches(rr, shape.rr):
 		return RiskDecision("1.0", "REJECTED", plan_data["symbol"], side, None, None, entry, stop, target, "rr_declared_mismatch")
-	if policy in (POLICY_V2_D, POLICY_V2_F3):
+	if policy in (POLICY_V2_D, POLICY_V2_F3, POLICY_FX):
 		outcome = classify(shape.rr, policy)
 		if outcome != WITHIN_POLICY:
 			reason = "rr_below_minimum" if outcome == RR_BELOW_FLOOR else "rr_above_maximum"

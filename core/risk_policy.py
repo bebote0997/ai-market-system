@@ -6,7 +6,7 @@ Every threshold the Phase 5 Risk Engine and the Paper Broker share is defined he
 from dataclasses import dataclass
 from fractions import Fraction
 
-from core.rr_contract import FILL_LIMITS, LIMITS, POLICY_V2_F3
+from core.rr_contract import FILL_LIMITS, LIMITS, POLICY_FX, POLICY_V2_F3
 
 RISK_POLICY_V2 = "V2_P5_RISK_1"
 
@@ -72,9 +72,35 @@ RISK_POLICY_V2_P5 = RiskPolicy(
     spread_threshold="UNAVAILABLE / INSUFFICIENT EVIDENCE (DEC-5.8)",
 )
 
+# DEC-FX-SL-1: the same Phase 5 risk policy for FX plans (SL clamped, TP fixed at FX_TP_RR); only the R:R identity,
+# the planned R:R and the fill floor differ (fill money factor (1 + 2) / (1 + 1.5) = 6/5 at the 2R default). The
+# multiple is part of the version, so an order stamped under another multiple is UNREGISTERED (fail closed).
+RISK_POLICY_V2_FX = RiskPolicy(
+    **{**RISK_POLICY_V2_P5.__dict__,
+       "version": f"{RISK_POLICY_V2}_FX_{LIMITS[POLICY_FX][0].normalize()}R",
+       "rr_policy": POLICY_FX,
+       "planned_rr": Fraction(LIMITS[POLICY_FX][0]),
+       "minimum_actual_fill_rr": Fraction(FILL_LIMITS[POLICY_FX][0])})
+
 # P5.1C: the ONLY policy versions whose pending orders may be reserved with a known factor. A stamped version that
 # is not registered here is UNKNOWN (fail closed), never mapped to a default.
-REGISTERED_RISK_POLICIES = {RISK_POLICY_V2_P5.version: RISK_POLICY_V2_P5}
+REGISTERED_RISK_POLICIES = {RISK_POLICY_V2_P5.version: RISK_POLICY_V2_P5,
+                            RISK_POLICY_V2_FX.version: RISK_POLICY_V2_FX}
+
+
+def stamp_fx_order(order, plan):
+    """DEC-FX-SL-1: give a PAPER order built from an FX plan its durable FX risk-policy identity (the frozen
+    ``PaperBroker.submit_plan`` leaves ordinary orders unstamped), so any broker fills it under the FX contract (1.5R
+    floor) and Risk V2 can prove its pending reservation. Other orders are untouched. Returns ``order``."""
+    if order is not None and getattr(plan, "policy_version", None) == POLICY_FX:
+        order.risk_policy_version = RISK_POLICY_V2_FX.version
+    return order
+
+
+def risk_policy_for(plan):
+    """The registered Phase 5 risk policy bound to ``plan``'s R:R identity: the FX policy for an FX plan, else the
+    fixed-3R policy (which rejects any other plan as ``rr_policy_mismatch``)."""
+    return RISK_POLICY_V2_FX if getattr(plan, "policy_version", None) == POLICY_FX else RISK_POLICY_V2_P5
 
 
 def registered_risk_policy(version):
@@ -88,5 +114,6 @@ def stamps_registered_semantics(policy):
         registered.rr_policy, registered.planned_rr, registered.minimum_actual_fill_rr)
 
 
-__all__ = ["REGISTERED_RISK_POLICIES", "RISK_POLICY_V2", "RISK_POLICY_V2_P5", "RiskPolicy", "fill_money_risk_factor",
-           "registered_risk_policy", "stamps_registered_semantics"]
+__all__ = ["REGISTERED_RISK_POLICIES", "RISK_POLICY_V2", "RISK_POLICY_V2_FX", "RISK_POLICY_V2_P5", "RiskPolicy",
+           "fill_money_risk_factor", "registered_risk_policy", "risk_policy_for", "stamp_fx_order",
+           "stamps_registered_semantics"]
