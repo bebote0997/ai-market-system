@@ -1,0 +1,15 @@
+{
+  "holdout": [
+    "2025-01-01",
+    "2026-10-20"
+  ],
+  "main_cost": "C_IBKR",
+  "selection_last_d1": "2024-12-31",
+  "symbol": "NAS100USD",
+  "train": [
+    "2021-10-01",
+    "2025-01-01"
+  ],
+  "train_metrics": null,
+  "variant": null
+}

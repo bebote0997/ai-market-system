@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8: selección NAS100USD
+
+- TRAIN (C_IBKR), 14 variantes: positivas S1a ORB5 +0,154R (DD 37,9R), S3b IB +0,159R (DD 33,7R), L1 momentum +0,099R (DD 25,6R), L3:NR4 +0,449R (4,7/mes, DD 14,4R), L3:NR7 +0,501R (2,7/mes, DD 9,9R). Ninguna cumple todo el umbral (DD < 12R y ≥ 3/mes) → **FLAT** (`replay/round8_frozen_NAS100USD.json`, sin holdout). XAUUSD registrado FLAT.
+
 ## 2026-10-21 — Ronda 8: selección XAUUSD
 
 - TRAIN (C_IBKR), 18 variantes: 17 negativas o ~0; L7 Raschke 80-20 +0,551R (110 trades, 4/4 semestres) pero 2,82 tr/mes < 3 y DD 20,6R, y dos operaciones (+32R, +26R) explican casi todo. Ninguna elegible → **FLAT** (`replay/round8_frozen_XAUUSD.json`, sin holdout). GBPUSD registrado FLAT.
