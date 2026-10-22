@@ -18,6 +18,7 @@ from ui.adapters import MARKETS, symbol_enablement
 from ui.components import panels
 from ui.fixtures.demo_floor import demo_market
 from ui.views import dashboard, experiment, floor, journal, markets, system, luxury
+from ui.views import floor_view
 from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.state import current_market, enabled_market_symbols, operational_store
@@ -28,8 +29,9 @@ luxury.apply(st)
 
 with st.sidebar:
     luxury.html(st, f'<div class="brand">{tr("Trading Floor")}<small>{tr("PAPER · V2")}</small></div>')
-    page = st.radio(tr("Navigation"), luxury.PAGES + dashboard.PAGES + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"),
-                    key="luxury_navigation", format_func=es.page_label)
+    page = st.radio(tr("Navigation"), luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES
+                    + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation",
+                    format_func=lambda key: floor_view.LABEL if key == floor_view.PAGE else es.page_label(key))
     enabled_symbols = enabled_market_symbols()
     symbol = st.selectbox(tr("Market"), MARKETS,
                           format_func=lambda market: f"{market} · {es.status_text(symbol_enablement(market, enabled_symbols))}")
@@ -44,6 +46,13 @@ if page in luxury.PAGES:
     def render_luxury():
         luxury.render(st, page, enabled_symbols)
     render_luxury()
+    st.stop()
+
+if page == floor_view.PAGE:
+    @st.fragment(run_every="60s" if refresh else None)
+    def render_floor_view():
+        floor_view.render(st, enabled_symbols)
+    render_floor_view()
     st.stop()
 
 if page in dashboard.PAGES:

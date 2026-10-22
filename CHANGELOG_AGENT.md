@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-22 — Merge de `origin/feat/floor-view` (PR #54) en `feat/fx-sl-week-hold` (chunk 4)
+
+- Merge sin conflictos textuales (vista Floor de solo lectura: `ui/floor_payload.py`, `ui/floor_cache.py`, `ui/views/floor_view.py`, `ui/static/floor/floor.html`, `ui/app.py`, `docs/floor_view.md`, tests). Revisión semántica: la vista lee R:R planificado y motivos de cierre ya guardados (`es.close_reason_text`), por lo que muestra 2R para planes FX y los motivos nuevos (`TIME_EXIT_MAX_HOLD`, `EXIT_REVERSAL_IN_PROFIT`, `REVERSAL_IN_PROFIT`) con sus textos. Suite completa 2435 OK (41 skipped, 1 expected failure) y ruff PASS (una ejecución previa bajo carga dio un timeout de 30 s en `test_phase6_conflict_concurrency`; aislado y en la repetición completa: OK).
+
 ## 2026-10-22 — DEC-REVERSAL-1: reversión con setup opuesto en beneficio (branch `feat/fx-sl-week-hold`, chunk 3)
 
 - Hallazgo: `V2_OPPOSITE_SETUP_POLICY` (DEC-14.1) default `BLOCK`, valores `BLOCK` / `STRUCTURE_CHANGE`; el router OANDA no tenía reversión. Cualquier valor ≠ BLOCK cambia el fingerprint ⇒ con la DB actual el preflight `experiment_resumable` impediría arrancar.
