@@ -185,6 +185,21 @@ class RouterReversalTests(RouterBase):
         self.assertEqual(self.events(bdr.REVERSAL), [])
         self.assertEqual([r["status"] for r in self.rows()], ["OPEN"])
 
+    def test_dry_run_reversal_closes_nothing_and_sends_nothing(self):
+        self.opened()  # live LONG 1.09000 opened by the routing router
+        dry = self.router(AI_FLOOR_BROKER_DEMO_DRY_RUN="1")
+        self.assertTrue(dry.dry_run)
+        self.server.add("GET", PRICING, pricing(bid="1.09500", ask="1.09510"))  # in profit: would reverse
+        self.server.routes[("GET", f"{A}/summary")] = [summary("10050")]
+        self.assertEqual(dry.on_cycle(context(run_id="run-2", **SHORT), "PLAN_READY", NOW + timedelta(hours=1)),
+                         ("REVERSAL_DRY_RUN", NEW_CID))
+        self.assertEqual(self.puts(), [])  # nothing closed
+        self.assertEqual([p for m, p in self.writes() if m == "POST"], [ORDERS])  # only the original live entry
+        self.assertEqual([(r["client_id"], r["status"]) for r in self.rows()], [(CID, "OPEN")])  # no intent row
+        self.assertEqual(self.events(bdr.REVERSAL), [])
+        [(_kind, cid, detail)] = self.events("REVERSAL_DRY_RUN")
+        self.assertEqual((cid, detail["closed_client_id"], detail["side"]), (NEW_CID, CID, "SHORT"))
+
     def test_reversal_off_by_env(self):
         router = self.opened(AI_FLOOR_DEMO_REVERSAL="0")
         self.assertFalse(router.reversal)

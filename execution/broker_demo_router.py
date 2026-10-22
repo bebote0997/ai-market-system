@@ -365,7 +365,7 @@ class BrokerDemoRouter:
             return self._refuse(client_id, "friday_close_window")  # dry-run too; no network
         if td.entries_blocked(at):  # DEC-HOLD-WEEK-1: Friday 16:45 NY -> Sunday 17:00 NY, whatever the flag
             return self._refuse(client_id, "friday_close_window")
-        report =reconciled if reconciled is not None else self.reconcile()
+        report = reconciled if reconciled is not None else self.reconcile()
         if report is None:
             return self._refuse(client_id, "broker_read_failed")
         if self.blocked_reason:
@@ -379,23 +379,14 @@ class BrokerDemoRouter:
             reversing, reason = self._reversal_row(decision, symbol, report)
             if reversing is None:
                 return self._refuse(client_id, reason)
-        try:
-            balance = self._broker.get_balance()
-        except Exception as exc:  # noqa: BLE001 - nothing sent
-            return self._refuse(client_id, f"balance_unavailable:{type(exc).__name__}")
-        equity = balance.equity
         entry, stop, target = (_dec(getattr(decision, n)) for n in ("entry", "stop", "target"))
-        try:
-            units = broker_units(equity, decision, entry, stop, self.max_units)
-        except ValueError:
-            return self._refuse(client_id, "sizing_invalid")
-        if units < 1:
-            self._event("SKIPPED_ZERO_UNITS", client_id, run_id=run_id, equity=equity)
-            return "SKIPPED_ZERO_UNITS", client_id
-        if self._loss_limit is not None:
-            loss = self._loss_check(at, Decimal(units) * abs(entry - stop), balance=balance)[0]
-            if not loss.entry_allowed:
-                return self._refuse(client_id, loss.reason)
+        units, refused = self._sized(client_id, run_id, decision, entry, stop, at)
+        if refused is not None:
+            return refused
+        if reversing is not None and self.dry_run:  # dry-run: never close nor send, only record what would happen
+            self._event("REVERSAL_DRY_RUN", client_id, closed_client_id=reversing["client_id"],
+                        trade_id=reversing.get("trade_id"), side=decision.side, units=units)
+            return "REVERSAL_DRY_RUN", client_id
         if reversing is not None:  # every entry gate above passed: close the profitable opposite trade first
             closed = self._close(reversing, REVERSAL, f"{reversing['client_id']}-rev")
             self._event(REVERSAL, client_id, closed_client_id=reversing["client_id"], outcome=closed)
@@ -416,6 +407,26 @@ class BrokerDemoRouter:
         if self.dry_run:
             return self._dry_run(order_plan, units, row)
         return self._send(order_plan, approval, row, at)
+
+    def _sized(self, client_id, run_id, decision, entry, stop, at):
+        """``(units, None)`` sized on a fresh NAV read with the daily-loss gate passed, else ``(None, outcome)``."""
+        try:
+            balance = self._broker.get_balance()
+        except Exception as exc:  # noqa: BLE001 - nothing sent
+            return None, self._refuse(client_id, f"balance_unavailable:{type(exc).__name__}")
+        equity = balance.equity
+        try:
+            units = broker_units(equity, decision, entry, stop, self.max_units)
+        except ValueError:
+            return None, self._refuse(client_id, "sizing_invalid")
+        if units < 1:
+            self._event("SKIPPED_ZERO_UNITS", client_id, run_id=run_id, equity=equity)
+            return None, ("SKIPPED_ZERO_UNITS", client_id)
+        if self._loss_limit is not None:
+            loss = self._loss_check(at, Decimal(units) * abs(entry - stop), balance=balance)[0]
+            if not loss.entry_allowed:
+                return None, self._refuse(client_id, loss.reason)
+        return units, None
 
     def _reversal_row(self, decision, symbol, report):
         """(routed row to close, None) when DEC-REVERSAL-1 applies, else (None, refusal reason). Applies only to exactly
