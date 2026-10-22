@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8: selección EURUSD
+
+- TRAIN 2021-10..2024-12 (C_RAW), 19 variantes: 16 negativas; L3:NR7 +0,159R (120 trades, PF 1,26) pero DD 15,6R y 2/4 semestres positivos; L3:NR4 +0,021R; L4 estricto −0,016R; L1 invertido −0,011R. Ninguna elegible → **FLAT** congelado en `replay/round8_frozen_EURUSD.json` (sin holdout).
+
 ## 2026-10-21 — Ronda 8: declaración (branch `feat/backtest-v2-i2`)
 
 - `replay/round8.py` + `test_round8.py` (15 tests): motor M1 de sesión única (fills sobre mid + costes por barra, stop gana empates, límite exige atravesar, OCO mismo bar = sin trade, stops acotados 5-15 pips FX / [1,5; 4,5] x mediana ATR14(M5) 20 d en XAU/NAS100), 70 variantes fijas (S1-S3 reconstruidas, L1-L7 de la adición de literatura), costes C_RAW / C_IBKR + stress + C_OANDA observado.
