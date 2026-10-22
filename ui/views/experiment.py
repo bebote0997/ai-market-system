@@ -9,8 +9,10 @@ DEMO_LENGTH_DAYS = 30
 
 
 def demo_progress_text(now=None):
-    """"Día N de 30" of the OANDA demo (from the first routed trade) while broker-demo routing is ON; None when OFF."""
-    if os.environ.get("AI_FLOOR_BROKER_DEMO_ROUTING") != "1":
+    """"Día N de 30" of the OANDA demo (from the first routed trade) while broker-demo routing is ON or the results
+    source is OANDA_DEMO; None otherwise."""
+    from execution.results_source import demo_results
+    if not demo_results(os.environ):
         return None
     try:
         from execution.demo_dashboard import demo_progress

@@ -56,8 +56,8 @@ LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_co
                 "ui/views/luxury.py": {"execution.demo_dashboard": [["demo_epoch", "demo_progress",
                                                                      "demo_snapshot"]]},
                 "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_progress"]]},
-                "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"],
-                                                                          ["demo_mode"]]}}
+                "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"]],
+                                             "execution.results_source": [["demo_results"]]}}
 
 
 def guarded_sources():

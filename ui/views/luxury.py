@@ -291,10 +291,30 @@ def demo_unavailable_api():
             'progress': lambda _now: (DEMO_DEFAULT_EPOCH, None, None)}
 
 
+def demo_results_on():
+    """Routing ON or ``AI_FLOOR_RESULTS_SOURCE=OANDA_DEMO`` (DEC-OANDA-ONLY-1). Read here, independently of the demo
+    module; never raises (unreadable => routing flag only)."""
+    try:
+        from execution.results_source import demo_results
+        return demo_results(os.environ)
+    except Exception:  # noqa: BLE001
+        return os.environ.get(DEMO_ROUTING_ENV) == '1'
+
+
+def paper_hidden():
+    """OANDA-demo-only mode: PAPER ledger / P&L sections are hidden (DEC-OANDA-ONLY-1)."""
+    try:
+        from execution.results_source import oanda_only
+        return oanda_only(os.environ)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def demo_api():
-    """The OANDA demo view (lazy, guarded) while broker-demo routing is ON; None => PAPER screens unchanged. The flag
-    is read here, independently of the demo module: ON + module unavailable => demo screens with "sin datos"."""
-    if os.environ.get(DEMO_ROUTING_ENV) != '1':
+    """The OANDA demo view (lazy, guarded) while broker-demo routing is ON or the results source is OANDA_DEMO; None
+    => PAPER screens unchanged. The flags are read here, independently of the demo module: ON + module unavailable =>
+    demo screens with "sin datos"."""
+    if not demo_results_on():
         return None
     try:
         from execution.demo_dashboard import demo_epoch, demo_progress, demo_snapshot
@@ -513,7 +533,8 @@ DEMO_TRADE_CELLS = {**TRADE_CELLS, 'realized_r': demo_r_cell}
 
 def floor(st, db, symbols):
     snapshots = {r['symbol']: r for r in payloads(db, 'ui_snapshots')}
-    positions = payloads(db, 'paper_positions', statuses=('OPEN',))
+    hidden = paper_hidden()  # DEC-OANDA-ONLY-1: no PAPER position on the desks
+    positions = [] if hidden else payloads(db, 'paper_positions', statuses=('OPEN',))
     cols = st.columns(max(1, len(symbols)))
     for col, symbol in zip(cols, symbols):
         with col:
@@ -525,8 +546,8 @@ def floor(st, db, symbols):
                  ('Side', state_chip(vm.setup_side) if vm and vm.setup_side else MISSING),
                  (es.column('freshness'), state_chip(vm.freshness if vm else None)),
                  ('Última actualización', vm.as_of if vm else None),
-                 ('Open position', ', '.join(es.status_text(p.get('side')) + ' · open' for p in opened)
-                  or tr('No open position'))])
+                 ('Open position', 'ver Floor / Operaciones (demo OANDA)' if hidden else
+                  ', '.join(es.status_text(p.get('side')) + ' · open' for p in opened) or tr('No open position'))])
     for symbol in symbols:
         snapshot = snapshots.get(symbol)
         if snapshot is None:

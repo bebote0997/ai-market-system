@@ -20,6 +20,16 @@ TABLES = frozenset({"runs", "setups", "agent_decisions", "risk_decisions",
 
 
 ROW_LIMIT = 200
+# DEC-OANDA-ONLY-1: PAPER ledger / P&L tables hidden from these pages when AI_FLOOR_RESULTS_SOURCE=OANDA_DEMO.
+PAPER_LEDGER_TABLES = frozenset({"paper_accounts", "paper_orders", "paper_fills", "paper_positions", "closed_trades"})
+
+
+def paper_hidden():
+    try:
+        from execution.results_source import oanda_only
+        return oanda_only(os.environ)
+    except Exception:  # noqa: BLE001 - unreadable flag: current behaviour
+        return False
 
 
 def records(db, table, *, run_id="", setup_id="", offset=0, statuses=(), failed=False):
@@ -127,11 +137,15 @@ def table(st, rows):
 def render(st, page):
     st.header(es.LEGACY_PAGES.get(page, page))
     st.caption(tr("Persisted PAPER evidence · SQLite read-only · missing evidence = NO_DATA"))
+    hidden = paper_hidden()
+    if hidden:
+        from execution.results_source import PAPER_HIDDEN_NOTE
+        st.info(PAPER_HIDDEN_NOTE)
     try:
         with dashboard_database() as db:
             if page == "OVERVIEW":
-                accounts = payloads(db, "paper_accounts")
-                if not accounts:
+                accounts = [] if hidden else payloads(db, "paper_accounts")
+                if not accounts and not hidden:
                     st.info(es.NO_DATA)
                 for account in accounts:
                     st.subheader(account["account_id"])
@@ -145,6 +159,8 @@ def render(st, page):
                     panels.chart(st, vm)
                 if not snapshots:
                     st.info(es.NO_DATA)
+            elif page == "POSITIONS" and hidden:
+                pass  # PAPER positions / orders are internal in OANDA-demo-only mode
             elif page == "POSITIONS":
                 st.subheader(tr("Open positions · all symbols"))
                 table(st, payloads(db, "paper_positions", statuses=("OPEN",)))
@@ -203,6 +219,8 @@ def render(st, page):
                                               key="history_page")
                 st.caption(tr("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first."))
                 rows = history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT)
+                if hidden:
+                    rows = [row for row in rows if row["record"] not in PAPER_LEDGER_TABLES]
                 if not rows:
                     st.info(es.NO_DATA)
                 for record_type, group in groupby(rows, key=lambda row: row["record"]):

@@ -151,9 +151,11 @@ class SlackNotificationSink:
 
 
 def _routing_on():
+    """OANDA demo summary while routing is ON or ``AI_FLOOR_RESULTS_SOURCE=OANDA_DEMO`` (DEC-OANDA-ONLY-1: never the
+    PAPER summary in that mode, even with routing OFF)."""
     try:
-        from execution.demo_dashboard import demo_mode
-        return demo_mode(os.environ)
+        from execution.results_source import demo_results
+        return demo_results(os.environ)
     except Exception:  # noqa: BLE001 - unreadable flag: the unchanged PAPER summary
         return False
 
