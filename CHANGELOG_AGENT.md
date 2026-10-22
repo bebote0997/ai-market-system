@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8b, bloque 3: selección EURUSD (motor corregido)
+
+- TRAIN (C_RAW), 22 variantes: mejor L3:NR7 +0,167R (120 trades, PF 1,28, DD 15,8R, 2/4 semestres); L3:NR4 +0,030R; el resto negativas. Nuevas: S4 1,5ATR −0,097R, S4 2ATR −0,066R, S5 −0,243R. L4 empeora tras la corrección (estricto −0,125R, relajado −0,140R). Ninguna elegible → **FLAT** (el archivo congelado no cambia; sin holdout). Las tablas de la ronda 8 se marcan como sustituidas en `report_round8.md`.
+
 ## 2026-10-21 — Ronda 8b, bloque 2: declaración previa de S4 / S5
 
 - Nuevas familias en `replay/round8.py`: S4 (cuerpo M5 >= 1,5 / 2 x ATR14(M5) de las 14 barras previas; continuación en la siguiente apertura M1; stop ATR acotado; TP 1,5R; cierre de sesión) y S5 micro SMC (barrida M5 del máximo/mínimo de la sesión anterior con cierre dentro; límite en el FVG M1 o en el order block; stop en el extremo de la barrida, acotado; TP 2R; cierre de sesión). 82 variantes (70 re-ejecutadas + 12 nuevas).

@@ -989,7 +989,8 @@ def sec_select(args):
     folds = "\n".join(f"| {r['name']} | {r['fold_mean']:+.3f} | {r['pos_folds']}/4 | {'yes' if r['eligible'] else 'no'}"
                       f" | " + " | ".join(f"{results[r['name']]['models'][mod]['avg_r']:+.3f}"
                                          for mod in models_for(sym)[1:]) + " |" for r in table)
-    report_append(args.root, f"""## {sym} - selection (TRAIN {TRAIN[0]}..2024-12-31, {SPECS[sym].main}; data sliced at
+    report_append(args.root, f"""## Round 8b: {sym} - selection (fixed engine, TRAIN {TRAIN[0]}..2024-12-31,
+{SPECS[sym].main}; data sliced at
 the cutoff, last D1 {last})
 
 {HEAD}
@@ -1014,7 +1015,7 @@ def sec_holdout(args):
     if frozen["variant"] is None:
         out.update({"verdict": "FAIL (no TRAIN candidate; FLAT, holdout not run)"})
         save(args.root, f"{sym}.json", out)
-        report_append(args.root, f"## {sym} - holdout\n\nNo frozen variant (FLAT): holdout not run. **FAIL**.")
+        report_append(args.root, f"## Round 8b: {sym} - holdout\n\nNo frozen variant (FLAT): holdout not run. **FAIL**.")
         return
     res, runs = holdout(args.root, sym, frozen)
     mt = res[SPECS[sym].main]
@@ -1027,7 +1028,7 @@ def sec_holdout(args):
     save(args.root, f"{sym}_holdout_trades.json", runs[SPECS[sym].main])
     rows = "\n".join(fmt_row(mod, r) for mod, r in res.items())
     bh = f"\nBuy-and-hold same window: {out['buy_hold']}." if "buy_hold" in out else ""
-    report_append(args.root, f"""## {sym} - holdout (run once, frozen {frozen['variant']}, {a}..2026-10-19)
+    report_append(args.root, f"""## Round 8b: {sym} - holdout (run once, frozen {frozen['variant']}, {a}..2026-10-19)
 
 {HEAD.replace('variant', 'cost model')}
 {rows}
