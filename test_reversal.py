@@ -200,6 +200,45 @@ class RouterReversalTests(RouterBase):
         [(_kind, cid, detail)] = self.events("REVERSAL_DRY_RUN")
         self.assertEqual((cid, detail["closed_client_id"], detail["side"]), (NEW_CID, CID, "SHORT"))
 
+    def reversal_routes(self, *navs):
+        self.server.add("GET", PRICING, pricing(bid="1.09500", ask="1.09510"))
+        self.server.routes[("GET", f"{A}/summary")] = [summary(n) for n in navs]
+        self.server.add("PUT", f"{A}/trades/6397/close", (200, {"orderFillTransaction": close_fill()}))
+        self.server.routes[("GET", OPEN_TRADES)] = [trades(open_trade()), trades(), trades(),
+                                                    trades(open_trade(trade_id="6400", ext=NEW_CID, units="-100"))]
+        self.server.add("GET", f"{A}/trades/@{NEW_CID}", (404, {"errorCode": "TRADE_DOES_NOT_EXIST"}))
+        self.server.routes[("POST", ORDERS)] = [NEW_FILL]
+
+    def test_reversal_resizes_on_the_nav_read_after_the_close(self):
+        router = self.opened()
+        self.reversal_routes("10050", "5000")  # NAV before the close, then after it
+        self.assertEqual(router.on_cycle(context(run_id="run-2", **SHORT), "PLAN_READY", NOW + timedelta(hours=1)),
+                         ("ACCEPTED", "6400"))
+        dec = context(run_id="run-2", **SHORT)["deterministic"].risk_decision
+        expected = bdr.broker_units(bdr.Decimal("5000"), dec, bdr.Decimal("1.095"), bdr.Decimal("1.1"),
+                                    router.max_units)
+        before = bdr.broker_units(bdr.Decimal("10050"), dec, bdr.Decimal("1.095"), bdr.Decimal("1.1"),
+                                  router.max_units)
+        self.assertNotEqual(expected, before)
+        body = [b for m, p, _h, b in self.server.calls if m == "POST" and p == ORDERS][-1]
+        self.assertEqual(body["order"]["units"], str(-expected))
+
+    def test_gate_rejecting_after_the_close_stays_flat(self):
+        router = self.opened()
+        self.reversal_routes("10050")
+        allowed = bdr.LossDecision(True, False, None, False, False, None, False)
+        refused = bdr.LossDecision(False, False, "daily_loss_halted", True, False, None, False)
+        router._loss_limit = object()  # gate enabled; its decisions come from the patched check below
+        with patch.object(router, "_loss_check", side_effect=[(allowed, {}), (allowed, {}), (refused, {})]):
+            self.assertEqual(router.on_cycle(context(run_id="run-2", **SHORT), "PLAN_READY",
+                                             NOW + timedelta(hours=1)), ("NOT_ROUTED", "daily_loss_halted"))
+        self.assertEqual(self.puts(), [f"{A}/trades/6397/close"])  # the profitable trade was closed
+        self.assertEqual([p for m, p in self.writes() if m == "POST"], [ORDERS])  # but no new entry was sent
+        rows = {r["client_id"]: r for r in self.rows()}
+        self.assertEqual((set(rows), rows[CID]["status"]), ({CID}, "CLOSED"))
+        [(_kind, cid, detail)] = self.events("REVERSAL_FLAT")
+        self.assertEqual((cid, detail), (NEW_CID, {"closed_client_id": CID, "reason": "daily_loss_halted"}))
+
     def test_reversal_off_by_env(self):
         router = self.opened(AI_FLOOR_DEMO_REVERSAL="0")
         self.assertFalse(router.reversal)

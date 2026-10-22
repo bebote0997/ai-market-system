@@ -396,6 +396,12 @@ class BrokerDemoRouter:
             if (report is None or self.blocked_reason or self._store.trades(LIVE_STATUSES)
                     or any(t.instrument == INSTRUMENTS[symbol] for t in report)):
                 return self._refuse(client_id, "reversal_not_flat")
+            # The close realised PnL and freed margin: re-read NAV, re-size and re-run the loss/risk gates on it.
+            units, refused = self._sized(client_id, run_id, decision, entry, stop, at)
+            if refused is not None:  # stays flat: the opposite trade is closed and nothing new is opened
+                self._event("REVERSAL_FLAT", client_id, closed_client_id=reversing["client_id"],
+                            reason=refused[1] if refused[0] == "NOT_ROUTED" else refused[0])
+                return refused
         try:  # A re-sized approval derived from the APPROVED decision: only the quantity differs.
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), entry, stop, target, client_id=client_id,
                                    source_run_id=run_id, risk_policy_version=getattr(plan, "policy_version", None))
