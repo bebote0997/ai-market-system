@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from execution.contracts import PaperAccount
@@ -86,7 +87,8 @@ def seed(path):
 def fake_demo(stats=True, closed_rows=()):
     snapshot = {
         "epoch": NOW - timedelta(days=2), "nav": 100123.45, "balance": 100100.0, "currency": "USD",
-        "capital": {"start": 100000.0, "change": 123.45}, "stale": False, "as_of": NOW, "trades_error": None, "curve": [
+        "capital": {"start": 100000.0, "change": 123.45}, "stale": False, "as_of": NOW, "trades_as_of": NOW,
+        "trades_error": None, "curve": [
             {"Closed at": NOW, "Cumulative realized PnL": 50.0}, {"Closed at": NOW, "Cumulative realized PnL": 100.0}],
         "stats": {"trades": 2, "wins": 1, "total_pnl": 100.0, "today_pnl": 0.0, "max_drawdown": 30.0,
                   "avg_r": 0.25, "avg_r_reason": None} if stats else None,
@@ -241,6 +243,42 @@ class FloorPayloadTests(unittest.TestCase):
         html = floor_view.render_html(self.build(sample_mode=False, demo=fake_demo()))
         self.assertIn("(dato antiguo · ${HD.equity_as_of} ET)", html)
 
+    def test_demo_trades_freshness_is_tracked(self):
+        def trades(**changes):
+            demo = fake_demo(stats=changes.pop("stats", True))
+            snapshot = {**demo["snapshot"](NOW), **changes}
+            payload = self.build(sample_mode=False, demo={**demo, "snapshot": lambda _now, **_r: snapshot})
+            return payload["header"]["trades_stale"], payload["header"]["trades_as_of"], payload["trades"]
+        stale, as_of, rows = trades(trades_as_of=NOW - timedelta(seconds=30))
+        self.assertEqual((stale, as_of), (False, "09:29"))
+        self.assertTrue(rows)
+        stale, as_of, rows = trades(trades_as_of=NOW - timedelta(hours=2))
+        self.assertEqual((stale, as_of), (True, "07:30"))  # old cached read: still shown, marked old
+        self.assertTrue(rows)
+        self.assertEqual(trades(trades_as_of=None)[:2], (True, None))  # unknown observation time: never current
+        self.assertEqual(trades(stats=False, trades_as_of=NOW - timedelta(hours=2)), (None, None, None))
+        html = floor_view.render_html(self.build(sample_mode=False, demo=fake_demo()))
+        self.assertIn("HD.trades_stale===true", html)
+        self.assertIn("(dato antiguo${HD.trades_as_of?` · ${HD.trades_as_of} ET`:''})", html)
+
+    def test_peeked_trades_carry_their_observation_time(self):
+        from ui import floor_cache
+        clock = [1000.0]
+        holder = SimpleNamespace(_clock=lambda: clock[0], _cache={})
+        fake = SimpleNamespace(_TRADES=holder)
+        with patch.dict(sys.modules, {floor_cache.READONLY_MODULE: fake}):
+            self.assertIsNone(floor_cache.peek_demo_trades("epoch"))
+            read_at = NOW - timedelta(minutes=10)
+            holder._cache["epoch"] = (700.0, {"closed": [], "open": [], "as_of": read_at})
+            self.assertEqual(floor_cache.peek_demo_trades("epoch")["observed_at"], read_at)  # the read's own time
+            holder._cache["epoch"] = (700.0, {"error": "deadline"})  # no as_of: store time on the cache clock
+            observed = floor_cache.peek_demo_trades("epoch")["observed_at"]
+            age = (datetime.now(timezone.utc) - observed).total_seconds()
+            self.assertTrue(299 <= age <= 330, age)
+            holder._clock = None  # unusable clock: unknown, never "now"
+            self.assertIsNone(floor_cache.peek_demo_trades("epoch")["observed_at"])
+            self.assertEqual(holder._cache["epoch"], (700.0, {"error": "deadline"}))  # the cache is never changed
+
     def test_demo_routing_uses_oanda_view_never_paper_numbers(self):
         seed(self.path)
         payload = self.build(sample_mode=False, demo=fake_demo())
@@ -298,6 +336,7 @@ class FloorPayloadTests(unittest.TestCase):
         header = payload["header"]
         self.assertEqual((header["equity"], header["equity_stale"], header["equity_as_of"]), (100070.0, True, "08:30"))
         self.assertEqual(header["trades"], 0)  # the stored (empty) trades read, not refreshed
+        self.assertEqual((header["trades_stale"], header["trades_as_of"]), (True, "08:30"))  # an hour-old read
 
     def test_sample_mode_fills_only_missing_sections_and_marks_them(self):
         seed(self.path)

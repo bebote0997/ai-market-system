@@ -79,6 +79,9 @@ const isEx=k=>EXF.has(k)||[...EXF].some(f=>f.startsWith(k+'.'));
 const BADGE='<span class="ex">EJEMPLO</span>',badge=k=>isEx(k)?BADGE:'';
 // a stale (last good / old) demo NAV is never shown as current: value + "(dato antiguo · HH:MM ET)"
 const STALE=HD.equity_stale===true&&HD.equity_as_of?`(dato antiguo · ${HD.equity_as_of} ET)`:'';
+// same for every section derived from the cached demo trades read (PnL, R, win rate, drawdown, curve, trades, hit rate)
+const TSTALE=HD.trades_stale===true?`(dato antiguo${HD.trades_as_of?` · ${HD.trades_as_of} ET`:''})`:'';
+const TKP=new Set(['pnl','r_total','win_rate','drawdown']);
 const NA='—',EMPTY='sin datos aún';
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ok=v=>typeof v==='number'&&isFinite(v);
@@ -98,7 +101,7 @@ const dd=ok(HD.drawdown_pct)?(HD.drawdown_pct>0?'−':'')+HD.drawdown_pct.toFixe
 const KP=[[money(HD.equity),'Equity',ok(HD.equity)?'':'na',['equity']],[money(HD.pnl,1),'PnL',tone(HD.pnl),['pnl']],[fR(HD.r_total),'R total',tone(HD.r_total),['r_total']],
  [ok(HD.win_rate)?HD.win_rate.toFixed(0)+'%':NA,'Win rate',ok(HD.win_rate)?'':'na',['win_rate']],[dd,'Drawdown',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],[dl,'Daily loss',dl==NA?'na':'',['daily_loss_used_pct','daily_loss_limit_pct']]];
 // EJEMPLO next to each KPI that fell back to example data (sample mode only)
-document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3][0]==='equity'&&STALE?' '+esc(STALE):''}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small></div>`).join('');
+document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3][0]==='equity'&&STALE?' '+esc(STALE):''}${TKP.has(k[3][0])&&TSTALE?' '+esc(TSTALE):''}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small></div>`).join('');
 const real=(DATA.real_fields||[]).length>0;
 document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura · `+
  (EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:`<i>${EMPTY}</i>`)+
@@ -228,7 +231,7 @@ function frame(now){const t=now-t0;const step=FIX!=null?FIX:Math.floor(t/STEP_MS
  // equity wall: real cumulative realised PnL curve (payload.curve); none => no line
  if(CURVE.length>1){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=8;cx.lineWidth=1.6;cx.beginPath();
   CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,2.15+.8*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0;
-  if(isEx('curve'))wt(3.3,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4')}
+  if(isEx('curve'))wt(3.3,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4');else if(TSTALE)wt(3.3,0,2.05,'CURVA '+TSTALE.toUpperCase(),7,'#ffb020')}
  else wt(3.3,0,2.4,EMPTY,8,'#4f6462');
  wt(3.3,0,3.4,'EQUITY · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':'')+(STALE?'  '+STALE.toUpperCase():''),8,STALE?'#ffb020':'#3fa9a4');wt(3.3,0,3.0,money(HD.equity),17,'#9ff5ee','Didot,Georgia,serif');
  const F=[P(9.8,0,1.9),P(16.6,0,1.9),P(16.6,0,3.7),P(9.8,0,3.7)];scr(F,false);
@@ -292,9 +295,9 @@ function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub
   ['Riesgo',money(t.risk_expected),NA,'',''],['R',ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA,fR(t.r_realized),'',''],
   ['PnL',NA,money(t.pnl,1),open?'abierta':(t.close_reason||''),''],['MAE / MFE',NA,NA,'','']];
  const chain=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng'].map(id=>`<span>◆</span> ${esc(NAMES[id][2])} — ${esc(AG[id]?(AG[id].status||NA):EMPTY)}`).join('<br>');
- const others=TRADES.length>1?`<div class="lab">Operaciones recientes</div><table><tr><th>Fecha (ET)</th><th>Lado</th><th>Estado</th><th>R</th></tr>${TRADES.map((o,i)=>`<tr class="pick" onclick="pickTrade(${i})"><td>${esc(o.opened_at||NA)}</td><td>${esc(SIDE[o.side]||NA)}</td><td>${o.status==='OPEN'?'Abierta':esc(o.close_reason||'Cerrada')}</td><td class="${tone(o.r_realized)}">${esc(fR(o.r_realized))}</td></tr>`).join('')}</table>`:'';
+ const others=TRADES.length>1?`<div class="lab">Operaciones recientes${TSTALE?' '+esc(TSTALE):''}</div><table><tr><th>Fecha (ET)</th><th>Lado</th><th>Estado</th><th>R</th></tr>${TRADES.map((o,i)=>`<tr class="pick" onclick="pickTrade(${i})"><td>${esc(o.opened_at||NA)}</td><td>${esc(SIDE[o.side]||NA)}</td><td>${o.status==='OPEN'?'Abierta':esc(o.close_reason||'Cerrada')}</td><td class="${tone(o.r_realized)}">${esc(fR(o.r_realized))}</td></tr>`).join('')}</table>`:'';
  return `<h2 class="serif">${esc(t.symbol||'EURUSD')} · ${esc(SIDE[t.side]||NA)}</h2>
- <div class="sub">Trade #${esc(t.id||NA)} · ${esc(t.opened_at||NA)} · ${ok(t.units)?esc(t.units.toLocaleString('en-US',{maximumFractionDigits:0})):NA} units · ${open?'Abierta':'Cerrada'}${t.closed_at?' '+esc(t.closed_at):''}${ex}</div>
+ <div class="sub">Trade #${esc(t.id||NA)} · ${esc(t.opened_at||NA)} · ${ok(t.units)?esc(t.units.toLocaleString('en-US',{maximumFractionDigits:0})):NA} units · ${open?'Abierta':'Cerrada'}${t.closed_at?' '+esc(t.closed_at):''}${TSTALE?' · '+esc(TSTALE):''}${ex}</div>
  <div class="big"><div><b class="${tone(t.pnl)}">${esc(money(t.pnl,1))}</b><small>PnL</small></div><div><b class="${tone(t.r_realized)}">${esc(fR(t.r_realized))}</b><small>R ${open?'actual':'final'}</small></div><div><b style="color:var(--mute)">${ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA}</b><small>R objetivo</small></div></div>
  <div class="lab">Plan R:R</div>${rrBar(t)}
  <div class="lab">Esperado vs real</div><table><tr><th></th><th>Esperado</th><th>Real</th><th>Δ</th></tr>${rows.map(r=>`<tr><td>${r[0]}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="${r[4]}">${esc(r[3])}</td></tr>`).join('')}</table>
@@ -304,7 +307,7 @@ document.getElementById('tradeV').innerHTML=tradeHTML(TR);
 function openAgent(id){const n=NAMES[id],d=AG[id]||{};document.getElementById('tradeV').style.display='none';const v=document.getElementById('agentV');v.style.display='';
  const sig=d.signals&&d.signals.length?`<table><tr><th>Fecha (ET)</th><th>Señal</th><th>Resultado</th><th>R</th></tr>${d.signals.map(r=>`<tr><td>${esc(r.at||NA)}</td><td>${esc(r.signal||NA)}</td><td>${esc(r.outcome||NA)}</td><td class="${tone(r.r)}" style="font-weight:500">${esc(fR(r.r))}</td></tr>`).join('')}</table>`:`<div class="empty">${EMPTY}</div>`;
  v.innerHTML=`<h2 class="serif" style="color:${COL[id]};text-shadow:0 0 18px ${COL[id]}66">${n[0]}</h2><div style="height:2px;width:46px;background:${COL[id]};margin:10px 0 0;box-shadow:0 0 10px ${COL[id]}"></div><div class="sub">${n[1]} · Sala ${n[2]}${badge('agents.'+id)}</div>
- <div class="big"><div><b>${ok(d.hit_rate)?d.hit_rate.toFixed(0)+'%':NA}</b><small>Hit rate</small></div><div><b>${ok(d.confidence)?d.confidence.toFixed(2):NA}</b><small>Confianza</small></div><div><b style="font-size:16px;padding-top:12px;color:var(--gold2)">${esc(d.status||EMPTY)}</b><small>Estado</small></div></div>
+ <div class="big"><div><b>${ok(d.hit_rate)?d.hit_rate.toFixed(0)+'%':NA}</b><small>Hit rate${ok(d.hit_rate)&&TSTALE?' '+esc(TSTALE):''}</small></div><div><b>${ok(d.confidence)?d.confidence.toFixed(2):NA}</b><small>Confianza</small></div><div><b style="font-size:16px;padding-top:12px;color:var(--gold2)">${esc(d.status||EMPTY)}</b><small>Estado</small></div></div>
  <div class="lab">Último análisis · ${esc(d.as_of||NA)}</div><div class="chain" style="line-height:1.7">${esc(d.analysis||EMPTY)}</div>
  <div class="lab">Últimas 5 señales</div>${sig}
  <div class="lab">Actualizado ${esc(d.as_of||NA)}${isEx('agents.'+id)?' · datos de ejemplo':''}</div>`;

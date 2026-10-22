@@ -40,12 +40,13 @@ def _loss_flags(env):
 def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
     """Everything the demo screens need. ``stats`` is None when the OANDA trades read failed (``trades_error`` is
     ``deadline``/``incomplete`` when that was the cause: never partial totals); NAV/balance are None when the summary
-    read failed; ``stale``/``as_of``: NAV/balance are the last good read, observed at ``as_of``. Never raises."""
+    read failed; ``stale``/``as_of``: NAV/balance are the last good read, observed at ``as_of``; ``trades_as_of``: when the
+    trades were read. Never raises."""
     env = os.environ if env is None else env
     epoch = demo_epoch(env)
     snapshot = {"epoch": epoch, "stats": None, "curve": [], "open_rows": [], "closed_rows": [], "nav": None,
                 "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False,
-                "as_of": None, "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {})}
+                "as_of": None, "trades_as_of": None, "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {})}
     try:
         if trades_reader is None or account_reader is None:
             from execution.oanda_readonly import cached_account_view, cached_demo_trades
@@ -53,6 +54,8 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
             account_reader = account_reader or cached_account_view
         risk = _risk_rows(env)
         trades = trades_reader(epoch)
+        if isinstance(trades, dict):  # observation time of the trades read (peek readers add ``observed_at``)
+            snapshot["trades_as_of"] = trades.get("observed_at") or trades.get("as_of")
         if isinstance(trades, dict) and trades.get("error") is not None:  # slow or incomplete read: no totals
             snapshot["trades_error"] = str(trades["error"])
         elif isinstance(trades, dict):

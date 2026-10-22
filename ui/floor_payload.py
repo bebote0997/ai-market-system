@@ -38,7 +38,7 @@ TRADE_LIMIT = 10
 SIGNAL_LIMIT = 5
 PIP = 0.0001  # EURUSD
 CURVE_POINTS = 40
-FRESH_SECONDS = 120  # a cached demo NAV observed longer ago than this is shown as "(dato antiguo · HH:MM ET)"
+FRESH_SECONDS = 120  # a cached demo NAV / trades read observed longer ago than this is "(dato antiguo · HH:MM ET)"
 
 
 def number(value):
@@ -100,7 +100,8 @@ def header_from_stats(stats, *, equity, start=None, daily_loss=None, day=None):
             "daily_loss_limit_pct": 100.0 * fraction if fraction is not None and loss.get('status') != 'OFF' else None,
             "daily_loss_status": loss.get('status') if loss.get('status') else None,
             "day_text": es.demo_day_text(day) if isinstance(day, int) and not isinstance(day, bool) else None,
-            "trades": trades, "equity_stale": None, "equity_as_of": None}
+            "trades": trades, "equity_stale": None, "equity_as_of": None, "trades_stale": None,
+            "trades_as_of": None}
 
 
 def paper_header(db, now):
@@ -122,7 +123,8 @@ def curve_values(curve):
 def demo_header(snapshot, day, now):
     """Demo KPIs. NAV freshness is kept: ``equity_stale`` when the cached read is the last good one (``stale``) or was
     observed more than ``FRESH_SECONDS`` ago; ``equity_as_of`` = its observation time. Stale without a known
-    observation time => equity None ("—"), never shown as current."""
+    observation time => equity None ("—"), never shown as current. ``trades_stale``/``trades_as_of``: the same for the
+    cached trades read behind every trade-derived section (unknown observation time => stale, without a time)."""
     stats = snapshot.get('stats')
     known = stats is not None
     header = header_from_stats(stats if known else {}, equity=snapshot.get('nav'),
@@ -136,6 +138,10 @@ def demo_header(snapshot, day, now):
         header['equity'], stale = None, None
     header['equity_stale'] = stale
     header['equity_as_of'] = et_text(at, with_date=False) if header['equity'] is not None else None
+    if known:  # trade-derived sections (PnL, R, win rate, drawdown, curve, trades, hit rates): same freshness rule
+        seen = as_utc(snapshot.get('trades_as_of'))
+        header['trades_stale'] = seen is None or (now - seen).total_seconds() > FRESH_SECONDS
+        header['trades_as_of'] = et_text(seen, with_date=False)
     return header
 
 
