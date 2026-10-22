@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8b, bloque 3: selección GBPUSD (motor corregido)
+
+- TRAIN (C_RAW), 22 variantes: mejor L3:NR4 +0,060R (DD 27,3R), L3:NR7 +0,046R, L1 invertido +0,010R; resto ≤ 0. Nuevas: S4 −0,079R / −0,079R, S5 −0,189R. L7 −0,022R. Ninguna elegible → **FLAT** (sin holdout).
+
 ## 2026-10-21 — Ronda 8b, bloque 3: selección EURUSD (motor corregido)
 
 - TRAIN (C_RAW), 22 variantes: mejor L3:NR7 +0,167R (120 trades, PF 1,28, DD 15,8R, 2/4 semestres); L3:NR4 +0,030R; el resto negativas. Nuevas: S4 1,5ATR −0,097R, S4 2ATR −0,066R, S5 −0,243R. L4 empeora tras la corrección (estricto −0,125R, relajado −0,140R). Ninguna elegible → **FLAT** (el archivo congelado no cambia; sin holdout). Las tablas de la ronda 8 se marcan como sustituidas en `report_round8.md`.
