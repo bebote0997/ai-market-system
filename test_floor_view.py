@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 from execution.contracts import PaperAccount
 from storage.codec import paper_encode
 from storage.database import Store
-from ui.floor_payload import AGENT_IDS, build_floor_payload, payload_json
+from ui.floor_payload import AGENT_IDS, build_floor_payload, payload_json, signals_and_hit_rate
 from ui.state import dashboard_database
 from ui.views import floor_view
 
@@ -217,6 +217,16 @@ class FloorPayloadTests(unittest.TestCase):
         agent = self.build(sample_mode=False, demo=fake_demo(stats=False))["agents"]["Structure"]
         self.assertIsNone(agent["hit_rate"])  # demo trades unknown: outcomes unknown, never PAPER ones
         self.assertEqual({s["outcome"] for s in agent["signals"]}, {None})
+
+    def test_breakeven_trade_is_neutral_in_the_hit_rate(self):
+        rows = [{"bias": "BEARISH", "run_id": "r-be", "as_of": NOW}, {"bias": "BULLISH", "run_id": "r-win", "as_of": NOW},
+                {"bias": "BULLISH", "run_id": "r-loss", "as_of": NOW}]
+        closed = {"r-be": {"side": "LONG", "net_pnl": 0.0}, "r-win": {"side": "LONG", "net_pnl": 25.0},
+                  "r-loss": {"side": "LONG", "net_pnl": -10.0}}
+        _signals, hit_rate = signals_and_hit_rate(rows, closed)
+        self.assertEqual(hit_rate, 50.0)  # opposite bias at breakeven is neither a hit nor a miss
+        self.assertIsNone(signals_and_hit_rate(rows[:1], {"r-be": closed["r-be"]})[1])
+        self.assertIsNone(signals_and_hit_rate([{**rows[0], "bias": "BULLISH"}], {"r-be": closed["r-be"]})[1])
 
     def test_demo_nav_freshness_is_kept(self):
         def equity(**changes):

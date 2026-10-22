@@ -265,7 +265,8 @@ def demo_closed_by_run(snapshot):
 def signals_and_hit_rate(decisions, closed):
     """Last 5 directional signals of one agent with the outcome of the trade of the SAME run (exact run_id link).
     Hit rate = share of linked closed trades where the signal's side matched the trade and it won (or the signal
-    opposed it and it lost); None when no signal is linked to a closed trade. ``closed`` None = outcomes unknown
+    opposed it and it lost); a breakeven trade (PnL 0) is neutral and excluded. None when no signal is linked to a
+    closed non-breakeven trade. ``closed`` None = outcomes unknown
     (demo trades not readable): every outcome and the hit rate are None."""
     known = closed is not None
     closed = closed or {}
@@ -276,7 +277,7 @@ def signals_and_hit_rate(decisions, closed):
             continue
         trade = closed.get(row.get('run_id'))
         pnl = num(trade.get('net_pnl')) if trade else None
-        if trade is not None and pnl is not None and trade.get('side') in ('LONG', 'SHORT'):
+        if trade is not None and pnl is not None and pnl != 0 and trade.get('side') in ('LONG', 'SHORT'):
             linked_count += 1
             hits += (side == trade['side']) == (pnl > 0)
         if len(signals) < SIGNAL_LIMIT:
