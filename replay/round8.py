@@ -1037,7 +1037,56 @@ Years: {years}. Exit mix ({SPECS[sym].main}): {mt['exits']}.{bh}
 **{out['verdict']}** (bar: avg R >= +0.08, PF > 1.15, MTM DD < 12R, >= 3 tr/mo, 2025 and 2026 YTD both positive).""")
 
 
-SECTIONS = {"select": sec_select, "holdout": sec_holdout}
+def best_train(sel):
+    """Chart pick: the variant with the highest TRAIN avg R (main cost), eligible or not."""
+    return max(sel["results"], key=lambda k: sel["results"][k]["train"]["avg_r"])
+
+
+def sec_chart(args):
+    """TRAIN equity (main cost, cumulative R by exit time) of each instrument's best-TRAIN variant; holdout curves
+    only for instruments whose holdout was run (frozen variant)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    ink, muted, surface, line = "#0b0b0b", "#52514e", "#fcfcfb", "#2a78d6"
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7.2), dpi=120, facecolor=surface, sharey=True)
+    for ax, sym in zip(axes.flat, SYMBOLS):
+        sel = load(args.root, f"{sym}_select.json")
+        name = best_train(sel)
+        m = market(args.root, sym, end=TRAIN[1])
+        trades = run_variant(m, sym, variants(sym)[name], *TRAIN, [SPECS[sym].main])[SPECS[sym].main]
+        xs = [pd.Timestamp(TRAIN[0], tz=NY)] + [pd.Timestamp(t["exit_t"], tz="UTC") for t in trades]
+        ys = np.concatenate([[0.0], np.cumsum([t["r"] for t in trades])])
+        ax.set_facecolor(surface)
+        ax.step(xs, ys, where="post", color=line, linewidth=1.8)
+        ho = load(args.root, f"{sym}_holdout_trades.json") if sel["best"] else None
+        if ho:
+            hx = [pd.Timestamp(t["exit_t"], tz="UTC") for t in ho]
+            ax.step(hx, ys[-1] + np.cumsum([t["r"] for t in ho]), where="post", color="#eb6834", linewidth=1.8)
+        ax.annotate(f"{ys[-1]:+.1f}R", (xs[-1], ys[-1]), xytext=(4, 0), textcoords="offset points", va="center",
+                    fontsize=9, color=ink)
+        tr = sel["results"][name]["train"]
+        status = f"frozen {sel['best']}" if sel["best"] else "FLAT (not eligible)"
+        ax.set_title(f"{sym}  {name}\n{tr['trades']} trades, {tr['avg_r']:+.3f}R avg, PF {tr['pf']}, "
+                     f"DD {tr['mtm_dd_r']}R, {tr['tr_mo']}/mo; {status}", loc="left", color=ink, fontsize=9)
+        ax.axhline(0, color=muted, linewidth=0.8)
+        ax.tick_params(colors=muted, labelsize=8)
+        ax.grid(axis="y", color="#e8e8e6", linewidth=0.8)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color("#c9c8c4")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Cumulative R (main cost)", color=muted)
+    fig.suptitle("Round 8b: TRAIN 2021-10..2024-12 equity of the best-TRAIN variant per instrument (fixed engine)",
+                 x=0.01, ha="left", color=ink, fontsize=11)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(os.path.join(args.root, "round8_equity_r.png"), facecolor=surface)
+    plt.close(fig)
+
+
+SECTIONS = {"select": sec_select, "holdout": sec_holdout, "chart": sec_chart}
 
 
 if __name__ == "__main__":

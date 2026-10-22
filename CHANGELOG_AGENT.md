@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8b, bloques 4-5: sin holdout, gráfico y cierre
+
+- Bloque 4 no ejecutado: ninguna variante es elegible en ningún instrumento. Los cuatro siguen **FLAT** y 2025-01..2026-10 sigue sin usar.
+- `replay/round8.py --sections chart` genera `round8_equity_r.png` (fuera del repo) con la equity TRAIN (coste principal) de la mejor variante TRAIN de cada instrumento, elegible o no; no hay curva de holdout.
+- Tests múltiples: ronda 8b = 82 (70 re-ejecuciones contadas como nuevas + 12 S4/S5). Acumulado 544 → 626; conservador 1084 → 1330; 0 holdouts. Las columnas de resultados de `scalping_references.md` pasan a los números 8b (las de la ronda 8 quedan sustituidas, con copia en `round8/superseded_r8/`). Resumen final 8b en `report_round8.md`.
+- Validación: unittest 2597 OK (41 skipped, 1 expected failure); ruff PASS.
+
 ## 2026-10-21 — Ronda 8b, bloque 3: selección NAS100USD (motor corregido)
 
 - TRAIN (C_IBKR), 17 variantes: positivas S1a ORB5 +0,144R (DD 45R), S3b IB +0,165R (DD 33R), L1 momentum +0,110R (DD 25R), L3:NR4 +0,454R (DD 14,3R), L3:NR7 +0,506R (2,69/mes); nuevas S4 +0,023R / +0,028R y S5 +0,065R (DD 19-36R). Ninguna cumple DD < 12R y ≥ 3/mes → **FLAT** (sin holdout). Ronda 8b: 0/4 elegibles; el bloque 4 (holdout) no se ejecuta.
