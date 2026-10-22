@@ -1,0 +1,118 @@
+# Runbook — reinicio del demo OANDA, domingo 2026-10-25
+
+**Alcance:** desplegar `feat/fx-sl-week-hold` (DEC-FX-SL-1, DEC-HOLD-WEEK-1, DEC-REVERSAL-1 y la vista Floor de PR #54)
+y reiniciar el reloj de 30 días del demo OANDA practice con una época nueva.
+**Lo ejecuta el owner** (o un agente solo con GO explícito para cada paso). Este documento no autoriza nada por sí mismo.
+**Invariantes:** `REAL_EXECUTION_ENABLED = False` (constante en código) · solo OANDA **practice**
+(`api-fxpractice.oanda.com`) · NAS100 bloqueado · XAUUSD pausado por código (DEC-XAU-OFF-1) · una sola instancia.
+Este documento no contiene secretos, ids de cuenta ni URLs privadas: `<SERVICE_ID>`, `<SERVICE_URL>`, `<RENDER_API_KEY>`
+y `<MERGE_SHA>` son marcadores que el owner rellena fuera del repo.
+
+## 0. Requisito previo de decisión (bloqueante)
+
+DEC-DEMO-PAUSE-1 (2026-10-20, rama `docs/dec-demo-pause-1`; no está en esta rama) pausó el enrutado
+(`AI_FLOOR_BROKER_DEMO_ROUTING=0`) y dice que reanudarlo requiere **una decisión nueva del owner con una estrategia que
+pase el backtest**. Antes del paso 3 el owner registra esa decisión en `docs/decisions.md`. Sin ella: **no se pone
+`AI_FLOOR_BROKER_DEMO_ROUTING=1`**. El resto del runbook (merge + deploy con el enrutado en 0) se puede ejecutar igual:
+solo cambia el comportamiento PAPER de EURUSD.
+
+Horario: domingo 2026-10-25 (aún EDT; el cambio de hora es el 2026-11-01). El mercado reabre a las **17:00 ET = 21:00
+UTC**. Hasta esa hora el código rechaza entradas (`friday_close_window` / `FRIDAY_FLATTEN_WINDOW`) y no hay ciclos
+programados hasta la sesión de Londres del lunes (03:00 ET). Ventana recomendada: 14:00–16:30 ET.
+
+## 1. Qué cambia (resumen para el owner)
+
+| Cambio | Efecto en el demo | Env necesaria |
+|---|---|---|
+| DEC-FX-SL-1 | EURUSD: SL ajustado a [45, 60] pips, TP fijo 2R (90–120 pips); XAUUSD sin cambio | ninguna (defaults en código) |
+| DEC-HOLD-WEEK-1 | Cierre forzado viernes 16:45 ET (o 5 días de trading, lo primero); sin entradas vie 16:45 → dom 17:00 ET; Day-1 < 0.5R desactivado | ninguna |
+| DEC-REVERSAL-1 | Router: setup opuesto en beneficio ⇒ cierra y abre la nueva dirección (todos los gates) | ninguna (ON por defecto con el enrutado) |
+| Vista Floor (PR #54) | Página de solo lectura | ninguna |
+
+`RuntimeConfig.fingerprint` **no cambia** con este despliegue: el preflight `experiment_resumable` sigue pasando con la DB
+actual. Por eso **no** se toca `V2_OPPOSITE_SETUP_POLICY` (ver DEC-REVERSAL-1: cualquier valor ≠ BLOCK cambia el
+fingerprint y el servicio no arrancaría con la DB actual).
+
+## 2. Cambios de env en Render (solo nombres y valores previstos)
+
+Siempre **PUT por clave**: `PUT https://api.render.com/v1/services/<SERVICE_ID>/env-vars/<KEY>` con cuerpo
+`{"value": "<valor>"}` y cabecera `Authorization: Bearer <RENDER_API_KEY>`. **Nunca** el PUT masivo de
+`/env-vars` (reemplaza la lista completa y borraría secretos). Anotar antes el número de claves:
+`GET /v1/services/<SERVICE_ID>/env-vars` (paginado; contar `envVar.key`). Según DEC-DEMO-PAUSE-1 eran **38**: verificarlo.
+
+| Clave | Valor previsto | Condición | Motivo |
+|---|---|---|---|
+| `AI_FLOOR_BROKER_DEMO_ROUTING` | `1` | solo con la decisión del paso 0 | reanuda el enrutado OANDA practice |
+| `AI_FLOOR_DEMO_EPOCH` | instante UTC en que se pone el enrutado a 1, ISO 8601 con offset, p. ej. `2026-10-25T20:00:00Z` | con el enrutado | época nueva: el dashboard y «Día N de 30» cuentan solo desde aquí |
+| `AI_FLOOR_DEMO_START_EQUITY` | NAV de la cuenta practice leída en el pre-flight 4.6 (decimal, p. ej. `100012.34`) | con el enrutado | base del gate PAPER de drawdown 5 % (DEC-DEMO-GATE-1); sin ella queda la base del 18-oct |
+| `AI_FLOOR_DAILY_LOSS_START_EQUITY` | el mismo NAV | solo si `AI_FLOOR_DAILY_LOSS_LIMIT=1` ya está puesto | base del freno de drawdown 5 % del router (si no, sigue el `dd_start` guardado de la época anterior) |
+
+No se cambia ninguna otra clave. En particular **no** poner: `V2_OPPOSITE_SETUP_POLICY`, `AI_FLOOR_FX_SL_MIN_PIPS`,
+`AI_FLOOR_FX_SL_MAX_PIPS`, `AI_FLOOR_FX_TP_RR`, `AI_FLOOR_MAX_HOLD_TRADING_DAYS`, `AI_FLOOR_FRIDAY_FLATTEN_NY`,
+`AI_FLOOR_TIME_EXIT_DAY1`, `AI_FLOOR_DEMO_REVERSAL` (los defaults del código son los valores pedidos), ni tocar
+`AI_FLOOR_GIT_COMMIT` (identifica el freeze del experimento; si cambia, `experiment_resumable` falla y el servicio no
+arranca), `AI_FLOOR_ENABLED_SYMBOLS` (sigue `XAUUSD,EURUSD`: la pausa de XAUUSD es por código), ni secretos.
+
+Recuento esperado tras el paso 3: **recuento previo + nº de claves que no existían**. Según DEC-DEMO-GATE-1
+`AI_FLOOR_DEMO_START_EQUITY` no estaba fijada en producción; si `AI_FLOOR_DEMO_EPOCH` tampoco existe (el GET previo lo
+dice), 38 ⇒ 40 (41 con `AI_FLOOR_DAILY_LOSS_START_EQUITY`). Cualquier otra diferencia ⇒ parar y revisar.
+
+Sin el enrutado (paso 0 no aprobado): **ningún cambio de env**.
+
+## 3. Despliegue
+
+1. El owner revisa y mergea el PR de `feat/fx-sl-week-hold` a `main` (CI `Tests / unit` en verde). Anotar `<MERGE_SHA>`.
+2. Archivado (sección 5) **antes** del deploy.
+3. Si procede (paso 0), aplicar los PUT por clave de la sección 2. `autoDeployTrigger` sigue `off`: los PUT no despliegan.
+4. `POST https://api.render.com/v1/services/<SERVICE_ID>/deploys` con `{"commitId": "<MERGE_SHA>"}` (nunca otro SHA).
+5. Esperar `status = live` (`GET /v1/services/<SERVICE_ID>/deploys/<DEPLOY_ID>`); si `build_failed` /
+   `update_failed` ⇒ rollback (sección 6).
+6. Ejecutar los checks post-deploy de la sección 4 (marcados «post»).
+
+## 4. Pre-flight y post-checks
+
+| # | Check | Cuándo | Cómo / esperado |
+|---|---|---|---|
+| 4.1 | Health | pre y post | `GET <SERVICE_URL>/_stcore/health` ⇒ 200 |
+| 4.2 | Cabeceras de seguridad | post | `curl -sI <SERVICE_URL>/` ⇒ `strict-transport-security`, `content-security-policy` (con `frame-ancestors 'none'`), `x-frame-options: DENY`, `x-content-type-options: nosniff`, `referrer-policy: no-referrer` |
+| 4.3 | Recuento de env | pre y post | sección 2 (38 antes; 40/41 después con el enrutado; 38 sin él) |
+| 4.4 | Flags | post | env: `AI_FLOOR_BROKER_DEMO_ROUTING` = `1` (o `0` sin decisión), sin `V2_OPPOSITE_SETUP_POLICY` nuevo; logs: `component=broker_demo event=ROUTER_READY dry_run=False`, `event=REVERSAL_ON`, `component=risk event=PAPER_DRAWDOWN_GATE source=OANDA_DEMO` |
+| 4.5 | REAL bloqueado | post | código: `runtime/demo_runner.py` `REAL_EXECUTION_ENABLED = False` en `<MERGE_SHA>`; el router no se construye si no es False; el host es el de practice (`api-fxpractice.oanda.com`) |
+| 4.6 | OANDA solo practice + NAV | pre | Dashboard vista Real / summary de solo lectura: cuenta practice, NAV (anotar para la sección 2), sin órdenes pendientes |
+| 4.7 | Operaciones abiertas | pre | OANDA practice: `openTrades` vacío, o cada trade abierto identificado. Si hay un trade enrutado abierto, desde el deploy lo gestiona la regla nueva (cierre viernes 16:45 ET; sus SL/TP en el broker no cambian). Un trade **no enrutado** abierto en la cuenta ⇒ el router marca `DRIFT` y rechaza entradas: parar y decidir con el owner (el sistema nunca lo cierra). PAPER: posiciones EURUSD abiertas (planes 3R antiguos) siguen con su SL/TP; la regla de la semana las cierra como muy tarde el viernes 16:45 ET |
+| 4.8 | Trade 13 intacto | pre y post | Anotar estado, precio, SL/TP y P&L del trade 13 en OANDA practice (y su fila en `broker_demo_trades` si existe) antes y después: deben ser idénticos. Ningún cambio de esta rama cierra, modifica ni borra un trade existente; solo actúa sobre trades enrutados `OPEN` por la regla de duración/reversión. Si el trade 13 está **abierto**, aplica 4.7 (no enrutado ⇒ DRIFT; enrutado ⇒ gestionado por la regla nueva): decisión del owner antes del deploy |
+| 4.9 | Scheduler solo EURUSD | post (lunes ≥ 03:00 ET) | logs: `component=scheduler event=SYMBOL_PAUSED symbol=XAUUSD` (una vez), `RUN_COMPLETED` solo con `symbol=EURUSD` |
+| 4.10 | XAUUSD pausado | post | sin ciclos ni órdenes XAUUSD; posición PAPER XAUUSD (si existiera) cerrada con `SYMBOL_PAUSED` |
+| 4.11 | Latches del router | pre | dashboard «Daily loss limit»: sin `DRAWDOWN_HALT` latcheado de la época anterior (si lo hay: `clear_drawdown_halt` por el operador, con motivo) |
+| 4.12 | Slack | post | `python -m runtime.alert_test --slack` (mensaje TEST) opcional; el lunes tras las 17:00 ET: log `component=notifications event=DAILY_SUMMARY_SENT source=OANDA_DEMO` y el resumen del día de trading |
+| 4.13 | Preflight cloud | post | el servicio arrancó (si `experiment_resumable` fallara, `runtime.cloud` no arranca): health 200 y heartbeat del runner en el dashboard |
+
+## 5. Reinicio del reloj de 30 días (época nueva)
+
+1. **Archivar, nunca borrar.** Desde el shell de Render, antes del deploy, copias consistentes (API de backup de SQLite,
+   origen en solo lectura) de la DB de trading (`$AI_FLOOR_DB_PATH`) y de la DB de estado del broker
+   (`$AI_FLOOR_BROKER_STATE_DB_PATH`, por defecto `data/runtime/broker_state.db`) a
+   `data/runtime/archive/<nombre>_pre_restart_20261025.db` (mismo disco persistente). Por ejemplo:
+   `python -c "import sqlite3,sys; s=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()" <origen> <destino>`.
+   No sobrescribir un destino existente. Comprobar `PRAGMA integrity_check` = `ok` en cada copia. Opcional: copia fuera
+   de Render.
+2. Las DB activas **se conservan** (no se renombran ni se vacían): la experiencia PAPER, el journal y las filas
+   enrutadas antiguas siguen ahí; el fingerprint no cambia, así que el preflight reanuda el experimento PAPER.
+3. La época nueva la fija `AI_FLOOR_DEMO_EPOCH` (sección 2): el dashboard muestra solo operaciones OANDA desde ese
+   instante y «Día N de 30» cuenta desde la primera operación enrutada tras él. Base de drawdown =
+   `AI_FLOOR_DEMO_START_EQUITY` (y `AI_FLOOR_DAILY_LOSS_START_EQUITY` si el límite diario está ON).
+4. Día 30 ≈ 2026-11-24 si la primera operación entra el 2026-10-26. Registrar en `docs/STATUS.md` la época real.
+
+## 6. Rollback
+
+1. Si el problema es solo del enrutado: `PUT .../env-vars/AI_FLOOR_BROKER_DEMO_ROUTING` = `0` (por clave). Con trades
+   enrutados abiertos, antes cerrar con el botón de emergencia del dashboard (flatten) y confirmar `openTrades` vacío.
+2. Si hay que volver al código anterior: `POST /v1/services/<SERVICE_ID>/deploys` con `{"commitId": "<SHA live
+   anterior>"}` (anotar el SHA live antes del paso 3.4; según DEC-DEMO-PAUSE-1 se redesplegó el `main` de entonces, `0b443b0`:
+   verificarlo en Render). Hacerlo con la cuenta plana: el código
+   anterior aplicaría la regla Day-1/Day-2 a trades abiertos y no reconoce la política de riesgo FX sellada en órdenes
+   PAPER pendientes (se rechazarían al rellenarse, fail-closed).
+3. Env: devolver las claves de la sección 2 a su estado previo (enrutado `0`; las claves nuevas se pueden eliminar con
+   `DELETE .../env-vars/<KEY>`, por clave) y comprobar el recuento (38).
+4. Datos: nada que restaurar (no se borró nada); las copias de la sección 5 quedan como evidencia.
+5. Registrar el rollback en `CHANGELOG_AGENT.md` y `docs/STATUS.md`.

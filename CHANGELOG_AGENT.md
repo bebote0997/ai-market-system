@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-22 — Runbook del reinicio del domingo 2026-10-25 (branch `feat/fx-sl-week-hold`, chunk 5)
+
+- Nuevo `docs/runbooks/sunday_restart_2026-10-25.md`: requisito de decisión del owner para reanudar el enrutado (DEC-DEMO-PAUSE-1), cambios de env en Render por clave (solo con el enrutado: `AI_FLOOR_BROKER_DEMO_ROUTING=1`, `AI_FLOOR_DEMO_EPOCH`, `AI_FLOOR_DEMO_START_EQUITY`, y `AI_FLOOR_DAILY_LOSS_START_EQUITY` si el límite diario está ON; sin enrutado ninguno; nunca `V2_OPPOSITE_SETUP_POLICY` ni `AI_FLOOR_GIT_COMMIT`), deploy con `POST /deploys` + `commitId` tras el merge del owner, reinicio del reloj de 30 días (época nueva, archivado por API de backup sin borrar), pre-flight/post-checks (health, cabeceras, recuento de env, flags, REAL bloqueado, scheduler solo EURUSD, XAUUSD pausado, operaciones abiertas, trade 13 intacto, solo practice, latches, Slack, preflight cloud) y rollback. Sin secretos ni ids. Sin cambios en Render.
+
 ## 2026-10-22 — Merge de `origin/feat/floor-view` (PR #54) en `feat/fx-sl-week-hold` (chunk 4)
 
 - Merge sin conflictos textuales (vista Floor de solo lectura: `ui/floor_payload.py`, `ui/floor_cache.py`, `ui/views/floor_view.py`, `ui/static/floor/floor.html`, `ui/app.py`, `docs/floor_view.md`, tests). Revisión semántica: la vista lee R:R planificado y motivos de cierre ya guardados (`es.close_reason_text`), por lo que muestra 2R para planes FX y los motivos nuevos (`TIME_EXIT_MAX_HOLD`, `EXIT_REVERSAL_IN_PROFIT`, `REVERSAL_IN_PROFIT`) con sus textos. Suite completa 2435 OK (41 skipped, 1 expected failure) y ruff PASS (una ejecución previa bajo carga dio un timeout de 30 s en `test_phase6_conflict_concurrency`; aislado y en la repetición completa: OK).
