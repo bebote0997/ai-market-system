@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-22 — Ronda 9, bloque 2: holdout NAS100USD (una sola vez)
+
+- `replay/round9.py` (+ `test_round9.py`): solo carga el congelado commiteado (falla cerrado si difiere de HEAD, si cambia el blob de `replay/round8.py` o si una variante es desconocida). Holdout 2025-01-01..2026-10-19 ejecutado una vez; resultados en `/workspace/backtest/round9/NAS100USD.json`, gráfico `round9_equity_r.png`, sección 2 de `report_round9.md`.
+- C_IBKR: L3:NR4 (primaria) 95 trades, 4,4/mes, +0,056R, PF 1,09, DD 17,7R, 4/8 trimestres → **FAIL**. L3:NR7 −0,149R. S1a:ORB5 +0,112R, 20,6/mes, PF 1,150, DD 37R, 6/8 → FAIL. Barra ronda 7 (informativa): las tres fallan. Buy-and-hold NAS100 +40,3 % (DD máx. 26,4 %).
+- Tests múltiples: 626 → 629. El holdout 2025-01..2026-10 de NAS100 ya no está limpio.
+
 ## 2026-10-22 — Ronda 9, bloque 1: congelado y declaración (antes del holdout)
 
 - `replay/round9_frozen.json` (copia de `/workspace/backtest/round9_frozen.json`): NAS100USD, configuraciones exactas de la ronda 8b sin reajuste. PRIMARIA L3:NR4; SECUNDARIAS L3:NR7 y S1a:ORB5. Coste principal C_IBKR, referencia C_OANDA. Registra el blob git de `replay/round8.py`.
