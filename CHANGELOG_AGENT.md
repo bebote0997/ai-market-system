@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8b, bloque 3: selección XAUUSD (motor corregido)
+
+- TRAIN (C_IBKR), 21 variantes: solo L7 Raschke 80-20 es positiva tras la corrección causal (+0,536R, 111 trades, PF 1,66), pero 2,84 tr/mes < 3 y DD 21,1R. Nuevas: S4 −0,065R / −0,155R, S5 −0,192R. Ninguna elegible → **FLAT** (sin holdout).
+
 ## 2026-10-21 — Ronda 8b, bloque 3: selección GBPUSD (motor corregido)
 
 - TRAIN (C_RAW), 22 variantes: mejor L3:NR4 +0,060R (DD 27,3R), L3:NR7 +0,046R, L1 invertido +0,010R; resto ≤ 0. Nuevas: S4 −0,079R / −0,079R, S5 −0,189R. L7 −0,022R. Ninguna elegible → **FLAT** (sin holdout).
