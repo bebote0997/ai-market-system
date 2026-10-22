@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8: selección GBPUSD
+
+- TRAIN (C_RAW), 19 variantes: mejor L3:NR4 +0,049R (DD 28R), L3:NR7 +0,035R, L1 invertido (Seeck) +0,018R, S3b IB +0,001R; resto negativas. Ninguna elegible → **FLAT** (`replay/round8_frozen_GBPUSD.json`, sin holdout). EURUSD registrado como FLAT en `round8/EURUSD.json`.
+
 ## 2026-10-21 — Ronda 8: selección EURUSD
 
 - TRAIN 2021-10..2024-12 (C_RAW), 19 variantes: 16 negativas; L3:NR7 +0,159R (120 trades, PF 1,26) pero DD 15,6R y 2/4 semestres positivos; L3:NR4 +0,021R; L4 estricto −0,016R; L1 invertido −0,011R. Ninguna elegible → **FLAT** congelado en `replay/round8_frozen_EURUSD.json` (sin holdout).
