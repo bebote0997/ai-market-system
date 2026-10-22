@@ -38,6 +38,12 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     # DEC-DEMO-GATE-1: daily Slack summary with OANDA demo figures while routing is ON: lazy + guarded.
                     ("runtime/notifications.py", "execution.demo_dashboard"),
                     ("runtime/notifications.py", "demo_dashboard"),
+                    # DEC-ALERTS-REDESIGN-1: Floor-style trade alerts from OANDA demo data (GET-only reads + broker
+                    # state DB mode=ro; no writes, no orders), in the alert worker thread: lazy + guarded.
+                    ("runtime/trade_alert_source.py", "execution.demo_dashboard"),
+                    ("runtime/trade_alert_source.py", "demo_dashboard"),
+                    ("runtime/trade_alert_source.py", "execution.oanda_readonly"),
+                    ("runtime/trade_alert_source.py", "oanda_readonly"),
                     # Floor page: peek-only reader of the oanda_readonly TTL caches via sys.modules (never imports or
                     # fetches; no network, no orders), plugged into demo_dashboard.demo_snapshot readers.
                     ("ui/floor_cache.py", "execution.oanda_readonly"), ("ui/floor_cache.py", "oanda_readonly"),
@@ -56,6 +62,8 @@ LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_co
                 "ui/views/luxury.py": {"execution.demo_dashboard": [["demo_epoch", "demo_progress",
                                                                      "demo_snapshot"]]},
                 "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_progress"]]},
+                "runtime/trade_alert_source.py": {"execution.demo_dashboard": [["state_db_path"], ["demo_progress"]],
+                                                  "execution.oanda_readonly": [["account_view", "demo_trades"]]},
                 "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"]],
                                              "execution.results_source": [["demo_results"]]}}
 

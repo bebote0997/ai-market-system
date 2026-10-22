@@ -27,6 +27,9 @@ st.set_page_config(page_title="AI Trading Floor · PAPER", layout="wide", page_i
 require_dashboard_access(st)
 luxury.apply(st)
 
+if st.query_params.get("page") == "floor" and "luxury_navigation" not in st.session_state:
+    st.session_state["luxury_navigation"] = floor_view.PAGE  # alert deep link (runtime.trade_alerts.floor_url)
+
 with st.sidebar:
     luxury.html(st, f'<div class="brand">{tr("Trading Floor")}<small>{tr("PAPER · V2")}</small></div>')
     page = st.radio(tr("Navigation"), luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES

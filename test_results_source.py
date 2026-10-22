@@ -2,13 +2,13 @@
 Slack summary) even with routing OFF; default keeps the current behaviour; RuntimeConfig.fingerprint never changes."""
 from contextlib import nullcontext
 from datetime import datetime, timezone
-import json
 import os
 import unittest
 from unittest.mock import patch
 
 from execution import results_source as rs
 from runtime.config import RuntimeConfig
+from runtime.notifications import paper_summary_text
 import test_demo_from_zero as tz
 import test_demo_gates_oanda as tg
 from ui.views import dashboard, experiment, luxury
@@ -57,13 +57,12 @@ class SlackOnlyTests(unittest.TestCase):
 
     def test_oanda_only_with_routing_off_sends_the_demo_summary(self):
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "0", **ONLY})
-        self.assertTrue(text.startswith("AI Market System OANDA DEMO DAILY_SUMMARY"))
+        self.assertTrue(text.startswith("📊 Resumen diario · OANDA Demo"))
         self.assertNotIn("PAPER", text)
 
     def test_default_routing_off_still_paper(self):
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "0", "AI_FLOOR_RESULTS_SOURCE": "PAPER"})
-        self.assertEqual(text, "AI Market System PAPER DAILY_SUMMARY\n" +
-                         json.dumps(tg.event().daily_summary, sort_keys=True, ensure_ascii=False))
+        self.assertEqual(text, paper_summary_text(tg.event().daily_summary))
 
 
 class DashboardOnlyTests(unittest.TestCase):

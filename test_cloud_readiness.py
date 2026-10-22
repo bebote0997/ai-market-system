@@ -14,6 +14,7 @@ from runtime.cloud import cloud_preflight
 from runtime.config import RuntimeConfig
 from runtime.demo_runner import DemoRunner
 from runtime.notifications import SlackNotificationSink
+from runtime.trade_alerts import payload_text
 from runtime.review_export import review_bundle, review_bundle_json
 from runtime.service import OperationalRuntime
 from storage.database import Store, SCHEMA_VERSION
@@ -87,17 +88,16 @@ class CloudDB(unittest.TestCase):
         runner = DemoRunner(config, notification_sink=sink, clock=lambda: T)
         try:
             self.assertEqual(runner.store.db.execute("SELECT version FROM schema_info").fetchone()[0], SCHEMA_VERSION)
-            first = [json.loads(item["text"].split("\n", 1)[1]) for item in sent]
-            self.assertEqual(len([item for item in first if item["type"] == "RUN_FAILED"]), 1)
+            first = [payload_text(item) for item in sent]
+            self.assertEqual(len([item for item in first if item.startswith("⚠️ Ciclo fallido")]), 1)
             self.assertEqual({r[0] for r in runner.store.db.execute("SELECT status FROM notification_deliveries")}, {"DELIVERED"})
             self.assertNotIn("dummy", json.dumps(sent))
         finally:
             runner.close()
         runner = DemoRunner(config, notification_sink=sink, clock=lambda: T)
         try:
-            all_items = [json.loads(item["text"].split("\n", 1)[1]) for item in sent]
-            self.assertEqual(len([item for item in all_items if item["type"] == "RUN_FAILED"]), 1)
-            self.assertEqual(len({item["event_id"] for item in all_items}), len(all_items))
+            all_items = [payload_text(item) for item in sent]
+            self.assertEqual(len([item for item in all_items if item.startswith("⚠️ Ciclo fallido")]), 1)
         finally:
             runner.close()
 

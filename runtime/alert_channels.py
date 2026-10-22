@@ -74,10 +74,30 @@ class GmailEmailChannel:
             msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
         return msg
 
+    def rendered_message(self, subject_line, text, html, *, event_id):
+        """Floor-style email (``runtime.trade_alerts``): plain-text part + dark HTML alternative."""
+        msg = EmailMessage()
+        msg["Subject"] = subject_line
+        msg["From"] = self.sender
+        msg["To"] = self.recipient
+        msg["Date"] = formatdate(usegmt=True)
+        msg["Message-ID"] = make_msgid(domain="ai-trading-floor.local")
+        msg["X-AI-Floor-Event-ID"] = str(event_id)
+        msg.set_content(text)
+        msg.add_alternative(html, subtype="html")
+        return msg
+
+    def send_rendered(self, subject_line, text, html, *, event_id):
+        if not self.configured:
+            raise AlertChannelError("NOT_CONFIGURED")
+        self._smtp_send(self.rendered_message(subject_line, text, html, event_id=event_id))
+
     def send(self, event, attachments=()):
         if not self.configured:
             raise AlertChannelError("NOT_CONFIGURED")
-        msg = self.message(event, attachments=attachments)
+        self._smtp_send(self.message(event, attachments=attachments))
+
+    def _smtp_send(self, msg):
         factory = self.smtp_factory or smtplib.SMTP_SSL
         try:
             smtp = factory(GMAIL_HOST, GMAIL_PORT, timeout=self.timeout, context=ssl.create_default_context())
@@ -138,10 +158,17 @@ class SlackAlertChannel:
         if not self.configured:
             raise AlertChannelError("NOT_CONFIGURED")
         try:
-            send_slack(self.transport, self.webhook_url, {"text": render_text(event)}, self.timeout)
+            send_slack(self.transport, self.webhook_url, slack_payload(event), self.timeout)
         except SlackNotificationError as exc:
             raise AlertChannelError(str(exc)) from None
 
 
-__all__ = ["AlertChannelError", "GmailEmailChannel", "SlackAlertChannel",
+def slack_payload(event):
+    """Compact Floor-style Slack message (DEC-ALERTS-REDESIGN-1): header + one detail line, never a field dump."""
+    from runtime.trade_alerts import system_slack_payload
+    label = event.event_type if not event.kind.trade or event.is_test else event.kind.label.capitalize()
+    return system_slack_payload(label, event.symbol, event.summary)
+
+
+__all__ = ["AlertChannelError", "GmailEmailChannel", "SlackAlertChannel", "slack_payload",
            "classify_smtp_error"]

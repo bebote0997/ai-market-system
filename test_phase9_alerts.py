@@ -1,5 +1,6 @@
 """V2 Phase 9: alert engine (F09-T01…T19). Mocks only: smtplib and urlopen are patched and every socket
 connection attempt fails the test, so no real email or Slack message can be sent."""
+import json
 import ast
 import copy
 import email
@@ -18,6 +19,7 @@ from runtime import alert_channels, alert_chart, alert_dispatch
 from runtime.alert_catalog import (CATALOG, NO_DATA, TRADE_FIELDS, alert_event, alert_event_id,
                                    from_notification, make_test_alert)
 from runtime.alert_channels import AlertChannelError, GmailEmailChannel, SlackAlertChannel
+from runtime.trade_alerts import payload_text
 from runtime.alert_dispatch import (AMBIGUOUS_RETRY, AlertDeliveryLedger, AlertDispatcher, AlertNotificationSink,
                                     alerts_enabled, dispatcher_from_env)
 from runtime.alert_hook import AlertHook
@@ -220,7 +222,10 @@ class TestSlackChannel(NoNetwork):
             SlackAlertChannel(webhook_url="https://hooks.slack.com/services/T0/B0/x", environ={}).send(trade_event())
         request = urlopen.call_args[0][0]
         self.assertEqual(request.full_url, "https://hooks.slack.com/services/T0/B0/x")
-        self.assertIn(b"Risk %: 1.0", request.data)
+        body = json.loads(request.data)
+        self.assertNotIn("text", body)  # DEC-ALERTS-REDESIGN-1: compact Block Kit attachment, no field dump
+        self.assertIn("Valid/executed trade · XAUUSD", payload_text(body))
+        self.assertNotIn("Risk %", request.data.decode())
 
     def test_errors_typed(self):
         cases = ((HTTPError("u", 429, "x", {}, io.BytesIO()), "RATE_LIMITED"),

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from ai.provider import DeterministicAIProvider
 from runtime.demo_runner import DemoRunner
 from runtime.notifications import SlackNotificationSink
+from runtime.trade_alerts import payload_text
 from runtime.review_export import review_bundle_json, run_evidence_json
 import test_demo_runner as fixture
 from test_demo_runner import Data, T, instrument, macro_fixture, patched_scouts
@@ -19,7 +20,7 @@ class ExecutionObservabilityTests(unittest.TestCase):
     def test_submitted_then_existing_position_is_explained_and_stable(self):
         sent = []
         sink = SlackNotificationSink(webhook_url="https://example.invalid/test",
-                                     transport=lambda _url, payload, _timeout: sent.append(payload["text"]))
+                                     transport=lambda _url, payload, _timeout: sent.append(payload_text(payload)))
         runner = self.runner(sink=sink)
         try:
             with patched_scouts("LONG"):
@@ -28,12 +29,11 @@ class ExecutionObservabilityTests(unittest.TestCase):
             self.assertEqual(initial["execution_status"], "SUBMITTED")
             self.assertEqual(initial["execution_reason"], "ORDER_SUBMITTED")
             self.assertTrue(initial["order_id"])
-            self.assertIn('"execution_status": "SUBMITTED"', "\n".join(sent))
-            self.assertIn('"plan_status": "PLAN_READY"', "\n".join(sent))
+            # DEC-ALERTS-REDESIGN-1: one compact line per decision (PAPER mode), never a JSON dump.
+            self.assertIn("Detalle: ORDER_SUBMITTED", "\n".join(sent))
             self.assertEqual(len([message for message in sent
-                                  if 'PAPER execution' in message]), 1)
-            self.assertFalse(any('"type": "SETUP_VALID_SETUP"' in message or
-                                 '"type": "ORDER_SUBMITTED"' in message for message in sent))
+                                  if 'Decisión de ejecución PAPER' in message]), 1)
+            self.assertFalse(any("{" in message for message in sent))
             self.assertEqual(len(runner.store.load_paper("paper-main")[1]), 1)
         finally:
             runner.close()
@@ -54,7 +54,7 @@ class ExecutionObservabilityTests(unittest.TestCase):
             self.assertIsNone(outcome["blocking_order_id"])
             self.assertEqual(outcome["setup_id"], initial["setup_id"])
             self.assertEqual(len(runner.store.load_paper("paper-main")[1]), 1)
-            self.assertIn('"execution_reason": "EXISTING_POSITION"', "\n".join(sent))
+            self.assertIn("Detalle: EXISTING_POSITION", "\n".join(sent))
             self.assertEqual(json.loads(run_evidence_json(runner.store, second["run_id"]))
                              ["review"]["execution"], outcome)
             self.assertEqual(len(runner.store.journal(run_id=second["run_id"],

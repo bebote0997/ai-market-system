@@ -22,7 +22,8 @@ from execution.demo_epoch import DEFAULT_DEMO_START_EQUITY, START_EQUITY_ENV, de
 from execution.risk_engine_v2 import drawdown_basis_scope, evaluate
 from execution.risk_reservation import prepare_reservation
 from runtime.config import RuntimeConfig
-from runtime.notifications import NotificationEvent, SlackNotificationSink, oanda_demo_summary_text
+from runtime.notifications import NotificationEvent, SlackNotificationSink, oanda_demo_summary_text, paper_summary_text
+from runtime.trade_alerts import payload_text
 from runtime.scheduler import slot_key
 from runtime.service import OperationalRuntime
 from test_dec14_opposite_policy import reports, snapshot
@@ -309,7 +310,7 @@ class SlackSummaryTests(unittest.TestCase):
     def send(self, env, **patches):
         sent = []
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x",
-                                     transport=lambda url, payload, timeout: sent.append(payload["text"]),
+                                     transport=lambda url, payload, timeout: sent.append(payload_text(payload)),
                                      clock=lambda: SENT_AT)
         with patch.dict(os.environ, env), \
                 patch("execution.demo_dashboard.demo_snapshot", **patches.get("snapshot", {"return_value": SNAPSHOT})), \
@@ -320,18 +321,18 @@ class SlackSummaryTests(unittest.TestCase):
 
     def test_routing_off_unchanged(self):
         text, progress = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "0"})
-        self.assertEqual(text, "AI Market System PAPER DAILY_SUMMARY\n" +
-                         json.dumps(event().daily_summary, sort_keys=True, ensure_ascii=False))
+        self.assertEqual(text, paper_summary_text(event().daily_summary))
+        self.assertNotIn("{", text)  # DEC-ALERTS-REDESIGN-1: never a JSON dump
         progress.assert_not_called()
 
     def test_routing_on_oanda_figures(self):
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"})
         self.assertEqual(text.splitlines(), [
-            "AI Market System OANDA DEMO DAILY_SUMMARY", "Día 2 de 30", "Día de trading: 2026-10-20 (17:00 a 17:00 ET)",
+            "📊 Resumen diario · OANDA Demo · 2026-10-20",
             "NAV (a las 10:00 ET): 100,040.00 USD", "Balance (a las 10:00 ET): 100,039.98 USD",
             "P&amp;L desde el inicio del demo (a las 10:00 ET): +40.02 USD",
             "P&amp;L del día de trading: -5.50 USD", "Operaciones cerradas en el día: 3 (ganadoras: 2)",
-            "R medio del día: -0.08", "Operaciones abiertas (a las 10:00 ET): 1"])
+            "R medio del día: -0.08", "Operaciones abiertas (a las 10:00 ET): 1", "OANDA Demo · Día 2 de 30"])
         self.assertNotIn("1234", text)
         self.assertNotIn("paper", text.lower())
 
@@ -341,15 +342,15 @@ class SlackSummaryTests(unittest.TestCase):
         for patches in ({"snapshot": {"return_value": empty}}, {"snapshot": {"side_effect": RuntimeError("x")}}):
             with self.subTest(patches=patches):
                 text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}, **patches)
-                self.assertEqual(text, "AI Market System OANDA DEMO DAILY_SUMMARY\nOANDA demo: sin datos")
+                self.assertEqual(text.splitlines()[1:], ["OANDA demo: sin datos", "OANDA Demo · Día sin datos"])
         nav_only = {**empty, "nav": 99990.0, "currency": "USD"}
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}, snapshot={"return_value": nav_only}, day=None)
         self.assertEqual(text.splitlines()[1:], ["Demo OANDA: aún sin operaciones del demo",
-                                                 "Día de trading: 2026-10-20 (17:00 a 17:00 ET)",
                                                  "NAV (a las 10:00 ET): 99,990.00 USD",
                                                  "Balance (a las 10:00 ET): sin datos",
                                                  "P&amp;L desde el inicio del demo (a las 10:00 ET): sin datos",
-                                                 "OANDA demo: sin datos de operaciones"])
+                                                 "OANDA demo: sin datos de operaciones",
+                                                 "OANDA Demo · Día sin datos"])
 
     def test_send_log_line_names_the_source_never_the_webhook(self):
         for routing, source in (("1", "OANDA_DEMO"), ("0", "PAPER")):
@@ -383,7 +384,7 @@ class SlackSummaryTests(unittest.TestCase):
         # are read and labelled at the send time; each day's aggregates keep its own 17:00 -> 17:00 NY window.
         sent = []
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x", clock=lambda: SENT_AT,
-                                     transport=lambda url, payload, timeout: sent.append(payload["text"]))
+                                     transport=lambda url, payload, timeout: sent.append(payload_text(payload)))
         events = [NotificationEvent("1.0", f"evt-{date}", f"daily:{date}", SENT_AT.isoformat(), "INFO",
                                     "DAILY_SUMMARY", None, (), (), None, (), (), (),
                                     daily_summary={"date_ny": date, "close_at_utc": close, "window_start_utc": start})
@@ -397,14 +398,14 @@ class SlackSummaryTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in snap.call_args_list + progress.call_args_list], [SENT_AT] * 4)
         first, second = (text.splitlines() for text in sent)
         for lines in (first, second):
-            self.assertEqual(lines[1], "Día 3 de 30")
-            self.assertEqual([lines[3], lines[4], lines[-1]], ["NAV (a las 10:00 ET): 100,040.00 USD",
+            self.assertEqual(lines[-1], "OANDA Demo · Día 3 de 30")
+            self.assertEqual([lines[1], lines[2], lines[-2]], ["NAV (a las 10:00 ET): 100,040.00 USD",
                                                                "Balance (a las 10:00 ET): 100,039.98 USD",
                                                                "Operaciones abiertas (a las 10:00 ET): 1"])
-        self.assertEqual((first[2], first[6:8]), ("Día de trading: 2026-10-19 (17:00 a 17:00 ET)",
+        self.assertEqual((first[0], first[4:6]), ("📊 Resumen diario · OANDA Demo · 2026-10-19",
                                                   ["P&amp;L del día de trading: +45.50 USD",
                                                    "Operaciones cerradas en el día: 1 (ganadoras: 1)"]))
-        self.assertEqual((second[2], second[6:8]), ("Día de trading: 2026-10-20 (17:00 a 17:00 ET)",
+        self.assertEqual((second[0], second[4:6]), ("📊 Resumen diario · OANDA Demo · 2026-10-20",
                                                     ["P&amp;L del día de trading: -5.50 USD",
                                                      "Operaciones cerradas en el día: 3 (ganadoras: 2)"]))
 
