@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8: resumen final y veredicto (branch `feat/backtest-v2-i2`)
+
+- **0/4 instrumentos pasan**: ninguna de las 70 variantes fue elegible en TRAIN (umbral + ≥ 3/4 semestres positivos); los cuatro congelados FLAT y commiteados; **no se ejecutó ningún holdout** (2025-01..2026-10 queda limpio). FX: costes de 1,1 pip contra stops de 5-15 pips anulan los efectos de la literatura (−0,24R..+0,05R). XAU: solo Raschke 80-20 (+0,55R, dos outliers). NAS100: varias positivas (NR4 +0,449R, NR7 +0,501R, ORB5 +0,154R, IB +0,159R) pero todas con DD > 12R o < 3 trades/mes; posible sesgo alcista 2022-2024.
+- Informe: secciones finales de `report_round8.md`; columna «tested/result» de `scalping_references.md` completada; JSON por símbolo en `round8/<SYM>.json` (fuera del repo). Tests múltiples: ronda 8 = 70; acumulado 544 (conservador 1084); 0 holdouts.
+- Propuesta (decisión del owner): no bajar el umbral; si hay ronda 9, un test predeclarado de NR4/NR7 + ORB en NAS100 con el mismo holdout sin usar.
+- Validación: unittest 2584 OK (41 skipped, 1 expected failure); ruff PASS.
+
 ## 2026-10-21 — Ronda 8: selección NAS100USD
 
 - TRAIN (C_IBKR), 14 variantes: positivas S1a ORB5 +0,154R (DD 37,9R), S3b IB +0,159R (DD 33,7R), L1 momentum +0,099R (DD 25,6R), L3:NR4 +0,449R (4,7/mes, DD 14,4R), L3:NR7 +0,501R (2,7/mes, DD 9,9R). Ninguna cumple todo el umbral (DD < 12R y ≥ 3/mes) → **FLAT** (`replay/round8_frozen_NAS100USD.json`, sin holdout). XAUUSD registrado FLAT.
