@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-10-21 — Ronda 8b, bloque 2: declaración previa de S4 / S5
+
+- Nuevas familias en `replay/round8.py`: S4 (cuerpo M5 >= 1,5 / 2 x ATR14(M5) de las 14 barras previas; continuación en la siguiente apertura M1; stop ATR acotado; TP 1,5R; cierre de sesión) y S5 micro SMC (barrida M5 del máximo/mínimo de la sesión anterior con cierre dentro; límite en el FVG M1 o en el order block; stop en el extremo de la barrida, acotado; TP 2R; cierre de sesión). 82 variantes (70 re-ejecutadas + 12 nuevas).
+- Declaración «Round 8b declaration» añadida a `report_round8.md` y a `replay/round8_declaration.md`, commiteada ANTES de cualquier selección. Tests de S4/S5 en `test_round8.py`.
+
 ## 2026-10-21 — Ronda 8b, bloque 1: corrección de los 4 hallazgos de Codex (branch `feat/backtest-v2-i2`)
 
 - (a) Bid/ask: los disparos de órdenes stop/límite se evalúan en su lado (compras en ask = mid + medio spread, ventas en bid), así que una compra límite nunca se llena por encima del límite. SL/TP se evalúan en el lado de salida (largo en bid, corto en ask); el TP se llena al precio objetivo y los gaps de stop, en la apertura del lado de salida.

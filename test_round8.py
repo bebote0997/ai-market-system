@@ -207,6 +207,58 @@ class Causality(unittest.TestCase):
         self.assertEqual(m.t[od.start], m.ts(day, (16, 0)))
 
 
+class Round8bFamilies(unittest.TestCase):
+    def s4_market(self, body):
+        q = 0.00005
+        base = [(1.1, 1.1 + q, 1.1 - q, 1.1)] * 120  # 01:00-03:00: M5 true range 1 pip
+        burst = [(1.1 + body * n / 5, 1.1 + body * (n + 1) / 5 + q, 1.1 + body * n / 5 - q, 1.1 + body * (n + 1) / 5)
+                 for n in range(5)]
+        rest = [(1.1 + body,) * 4] * 475
+        return r8.Market(frame(base + burst + rest, start="2024-03-05 01:00"), "EURUSD")
+
+    def test_s4_body_threshold_and_continuation(self):
+        day = date(2024, 3, 5)
+        m = self.s4_market(-0.00018)  # 1.8 pips down body vs ATR 1 pip of the bars before
+        (od,) = r8.f_s4(1.5)(m, day)
+        self.assertEqual(od.legs[0].side, -1)
+        self.assertEqual(od.legs[0].tp_r, 1.5)
+        self.assertEqual(m.t[od.start], m.ts(day, (3, 5)))  # next M1 open after the M5 close
+        self.assertEqual(r8.f_s4(2.0)(m, day), [])
+
+    def s5_market(self, sweep, after):
+        prev = [(1.1, 1.1010, 1.0990, 1.1)] + flat(479)  # previous session range 1.0990-1.1010
+        rows = sweep + after
+        rows = rows + flat(480 - len(rows), rows[-1][3])
+        return r8.Market(segments(("2024-03-04 03:00", prev), ("2024-03-05 03:00", rows)), "EURUSD")
+
+    def test_s5_sweep_then_order_block_retest(self):
+        day = date(2024, 3, 5)
+        sweep = [(1.1005, 1.1015, 1.1004, 1.1012)] + [(1.1012, 1.1012, 1.1006, 1.1006)] * 3 + \
+                [(1.1006, 1.1006, 1.1004, 1.1005)]  # high above 1.1010, close back inside; low 1.1004
+        after = [(1.1005, 1.1007, 1.1001, 1.1002)]  # no FVG (high 1.1007 >= low 2 bars back); close below the sweep bar's low -> displacement
+        m = self.s5_market(sweep, after)
+        (od,) = r8.f_s5(m, day)
+        leg = od.legs[0]
+        i0 = int(np.searchsorted(m.t, m.ts(day, (3, 0))))
+        self.assertEqual((leg.side, leg.kind, leg.tp_r), (-1, "limit", 2.0))
+        self.assertAlmostEqual(leg.level, 1.1005)  # open of the last up-close M1 bar of the sweep
+        self.assertAlmostEqual(leg.stop, 1.1015)
+        self.assertEqual(od.start, i0 + 6)  # placed after the displacement bar closed
+        self.assertEqual(od.end - od.start, 60)
+
+    def test_s5_fvg_first(self):
+        m = mk(flat(12))
+        m.o, m.c = np.full(12, 1.1), np.full(12, 1.1)
+        m.h, m.l = np.full(12, 1.1005), np.full(12, 1.1)
+        m.l[4], m.h[6] = 1.1003, 1.1001  # bearish FVG completed at bar 6, no close below 1.0990
+        self.assertEqual(r8.smc_entry(m, -1, 0, 5, 35, 1.0990), (1.1002, 7))
+        self.assertIsNone(r8.smc_entry(m, -1, 0, 7, 35, 1.0990))  # nothing after bar 7
+
+    def test_variant_counts_8b(self):
+        self.assertEqual({s: len(r8.variants(s)) for s in r8.SYMBOLS},
+                         {"EURUSD": 22, "GBPUSD": 22, "XAUUSD": 21, "NAS100USD": 17})
+
+
 class Clamp(unittest.TestCase):
     def test_index_clamp_uses_prior_days_median(self):
         m = mk([(1.1, 1.1, 1.1, 1.1)] * 3)
@@ -271,10 +323,8 @@ class Frozen(unittest.TestCase):
 
 class Variants(unittest.TestCase):
     def test_declared_sets(self):
-        self.assertEqual(len(r8.variants("EURUSD")), 19)
-        self.assertEqual(len(r8.variants("GBPUSD")), 19)
-        self.assertEqual(len(r8.variants("XAUUSD")), 18)
-        self.assertEqual(len(r8.variants("NAS100USD")), 14)
+        base = {k for k in r8.variants("EURUSD") if not k.startswith(("S4", "S5"))}
+        self.assertEqual(len(base), 19)  # round 8 set; round 8b adds S4 x 2 + S5 (Round8bFamilies)
 
 
 if __name__ == "__main__":

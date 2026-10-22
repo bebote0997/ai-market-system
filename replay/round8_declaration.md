@@ -79,3 +79,36 @@ main model only).
   seed 8).
 - Multiple testing: 70 new variant tests (+ up to 4 holdouts); cumulative before round 8: 474 (conservative 874).
   Conservative count adds every cost-model run (70 x 3 = 210).
+
+## Round 8b declaration (written and committed BEFORE any 8b selection run)
+
+Brief: `spec_round8b.md`. Decisions taken without asking:
+
+- **Code fixes (Codex r8 findings, chunk 1, commit 36dc749).** (a) Bid/ask sides: buy stop/limit triggers use the ask
+  (mid + half spread) and sell triggers the bid. A buy limit needs the ask low to trade through the level and fills at
+  min(ask open, level), so never above the limit. Exits are checked on the exit side: a long's SL/TP on the bid, a
+  short's on the ask. A TP fills at the target price (it is already on the exit side, so no extra spread is charged).
+  SL gaps fill at the exit-side open. Market entries and time exits pay half spread + slippage as before. (b) L7: the
+  stop order is placed at kb+1 (the bar after the first breach), with its stop at the session extreme through kb. It
+  is not amended and stays live to session end. (c) L4 Silver Bullet: the FVG is the most recent one completed by the
+  MSS bar. If there is none, it is the first one completing in the next 3 bars, scanned forward. The order is placed on
+  the bar after the later of MSS and FVG. (d) L1/L1b: direction comes from the close of the last bar before the entry
+  time, and the entry is at the next bar's open.
+- **All 70 round-8 variants are re-run** with the fixed engine. Every round-8 TRAIN number above is **superseded**. The
+  re-runs count as **new tests**.
+- **New families** (all four instruments, same sessions, fills, clamps, costs and protocol as section 1):
+
+| id | rule |
+|---|---|
+| S4:M5_MOM_1.5ATR / S4:M5_MOM_2ATR | first M5 bar starting in [open, end-60 min) with body abs(C-O) >= m x ATR14(M5) of the 14 M5 bars **before** it (m = 1.5 / 2) -> market order in the body's direction at the next M1 open; stop 3 x ATR14(M5) known at entry (the common ATR rule), clamped; TP 1.5R; exit at session end |
+| S5:MICRO_SMC | previous session's high/low (previous trading day, same session window: London 03:00-11:00 NY; NAS100 09:30-16:00 ET). The first M5 bar starting in [open, end-60 min) that trades beyond the high (low) and closes back inside sets up a fade. Scanning the next 30 M1 bars forward, the first of these sets the level: (1) a 3-bar M1 FVG in the trade direction -> limit at its midpoint; (2) an M1 close beyond the sweep bar's opposite extreme (displacement) -> order block = last opposite-colour M1 bar from the sweep bar's start, limit at its open. The order is placed on the next bar and stays live 60 min (capped at session end). Stop at the sweep extreme from the sweep bar's start to placement, clamped. TP 2R; exit at session end |
+
+  One signal per session for S4 and S5 (the first one). Before this declaration, a smoke run on 2021-10 counted orders
+  and trades only (no metric was computed).
+- Variant counts for 8b: EURUSD 22, GBPUSD 22, XAUUSD 21, NAS100USD 17 = **82** (70 re-runs + 12 new), each under 3
+  cost models.
+- Unchanged from section 1.3: TRAIN 2021-10-01..2024-12-31 (sliced before building), folds 2023H1..2024H2,
+  eligibility (bar + >= 3/4 positive folds), pick rule, fail-closed freeze, HOLDOUT 2025-01-01..2026-10-19 run once
+  **only** if a variant is eligible; otherwise FLAT and no holdout.
+- Multiple testing: round 8 counted 70 (cumulative 544, conservative 1084). Round 8b adds 82, so the count goes to
+  **626**. Conservative: + 82 x 3 = 246, so **1330**. Any holdout run is added on top.

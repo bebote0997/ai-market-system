@@ -46,7 +46,7 @@ ATR_MED_DAYS = 20
 # pass bar (holdout, main cost model), and the same bar on TRAIN as the selection eligibility filter
 BAR = {"avg_r": 0.08, "pf": 1.15, "dd": 12.0, "tr_mo": 3.0}
 MIN_POS_FOLDS = 3
-PREVIOUS_TESTS, PREVIOUS_CONSERVATIVE = 474, 874
+PREVIOUS_TESTS, PREVIOUS_CONSERVATIVE = 474, 874  # before round 8
 BOOT_N, BOOT_SEED = 2000, 8
 
 
@@ -668,8 +668,96 @@ def f_l7(m, day):
     return [Order(day, [Leg(side, "stop", level, stop=ext)], kb + 1, j, x)] if kb + 1 < j else []
 
 
+def m5_span(m, a, b):
+    """M5 bar indices starting in [a, b)."""
+    return int(np.searchsorted(m.t5, a, "left")), int(np.searchsorted(m.t5, b, "left"))
+
+
+def f_s4(mult):
+    def fn(m, day):
+        """S4 (8b) M5 momentum continuation: the first M5 bar starting in [open, end-60 min) whose body |C-O| >=
+        ``mult`` x ATR14(M5) of the 14 bars before it -> market order in the body's direction at the next M1 open;
+        ATR stop (3 x ATR14(M5) known at entry, clamped); TP 1.5R; exit at session end."""
+        op, end = session(m, day)
+        x = m.exit_at(end)
+        if x is None:
+            return []
+        a, b = m5_span(m, op, end - 60 * MINUTE)
+        for q in range(max(a, 1), b):
+            atr = m.atr5[q - 1]
+            body = m.c5[q] - m.o5[q]
+            if math.isnan(atr) or atr <= 0 or abs(body) < mult * atr:
+                continue
+            k = m.entry_at(int(m.end5[q]))
+            leg = atr_leg(m, int(m.end5[q]), sign(body))
+            if k is None or k > x or leg is None:
+                return []
+            leg.tp_r = 1.5
+            return [Order(day, [leg], k, k + 1, x)]
+        return []
+    return fn
+
+
+S5_SCAN = 30  # M1 bars after the sweep close in which the FVG / displacement must appear
+S5_LIVE = 60  # minutes the limit stays live after placement (capped at session end)
+
+
+def prev_session_day(m, day):
+    k = int(np.searchsorted(np.array(m.days, dtype=object), day, "left"))
+    return m.days[k - 1] if k > 0 else None
+
+
+def smc_entry(m, side, i0, k0, kmax, sweep_ext):
+    """S5 entry level after a sweep M5 bar (M1 bars i0..k0-1): scanning M1 bars k0..kmax-1 forward, the first of
+    (1) a 3-bar FVG in the trade direction completed at bar i (bars >= i0) -> its midpoint, (2) a displacement close
+    beyond the sweep bar's opposite extreme ``sweep_ext`` -> the order block = the last opposite-colour M1 bar in
+    [i0, i), level = its open. Returns (level, placement bar = i + 1) or None."""
+    for i in range(k0, min(kmax, len(m.t))):
+        if i - 2 >= i0 and is_fvg(m, side, i):
+            return float((m.l[i - 2] + m.h[i]) / 2 if side < 0 else (m.h[i - 2] + m.l[i]) / 2), i + 1
+        if (m.c[i] < sweep_ext) if side < 0 else (m.c[i] > sweep_ext):
+            opp = np.flatnonzero(m.c[i0:i] > m.o[i0:i] if side < 0 else m.c[i0:i] < m.o[i0:i])
+            if not len(opp):
+                return None
+            return float(m.o[i0 + int(opp[-1])]), i + 1
+    return None
+
+
+def f_s5(m, day):
+    """S5 (8b) micro SMC: the first M5 bar starting in [open, end-60 min) that trades beyond the previous session's
+    high (low) and closes back inside -> fade; entry = limit at the M1 FVG midpoint or order-block open
+    (``smc_entry``), placed after it is known and live 60 min; stop beyond the sweep extreme known at placement
+    (clamped); TP 2R; exit at session end."""
+    prev = prev_session_day(m, day)
+    op, end = session(m, day)
+    x = m.exit_at(end)
+    if prev is None or x is None:
+        return []
+    rng = m.range_hl(*session(m, prev))
+    if rng is None:
+        return []
+    hi, lo = rng
+    a, b = m5_span(m, op, end - 60 * MINUTE)
+    for q in range(a, b):
+        side = -1 if (m.h5[q] > hi and m.c5[q] < hi) else (+1 if (m.l5[q] < lo and m.c5[q] > lo) else 0)
+        if not side:
+            continue
+        i0, k0 = m.span(int(m.t5[q]), int(m.end5[q]))
+        got = smc_entry(m, side, i0, k0, k0 + S5_SCAN, m.l5[q] if side < 0 else m.h5[q])
+        if got is None:
+            return []
+        level, place = got
+        if place > x:
+            return []
+        _, live = m.span(m.t[place], min(int(m.t[place]) + S5_LIVE * MINUTE, end))
+        ext = float(m.h[i0:place].max() if side < 0 else m.l[i0:place].min())
+        return [Order(day, [Leg(side, "limit", level, stop=ext, tp_r=2.0)], place, min(live, x + 1), x)]
+    return []
+
+
 def variants(symbol):
-    """Pre-declared variants per instrument (name -> signal function). L2 not for NAS100; L5 XAU only; L6 FX only."""
+    """Pre-declared variants per instrument (name -> signal function). L2 not for NAS100; L5 XAU only; L6 FX only;
+    S4 / S5 added in round 8b (all instruments)."""
     v = {"S1a:ORB5": f_s1a, "S1b:RANGE_BO_TP1": f_s1b(1.0), "S1b:RANGE_BO_TP2": f_s1b(2.0), "S2:SWEEP_REV": f_s2,
          "S3a:VWAP2S_FADE": f_s3a, "S3b:IB_BO": f_s3b, "L1:OPEN30_MOM": f_l1(+1), "L1:OPEN30_REV": f_l1(-1),
          "L1b:LAST30_MOM": f_l1b}
@@ -681,6 +769,7 @@ def variants(symbol):
     if symbol in FX:
         v.update({"L6:SHORT_EU": f_l6("short_eu"), "L6:LONG_US": f_l6("long_us")})
     v["L7:RASCHKE_80_20"] = f_l7
+    v.update({"S4:M5_MOM_1.5ATR": f_s4(1.5), "S4:M5_MOM_2ATR": f_s4(2.0), "S5:MICRO_SMC": f_s5})  # round 8b
     return v
 
 
