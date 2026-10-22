@@ -30,7 +30,10 @@ are processed at the start of every ``on_cycle`` / ``manage``: ``flatten_request
 then closes every routed OPEN trade and is dropped only after a successful reconcile with no OPEN / PENDING_SEND /
 UNKNOWN row left; ``drift_clear_request`` is bound to the current ``drift_episode`` and honoured by ``reconcile`` only
 when that same pass verifies the broker and the local state match (clear + request consumption + audit event in one
-transaction). With an emergency active ``router_from_env`` returns None, unless a flatten request or routed rows
+transaction); ``manual_close_request`` (Floor "Cerrar operación") closes that ONE routed OPEN trade through ``_close``
+(reason ``MANUAL_CLOSE``; dry-run: ``MANUAL_CLOSE_DRY_RUN`` only) and is dropped once the row is no longer OPEN or the
+broker definitively rejected the close (retried while the outcome is a definite transient failure or UNKNOWN). With an
+emergency active ``router_from_env`` returns None, unless a flatten request or routed rows
 remain: then it builds a ``closing_only`` router on a ``close_only`` OandaBroker (entries refused ``emergency_active``,
 every routed OPEN trade closed on every tick; the switch is never turned ON). DEC-REVERSAL-1 (ON unless
 ``AI_FLOOR_DEMO_REVERSAL == "0"``): an approved opposite-direction plan while the single routed trade is in profit
@@ -82,6 +85,8 @@ SL_TP_OR_EXTERNAL = "SL_TP_OR_EXTERNAL"
 FLATTEN_REQUEST_FLAG = "flatten_request"  # same keys as execution/operator_actions.py
 DRIFT_CLEAR_REQUEST_FLAG = "drift_clear_request"
 DRIFT_EPISODE_FLAG = "drift_episode"
+MANUAL_CLOSE_REQUEST_FLAG = "manual_close_request"
+MANUAL_CLOSE = "MANUAL_CLOSE"
 EMERGENCY_ACTIVE = "EMERGENCY_ACTIVE"
 EMERGENCY_BUTTON = "EMERGENCY_BUTTON"
 FRIDAY_PREFLATTEN = "FRIDAY_PREFLATTEN"
@@ -101,7 +106,8 @@ FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(
 ALERT_KINDS = frozenset({"ACCEPTED", REJECTED, UNKNOWN, CLOSED, "CLOSE_UNKNOWN", "CLOSE_FAILED", CLOSED_AT_BROKER,
                          BREAKEVEN, "DRIFT", "UNRESOLVED_ACTION", "DAILY_LOSS_HALT", "DAILY_LOSS_RESUMED",
                          "DRAWDOWN_HALT", "FLATTEN_DAILY_LOSS", "FLATTEN_DRAWDOWN", EMERGENCY_BUTTON,
-                         "FLATTEN_REQUEST_DONE", "DRIFT_CLEARED", "DRIFT_CLEAR_REFUSED"})
+                         "FLATTEN_REQUEST_DONE", "DRIFT_CLEARED", "DRIFT_CLEAR_REFUSED", MANUAL_CLOSE,
+                         "MANUAL_CLOSE_FAILED"})
 CLOSE_SENT = {"CLOSED", CLOSED_AT_BROKER, "CLOSE_FAILED", "CLOSE_REJECTED", UNKNOWN, DRY_RUN}
 
 
@@ -207,6 +213,7 @@ _ACTION_LOG_OK = frozenset({"CLOSED", CLOSED_AT_BROKER, "BREAKEVEN"})
 # Only these controlled reason codes reach the log; "EMERGENCY:<free text>" -> EMERGENCY, anything else (broker
 # reject text, unexpected exception names, ...) -> OTHER, so a reason can never leak an id or token.
 _LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN, REVERSAL,
+                          MANUAL_CLOSE,
                           EMERGENCY_ACTIVE, EMERGENCY_BUTTON, "BrokerAuthError", "BrokerRateLimited",
                           "BrokerGuardError", "BrokerMalformedResponse", "no_open_position"})
 
@@ -245,6 +252,7 @@ class BrokerDemoRouter:
         self._friday_alerted = None
         self.reversal = bool(reversal)  # DEC-REVERSAL-1
         self._flatten_ticks = 0
+        self._manual_ticks = 0
         self.on_alert = on_alert  # optional callable(kind, detail dict | message str); see ALERT_KINDS
         if loss_limit is not None:
             loss_limit.on_event = self._alert  # halt / resume events reach the same hook
@@ -308,6 +316,8 @@ class BrokerDemoRouter:
         with self._lock:
             self._heartbeat()
             flattened, reconciled = self._process_requests(at)
+            manual, reconciled = self._process_manual_close(reconciled)
+            flattened = {**flattened, **manual}
             if self._loss_limit is not None:
                 flattened = {**flattened, **self._loss_check(at)[1]}
             if self._friday_minutes is not None:
@@ -678,6 +688,8 @@ class BrokerDemoRouter:
         with self._lock:
             self._heartbeat()
             flattened, report = self._process_requests(at)
+            manual, report = self._process_manual_close(report)
+            flattened = {**flattened, **manual}
             if self._loss_limit is not None:  # a halt / flatten happens on every tick, even with paper disabled
                 flattened = {**flattened, **self._loss_check(at)[1]}
             if self._friday_minutes is not None:
@@ -866,6 +878,74 @@ class BrokerDemoRouter:
         except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
             LOG.error("component=broker_demo event=FLATTEN_REQUEST_ERROR error_type=%s", type(exc).__name__)
             return {}, None
+
+    def _process_manual_close(self, report):
+        """Floor "Cerrar operación" (``manual_close_request``): reconcile (unless this tick already did), then close
+        the requested routed OPEN row through ``_close`` with reason ``MANUAL_CLOSE``. Idempotent: the row leaves OPEN
+        before the request is dropped, everything runs under the router lock, and a second request cannot be stored
+        while one is pending (``operator_actions.request_manual_close``). Returns ``({client_id: outcome}, report)``;
+        never raises."""
+        try:
+            raw = self._store.flag(MANUAL_CLOSE_REQUEST_FLAG)
+            if not raw:
+                self._manual_ticks = 0
+                return {}, report
+            try:
+                request = json.loads(raw)
+                client_id = request["client_id"]
+                if not isinstance(client_id, str) or not client_id:
+                    raise ValueError
+            except (TypeError, ValueError, KeyError):
+                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
+                self._event("MANUAL_CLOSE_REFUSED", None, reason="malformed_request")
+                return {}, report
+            detail = {"request_id": request.get("request_id"), "actor": request.get("actor")}
+            self._manual_ticks += 1
+            quiet = self._manual_ticks > PENDING_EVENT_CAP
+            report = self.reconcile() if report is None else report
+            if report is None:  # nothing verified: keep the request, retry next tick
+                if not quiet:
+                    self._event("MANUAL_CLOSE_PENDING", client_id, reason="broker_read_failed", **detail)
+                return {}, None
+            row = self._store.trade(client_id)
+            if row is None or row["status"] != OPEN:  # gone (SL/TP, flatten, or our own earlier UNKNOWN close)
+                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
+                self._manual_ticks = 0
+                if row is not None and row.get("closed_reason") == MANUAL_CLOSE:
+                    self._event(MANUAL_CLOSE, client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE,
+                                outcome=row["status"], **detail)
+                else:
+                    self._event("MANUAL_CLOSE_NOT_OPEN", client_id, status=None if row is None else row["status"],
+                                **detail)
+                return {}, report
+            if request.get("trade_id") not in (None, row["trade_id"]):
+                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
+                self._event("MANUAL_CLOSE_REFUSED", client_id, reason="trade_mismatch", **detail)
+                return {}, report
+            if row.get("action_status") == UNKNOWN:  # an earlier action is unresolved: never stack a second close
+                if not quiet:
+                    self._event("MANUAL_CLOSE_PENDING", client_id, reason="action_unresolved", **detail)
+                return {client_id: "ACTION_UNRESOLVED"}, report
+            if self.dry_run:
+                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
+                self._event("MANUAL_CLOSE_DRY_RUN", client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE, **detail)
+                return {client_id: DRY_RUN}, report
+            outcome = self._close(row, MANUAL_CLOSE, f"{client_id}-manual")
+            if outcome in ("CLOSED", CLOSED_AT_BROKER):
+                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
+                self._manual_ticks = 0
+                self._event(MANUAL_CLOSE, client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE, outcome=outcome,
+                            **detail)
+            elif outcome == "CLOSE_REJECTED":  # definitive broker refusal (e.g. market halted): the owner may retry
+                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
+                self._manual_ticks = 0
+                self._event("MANUAL_CLOSE_FAILED", client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE,
+                            outcome=outcome, **detail)
+            # CLOSE_FAILED (definite, not processed) / UNKNOWN (latched): keep the request; retried / resolved later
+            return {client_id: outcome}, report
+        except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
+            LOG.error("component=broker_demo event=MANUAL_CLOSE_ERROR error_type=%s", type(exc).__name__)
+            return {}, report
 
     # -- Friday close (OANDA halts EUR_USD at 17:00 NY) -------------------------------------------------------------
     def _friday_tick(self, at, price_provider=None):

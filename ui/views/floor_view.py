@@ -3,11 +3,15 @@
 The HTML is a static asset; Python injects the JSON payload of ``ui.floor_payload.build_floor_payload`` (escaped so
 it cannot close the ``<script>`` tag). The browser fetches nothing. Rendered as a sandboxed ``srcdoc`` iframe with
 ``st.iframe`` (``streamlit.components.v1.html`` on Streamlit versions without it; that API is deprecated).
+
+Below the floor, the trade manager / risk desk offers ONE owner action, «Cerrar operación» (``ui.views.floor_actions``;
+this module itself never imports any execution / broker code).
 """
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ui.floor_payload import build_floor_payload, guarded, payload_json
+from ui.views.floor_actions import render_manual_close
 
 PAGE = "Floor"
 LABEL = "Floor"  # == PAGE: ui.i18n_es.page_key(label) maps unknown labels back to themselves
@@ -48,6 +52,8 @@ def render(st, symbols):
     except Exception:  # noqa: BLE001 - DB unopenable etc.: empty floor ("—"), never a broken page
         payload = build_floor_payload(sample_mode=bool(st.session_state.get("sample_mode")))
     embed(st, render_html(payload))
-    st.caption("Floor · solo lectura · PAPER / demo · ninguna orden se envía desde esta vista. "
+    render_manual_close(st)
+    st.caption("Floor · solo lectura salvo «Cerrar operación» (owner, demo OANDA de práctica) · ninguna orden nueva "
+               "se envía desde esta vista. "
                "«—» = sin datos aún" + (" · «EJEMPLO» = datos de ejemplo (modo muestra)" if payload["example_fields"]
                                         else ""))

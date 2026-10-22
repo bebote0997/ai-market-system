@@ -71,9 +71,33 @@ el ejemplo.
   'unsafe-inline'` ya permitido) y `frame-src 'none'` no lo bloquea. Verificado en Chrome headless con
   `streamlit run ui/asgi_app.py`: el script del floor corre y no hay errores CSP.
 
+## «Cerrar operación» (DEC-MANUAL-CLOSE-1)
+
+Debajo del floor, el gestor de la operación / mesa de riesgo ofrece **una** acción del owner: «Cerrar operación» sobre
+la operación enrutada al demo OANDA (`ui/views/floor_actions.py`; `floor_view.py` sigue sin importar `execution.*`).
+
+- Dos clics: «Cerrar operación» ⇒ «Confirmar cierre» (o «Cancelar»).
+- Habilitado solo con sesión del owner (contraseña del panel, `ui.auth.owner_authenticated`; el modo loopback sin
+  contraseña no cuenta), `AI_FLOOR_BROKER_DEMO_ROUTING=1`, cuenta de práctica OANDA (`101-`, proveedor `oanda`, host
+  practice del cliente), `REAL_EXECUTION_ENABLED=False`, una fila enrutada OPEN sin acción pendiente y ningún cierre
+  ya solicitado.
+- El clic solo guarda `manual_close_request` en la DB de estado del broker
+  (`execution.operator_actions.request_manual_close`, una transacción `set_flag_if_absent` + evento
+  `MANUAL_CLOSE_REQUESTED`); el router lo ejecuta en su próximo ciclo/tick con su propia ruta de cierre (`_close`, la
+  misma del flatten de emergencia), motivo `MANUAL_CLOSE`, evento `MANUAL_CLOSE` (alerta Slack por la ruta existente
+  `runtime/broker_alerts.py`). Rechazo definitivo del broker ⇒ `MANUAL_CLOSE_FAILED` (alerta) y la solicitud se
+  descarta; cierre UNKNOWN ⇒ la solicitud espera a la reconciliación (nunca un segundo cierre). Dry-run ⇒
+  `MANUAL_CLOSE_DRY_RUN`, nunca cierra.
+- Idempotente: cada confirmación lleva un `request_id`; un segundo clic / petición concurrente no guarda otra
+  solicitud (`duplicate` / `already_pending`).
+- El motivo aparece en las operaciones cerradas del demo (Floor/Operaciones) como «Exit · cierre manual del owner».
+
 ## Tests
 
 `test_floor_view.py`: DB inexistente/vacía ⇒ todo `None`; errores de lectura ⇒ `None`; filas sembradas ⇒ valores reales
 (PAPER y demo con fake, sin red); modo muestra solo rellena lo que falta; escape del JSON; el asset no contiene cifras
 del ejemplo ni `fetch`/URLs; sin id de cuenta ni secretos; `app.py` registra la página; sin imports de rutas de órdenes
 (AST + subproceso); la página se renderiza en la app real (AppTest) en ambos modos sin escribir la DB.
+`test_manual_close.py`: solicitud, rechazos (enrutado OFF, cuenta no práctica, REAL, sin operación, acción sin
+resolver), idempotencia (doble clic y 6 hilos concurrentes), cierre del router (manage/on_cycle, rechazo, UNKNOWN,
+ya cerrada, dry-run, solicitud corrupta), alerta Slack, motivo en español y flujo de dos clics con sesión del owner.

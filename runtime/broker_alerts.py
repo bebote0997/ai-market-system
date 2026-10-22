@@ -48,6 +48,8 @@ MESSAGES = {
     "DRIFT_CLEARED": "Desajuste resuelto: entradas desbloqueadas",
     "DRIFT_CLEAR_REFUSED": "Desbloqueo de desajuste rechazado",
     "FRIDAY_FLATTEN_FAILED": "Cierre previo al viernes incompleto",
+    "MANUAL_CLOSE": "Cierre manual del owner (botón «Cerrar operación»)",
+    "MANUAL_CLOSE_FAILED": "Cierre manual rechazado por el broker (la operación sigue abierta)",
 }
 _SAFE = re.compile(r"[^A-Za-z0-9_:.\-]")
 _LONG_DIGITS = re.compile(r"\d{5,}")

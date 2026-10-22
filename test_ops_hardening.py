@@ -124,7 +124,8 @@ class EmergencyRequestTests(OpsBase):
                          "registry_unavailable")
         self.assertFalse(experiment.exists())
         self.assertEqual(ops.operator_state(junk), {"readable": False, "emergency": None, "flatten_pending": None,
-                                                    "drift_clear_pending": None, "blocked_reason": None})
+                                                    "drift_clear_pending": None, "manual_close_pending": None,
+                                                    "blocked_reason": None})
         missing = Path(self.tmp.name) / "missing.db"
         self.assertFalse(ops.operator_state(missing)["readable"])
         self.assertFalse(missing.exists())  # read-only: never creates the DB

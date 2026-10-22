@@ -197,6 +197,27 @@ class DemoStateStore:
                 con.execute("ROLLBACK")
                 raise
 
+    def set_flag_if_absent(self, key, value, *, event=None):
+        """ONE transaction: insert ``key`` only when it holds no (non-empty) value, plus ``event`` = ``(kind,
+        client_id, detail)`` when inserted. True when this call stored it; False when a request is already pending
+        (a concurrent / repeated request never overwrites it)."""
+        now = self._clock()
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                row = con.execute("SELECT value FROM broker_demo_flags WHERE key = ?", (key,)).fetchone()
+                inserted = row is None or not row[0]
+                if inserted:
+                    con.execute(_SET_FLAG_SQL, (key, value, now))
+                    if event is not None:
+                        kind, client_id, detail = event
+                        con.execute(_EVENT_SQL, (now, kind, client_id, _detail(detail)))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+        return inserted
+
     def events(self, limit=20):
         with closing(self._connect()) as con:
             rows = con.execute("SELECT ts, kind, client_id, detail FROM broker_demo_events ORDER BY id DESC LIMIT ?",

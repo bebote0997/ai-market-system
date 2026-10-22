@@ -27,6 +27,10 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     ("ui/views/control.py", "execution.oanda_readonly"), ("ui/views/control.py", "oanda_readonly"),
                     # Emergency button / drift-clear request (writes only the state DB; never orders): lazy + guarded.
                     ("ui/views/control.py", "execution.operator_actions"), ("ui/views/control.py", "operator_actions"),
+                    # Floor «Cerrar operación» (owner-only manual close REQUEST in the state DB; the router closes):
+                    # lazy + guarded.
+                    ("ui/views/floor_actions.py", "execution.operator_actions"),
+                    ("ui/views/floor_actions.py", "operator_actions"),
                     ("runtime/service.py", "execution.broker_demo_router"), ("runtime/service.py", "broker_demo_router"),
                     # OANDA demo numbers (GET-only reads + broker state DB mode=ro; no writes, no orders): lazy + guarded.
                     ("ui/views/luxury.py", "execution.demo_dashboard"), ("ui/views/luxury.py", "demo_dashboard"),
@@ -46,6 +50,9 @@ LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_co
                                                                         "request_drift_clear",
                                                                         "request_emergency_stop"]]},
                 "runtime/service.py": {"execution.broker_demo_router": [["router_from_env"]]},
+                "ui/views/floor_actions.py": {"execution.operator_actions": [["manual_close_target", "operator_state",
+                                                                              "practice_problem",
+                                                                              "request_manual_close"]]},
                 "ui/views/luxury.py": {"execution.demo_dashboard": [["demo_epoch", "demo_progress",
                                                                      "demo_snapshot"]]},
                 "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_progress"]]},
