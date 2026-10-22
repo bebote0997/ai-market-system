@@ -16,7 +16,8 @@ REJECTED / UNKNOWN (blocks routing until reconcile proves the outcome).
 
 Dry-run (``AI_FLOOR_BROKER_DEMO_DRY_RUN=1``, opt-in) records the exact order JSON (event DRY_RUN) and never POSTs/PUTs;
 it may read summary/pricing/openTrades. ``manage`` applies the trade-duration rule (execution/trade_duration.py) to
-LIVE routed trades; ``emergency_close_all`` closes every routed OPEN trade (closing is always allowed).
+LIVE routed trades (DEC-HOLD-WEEK-1: max hold one week, Friday 16:45 NY flatten, no entries until the Sunday
+reopen); ``emergency_close_all`` closes every routed OPEN trade (closing is always allowed).
 
 Optional daily loss limit / drawdown halt (``execution/daily_loss_limit.py``, OFF unless ``AI_FLOOR_DAILY_LOSS_LIMIT ==
 "1"``): evaluated on every cycle, every ``manage`` tick and before every entry; a halt refuses entries and (flatten ON /
@@ -163,18 +164,18 @@ def position_view(row):
 def duration_action(trade_row, now, price):
     """Pure trade-duration decision for a routed LIVE trade: ``("CLOSE", reason)``, ``("BREAKEVEN", None)`` or None.
 
-    Next boundary = Day-1 NY close (17:00 America/New_York after the open; Day-2 close once the stop was moved). At or
-    after an unprocessed boundary: Friday -> close; Day-2 stage -> close; Day-1 below +0.5R of the ORIGINAL stop
-    distance -> close; else breakeven. Max 2 days: a Day-1 trade already past its Day-2 close is closed. ``price``
-    (bid for LONG, ask for SHORT) is only needed for the Day-1 R test; None there -> None (retry next tick)."""
+    DEC-HOLD-WEEK-1 (same rule as PAPER): at or after the week-rule boundary of the fill (the earlier of Friday 16:45
+    NY and MAX_HOLD_TRADING_DAYS trading days; a fill inside the weekend window is due at once) -> close. With the
+    optional legacy Day-1 check ON, its NY close comes first: below +0.5R of the ORIGINAL stop distance -> close, else
+    breakeven. ``price`` (bid for LONG, ask for SHORT) is only needed for the Day-1 R test; None there -> None (retry
+    next tick)."""
     position = position_view(trade_row)
     boundary = td.next_boundary(position)
     if now < boundary:
         return None
-    if position.duration_stage is None and now >= td.day2_close(position):
-        return "CLOSE", td.CLOSE_FRIDAY if td.is_friday_close(td.day2_close(position)) else td.CLOSE_DAY2_NY_CLOSE
-    if td.is_friday_close(boundary) or position.duration_stage is not None:
-        return td.boundary_decision(position, boundary, price)
+    hold, reason = td.hold_boundary(position.opened_at)
+    if now >= hold:
+        return "CLOSE", reason
     if price is None:
         return None
     return td.boundary_decision(position, boundary, price)
@@ -350,6 +351,8 @@ class BrokerDemoRouter:
             return "ALREADY_ROUTED", client_id
         if self._friday_minutes is not None and fc.friday_window(at, self._friday_minutes) != fc.OPEN:
             return self._refuse(client_id, "friday_close_window")  # dry-run too; no network
+        if td.entries_blocked(at):  # DEC-HOLD-WEEK-1: Friday 16:45 NY -> Sunday 17:00 NY, whatever the flag
+            return self._refuse(client_id, "friday_close_window")
         report =reconciled if reconciled is not None else self.reconcile()
         if report is None:
             return self._refuse(client_id, "broker_read_failed")

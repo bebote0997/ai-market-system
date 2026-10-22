@@ -572,9 +572,9 @@ class FridayWindowTests(unittest.TestCase):
         self.assertEqual(fc.friday_window(ny(2026, 10, 16, 16, 54), 5), fc.OPEN)
 
     def test_dst_weeks_in_utc(self):
-        # EST (after 2026-11-01): 17:00 NY = 22:00 UTC.
-        self.assertEqual(fc.friday_window(datetime(2026, 11, 6, 21, 29, tzinfo=UTC)), fc.OPEN)
-        self.assertEqual(fc.friday_window(datetime(2026, 11, 6, 21, 30, tzinfo=UTC)), fc.PREFLATTEN)
+        # EST (after 2026-11-01): 17:00 NY = 22:00 UTC; default window from the 16:45 NY flatten (DEC-HOLD-WEEK-1).
+        self.assertEqual(fc.friday_window(datetime(2026, 11, 6, 21, 44, tzinfo=UTC)), fc.OPEN)
+        self.assertEqual(fc.friday_window(datetime(2026, 11, 6, 21, 45, tzinfo=UTC)), fc.PREFLATTEN)
         self.assertEqual(fc.friday_window(datetime(2026, 11, 6, 22, 0, tzinfo=UTC)), fc.CLOSED)
         # EDT: 17:00 NY = 21:00 UTC.
         self.assertEqual(fc.friday_window(datetime(2026, 10, 16, 21, 0, tzinfo=UTC)), fc.CLOSED)
@@ -600,9 +600,10 @@ class FridayWindowTests(unittest.TestCase):
         self.assertIsNone(fc.minutes_from_env({}))
         for value in ("true", "yes", " 1", "0", ""):
             self.assertIsNone(fc.minutes_from_env({"AI_FLOOR_FRIDAY_PREFLATTEN": value}))
-        self.assertEqual(fc.minutes_from_env(FRIDAY_ON), 30)
-        for raw, expected in (("45", 45), ("5", 5), ("240", 240), ("4", 30), ("241", 30), ("x", 30), ("-10", 30),
-                              ("12.5", 30)):
+        self.assertEqual(fc.minutes_from_env(FRIDAY_ON), 15)  # DEC-HOLD-WEEK-1: aligned to the 16:45 NY flatten
+        self.assertEqual(fc.DEFAULT_MINUTES, 15)
+        for raw, expected in (("45", 45), ("5", 5), ("240", 240), ("4", 15), ("241", 15), ("x", 15), ("-10", 15),
+                              ("12.5", 15)):
             with self.subTest(raw=raw):
                 self.assertEqual(fc.preflatten_minutes({"AI_FLOOR_FRIDAY_PREFLATTEN_MINUTES": raw}), expected)
 
@@ -636,14 +637,14 @@ class FridayRouterTests(OpsBase):
 
     def test_preflatten_closes_ahead_of_the_halt(self):
         router = self.friday(**FRIDAY_ON)
-        self.assertEqual(router._friday_minutes, 30)
+        self.assertEqual(router._friday_minutes, 15)
         spy = self.spy_close(router)
         self.server.add("GET", PRICING, pricing())
         self.server.add("PUT", CLOSE, CLOSED_OK)
-        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 29)), {CID: "KEEP"})  # not yet
+        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 44)), {CID: "KEEP"})  # not yet
         self.assertEqual(self.puts(), [])
         self.server.routes[("GET", OPEN_TRADES)] = [trades()]
-        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 31)), {CID: "CLOSED"})
+        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 46)), {CID: "CLOSED"})
         self.assertEqual(spy.call_args.kwargs["client_id"], f"{CID}-fri")
         self.assertEqual((self.rows()[0]["status"], self.rows()[0]["closed_reason"]), ("CLOSED", "FRIDAY_PREFLATTEN"))
         self.assertEqual(self.puts(), [CLOSE])
@@ -652,21 +653,22 @@ class FridayRouterTests(OpsBase):
     def test_preflatten_retries_and_needs_a_tradeable_quote(self):
         router = self.friday(**FRIDAY_ON)
         self.server.add("GET", PRICING, pricing(tradeable=False))
-        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 35)), {CID: "KEEP"})  # duration rule: not due yet
+        # Both the pre-flatten and the 16:45 duration rule are due; neither acts without a tradeable quote.
+        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 46)), {CID: "MARKET_CLOSED"})
         self.assertEqual(self.events("FRIDAY_PREFLATTEN_SKIPPED")[-1][2], {"reason": "not_tradeable"})
         self.assertEqual(self.puts(), [])
         self.server.routes[("GET", PRICING)] = [pricing()]
         self.server.add("PUT", CLOSE, HALTED, CLOSED_OK)
-        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 36)), {CID: "CLOSE_REJECTED"})
+        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 47)), {CID: "CLOSE_REJECTED"})  # one close per tick
         self.assertEqual(self.rows()[0]["status"], "OPEN")
         self.server.routes[("GET", OPEN_TRADES)] = [trades()]
-        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 37)), {CID: "CLOSED"})
+        self.assertEqual(router.manage(ny(2026, 10, 16, 16, 48)), {CID: "CLOSED"})
         self.assertEqual(self.puts(), [CLOSE, CLOSE])
 
     def test_entries_refused_in_preflatten_and_closed_windows_including_dry_run(self):
         live = self.router(**FRIDAY_ON)
         dry = self.router(AI_FLOOR_BROKER_DEMO_DRY_RUN="1", **FRIDAY_ON)
-        for n, at in enumerate((ny(2026, 10, 16, 16, 30), ny(2026, 10, 16, 17, 0), ny(2026, 10, 17, 9, 0),
+        for n, at in enumerate((ny(2026, 10, 16, 16, 45), ny(2026, 10, 16, 17, 0), ny(2026, 10, 17, 9, 0),
                                 ny(2026, 10, 18, 16, 59))):
             for name, router in (("live", live), ("dry", dry)):
                 with self.subTest(at=at, router=name):
@@ -750,7 +752,7 @@ class FridayRouterTests(OpsBase):
         dry = self.router(AI_FLOOR_BROKER_DEMO_DRY_RUN="1", **FRIDAY_ON)
         self.server.add("GET", PRICING, pricing())
         writes = len(self.writes())
-        dry.manage(ny(2026, 10, 16, 16, 40))
+        dry.manage(ny(2026, 10, 16, 16, 46))
         self.assertEqual(self.writes()[writes:], [])
         self.assertTrue([e for e in self.events("DRY_RUN") if e[2].get("action") == "friday_preflatten"])
 

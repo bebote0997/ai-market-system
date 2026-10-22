@@ -37,6 +37,7 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 - 2026-10-19 (`feat/summary-trading-day`, DEC-SUMMARY-DAY-1): el resumen diario de Slack cubre el día de trading 17:00 → 17:00 NY (clave = fecha NY de su cierre; sin resúmenes de sábado/domingo; días pendientes tras una caída se envían una vez, máx. 5); PAPER y OANDA agregados sobre esa ventana. Revisión Codex: outbox de resúmenes persistidos sin enviar tras un crash (reclamado sin resultado ⇒ `UNKNOWN`, nunca reenviado); NAV/Balance/abiertas/«Día N» del demo OANDA a la hora de envío «(a las HH:MM ET)»; ganadoras «—» si falta un P&L.
 - 2026-10-19 (`feat/pause-xauusd`, DEC-XAU-OFF-1): XAUUSD pausado en el motor PAPER por código (`runtime/symbol_pause.py`); su posición PAPER abierta se cierra a mercado (simulado) con `SYMBOL_PAUSED`. EURUSD, demo OANDA, fingerprint, preflight y env sin cambios.
 - 2026-10-22 (`feat/fx-sl-week-hold`, DEC-FX-SL-1): FX (EURUSD; no XAUUSD/índices) con SL ajustado a [45, 60] pips y TP fijo 2R del SL ajustado (sustituye la 3R para FX); config en `core/fx_policy.py`, override opcional por env; fingerprint sin cambios.
+- 2026-10-22 (`feat/fx-sl-week-hold`, DEC-HOLD-WEEK-1): duración máxima una semana (cierre en lo primero de viernes 16:45 NY y 5 días de trading tras el fill), sin entradas vie 16:45 → dom 17:00 NY; PAPER y router demo; Day-1 < 0.5R desactivado (flag opcional), Day-2 retirado.
 
 ## Abierto (ver `docs/issues.md`)
 - ISSUE-008 / ISSUE-009 (bloquean activación de SYSTEM HEALTH).

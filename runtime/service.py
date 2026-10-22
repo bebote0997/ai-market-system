@@ -21,6 +21,7 @@ from execution.paper_broker import PaperBroker
 from execution.pending_order_gate import (BLOCKING_FINAL_STATUSES, CurrentCycleGate, PendingGateEvidenceError,
                                           gate_pending_orders)
 from execution.position_catch_up import CatchUpEvidenceError, catch_up_position
+from execution.trade_duration import entries_blocked
 from execution.trade_manager import TradeManager
 from floor.orchestrator import run as run_floor
 from riesgo import crear_configuracion_riesgo_v2
@@ -54,6 +55,7 @@ OFF_OBSERVE_GRACE_SECONDS = 0.5
 # Pre-demo: an AI review needed for this cycle returned NO_DATA (retried once; still NO_DATA => no trade).
 AI_REVIEW_UNHEALTHY = "AI_REVIEW_UNHEALTHY"
 MACRO_NO_DATA_REASON = "AI_REVIEW_UNHEALTHY: macro=NO_DATA"
+FRIDAY_FLATTEN_WINDOW = "FRIDAY_FLATTEN_WINDOW"  # DEC-HOLD-WEEK-1: no new entry from Friday 16:45 NY to the reopen
 
 
 def attach_broker_alerts(router, environ):
@@ -517,89 +519,58 @@ class OperationalRuntime:
             return decide(fresh, position)
         return self._guarded_paper_write(symbol, key, apply, store, kind)
 
-    def _duration_evidence(self, symbol, snapshot, timeframe):
-        """The bars the duration rule reads, from the same source as SL/TP management: committed evidence when the
-        evidence catch-up applies (authoritative; a provider revision never re-prices a decision), else the cycle's
-        snapshot. Returns (5m MarketBars, None) or (15m DataFrame, None); (None, reason) when evidence is unreadable."""
+    def _duration_evidence(self, symbol, snapshot):
+        """The 5m bars the duration rule prices with, from the same source as SL/TP management: committed evidence
+        when the evidence catch-up applies (authoritative; a provider revision never re-prices a decision), else the
+        cycle's snapshot. Returns (MarketBars, None), or (None, reason) when evidence is unreadable."""
         if self.config.catch_up_applies(symbol) and not self._snapshot_catch_up_applies(symbol):
             try:
-                bars = self._evidence_engine().committed(symbol, timeframe)
+                return self._evidence_engine().committed(symbol, "5m"), None
             except Exception:  # noqa: BLE001 - unreadable evidence fails closed
                 return None, EVIDENCE_UNAVAILABLE
-            if timeframe == "5m":
-                return bars, None
-            import pandas as pd
-            closed = [bar for bar in bars if bar.is_closed is True]
-            return pd.DataFrame({"Open": [b.open for b in closed], "High": [b.high for b in closed],
-                                 "Low": [b.low for b in closed], "Close": [b.close for b in closed],
-                                 "is_closed": True}, index=pd.DatetimeIndex([b.start for b in closed])), None
-        if timeframe not in snapshot:
+        if "5m" not in snapshot:
             return None, None
-        if timeframe == "15m":
-            return snapshot[timeframe], None
         try:
-            return bars_from_frame(snapshot[timeframe], symbol=symbol, timeframe=timeframe), None
+            return bars_from_frame(snapshot["5m"], symbol=symbol, timeframe="5m"), None
         except EvidenceError:
             return (), None
 
     def _enforce_trade_duration(self, symbol, slot, key, snapshot, store=None, observer=None, closed=None):
-        """Pre-demo trade-duration rule up to ``slot`` (execution.trade_duration): the NY closes passed by the slot and
-        the Day-2 adverse 15m structure exit, in time order with SL/TP management.
+        """DEC-HOLD-WEEK-1 trade-duration rule up to ``slot`` (execution.trade_duration): the week-rule boundary
+        (Friday 16:45 NY / max trading days) and, when ON, the legacy Day-1 NY close.
 
-        Before acting at a moment (a NY close, or the moment an adverse BOS is known), SL/TP management first runs up
-        to that moment only (the same catch-up route as the cycle): an earlier stop/target wins, and a later bar can
-        never stop out a position the rule had already closed. Returns None, or the reason PAPER economics are
-        blocked for this cycle."""
+        Before acting at a boundary, SL/TP management first runs up to that moment only (the same catch-up route as
+        the cycle): an earlier stop/target wins, and a later bar can never stop out a position the rule had already
+        closed. Returns None, or the reason PAPER economics are blocked for this cycle."""
         from execution import trade_duration as td
-        for _ in range(4):  # Day-1 close, then a structure exit or the Day-2 close; one re-read after a MOVED write
+        for _ in range(3):  # optional Day-1 close, then the week boundary; one re-read after a MOVED write
             position = self._broker(symbol).account.open_positions.get(symbol)
             if position is None:
                 return None
             boundary = td.next_boundary(position)
-            structure = None
-            if position.duration_stage is not None:
-                frame, blocked = self._duration_evidence(symbol, snapshot, "15m")
-                if blocked is not None:
-                    return blocked
-                managed = (position.opened_at if position.last_processed_at is None
-                           else position.last_processed_at + timedelta(minutes=5))
-                structure = td.first_adverse_structure(position, frame, managed, slot)
-            if structure is None and boundary > slot:
+            if boundary > slot:
                 return None
-            at = boundary if structure is None else structure[0]
             if self._snapshot_catch_up_applies(symbol):
-                blocked = self._catch_up_positions(symbol, at, key, store, observer, snapshot["5m"])
+                blocked = self._catch_up_positions(symbol, boundary, key, store, observer, snapshot["5m"])
             elif self.config.catch_up_applies(symbol):
-                blocked = self._catch_up_positions(symbol, at, key, store, observer)
+                blocked = self._catch_up_positions(symbol, boundary, key, store, observer)
             else:
                 blocked = None  # legacy newest-bar route (no enabled PAPER symbol uses it)
             if blocked is not None:
                 return blocked
-            bars, blocked = self._duration_evidence(symbol, snapshot, "5m")
+            bars, blocked = self._duration_evidence(symbol, snapshot)
             if blocked is not None:
                 return blocked
-            bar = td.price_bar((b for b in bars or () if b.closed_at(at)), position, at)
+            bar = td.price_bar((b for b in bars or () if b.closed_at(slot)), position, boundary)
             if bar is None:
                 LOG.warning("symbol=%s component=trade_duration event=TRADE_DURATION_NO_DATA boundary=%s",
-                            symbol, utc(at))
+                            symbol, utc(boundary))
                 self._persist("O", lambda: self.store.event(self.clock(), position.run_id, symbol, "trade_duration",
                                                             "TRADE_DURATION_NO_DATA", "WARNING",
-                                                            {"boundary_utc": utc(at)}))
+                                                            {"boundary_utc": utc(boundary)}))
                 return None
 
-            def decide(fresh, position, boundary=boundary, bar=bar, structure=structure):
-                if structure is not None:
-                    bos = structure[1]
-                    fresh.close_market(symbol, bar.close, bar.end, exit_reason=td.CLOSE_DAY2_STRUCTURE,
-                                       decision_run_id=position.run_id)
-                    fresh._event(bar.end, position.run_id, symbol, position.position_id, "TRADE_DURATION_EXIT",
-                                 {"exit_reason": td.CLOSE_DAY2_STRUCTURE, "price": bar.close,
-                                  "price_bar_start": utc(bar.start),
-                                  "bos_break_utc": utc(bos["break_timestamp"].to_pydatetime()),
-                                  "bos_direction": bos["direction"]})
-                    LOG.info("symbol=%s component=trade_duration event=POSITION_CLOSED reason=%s",
-                             symbol, td.CLOSE_DAY2_STRUCTURE)
-                    return True, "CLOSE"
+            def decide(fresh, position, boundary=boundary, bar=bar):
                 action, reason = td.boundary_decision(position, boundary, bar.close)
                 details = {"boundary_utc": utc(boundary), "price": bar.close, "price_bar_start": utc(bar.start),
                            "unrealized_r": None if (r := td.unrealized_r(position, bar.close)) is None else str(r)}
@@ -614,8 +585,7 @@ class OperationalRuntime:
                                  {**details, "initial_stop": position.initial_stop, "stop": position.stop})
                     LOG.info("symbol=%s component=trade_duration event=STOP_MOVED_TO_ENTRY", symbol)
                 return True, action
-            kind = "trade_duration" if structure is None else "trade_duration_structure"
-            fresh, action = self._duration_write(symbol, key, position.position_id, boundary, decide, store, kind)
+            fresh, action = self._duration_write(symbol, key, position.position_id, boundary, decide, store)
             if fresh is None:
                 return STALE_PAPER_STATE
             if action == "CLOSE" and closed is not None:
@@ -682,7 +652,7 @@ class OperationalRuntime:
                 if outcome is not None:
                     results[symbol] = outcome
                 continue
-            if self._due_orders(orders, symbol, slot):  # pending orders: Friday / Day-2 NY close (no data needed)
+            if self._due_orders(orders, symbol, slot):  # pending orders: Friday flatten / max hold (no data needed)
                 try:
                     cancelled, blocked = self._cancel_due_orders(symbol, slot, None)
                     results[symbol] = blocked or ("ORDERS_CANCELLED" if cancelled else "CHECKED")
@@ -695,8 +665,7 @@ class OperationalRuntime:
             position = None if account is None else account.open_positions.get(symbol)
             if position is None or self.market_provider is None:
                 continue
-            day2_check = position.duration_stage is not None and slot.minute % 15 == 0  # a 15m BOS needs a 15m close
-            if td.next_boundary(position) > slot and not day2_check:
+            if td.next_boundary(position) > slot:
                 continue
             try:
                 snapshot = self.market_provider.load_snapshot(symbol, slot)
@@ -782,7 +751,7 @@ class OperationalRuntime:
             position = self._broker(symbol).account.open_positions.get(symbol)
             if position is None:
                 return "CLOSED_BY_MANAGEMENT"  # SL/TP up to the slot closed it first
-            bars, blocked = self._duration_evidence(symbol, snapshot, "5m")
+            bars, blocked = self._duration_evidence(symbol, snapshot)
             if blocked is not None:
                 return blocked
             bar = td.price_bar((b for b in bars or () if b.closed_at(slot)), position, slot)
@@ -1369,6 +1338,8 @@ class OperationalRuntime:
                 execution_reason = paper_blocked  # B2.3B: no submission over unreconciled positions.
             elif eligible and duration_closed:
                 execution_reason = "TRADE_DURATION_EXIT"  # no new entry in the cycle that time-closed a position
+            elif deterministic.final_status == "PLAN_READY" and entries_blocked(execution_at):
+                execution_reason = FRIDAY_FLATTEN_WINDOW  # DEC-HOLD-WEEK-1: Friday 16:45 NY -> Sunday 17:00 NY
             elif (self.config.v2_opposite_setup_policy == "STRUCTURE_CHANGE"
                   and deterministic.final_status == "PLAN_READY" and self.paper_enabled
                   and paper_blocked is None

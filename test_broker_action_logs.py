@@ -12,7 +12,7 @@ from test_broker_demo_router import (A, ACCOUNT, CID, PRICING as PRICING_PATH, T
 LOGGER = "ai_floor.broker.demo_router"
 
 
-class ActionLogTests(RouterBase):
+class ActionLogTests(base.Day1On, RouterBase):  # Day-1 check ON (OFF by default, DEC-HOLD-WEEK-1)
     DAY1 = base.ManageTests.DAY1
 
     def opened(self):

@@ -455,7 +455,18 @@ def row(side="LONG", entry="1.09000", stop="1.08000", opened=NOW, stage=None, in
             "created_at": opened.isoformat()}
 
 
-class DurationRuleTests(unittest.TestCase):
+class Day1On:
+    """The legacy Day-1 check is OFF by default (DEC-HOLD-WEEK-1); these tests characterize it switched ON."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(patch.object(td, "DAY1_RULE", True))
+
+
+FRIDAY_FLATTEN = datetime(2026, 10, 16, 20, 45, tzinfo=timezone.utc)  # Friday 16:45 New York (EDT)
+
+
+class DurationRuleTests(Day1On, unittest.TestCase):
     DAY1 = datetime(2026, 10, 12, 21, 0, tzinfo=timezone.utc)
 
     def test_rule_table(self):
@@ -467,13 +478,14 @@ class DurationRuleTests(unittest.TestCase):
             (row(side="SHORT", stop="1.10000"), self.DAY1, Decimal("1.08500"), ("BREAKEVEN", None)),
             (row(side="SHORT", stop="1.10000"), self.DAY1, Decimal("1.08600"), ("CLOSE", td.CLOSE_DAY1_BELOW_HALF_R)),
             (row(), self.DAY1, None, None),  # price unavailable: no Day-1 decision (retried next tick)
-            # Day 2: R measured against the ORIGINAL stop, closed at the Day-2 NY close whatever the price.
-            (row(stage=td.STAGE_DAY2, stop="1.09000", initial_stop="1.08000"), self.DAY1 + timedelta(hours=1), None, None),
+            # After a Day-1 keep the week rule decides (no Day-2 close): kept until Friday 16:45 NY, whatever the price.
             (row(stage=td.STAGE_DAY2, stop="1.09000", initial_stop="1.08000"), self.DAY1 + timedelta(days=1), None,
-             ("CLOSE", td.CLOSE_DAY2_NY_CLOSE)),
-            # Max 2 days: a Day-1 trade already past its Day-2 close is closed.
-            (row(), self.DAY1 + timedelta(days=1), Decimal("1.2"), ("CLOSE", td.CLOSE_DAY2_NY_CLOSE)),
-            # Friday: opened Friday -> its Day-1 close is the Friday close; Thursday trade -> Day-2 close on Friday.
+             None),
+            (row(stage=td.STAGE_DAY2, stop="1.09000", initial_stop="1.08000"), FRIDAY_FLATTEN, None,
+             ("CLOSE", td.CLOSE_FRIDAY)),
+            # A Day-1 decision still unprocessed at the week boundary: closed by the week rule.
+            (row(), FRIDAY_FLATTEN, Decimal("1.2"), ("CLOSE", td.CLOSE_FRIDAY)),
+            # Friday: opened Friday or Thursday -> closed at/after the Friday flatten.
             (row(opened=datetime(2026, 10, 16, 10, tzinfo=timezone.utc)), datetime(2026, 10, 16, 21, tzinfo=timezone.utc),
              None, ("CLOSE", td.CLOSE_FRIDAY)),
             (row(opened=datetime(2026, 10, 15, 10, tzinfo=timezone.utc), stage=td.STAGE_DAY2, stop="1.09000",
@@ -482,6 +494,12 @@ class DurationRuleTests(unittest.TestCase):
         for trade_row, now, price, expected in cases:
             with self.subTest(now=now, price=price, stage=trade_row["stage"]):
                 self.assertEqual(duration_action(trade_row, now, price), expected)
+
+    def test_default_off_only_the_week_rule(self):
+        with patch.object(td, "DAY1_RULE", False):
+            self.assertIsNone(duration_action(row(), self.DAY1, Decimal("1.08500")))
+            self.assertIsNone(duration_action(row(), FRIDAY_FLATTEN - timedelta(minutes=1), None))
+            self.assertEqual(duration_action(row(), FRIDAY_FLATTEN, None), ("CLOSE", td.CLOSE_FRIDAY))
 
     def test_dst_edge(self):
         winter = row(opened=datetime(2026, 3, 5, 14, tzinfo=timezone.utc))  # EST: 17:00 NY = 22:00 UTC
@@ -497,7 +515,7 @@ class DurationRuleTests(unittest.TestCase):
             duration_action(broken, NOW, Decimal("1"))
 
 
-class ManageTests(RouterBase):
+class ManageTests(Day1On, RouterBase):
     DAY1 = datetime(2026, 10, 12, 21, 0, tzinfo=timezone.utc)
 
     def opened(self):
@@ -521,7 +539,7 @@ class ManageTests(RouterBase):
         self.assertEqual((row_["status"], row_["closed_reason"]), ("CLOSED", td.CLOSE_DAY1_BELOW_HALF_R))
         self.assertEqual([p for m, p in self.writes() if m == "PUT"], [close, close])
 
-    def test_day1_keep_moves_stop_to_entry_then_day2_close(self):
+    def test_day1_keep_moves_stop_to_entry_then_friday_flatten(self):
         router = self.opened()
         self.server.add("GET", PRICING, pricing(bid="1.09600", ask="1.09610"))  # +0.6R
         self.server.add("GET", f"{A}/trades/6397", (200, {"trade": open_trade()}))
@@ -534,8 +552,9 @@ class ManageTests(RouterBase):
         self.assertEqual(router.manage(self.DAY1 + timedelta(hours=2)), {CID: "KEEP"})  # idempotent: no second PUT
         self.assertEqual(len([c for c in self.server.calls if c[0] == "PUT"]), 1)
         self.server.add("PUT", f"{A}/trades/6397/close", (200, {"orderFillTransaction": close_fill()}))
-        self.assertEqual(router.manage(self.DAY1 + timedelta(days=1)), {CID: "CLOSED"})
-        self.assertEqual(self.rows()[0]["closed_reason"], td.CLOSE_DAY2_NY_CLOSE)
+        self.assertEqual(router.manage(self.DAY1 + timedelta(days=1)), {CID: "KEEP"})  # no Day-2 close any more
+        self.assertEqual(router.manage(FRIDAY_FLATTEN), {CID: "CLOSED"})
+        self.assertEqual(self.rows()[0]["closed_reason"], td.CLOSE_FRIDAY)
 
     def test_price_unavailable_or_market_closed_no_action_then_retry(self):
         router = self.opened()
@@ -564,8 +583,8 @@ class ManageTests(RouterBase):
         self.server.routes[("GET", OPEN_TRADES)] = [trades()]
         router.manage(friday + timedelta(days=2, minutes=2))
         row_ = self.rows()[0]
-        # Opened Monday: by Friday it is an overdue Day-2 close (max 2 days), with the reason kept while latched.
-        self.assertEqual((row_["status"], row_["closed_reason"]), ("CLOSED", td.CLOSE_DAY2_NY_CLOSE))
+        # Opened Monday: by Friday 16:45 NY it is due under the week rule, with the reason kept while latched.
+        self.assertEqual((row_["status"], row_["closed_reason"]), ("CLOSED", td.CLOSE_FRIDAY))
 
     def puts(self):
         return [p for m, p in self.writes() if m == "PUT"]
@@ -634,7 +653,7 @@ class ManageTests(RouterBase):
 
     def test_actions_need_a_valid_tradeable_quote(self):
         router = self.opened()
-        friday = datetime(2026, 10, 16, 21, tzinfo=timezone.utc)  # overdue close (Day-2 / Friday)
+        friday = datetime(2026, 10, 16, 21, tzinfo=timezone.utc)  # overdue close (Friday 16:45 NY flatten)
 
         def boom(_symbol):
             raise OSError("down")
