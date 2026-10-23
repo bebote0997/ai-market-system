@@ -67,6 +67,14 @@ CREATE TRIGGER IF NOT EXISTS broker_demo_events_no_update BEFORE UPDATE ON broke
 BEGIN SELECT RAISE(ABORT, 'broker_demo_events is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS broker_demo_events_no_delete BEFORE DELETE ON broker_demo_events
 BEGIN SELECT RAISE(ABORT, 'broker_demo_events is append-only'); END;
+CREATE TABLE IF NOT EXISTS broker_demo_outbox (
+    event_id INTEGER PRIMARY KEY REFERENCES broker_demo_events(id),
+    kind TEXT NOT NULL,
+    detail TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    attempted_at TEXT
+);
 CREATE TABLE IF NOT EXISTS broker_demo_flags (
     key TEXT PRIMARY KEY,
     value TEXT,
@@ -107,6 +115,10 @@ _EVENT_SQL = "INSERT INTO broker_demo_events(ts, kind, client_id, detail) VALUES
 _SET_FLAG_SQL = ("INSERT INTO broker_demo_flags(key, value, updated_at) VALUES (?, ?, ?) "
                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
 _CLEAR_FLAG_SQL = "DELETE FROM broker_demo_flags WHERE key = ? AND (? IS NULL OR value = ?)"
+# Durable alert outbox (operator-request completions): PENDING -> CLAIMED -> SENT / FAILED; stale CLAIMED -> UNKNOWN.
+OUTBOX_PENDING, OUTBOX_CLAIMED, OUTBOX_SENT, OUTBOX_FAILED, OUTBOX_UNKNOWN = (
+    "PENDING", "CLAIMED", "SENT", "FAILED", "UNKNOWN")
+_OUTBOX_SQL = "INSERT INTO broker_demo_outbox(event_id, kind, detail, status, created_at) VALUES (?, ?, ?, ?, ?)"
 
 
 def _detail(detail):
@@ -196,6 +208,62 @@ class DemoStateStore:
             except BaseException:
                 con.execute("ROLLBACK")
                 raise
+
+    def consume_flag(self, key, value, *, event, notify=False):
+        """ONE transaction: delete ``key`` while it still holds ``value``, append ``event`` = ``(kind, client_id,
+        detail)`` and, with ``notify``, a PENDING ``broker_demo_outbox`` row for that event (durable alert). Returns
+        the event id; None (nothing written) when the flag no longer holds ``value``. A crash leaves either the
+        request (redone next tick) or the event + its alert, never one without the other."""
+        now = self._clock()
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                if not con.execute(_CLEAR_FLAG_SQL, (key, value, value)).rowcount:
+                    con.execute("ROLLBACK")
+                    return None
+                kind, client_id, detail = event
+                event_id = con.execute(_EVENT_SQL, (now, kind, client_id, _detail(detail))).lastrowid
+                if notify:
+                    con.execute(_OUTBOX_SQL, (event_id, kind, _detail(detail), OUTBOX_PENDING, now))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+        return event_id
+
+    def claim_outbox(self, now, stale_before):
+        """ONE transaction: CLAIMED rows attempted before ``stale_before`` become UNKNOWN (a crash mid-delivery: Slack
+        cannot dedupe, so never resent); PENDING rows become CLAIMED at ``now``. Returns ``(claimed, unknown)`` lists
+        of ``{event_id, kind, detail}`` (detail decoded)."""
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                unknown = [dict(r) for r in con.execute(
+                    "SELECT event_id, kind, detail FROM broker_demo_outbox WHERE status = ? AND attempted_at < ? "
+                    "ORDER BY event_id", (OUTBOX_CLAIMED, stale_before))]
+                con.execute("UPDATE broker_demo_outbox SET status = ? WHERE status = ? AND attempted_at < ?",
+                            (OUTBOX_UNKNOWN, OUTBOX_CLAIMED, stale_before))
+                claimed = [dict(r) for r in con.execute(
+                    "SELECT event_id, kind, detail FROM broker_demo_outbox WHERE status = ? ORDER BY event_id",
+                    (OUTBOX_PENDING,))]
+                con.execute("UPDATE broker_demo_outbox SET status = ?, attempted_at = ? WHERE status = ?",
+                            (OUTBOX_CLAIMED, now, OUTBOX_PENDING))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+        for row in claimed + unknown:
+            row["detail"] = json.loads(row["detail"]) if row["detail"] else {}
+        return claimed, unknown
+
+    def finish_outbox(self, event_id, status):
+        with closing(self._connect()) as con:
+            con.execute("UPDATE broker_demo_outbox SET status = ? WHERE event_id = ? AND status = ?",
+                        (status, event_id, OUTBOX_CLAIMED))
+
+    def outbox(self):
+        with closing(self._connect()) as con:
+            return [dict(r) for r in con.execute("SELECT * FROM broker_demo_outbox ORDER BY event_id")]
 
     def set_flag_if_absent(self, key, value, *, event=None):
         """ONE transaction: insert ``key`` only when it holds no (non-empty) value, plus ``event`` = ``(kind,

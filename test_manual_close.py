@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from execution import operator_actions as ops
+from execution.broker_demo_state import DemoStateStore
 from execution.demo_metrics import demo_rows, load_risk_rows
 from runtime.broker_alerts import build_message
 from test_broker_demo_router import CID, NOW, OPEN_TRADES, open_trade, trades
@@ -121,6 +122,74 @@ class ManualCloseRouterTests(ManualBase):
         router.manage(LATER + timedelta(minutes=2))
         self.assertEqual(self.puts(), [CLOSE])  # never a second close
         self.assertEqual(self.request(request_id="req-2")["reason"], "no_open_trade")
+
+    def test_crash_between_close_and_completion_keeps_the_request_and_attribution(self):
+        router = self.opened()
+        self.request()
+        self.server.add("PUT", CLOSE, CLOSED_OK)
+        with patch.object(DemoStateStore, "consume_flag", side_effect=RuntimeError("crash before commit")):
+            router.manage(LATER)
+        self.assertEqual((self.rows()[0]["status"], self.rows()[0]["closed_reason"]), ("CLOSED", "MANUAL_CLOSE"))
+        self.assertIsNotNone(self.store().flag(ops.MANUAL_CLOSE_REQUEST_FLAG))  # not consumed without its event
+        self.assertEqual(self.events("MANUAL_CLOSE"), [])
+        restarted = self.router()
+        restarted.on_alert = MagicMock()
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        restarted.manage(LATER + timedelta(minutes=1))
+        [done] = self.events("MANUAL_CLOSE")
+        self.assertEqual((done[1], done[2]["request_id"], done[2]["actor"], done[2]["outcome"]),
+                         (CID, "req-1", "dashboard", "CLOSED"))
+        self.assertIsNone(self.store().flag(ops.MANUAL_CLOSE_REQUEST_FLAG))
+        self.assertEqual([c.args[0] for c in restarted.on_alert.call_args_list].count("MANUAL_CLOSE"), 1)
+        self.assertEqual(self.puts(), [CLOSE])  # never a second close
+
+    def test_completion_and_consumption_are_one_transaction(self):
+        router = self.opened()
+        self.request()
+        self.server.add("PUT", CLOSE, CLOSED_OK)
+        with patch("execution.broker_demo_state._OUTBOX_SQL", "INSERT INTO no_such_table VALUES (?, ?, ?, ?, ?)"):
+            router.on_alert = MagicMock()
+            router.manage(LATER)  # the outbox insert fails -> the event and the consumption roll back too
+        self.assertIsNotNone(self.store().flag(ops.MANUAL_CLOSE_REQUEST_FLAG))
+        self.assertEqual(self.events("MANUAL_CLOSE"), [])
+        router.manage(LATER + timedelta(minutes=1))
+        self.assertEqual(len(self.events("MANUAL_CLOSE")), 1)
+        self.assertIsNone(self.store().flag(ops.MANUAL_CLOSE_REQUEST_FLAG))
+
+    def test_crash_after_commit_delivers_the_alert_once_from_the_outbox(self):
+        router = self.opened()
+        router.on_alert = MagicMock()
+        self.request()
+        self.server.add("PUT", CLOSE, CLOSED_OK)
+        with patch.object(type(router), "_drain_outbox"):  # crash right after the commit: nothing delivered
+            router.manage(LATER)
+        self.assertIsNone(self.store().flag(ops.MANUAL_CLOSE_REQUEST_FLAG))
+        self.assertEqual([r["status"] for r in self.store().outbox()], ["PENDING"])
+        restarted = self.router()
+        restarted.on_alert = MagicMock()
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        restarted.manage(LATER + timedelta(minutes=1))
+        restarted.manage(LATER + timedelta(minutes=2))
+        [call] = [c for c in restarted.on_alert.call_args_list if c.args[0] == "MANUAL_CLOSE"]
+        self.assertEqual((call.args[1]["request_id"], call.args[1]["outcome"]), ("req-1", "CLOSED"))
+        self.assertEqual([r["status"] for r in self.store().outbox()], ["SENT"])
+
+    def test_stale_claim_is_unknown_never_resent(self):
+        router = self.opened()
+        router.on_alert = MagicMock()
+        self.request()
+        self.server.add("PUT", CLOSE, CLOSED_OK)
+        with patch.object(DemoStateStore, "finish_outbox", side_effect=RuntimeError("crash mid-delivery")):
+            router.manage(LATER)
+        self.assertEqual([r["status"] for r in self.store().outbox()], ["CLAIMED"])
+        restarted = self.router()
+        restarted.on_alert = MagicMock()
+        self.server.routes[("GET", OPEN_TRADES)] = [trades()]
+        restarted.manage(LATER + timedelta(minutes=1))  # within the grace: still CLAIMED, not resent
+        self.now += timedelta(minutes=11)
+        restarted.manage(self.now)
+        self.assertEqual([r["status"] for r in self.store().outbox()], ["UNKNOWN"])
+        self.assertNotIn("MANUAL_CLOSE", [c.args[0] for c in restarted.on_alert.call_args_list])
 
     def test_on_cycle_processes_the_request(self):
         router = self.opened()

@@ -32,7 +32,9 @@ UNKNOWN row left; ``drift_clear_request`` is bound to the current ``drift_episod
 when that same pass verifies the broker and the local state match (clear + request consumption + audit event in one
 transaction); ``manual_close_request`` (Floor "Cerrar operación") closes that ONE routed OPEN trade through ``_close``
 (reason ``MANUAL_CLOSE``; dry-run: ``MANUAL_CLOSE_DRY_RUN`` only) and is dropped once the row is no longer OPEN or the
-broker definitively rejected the close (retried while the outcome is a definite transient failure or UNKNOWN). With an
+broker definitively rejected the close (retried while the outcome is a definite transient failure or UNKNOWN); the
+request is consumed in the same state-DB transaction as its completion event and, for alert kinds, a durable
+``broker_demo_outbox`` row (delivered once on that or a later tick; a stale claim becomes UNKNOWN, never resent). With an
 emergency active ``router_from_env`` returns None, unless a flatten request or routed rows
 remain: then it builds a ``closing_only`` router on a ``close_only`` OandaBroker (entries refused ``emergency_active``,
 every routed OPEN trade closed on every tick; the switch is never turned ON). DEC-REVERSAL-1 (ON unless
@@ -61,7 +63,7 @@ from execution import trade_duration as td
 from execution.account_registry import AccountRegistry
 from execution.broker_config import load_broker_config
 from execution.broker_demo_state import (CLOSED, CLOSED_AT_BROKER, DRY_RUN, HEARTBEAT_FLAG, LIVE_STATUSES, MODE_FLAG,
-                                         OPEN, PENDING_SEND, REJECTED, UNKNOWN, UNRESOLVED_STATUSES, DemoStateStore,
+                                         OPEN, OUTBOX_FAILED, OUTBOX_SENT, PENDING_SEND, REJECTED, UNKNOWN, UNRESOLVED_STATUSES, DemoStateStore,
                                          dry_run_flag, max_units_setting, routing_flag, summarize_status)
 from execution.broker_port import (ACCEPTED, APPROVED, BrokerAuthError, BrokerGuardError, BrokerMalformedResponse,
                                    BrokerRateLimited, OrderPlan, RiskApproval)
@@ -100,6 +102,7 @@ def reversal_flag(env):
     """Demo-profile default ON; only the exact value ``0`` turns the reversal off."""
     return (env or {}).get(REVERSAL_ENV) != "0"
 FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
+OUTBOX_CLAIM_GRACE = timedelta(minutes=10)  # a CLAIMED alert this old had a crash mid-delivery -> UNKNOWN, not resent
 PENDING_EVENT_CAP = 50  # FLATTEN_REQUEST_PENDING (and dry-run previews) per request: the events table is append-only
 FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(minutes=30)}
 # Events forwarded to the optional ``on_alert`` hook (best effort; FRIDAY_FLATTEN_FAILED has its own explicit call).
@@ -289,6 +292,40 @@ class BrokerDemoRouter:
             self.on_alert(kind, dict(detail))
         except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
             LOG.warning("component=broker_demo event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
+
+    def _complete_manual(self, raw, kind, client_id, **detail):
+        """Consume the manual-close request AND record its completion event in ONE state-DB transaction; an alert
+        kind also gets a durable outbox row (delivered by ``_drain_outbox``, here and on every later tick)."""
+        notify = self.on_alert is not None and kind in ALERT_KINDS
+        self._store.consume_flag(MANUAL_CLOSE_REQUEST_FLAG, raw, event=(kind, client_id, detail or None),
+                                 notify=notify)
+        self._manual_ticks = 0
+        self._drain_outbox()
+
+    def _drain_outbox(self):
+        """Deliver PENDING outbox alerts once (CLAIMED -> SENT / FAILED); a claim older than ``OUTBOX_CLAIM_GRACE``
+        without an outcome is marked UNKNOWN and never resent (same rule as the daily-summary outbox). Never raises."""
+        if self.on_alert is None:
+            return
+        try:
+            now = self._clock()
+            claimed, unknown = self._store.claim_outbox(now.isoformat(), (now - OUTBOX_CLAIM_GRACE).isoformat())
+        except Exception as exc:  # noqa: BLE001 - retried next tick
+            LOG.warning("component=broker_demo event=OUTBOX_READ_FAILED error_type=%s", type(exc).__name__)
+            return
+        for row in unknown:
+            LOG.warning("component=broker_demo event=ALERT_DELIVERY_UNKNOWN kind=%s", row["kind"])
+        for row in claimed:
+            status = OUTBOX_SENT
+            try:
+                self.on_alert(row["kind"], dict(row["detail"]))
+            except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
+                status = OUTBOX_FAILED
+                LOG.warning("component=broker_demo event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
+            try:
+                self._store.finish_outbox(row["event_id"], status)
+            except Exception as exc:  # noqa: BLE001 - stays CLAIMED -> UNKNOWN after the grace, never resent
+                LOG.warning("component=broker_demo event=OUTBOX_WRITE_FAILED error_type=%s", type(exc).__name__)
 
     def _heartbeat(self):
         try:  # Lets the (possibly separate) dashboard process know routing is alive; best effort.
@@ -882,9 +919,11 @@ class BrokerDemoRouter:
     def _process_manual_close(self, report):
         """Floor "Cerrar operación" (``manual_close_request``): reconcile (unless this tick already did), then close
         the requested routed OPEN row through ``_close`` with reason ``MANUAL_CLOSE``. Idempotent: the row leaves OPEN
-        before the request is dropped, everything runs under the router lock, and a second request cannot be stored
+        before the request is dropped, the request is consumed together with its completion event (+ durable alert
+        outbox row) in one transaction (``_complete_manual``), everything runs under the router lock, and a second request cannot be stored
         while one is pending (``operator_actions.request_manual_close``). Returns ``({client_id: outcome}, report)``;
         never raises."""
+        self._drain_outbox()  # alerts a crash left undelivered
         try:
             raw = self._store.flag(MANUAL_CLOSE_REQUEST_FLAG)
             if not raw:
@@ -896,8 +935,7 @@ class BrokerDemoRouter:
                 if not isinstance(client_id, str) or not client_id:
                     raise ValueError
             except (TypeError, ValueError, KeyError):
-                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
-                self._event("MANUAL_CLOSE_REFUSED", None, reason="malformed_request")
+                self._complete_manual(raw, "MANUAL_CLOSE_REFUSED", None, reason="malformed_request")
                 return {}, report
             detail = {"request_id": request.get("request_id"), "actor": request.get("actor")}
             self._manual_ticks += 1
@@ -909,38 +947,31 @@ class BrokerDemoRouter:
                 return {}, None
             row = self._store.trade(client_id)
             if row is None or row["status"] != OPEN:  # gone (SL/TP, flatten, or our own earlier UNKNOWN close)
-                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
-                self._manual_ticks = 0
                 if row is not None and row.get("closed_reason") == MANUAL_CLOSE:
-                    self._event(MANUAL_CLOSE, client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE,
-                                outcome=row["status"], **detail)
+                    self._complete_manual(raw, MANUAL_CLOSE, client_id, trade_id=row["trade_id"],
+                                          reason=MANUAL_CLOSE, outcome=row["status"], **detail)
                 else:
-                    self._event("MANUAL_CLOSE_NOT_OPEN", client_id, status=None if row is None else row["status"],
-                                **detail)
+                    self._complete_manual(raw, "MANUAL_CLOSE_NOT_OPEN", client_id,
+                                          status=None if row is None else row["status"], **detail)
                 return {}, report
             if request.get("trade_id") not in (None, row["trade_id"]):
-                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
-                self._event("MANUAL_CLOSE_REFUSED", client_id, reason="trade_mismatch", **detail)
+                self._complete_manual(raw, "MANUAL_CLOSE_REFUSED", client_id, reason="trade_mismatch", **detail)
                 return {}, report
             if row.get("action_status") == UNKNOWN:  # an earlier action is unresolved: never stack a second close
                 if not quiet:
                     self._event("MANUAL_CLOSE_PENDING", client_id, reason="action_unresolved", **detail)
                 return {client_id: "ACTION_UNRESOLVED"}, report
             if self.dry_run:
-                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
-                self._event("MANUAL_CLOSE_DRY_RUN", client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE, **detail)
+                self._complete_manual(raw, "MANUAL_CLOSE_DRY_RUN", client_id, trade_id=row["trade_id"],
+                                      reason=MANUAL_CLOSE, **detail)
                 return {client_id: DRY_RUN}, report
             outcome = self._close(row, MANUAL_CLOSE, f"{client_id}-manual")
             if outcome in ("CLOSED", CLOSED_AT_BROKER):
-                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
-                self._manual_ticks = 0
-                self._event(MANUAL_CLOSE, client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE, outcome=outcome,
-                            **detail)
+                self._complete_manual(raw, MANUAL_CLOSE, client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE,
+                                      outcome=outcome, **detail)
             elif outcome == "CLOSE_REJECTED":  # definitive broker refusal (e.g. market halted): the owner may retry
-                self._store.clear_flag(MANUAL_CLOSE_REQUEST_FLAG, raw)
-                self._manual_ticks = 0
-                self._event("MANUAL_CLOSE_FAILED", client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE,
-                            outcome=outcome, **detail)
+                self._complete_manual(raw, "MANUAL_CLOSE_FAILED", client_id, trade_id=row["trade_id"],
+                                      reason=MANUAL_CLOSE, outcome=outcome, **detail)
             # CLOSE_FAILED (definite, not processed) / UNKNOWN (latched): keep the request; retried / resolved later
             return {client_id: outcome}, report
         except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
