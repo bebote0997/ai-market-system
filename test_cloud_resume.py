@@ -76,3 +76,22 @@ class ExistingExperimentPreflight(unittest.TestCase):
             store.db.execute("DELETE FROM paper_accounts")
             store.db.commit()
         self.assertFalse(cloud_preflight(self.config, env=self.env, disk_mounted=True).experiment_ready)
+
+    def test_scheduler_flag_facts_documented_in_the_sunday_runbook(self):
+        """docs/runbooks/sunday_restart_2026-10-25.md: scheduler_enabled is in the fingerprint, experiment_resumable
+        forces it True, only both-0 passes scheduler_not_started, and a cycle run with the scheduler OFF poisons
+        run_metadata."""
+        self.assertNotEqual(self.config.fingerprint(), replace(self.config, scheduler_enabled=True).fingerprint())
+        for scheduler in (False, True):
+            with self.subTest(scheduler=scheduler):
+                result = cloud_preflight(replace(self.config, scheduler_enabled=scheduler), env=self.env,
+                                         disk_mounted=True)
+                self.assertTrue(result.checks["experiment_resumable"])
+                self.assertEqual(result.checks["scheduler_not_started"], not scheduler)
+                self.assertEqual(result.infra_ready, not scheduler)  # SCHEDULER=1 with RUNNER=0 cannot boot
+        runner_on = cloud_preflight(self.config, env={**self.env, "AI_FLOOR_CLOUD_RUNNER": "1"}, disk_mounted=True)
+        self.assertFalse(runner_on.checks["scheduler_not_started"])
+        with closing(Store(self.path)) as store:  # a manual cycle with AI_FLOOR_SCHEDULER=0
+            store.claim_slot("manual", "EURUSD", AT, AT, run_id="manual-run")
+            store.save_run_metadata("manual", self.config.fingerprint(), 10000, FREEZE)
+        self.assertFalse(cloud_preflight(self.config, env=self.env, disk_mounted=True).checks["experiment_resumable"])

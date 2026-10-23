@@ -57,7 +57,7 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 - [x] DEC-8.24 — APPROVED 2026-10-10 (Grok Bot, control total delegado): G8/G15 diferidos a Fase 13 (se informa al owner).
 - [x] DEC-8.18a — 2026-10-10 (Grok Bot, control delegado): sin firma H5; Q1–Q8 automatizadas (`replay/status_verifier.py`).
 - [ ] DEC-8.22-a…j / OP-1…OP-7 (NOT AUTHORIZED).
-- [ ] Autorizar `AI_FLOOR_CLOUD_RUNNER` / `AI_FLOOR_SCHEDULER` en Render (hoy `0`).
+- [ ] Autorizar `AI_FLOOR_CLOUD_RUNNER` / `AI_FLOOR_SCHEDULER` en Render (hoy `0`): solo junto con `AI_FLOOR_BROKER_DEMO_ROUTING=1` (regla del owner 2026-10-22: nunca ciclos solo-PAPER; ver runbook del domingo).
 
 ## Próximos pasos hacia el demo PAPER de 30 días
 1. Fase 8 CERTIFIED y mergeada (PR #13).
