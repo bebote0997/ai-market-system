@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-18 (America/New_York; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
+_Última actualización: 2026-10-22 (America/New_York; rama `feat/fx-sl-week-hold`: DEC-FX-SL-1, DEC-HOLD-WEEK-1, DEC-REVERSAL-1, runbook del reinicio 2026-10-25. Anterior: 2026-10-18; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
 
 _Estado anterior: 2026-10-14 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 
@@ -36,6 +36,13 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 - 2026-10-19 (`feat/ops-diag-fixes`, DEC-WATCHDOG-2 / DEC-LATCH-PERSIST-1): watchdog 300 s (volcado 240 s, heartbeat de progreso por símbolo), logs de cierre/breakeven del router, dashboard demo con límite de pérdida diaria, R por operación y «Día N de 30» (tope «completo»), tests de persistencia de latches (ya persistían en SQLite), log `DAILY_SUMMARY_SENT source=OANDA_DEMO`. Sin cambios de env/flags/fingerprint/preflight.
 - 2026-10-19 (`feat/summary-trading-day`, DEC-SUMMARY-DAY-1): el resumen diario de Slack cubre el día de trading 17:00 → 17:00 NY (clave = fecha NY de su cierre; sin resúmenes de sábado/domingo; días pendientes tras una caída se envían una vez, máx. 5); PAPER y OANDA agregados sobre esa ventana. Revisión Codex: outbox de resúmenes persistidos sin enviar tras un crash (reclamado sin resultado ⇒ `UNKNOWN`, nunca reenviado); NAV/Balance/abiertas/«Día N» del demo OANDA a la hora de envío «(a las HH:MM ET)»; ganadoras «—» si falta un P&L.
 - 2026-10-19 (`feat/pause-xauusd`, DEC-XAU-OFF-1): XAUUSD pausado en el motor PAPER por código (`runtime/symbol_pause.py`); su posición PAPER abierta se cierra a mercado (simulado) con `SYMBOL_PAUSED`. EURUSD, demo OANDA, fingerprint, preflight y env sin cambios.
+- 2026-10-22 (`feat/fx-sl-week-hold`, DEC-FX-SL-1): FX (EURUSD; no XAUUSD/índices) con SL ajustado a [45, 60] pips y TP fijo 2R del SL ajustado (sustituye la 3R para FX); config en `core/fx_policy.py`, override opcional por env; fingerprint sin cambios.
+- 2026-10-22 (`feat/fx-sl-week-hold`, DEC-HOLD-WEEK-1): duración máxima una semana (cierre en lo primero de viernes 16:45 NY y 5 días de trading tras el fill), sin entradas vie 16:45 → dom 17:00 NY; PAPER y router demo; Day-1 < 0.5R desactivado (flag opcional), Day-2 retirado.
+- 2026-10-22 (`feat/fx-sl-week-hold`, DEC-REVERSAL-1): setup opuesto con la operación en beneficio ⇒ cerrar y abrir la nueva dirección (todos los gates); en pérdida ⇒ conservar. Demo OANDA: ON por defecto con el enrutado (`AI_FLOOR_DEMO_REVERSAL=0` la apaga). PAPER: valor nuevo `V2_OPPOSITE_SETUP_POLICY=REVERSE_IN_PROFIT`, default sigue `BLOCK` (no fijarlo en Render con la DB actual: cambia el fingerprint).
+- 2026-10-22 (`feat/fx-sl-week-hold`, DEC-MANUAL-CLOSE-1): botón «Cerrar operación» en el Floor (owner con contraseña, dos clics, solo enrutado ON en práctica; el router cierra con su ruta de cierre, motivo `MANUAL_CLOSE`, alerta Slack; idempotente).
+- 2026-10-22 (`feat/fx-sl-week-hold`, DEC-ALERTS-REDESIGN-1): alertas Slack/email estilo Floor (Block Kit con barra de color y botones de enlace, email HTML oscuro), solo con datos del demo OANDA; sin volcados JSON; alertas macro plegadas en el resumen diario; «Por qué» = una frase de ≤90 caracteres construida con la evidencia estructurada del setup (barrida/niveles 5M, ruptura/retroceso 15M, estructura 1H). Enlace del Floor: `AI_FLOOR_PUBLIC_URL` (o `RENDER_EXTERNAL_URL`).
+- 2026-10-22 (`feat/fx-sl-week-hold`, DEC-OANDA-ONLY-1): `AI_FLOOR_RESULTS_SOURCE=OANDA_DEMO` ⇒ dashboard, Floor y resumen de Slack solo con resultados OANDA (PAPER interno); default sin cambios; fingerprint sin cambios. Runbook del domingo actualizado (scheduler/runner a 1, enrutado, clave de resultados, época/base).
+- 2026-10-22 (`feat/fx-sl-week-hold`): rama con merge de PR #54 (vista Floor) y runbook `docs/runbooks/sunday_restart_2026-10-25.md` para el reinicio del demo (época nueva). Pendiente del owner: revisión/merge del PR, decisión de reanudar el enrutado (DEC-DEMO-PAUSE-1) y deploy. Sin cambios en Render.
 
 ## Abierto (ver `docs/issues.md`)
 - ISSUE-008 / ISSUE-009 (bloquean activación de SYSTEM HEALTH).
@@ -50,7 +57,7 @@ Progreso certificado: 13/14 (92.86 %). Las fases 9-12 tienen certificación lige
 - [x] DEC-8.24 — APPROVED 2026-10-10 (Grok Bot, control total delegado): G8/G15 diferidos a Fase 13 (se informa al owner).
 - [x] DEC-8.18a — 2026-10-10 (Grok Bot, control delegado): sin firma H5; Q1–Q8 automatizadas (`replay/status_verifier.py`).
 - [ ] DEC-8.22-a…j / OP-1…OP-7 (NOT AUTHORIZED).
-- [ ] Autorizar `AI_FLOOR_CLOUD_RUNNER` / `AI_FLOOR_SCHEDULER` en Render (hoy `0`).
+- [ ] Autorizar `AI_FLOOR_CLOUD_RUNNER` / `AI_FLOOR_SCHEDULER` en Render (hoy `0`): solo junto con `AI_FLOOR_BROKER_DEMO_ROUTING=1` (regla del owner 2026-10-22: nunca ciclos solo-PAPER; ver runbook del domingo).
 
 ## Próximos pasos hacia el demo PAPER de 30 días
 1. Fase 8 CERTIFIED y mergeada (PR #13).

@@ -16,7 +16,8 @@ REJECTED / UNKNOWN (blocks routing until reconcile proves the outcome).
 
 Dry-run (``AI_FLOOR_BROKER_DEMO_DRY_RUN=1``, opt-in) records the exact order JSON (event DRY_RUN) and never POSTs/PUTs;
 it may read summary/pricing/openTrades. ``manage`` applies the trade-duration rule (execution/trade_duration.py) to
-LIVE routed trades; ``emergency_close_all`` closes every routed OPEN trade (closing is always allowed).
+LIVE routed trades (DEC-HOLD-WEEK-1: max hold one week, Friday 16:45 NY flatten, no entries until the Sunday
+reopen); ``emergency_close_all`` closes every routed OPEN trade (closing is always allowed).
 
 Optional daily loss limit / drawdown halt (``execution/daily_loss_limit.py``, OFF unless ``AI_FLOOR_DAILY_LOSS_LIMIT ==
 "1"``): evaluated on every cycle, every ``manage`` tick and before every entry; a halt refuses entries and (flatten ON /
@@ -29,9 +30,16 @@ are processed at the start of every ``on_cycle`` / ``manage``: ``flatten_request
 then closes every routed OPEN trade and is dropped only after a successful reconcile with no OPEN / PENDING_SEND /
 UNKNOWN row left; ``drift_clear_request`` is bound to the current ``drift_episode`` and honoured by ``reconcile`` only
 when that same pass verifies the broker and the local state match (clear + request consumption + audit event in one
-transaction). With an emergency active ``router_from_env`` returns None, unless a flatten request or routed rows
+transaction); ``manual_close_request`` (Floor "Cerrar operación") closes that ONE routed OPEN trade through ``_close``
+(reason ``MANUAL_CLOSE``; dry-run: ``MANUAL_CLOSE_DRY_RUN`` only) and is dropped once the row is no longer OPEN or the
+broker definitively rejected the close (retried while the outcome is a definite transient failure or UNKNOWN); the
+request is consumed in the same state-DB transaction as its completion event and, for alert kinds, a durable
+``broker_demo_outbox`` row (delivered once on that or a later tick; a stale claim becomes UNKNOWN, never resent). With an
+emergency active ``router_from_env`` returns None, unless a flatten request or routed rows
 remain: then it builds a ``closing_only`` router on a ``close_only`` OandaBroker (entries refused ``emergency_active``,
-every routed OPEN trade closed on every tick; the switch is never turned ON). Optional Friday pre-flatten (``execution/friday_close.py``, OFF unless
+every routed OPEN trade closed on every tick; the switch is never turned ON). DEC-REVERSAL-1 (ON unless
+``AI_FLOOR_DEMO_REVERSAL == "0"``): an approved opposite-direction plan while the single routed trade is in profit
+closes it (reason ``REVERSAL_IN_PROFIT``) and routes the new direction after every entry gate. Optional Friday pre-flatten (``execution/friday_close.py``, OFF unless
 ``AI_FLOOR_FRIDAY_PREFLATTEN == "1"``) closes routed trades before the 17:00 NY Friday halt and refuses entries
 until the market reopens. The optional ``on_alert`` hook (Slack, ``runtime/broker_alerts.py``; set by
 ``runtime/service.py`` only when alerts are ON) receives the ``ALERT_KINDS`` events; it is best effort and never alters
@@ -55,7 +63,7 @@ from execution import trade_duration as td
 from execution.account_registry import AccountRegistry
 from execution.broker_config import load_broker_config
 from execution.broker_demo_state import (CLOSED, CLOSED_AT_BROKER, DRY_RUN, HEARTBEAT_FLAG, LIVE_STATUSES, MODE_FLAG,
-                                         OPEN, PENDING_SEND, REJECTED, UNKNOWN, UNRESOLVED_STATUSES, DemoStateStore,
+                                         OPEN, OUTBOX_FAILED, OUTBOX_SENT, PENDING_SEND, REJECTED, UNKNOWN, UNRESOLVED_STATUSES, DemoStateStore,
                                          dry_run_flag, max_units_setting, routing_flag, summarize_status)
 from execution.broker_port import (ACCEPTED, APPROVED, BrokerAuthError, BrokerGuardError, BrokerMalformedResponse,
                                    BrokerRateLimited, OrderPlan, RiskApproval)
@@ -79,17 +87,30 @@ SL_TP_OR_EXTERNAL = "SL_TP_OR_EXTERNAL"
 FLATTEN_REQUEST_FLAG = "flatten_request"  # same keys as execution/operator_actions.py
 DRIFT_CLEAR_REQUEST_FLAG = "drift_clear_request"
 DRIFT_EPISODE_FLAG = "drift_episode"
+MANUAL_CLOSE_REQUEST_FLAG = "manual_close_request"
+MANUAL_CLOSE = "MANUAL_CLOSE"
 EMERGENCY_ACTIVE = "EMERGENCY_ACTIVE"
 EMERGENCY_BUTTON = "EMERGENCY_BUTTON"
 FRIDAY_PREFLATTEN = "FRIDAY_PREFLATTEN"
+# DEC-REVERSAL-1: an approved opposite-direction plan while the routed trade is in profit closes it and routes the new
+# direction (every entry gate still applies). ON by default whenever routing is ON; ``AI_FLOOR_DEMO_REVERSAL=0`` = OFF.
+REVERSAL = "REVERSAL_IN_PROFIT"
+REVERSAL_ENV = "AI_FLOOR_DEMO_REVERSAL"
+
+
+def reversal_flag(env):
+    """Demo-profile default ON; only the exact value ``0`` turns the reversal off."""
+    return (env or {}).get(REVERSAL_ENV) != "0"
 FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
+OUTBOX_CLAIM_GRACE = timedelta(minutes=10)  # a CLAIMED alert this old had a crash mid-delivery -> UNKNOWN, not resent
 PENDING_EVENT_CAP = 50  # FLATTEN_REQUEST_PENDING (and dry-run previews) per request: the events table is append-only
 FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(minutes=30)}
 # Events forwarded to the optional ``on_alert`` hook (best effort; FRIDAY_FLATTEN_FAILED has its own explicit call).
 ALERT_KINDS = frozenset({"ACCEPTED", REJECTED, UNKNOWN, CLOSED, "CLOSE_UNKNOWN", "CLOSE_FAILED", CLOSED_AT_BROKER,
                          BREAKEVEN, "DRIFT", "UNRESOLVED_ACTION", "DAILY_LOSS_HALT", "DAILY_LOSS_RESUMED",
                          "DRAWDOWN_HALT", "FLATTEN_DAILY_LOSS", "FLATTEN_DRAWDOWN", EMERGENCY_BUTTON,
-                         "FLATTEN_REQUEST_DONE", "DRIFT_CLEARED", "DRIFT_CLEAR_REFUSED"})
+                         "FLATTEN_REQUEST_DONE", "DRIFT_CLEARED", "DRIFT_CLEAR_REFUSED", MANUAL_CLOSE,
+                         "MANUAL_CLOSE_FAILED"})
 CLOSE_SENT = {"CLOSED", CLOSED_AT_BROKER, "CLOSE_FAILED", "CLOSE_REJECTED", UNKNOWN, DRY_RUN}
 
 
@@ -163,18 +184,18 @@ def position_view(row):
 def duration_action(trade_row, now, price):
     """Pure trade-duration decision for a routed LIVE trade: ``("CLOSE", reason)``, ``("BREAKEVEN", None)`` or None.
 
-    Next boundary = Day-1 NY close (17:00 America/New_York after the open; Day-2 close once the stop was moved). At or
-    after an unprocessed boundary: Friday -> close; Day-2 stage -> close; Day-1 below +0.5R of the ORIGINAL stop
-    distance -> close; else breakeven. Max 2 days: a Day-1 trade already past its Day-2 close is closed. ``price``
-    (bid for LONG, ask for SHORT) is only needed for the Day-1 R test; None there -> None (retry next tick)."""
+    DEC-HOLD-WEEK-1 (same rule as PAPER): at or after the week-rule boundary of the fill (the earlier of Friday 16:45
+    NY and MAX_HOLD_TRADING_DAYS trading days; a fill inside the weekend window is due at once) -> close. With the
+    optional legacy Day-1 check ON, its NY close comes first: below +0.5R of the ORIGINAL stop distance -> close, else
+    breakeven. ``price`` (bid for LONG, ask for SHORT) is only needed for the Day-1 R test; None there -> None (retry
+    next tick)."""
     position = position_view(trade_row)
     boundary = td.next_boundary(position)
     if now < boundary:
         return None
-    if position.duration_stage is None and now >= td.day2_close(position):
-        return "CLOSE", td.CLOSE_FRIDAY if td.is_friday_close(td.day2_close(position)) else td.CLOSE_DAY2_NY_CLOSE
-    if td.is_friday_close(boundary) or position.duration_stage is not None:
-        return td.boundary_decision(position, boundary, price)
+    hold, reason = td.hold_boundary(position.opened_at)
+    if now >= hold:
+        return "CLOSE", reason
     if price is None:
         return None
     return td.boundary_decision(position, boundary, price)
@@ -194,7 +215,8 @@ _ACTION_LOG_OK = frozenset({"CLOSED", CLOSED_AT_BROKER, "BREAKEVEN"})
 
 # Only these controlled reason codes reach the log; "EMERGENCY:<free text>" -> EMERGENCY, anything else (broker
 # reject text, unexpected exception names, ...) -> OTHER, so a reason can never leak an id or token.
-_LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN,
+_LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN, REVERSAL,
+                          MANUAL_CLOSE,
                           EMERGENCY_ACTIVE, EMERGENCY_BUTTON, "BrokerAuthError", "BrokerRateLimited",
                           "BrokerGuardError", "BrokerMalformedResponse", "no_open_position"})
 
@@ -224,14 +246,16 @@ def _not_routed(reason):
 
 class BrokerDemoRouter:
     def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None,
-                 friday_minutes=None, closing_only=False, on_alert=None, env=None):
+                 friday_minutes=None, closing_only=False, on_alert=None, env=None, reversal=True):
         self._broker = broker
         self._env = env  # demo_start_equity source (None: os.environ)
         self.closing_only = bool(closing_only)  # emergency restart: closes routed trades, never opens
         self._loss_limit = loss_limit
         self._friday_minutes = friday_minutes  # None: Friday pre-flatten OFF (behaviour unchanged)
         self._friday_alerted = None
+        self.reversal = bool(reversal)  # DEC-REVERSAL-1
         self._flatten_ticks = 0
+        self._manual_ticks = 0
         self.on_alert = on_alert  # optional callable(kind, detail dict | message str); see ALERT_KINDS
         if loss_limit is not None:
             loss_limit.on_event = self._alert  # halt / resume events reach the same hook
@@ -269,6 +293,40 @@ class BrokerDemoRouter:
         except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
             LOG.warning("component=broker_demo event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
 
+    def _complete_manual(self, raw, kind, client_id, **detail):
+        """Consume the manual-close request AND record its completion event in ONE state-DB transaction; an alert
+        kind also gets a durable outbox row (delivered by ``_drain_outbox``, here and on every later tick)."""
+        notify = self.on_alert is not None and kind in ALERT_KINDS
+        self._store.consume_flag(MANUAL_CLOSE_REQUEST_FLAG, raw, event=(kind, client_id, detail or None),
+                                 notify=notify)
+        self._manual_ticks = 0
+        self._drain_outbox()
+
+    def _drain_outbox(self):
+        """Deliver PENDING outbox alerts once (CLAIMED -> SENT / FAILED); a claim older than ``OUTBOX_CLAIM_GRACE``
+        without an outcome is marked UNKNOWN and never resent (same rule as the daily-summary outbox). Never raises."""
+        if self.on_alert is None:
+            return
+        try:
+            now = self._clock()
+            claimed, unknown = self._store.claim_outbox(now.isoformat(), (now - OUTBOX_CLAIM_GRACE).isoformat())
+        except Exception as exc:  # noqa: BLE001 - retried next tick
+            LOG.warning("component=broker_demo event=OUTBOX_READ_FAILED error_type=%s", type(exc).__name__)
+            return
+        for row in unknown:
+            LOG.warning("component=broker_demo event=ALERT_DELIVERY_UNKNOWN kind=%s", row["kind"])
+        for row in claimed:
+            status = OUTBOX_SENT
+            try:
+                self.on_alert(row["kind"], dict(row["detail"]))
+            except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
+                status = OUTBOX_FAILED
+                LOG.warning("component=broker_demo event=ALERT_HOOK_FAILED error_type=%s", type(exc).__name__)
+            try:
+                self._store.finish_outbox(row["event_id"], status)
+            except Exception as exc:  # noqa: BLE001 - stays CLAIMED -> UNKNOWN after the grace, never resent
+                LOG.warning("component=broker_demo event=OUTBOX_WRITE_FAILED error_type=%s", type(exc).__name__)
+
     def _heartbeat(self):
         try:  # Lets the (possibly separate) dashboard process know routing is alive; best effort.
             self._store.set_flag(MODE_FLAG, "dry_run" if self.dry_run else "live")
@@ -295,6 +353,8 @@ class BrokerDemoRouter:
         with self._lock:
             self._heartbeat()
             flattened, reconciled = self._process_requests(at)
+            manual, reconciled = self._process_manual_close(reconciled)
+            flattened = {**flattened, **manual}
             if self._loss_limit is not None:
                 flattened = {**flattened, **self._loss_check(at)[1]}
             if self._friday_minutes is not None:
@@ -350,7 +410,9 @@ class BrokerDemoRouter:
             return "ALREADY_ROUTED", client_id
         if self._friday_minutes is not None and fc.friday_window(at, self._friday_minutes) != fc.OPEN:
             return self._refuse(client_id, "friday_close_window")  # dry-run too; no network
-        report =reconciled if reconciled is not None else self.reconcile()
+        if td.entries_blocked(at):  # DEC-HOLD-WEEK-1: Friday 16:45 NY -> Sunday 17:00 NY, whatever the flag
+            return self._refuse(client_id, "friday_close_window")
+        report = reconciled if reconciled is not None else self.reconcile()
         if report is None:
             return self._refuse(client_id, "broker_read_failed")
         if self.blocked_reason:
@@ -359,25 +421,34 @@ class BrokerDemoRouter:
             return self._refuse(client_id, "unresolved_submission")
         if not self.dry_run and not self._open_allowed():
             return self._refuse(client_id, "broker_demo_not_allowed")
+        reversing = None
         if self._store.trades(LIVE_STATUSES) or any(t.instrument == INSTRUMENTS[symbol] for t in report):
-            return self._refuse(client_id, "position_already_open")
-        try:
-            balance = self._broker.get_balance()
-        except Exception as exc:  # noqa: BLE001 - nothing sent
-            return self._refuse(client_id, f"balance_unavailable:{type(exc).__name__}")
-        equity = balance.equity
+            reversing, reason = self._reversal_row(decision, symbol, report)
+            if reversing is None:
+                return self._refuse(client_id, reason)
         entry, stop, target = (_dec(getattr(decision, n)) for n in ("entry", "stop", "target"))
-        try:
-            units = broker_units(equity, decision, entry, stop, self.max_units)
-        except ValueError:
-            return self._refuse(client_id, "sizing_invalid")
-        if units < 1:
-            self._event("SKIPPED_ZERO_UNITS", client_id, run_id=run_id, equity=equity)
-            return "SKIPPED_ZERO_UNITS", client_id
-        if self._loss_limit is not None:
-            loss = self._loss_check(at, Decimal(units) * abs(entry - stop), balance=balance)[0]
-            if not loss.entry_allowed:
-                return self._refuse(client_id, loss.reason)
+        units, refused = self._sized(client_id, run_id, decision, entry, stop, at)
+        if refused is not None:
+            return refused
+        if reversing is not None and self.dry_run:  # dry-run: never close nor send, only record what would happen
+            self._event("REVERSAL_DRY_RUN", client_id, closed_client_id=reversing["client_id"],
+                        trade_id=reversing.get("trade_id"), side=decision.side, units=units)
+            return "REVERSAL_DRY_RUN", client_id
+        if reversing is not None:  # every entry gate above passed: close the profitable opposite trade first
+            closed = self._close(reversing, REVERSAL, f"{reversing['client_id']}-rev")
+            self._event(REVERSAL, client_id, closed_client_id=reversing["client_id"], outcome=closed)
+            if closed not in ("CLOSED", CLOSED_AT_BROKER):
+                return self._refuse(client_id, f"reversal_close_{closed.lower()}")
+            report = self.reconcile()
+            if (report is None or self.blocked_reason or self._store.trades(LIVE_STATUSES)
+                    or any(t.instrument == INSTRUMENTS[symbol] for t in report)):
+                return self._refuse(client_id, "reversal_not_flat")
+            # The close realised PnL and freed margin: re-read NAV, re-size and re-run the loss/risk gates on it.
+            units, refused = self._sized(client_id, run_id, decision, entry, stop, at)
+            if refused is not None:  # stays flat: the opposite trade is closed and nothing new is opened
+                self._event("REVERSAL_FLAT", client_id, closed_client_id=reversing["client_id"],
+                            reason=refused[1] if refused[0] == "NOT_ROUTED" else refused[0])
+                return refused
         try:  # A re-sized approval derived from the APPROVED decision: only the quantity differs.
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), entry, stop, target, client_id=client_id,
                                    source_run_id=run_id, risk_policy_version=getattr(plan, "policy_version", None))
@@ -389,6 +460,50 @@ class BrokerDemoRouter:
         if self.dry_run:
             return self._dry_run(order_plan, units, row)
         return self._send(order_plan, approval, row, at)
+
+    def _sized(self, client_id, run_id, decision, entry, stop, at):
+        """``(units, None)`` sized on a fresh NAV read with the daily-loss gate passed, else ``(None, outcome)``."""
+        try:
+            balance = self._broker.get_balance()
+        except Exception as exc:  # noqa: BLE001 - nothing sent
+            return None, self._refuse(client_id, f"balance_unavailable:{type(exc).__name__}")
+        equity = balance.equity
+        try:
+            units = broker_units(equity, decision, entry, stop, self.max_units)
+        except ValueError:
+            return None, self._refuse(client_id, "sizing_invalid")
+        if units < 1:
+            self._event("SKIPPED_ZERO_UNITS", client_id, run_id=run_id, equity=equity)
+            return None, ("SKIPPED_ZERO_UNITS", client_id)
+        if self._loss_limit is not None:
+            loss = self._loss_check(at, Decimal(units) * abs(entry - stop), balance=balance)[0]
+            if not loss.entry_allowed:
+                return None, self._refuse(client_id, loss.reason)
+        return units, None
+
+    def _reversal_row(self, decision, symbol, report):
+        """(routed row to close, None) when DEC-REVERSAL-1 applies, else (None, refusal reason). Applies only to exactly
+        one OPEN routed trade of ``symbol`` (no pending action), on the opposite side of ``decision``, matching the
+        only broker trade of the instrument, and in profit on a valid tradeable quote (LONG: bid > fill; SHORT: ask <
+        fill). In loss or at zero -> keep; same direction -> no action (both ``position_already_open``)."""
+        live = self._store.trades(LIVE_STATUSES)
+        if not self.reversal or len(live) != 1:
+            return None, "position_already_open"
+        row = live[0]
+        broker = [t for t in report if t.instrument == INSTRUMENTS[symbol]]
+        if (row["status"] != OPEN or row["symbol"] != symbol or row.get("action_status") or row["side"] == decision.side
+                or len(broker) != 1 or len(report) != 1 or str(broker[0].trade_id) != str(row.get("trade_id"))):
+            return None, "position_already_open"
+        quote, problem = self._quote(symbol, None)
+        if problem is not None:
+            return None, f"reversal_{problem}"
+        _tradeable, bid, ask = quote
+        fill = _dec(row.get("fill_price")) or _dec(row["entry"])
+        in_profit = bid > fill if row["side"] == "LONG" else ask < fill
+        if not in_profit:
+            self._event("REVERSAL_SKIPPED", row["client_id"], reason="not_in_profit")
+            return None, "position_already_open"
+        return row, None
 
     def _refuse(self, client_id, reason):
         self._event("NOT_ROUTED", client_id, reason=reason)
@@ -610,6 +725,8 @@ class BrokerDemoRouter:
         with self._lock:
             self._heartbeat()
             flattened, report = self._process_requests(at)
+            manual, report = self._process_manual_close(report)
+            flattened = {**flattened, **manual}
             if self._loss_limit is not None:  # a halt / flatten happens on every tick, even with paper disabled
                 flattened = {**flattened, **self._loss_check(at)[1]}
             if self._friday_minutes is not None:
@@ -798,6 +915,68 @@ class BrokerDemoRouter:
         except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
             LOG.error("component=broker_demo event=FLATTEN_REQUEST_ERROR error_type=%s", type(exc).__name__)
             return {}, None
+
+    def _process_manual_close(self, report):
+        """Floor "Cerrar operación" (``manual_close_request``): reconcile (unless this tick already did), then close
+        the requested routed OPEN row through ``_close`` with reason ``MANUAL_CLOSE``. Idempotent: the row leaves OPEN
+        before the request is dropped, the request is consumed together with its completion event (+ durable alert
+        outbox row) in one transaction (``_complete_manual``), everything runs under the router lock, and a second request cannot be stored
+        while one is pending (``operator_actions.request_manual_close``). Returns ``({client_id: outcome}, report)``;
+        never raises."""
+        self._drain_outbox()  # alerts a crash left undelivered
+        try:
+            raw = self._store.flag(MANUAL_CLOSE_REQUEST_FLAG)
+            if not raw:
+                self._manual_ticks = 0
+                return {}, report
+            try:
+                request = json.loads(raw)
+                client_id = request["client_id"]
+                if not isinstance(client_id, str) or not client_id:
+                    raise ValueError
+            except (TypeError, ValueError, KeyError):
+                self._complete_manual(raw, "MANUAL_CLOSE_REFUSED", None, reason="malformed_request")
+                return {}, report
+            detail = {"request_id": request.get("request_id"), "actor": request.get("actor")}
+            self._manual_ticks += 1
+            quiet = self._manual_ticks > PENDING_EVENT_CAP
+            report = self.reconcile() if report is None else report
+            if report is None:  # nothing verified: keep the request, retry next tick
+                if not quiet:
+                    self._event("MANUAL_CLOSE_PENDING", client_id, reason="broker_read_failed", **detail)
+                return {}, None
+            row = self._store.trade(client_id)
+            if row is None or row["status"] != OPEN:  # gone (SL/TP, flatten, or our own earlier UNKNOWN close)
+                if row is not None and row.get("closed_reason") == MANUAL_CLOSE:
+                    self._complete_manual(raw, MANUAL_CLOSE, client_id, trade_id=row["trade_id"],
+                                          reason=MANUAL_CLOSE, outcome=row["status"], **detail)
+                else:
+                    self._complete_manual(raw, "MANUAL_CLOSE_NOT_OPEN", client_id,
+                                          status=None if row is None else row["status"], **detail)
+                return {}, report
+            if request.get("trade_id") not in (None, row["trade_id"]):
+                self._complete_manual(raw, "MANUAL_CLOSE_REFUSED", client_id, reason="trade_mismatch", **detail)
+                return {}, report
+            if row.get("action_status") == UNKNOWN:  # an earlier action is unresolved: never stack a second close
+                if not quiet:
+                    self._event("MANUAL_CLOSE_PENDING", client_id, reason="action_unresolved", **detail)
+                return {client_id: "ACTION_UNRESOLVED"}, report
+            if self.dry_run:
+                self._complete_manual(raw, "MANUAL_CLOSE_DRY_RUN", client_id, trade_id=row["trade_id"],
+                                      reason=MANUAL_CLOSE, **detail)
+                return {client_id: DRY_RUN}, report
+            outcome = self._close(row, MANUAL_CLOSE, f"{client_id}-manual")
+            if outcome in ("CLOSED", CLOSED_AT_BROKER):
+                self._complete_manual(raw, MANUAL_CLOSE, client_id, trade_id=row["trade_id"], reason=MANUAL_CLOSE,
+                                      outcome=outcome, **detail)
+            elif outcome == "CLOSE_REJECTED":  # definitive broker refusal (e.g. market halted): the owner may retry
+                self._complete_manual(raw, "MANUAL_CLOSE_FAILED", client_id, trade_id=row["trade_id"],
+                                      reason=MANUAL_CLOSE, outcome=outcome, **detail)
+            # CLOSE_FAILED (definite, not processed) / UNKNOWN (latched): keep the request; retried / resolved later
+            return {client_id: outcome}, report
+        except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
+            LOG.error("component=broker_demo event=MANUAL_CLOSE_ERROR error_type=%s", type(exc).__name__)
+            return {}, report
 
     # -- Friday close (OANDA halts EUR_USD at 17:00 NY) -------------------------------------------------------------
     def _friday_tick(self, at, price_provider=None):
@@ -1036,7 +1215,8 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     loss_limit = limit_from_env(env, store, clock=now)
     router = BrokerDemoRouter(broker, store, registry=registry, dry_run=dry_run_flag(env),
                               max_units=max_units_setting(env), clock=now, loss_limit=loss_limit,
-                              friday_minutes=fc.minutes_from_env(env), closing_only=closing_only, env=env)
+                              friday_minutes=fc.minutes_from_env(env), closing_only=closing_only, env=env,
+                              reversal=reversal_flag(env))
     router._heartbeat()
     if closing_only:
         LOG.warning("component=broker_demo event=ROUTER_CLOSING_ONLY reason=emergency_stop")
@@ -1045,4 +1225,5 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
         LOG.info("component=broker_demo event=DAILY_LOSS_LIMIT_ON limit=%r", loss_limit)
     if router._friday_minutes is not None:
         LOG.info("component=broker_demo event=FRIDAY_PREFLATTEN_ON minutes=%d", router._friday_minutes)
+    LOG.info("component=broker_demo event=REVERSAL_%s", "ON" if router.reversal else "OFF")
     return router

@@ -22,7 +22,6 @@ gap and no double count. Not wired into the frozen V1 runtime.
 from dataclasses import dataclass, replace
 
 from core.risk_policy import RISK_POLICY_V2_P5, stamps_registered_semantics
-from core.rr_contract import POLICY_V2_F3
 from execution.paper_broker import PaperBroker
 from execution.risk_engine_v2 import evaluate
 
@@ -60,7 +59,7 @@ def prepare_reservation(floor_report, instrument, account, orders, fills, *, as_
     record = result.record
     if result.decision.status != "APPROVED":
         return PreparedReservation("REJECTED", result.decision.reason, record, record, None, None)
-    broker = PaperBroker(account, instrument, rr_policy=POLICY_V2_F3)
+    broker = PaperBroker(account, instrument, rr_policy=policy.rr_policy)  # DEC-FX-SL-1: the policy's own R:R
     broker.orders, broker.fills = orders, fills
     order = broker.submit_plan(replace(floor_report, risk_decision=result.decision), None, as_of)
     if order is None:
@@ -83,7 +82,8 @@ def reserve_and_submit(store, floor_report, instrument, *, account_id, as_of, se
     plan = getattr(floor_report, "trade_plan", None)
     if not stamps_registered_semantics(policy):
         return ReservationResult("NOT_SUBMITTED", "RISK_POLICY_NOT_REGISTERED", None, None, 0)
-    if plan is None or getattr(plan, "policy_version", None) != POLICY_V2_F3 or floor_report.final_status != "PLAN_READY":
+    # DEC-FX-SL-1: the plan must carry the R:R identity of ``policy`` (fixed 3R, or the FX policy for an FX plan).
+    if plan is None or getattr(plan, "policy_version", None) != policy.rr_policy or floor_report.final_status != "PLAN_READY":
         return ReservationResult("NOT_SUBMITTED", "not_a_fixed_3r_plan_ready_report", None, None, 0)
     for attempt in (1, 2):
         account, orders, fills = store.load_paper(account_id)

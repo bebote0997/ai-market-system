@@ -13,16 +13,23 @@ from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation, localcontext
 import math
 
+from core import fx_policy as _fx
+
 POLICY_V1 = "V1_FIXED_3R"
 POLICY_V2_D = "V2_P4_D_FIRST_OBSTACLE_2R_5R"
 POLICY_V2_F3 = "V2_P4_FIXED_3R"  # DEC-4.6: the selected V2 planning policy.
+# DEC-FX-SL-1: FX symbols, SL clamped to [45, 60] pips and TP fixed at FX_TP_RR (2R) of it (core/fx_policy.py).
+POLICY_FX = _fx.POLICY_FX
 # policy -> (floor, ceiling) for PLANNED geometry; both inclusive. V1 has no ceiling; fixed 3R is exactly 3.
 LIMITS = {POLICY_V1: (Decimal(3), None), POLICY_V2_D: (Decimal(2), Decimal(5)),
-          POLICY_V2_F3: (Decimal(3), Decimal(3))}
+          POLICY_V2_F3: (Decimal(3), Decimal(3)), POLICY_FX: (_fx.FX_TP_RR, _fx.FX_TP_RR)}
+# Fixed-multiple policies: the planned R:R is exactly LIMITS[policy][0] and SL/TP are frozen at submission.
+FIXED_RR_POLICIES = (POLICY_V2_F3, POLICY_FX)
 # Fill-time EXECUTION TOLERANCE (actual fill vs frozen SL/TP), distinct from the planning policy. DEC-4.7: a fixed-3R
 # plan (planned exactly 3.00R) executes when the actual fill-time R:R >= 2.50 (no upper bound; favorable fills are
 # recorded truthfully, never normalized back). The plan stays a fixed-3R plan; SL/TP are never moved.
-FILL_LIMITS = {POLICY_V2_D: LIMITS[POLICY_V2_D], POLICY_V2_F3: (Decimal("2.5"), None)}
+FILL_LIMITS = {POLICY_V2_D: LIMITS[POLICY_V2_D], POLICY_V2_F3: (Decimal("2.5"), None),
+               POLICY_FX: (_fx.FX_FILL_RR_FLOOR, None)}
 # Relative tolerance for comparing a DECLARED ratio with the recomputed one. It only absorbs binary-float
 # noise of legacy float plans; it is never applied to the policy floor/ceiling of the Phase 4 path.
 DECLARED_TOLERANCE = Decimal("1e-9")
@@ -126,6 +133,6 @@ def normalize(price, increment, rounding):
     return result if result > 0 else None
 
 
-__all__ = ["DECLARED_TOLERANCE", "FILL_LIMITS", "Geometry", "LIMITS", "POLICY_V2_F3", "OUT_OF_POLICY_EXTENDED_TARGET", "POLICY_V1",
+__all__ = ["DECLARED_TOLERANCE", "FILL_LIMITS", "FIXED_RR_POLICIES", "Geometry", "LIMITS", "POLICY_FX", "POLICY_V2_F3", "OUT_OF_POLICY_EXTENDED_TARGET", "POLICY_V1",
            "POLICY_V2_D", "ROUND_CEILING", "ROUND_FLOOR", "RR_BELOW_FLOOR", "WITHIN_POLICY", "band", "classify",
            "declared_matches", "geometry", "normalize", "to_decimal"]

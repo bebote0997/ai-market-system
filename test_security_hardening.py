@@ -21,6 +21,7 @@ from data.twelve_data_provider import TwelveDataMarketDataProvider, TwelveDataPr
 from replay.safe_pickle import UnsafePickleError, loads as safe_loads
 from runtime.alert_channels import AlertChannelError, GmailEmailChannel, SlackAlertChannel
 from runtime.notifications import NotificationEvent, SlackNotificationError, SlackNotificationSink, _slack_post
+from runtime.trade_alerts import payload_text
 from ui import auth
 from ui.auth import LoginLimiter, require_dashboard_access
 
@@ -310,9 +311,10 @@ class TwelveDataKeyTests(unittest.TestCase):
 
 
 def event(summary):
+    # The compact line carries the execution reason: the hostile text reaches Slack through it.
     return NotificationEvent("1.0", "evt", "run", "2026-10-13T00:00:00Z", "INFO", "AI_REVIEW", "XAUUSD",
                              (), ({"agent": "macro", "status": "OK", "reasoning_summary": summary},),
-                             None, (), (), ())
+                             None, (), (), (), execution={"reason": summary})
 
 
 class SlackHardeningTests(unittest.TestCase):
@@ -321,11 +323,10 @@ class SlackHardeningTests(unittest.TestCase):
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x",
                                      transport=lambda url, payload, timeout: sent.append(payload))
         sink.deliver(event("<!channel> see <https://evil.example|bank> & more"))
-        text = sent[0]["text"]
-        self.assertNotIn("<", text)
-        self.assertNotIn(">", text)
-        self.assertIn("&lt;!channel&gt;", text)
-        self.assertIn("&amp; more", text)
+        # Block Kit plain_text only: Slack never parses it as mrkdwn (no mention, link or formatting), shown literally.
+        self.assertNotIn("mrkdwn", json.dumps(sent[0]))
+        self.assertNotIn("text", sent[0])  # no top-level mrkdwn text
+        self.assertIn("<!channel> see <https://evil.example|bank> & more", payload_text(sent[0]))
 
     def test_i3_only_https_slack_webhooks_are_opened(self):
         for url in ("file:///etc/passwd", "http://hooks.slack.com/services/x", "https://evil.example/hook",

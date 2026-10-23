@@ -184,6 +184,7 @@ class AlertDispatcher:
             raise ValueError("stale_after out of bounds")
         # Only an explicit True (or env value exactly "1") enables delivery.
         self.enabled = alerts_enabled(environ) if enabled is None else enabled is True
+        self.environ = environ
         self.prepare_event = None
         self.channels = tuple(channels)
         self.ledger = ledger if ledger is not None else AlertDeliveryLedger()
@@ -238,6 +239,8 @@ class AlertDispatcher:
             return 'NOT_APPLICABLE'
         if not setup and not getattr(self, 'normal_alerts_enabled', True):
             return 'DISABLED'
+        if not setup and event.kind.trade and not event.is_test and _oanda_results(self.environ):
+            return 'OANDA_ONLY'  # DEC-ALERTS-REDESIGN-1: PAPER trade alerts are never sent; the router reports demo trades
         try:
             self.ledger.save(event)
             if not getattr(channel, "configured", True):
@@ -301,6 +304,15 @@ class AlertDispatcher:
             result[channel.name] = {"status": status, "consecutive_failures": failures,
                                     "last_error_type": self._last_error[channel.name]}
         return result
+
+
+def _oanda_results(environ):
+    """Same rule as ``execution.results_source.demo_results`` (not imported: alert modules import no trading code)."""
+    try:
+        env = os.environ if environ is None else environ
+        return env.get("AI_FLOOR_RESULTS_SOURCE") == "OANDA_DEMO" or env.get("AI_FLOOR_BROKER_DEMO_ROUTING") == "1"
+    except Exception:  # noqa: BLE001 - unreadable flag: current behaviour
+        return False
 
 
 class AlertNotificationSink:

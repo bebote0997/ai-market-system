@@ -1,4 +1,10 @@
-"""DEC-14.1 deterministic PAPER policy. Runtime owns the symbol lock for both CAS saves.
+"""DEC-14.1 / DEC-REVERSAL-1 deterministic PAPER policy. Runtime owns the symbol lock for both CAS saves.
+
+``STRUCTURE_CHANGE`` (DEC-14.1): an opposite setup acts only with a confirmed closed 15m BOS beyond the position's SL;
+profit -> close and reverse, loss -> keep while the 1H structure is intact, else close and re-evaluate.
+``REVERSE_IN_PROFIT`` (DEC-REVERSAL-1): an opposite PLAN_READY setup while the position is in profit (marked at the
+last closed 5m close, before costs) -> close and open the new direction through a fresh Risk V2 reservation (every gate
+applies; a rejection after the close stays flat); in loss or at zero -> keep; same direction -> no action.
 
 Close + DEC14_CLOSE commit together. Open is a separate fresh Risk V2 reservation.
 An incomplete close is abandoned on restart; historical evidence never authorizes a resumed reverse.
@@ -10,7 +16,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from core.risk_policy import RISK_POLICY_V2_P5
+from core.risk_policy import risk_policy_for
 from execution.candidate_identity import CLAIMED, SAME, candidate_fields, claim_run
 from execution.conflict_path import candidate
 from execution.risk_engine_v2 import drawdown_basis_scope
@@ -18,6 +24,9 @@ from execution.risk_reservation import prepare_reservation
 from runtime.gates import fresh_snapshot
 
 VERSION = "DEC14_STRUCTURE_CHANGE_1"
+REVERSAL_VERSION = "DEC_REVERSAL_1"
+EXIT_REASONS = {"STRUCTURE_CHANGE": "EXIT_STRUCTURE_CHANGE", "REVERSE_IN_PROFIT": "EXIT_REVERSAL_IN_PROFIT"}
+VERSIONS = {"STRUCTURE_CHANGE": VERSION, "REVERSE_IN_PROFIT": REVERSAL_VERSION}
 DECISION = "DEC14_DECISION"
 CLOSE = "DEC14_CLOSE"
 
@@ -65,7 +74,7 @@ def _confirmed_bos(signal, frame, timeframe, side, position, at, max_age):
     return close < Decimal(str(position.stop)) if side == "SHORT" else close > Decimal(str(position.stop))
 
 
-def assess(report, position, snapshot, instrument, at, limits, *, original_stop=None):
+def assess(report, position, snapshot, instrument, at, limits, *, original_stop=None, policy="STRUCTURE_CHANGE"):
     """Pure classification using validator evidence and the actual closed BOS bar; no AI input."""
     setup_id, invalid = candidate(report)
     if invalid:
@@ -79,6 +88,11 @@ def assess(report, position, snapshot, instrument, at, limits, *, original_stop=
         if near:
             return "SAME_SETUP_IGNORED"
         return "SAME_DIRECTION"
+    if policy == "REVERSE_IN_PROFIT":  # DEC-REVERSAL-1: profit alone decides; no BOS-beyond-SL requirement
+        price = float(snapshot["5m"].iloc[-1]["Close"])
+        pnl = ((price - position.entry_price) if position.side == "LONG" else
+               (position.entry_price - price)) * position.quantity * position.contract_multiplier
+        return "WOULD_CLOSE_PROFIT" if pnl > 0 else "OPPOSITE_IN_LOSS_KEPT"
     structure = report.setup_assessment.evidence[0]
     if not _confirmed_bos(structure["15m"], snapshot["15m"], "15min", plan.side, position, at,
                           dict(limits)["15m"]):
@@ -103,9 +117,11 @@ def assess(report, position, snapshot, instrument, at, limits, *, original_stop=
 
 
 def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, drawdown_basis=None):
-    """Called only for STRUCTURE_CHANGE. Both writes reuse runtime CAS, halt/REX and slot ownership.
+    """Called only for STRUCTURE_CHANGE / REVERSE_IN_PROFIT. Both writes reuse runtime CAS, halt/REX and slot ownership.
     ``drawdown_basis`` (routing ON only): Risk V2 Gate 4 on the OANDA demo account (DEC-DEMO-GATE-1)."""
     store, symbol, run_id = runtime.store, report.symbol, report.run_id
+    mode = runtime.config.v2_opposite_setup_policy
+    version = VERSIONS[mode]
     if not store.owns_slot(key, symbol):
         raise RuntimeError("opposite policy requires symbol lock")
     instrument = runtime.instruments[symbol]
@@ -114,8 +130,9 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, draw
         store.event(at, run_id, symbol, "opposite_policy", DECISION, "WARNING",
                     {"status": "SKIPPED", "reason": invalid})
         return Outcome("SKIPPED", invalid)
+    policy = risk_policy_for(report.trade_plan)  # DEC-FX-SL-1: an FX plan is reserved under the FX risk policy
     fields = candidate_fields(report, instrument, account_id=runtime.config.account_id, setup_id=setup_id,
-                              policy=RISK_POLICY_V2_P5, conflict_policy_version=VERSION)
+                              policy=policy, conflict_policy_version=version)
     claim = runtime._persist("D", lambda: claim_run(
         store, run_id=run_id, symbol=symbol, fields=fields, as_of=at, owner_key=key,
         has_history=lambda s: prior(s, run_id) is not None or any(
@@ -139,7 +156,7 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, draw
             trade = {"side": order.side, "entry": order.planned_entry, "stop_loss": order.stop,
                      "take_profit": order.target, "quantity": order.quantity}
         broker._event(at, run_id, symbol, "opposite_policy", event,
-                      {"policy": VERSION, "status": outcome.status, "reason": outcome.reason,
+                      {"policy": version, "status": outcome.status, "reason": outcome.reason,
                        "order_id": outcome.order_id, "setup_id": setup_id, **trade})
 
     def gate():
@@ -161,10 +178,10 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, draw
         if reason is None and position is not None:
             origin = broker.orders.get(position.origin_order_id)
             reason = assess(report, position, snapshot, instrument, runtime.clock(), runtime.config.max_age_seconds,
-                            original_stop=None if origin is None else origin.stop)
+                            original_stop=None if origin is None else origin.stop, policy=mode)
         if reason in {"WOULD_CLOSE_PROFIT", "WOULD_CLOSE_LOSS"}:
             broker.close_market(symbol, float(snapshot["5m"].iloc[-1]["Close"]), at,
-                                exit_reason="EXIT_STRUCTURE_CHANGE", decision_run_id=run_id)
+                                exit_reason=EXIT_REASONS[mode], decision_run_id=run_id)
             outcome = Outcome("CLOSED", reason)
             note(broker, outcome, CLOSE)
         elif reason is not None:
@@ -188,7 +205,7 @@ def execute(runtime, report, snapshot, *, key, at, ai_allowed, writer=None, draw
         else:
             with drawdown_basis_scope(drawdown_basis):  # risk_reservation.py is frozen: the basis is scoped
                 prepared = prepare_reservation(report, instrument, broker.account, broker.orders, broker.fills,
-                                               as_of=at, setup_id=setup_id, stamp_setup_id=True)
+                                               as_of=at, setup_id=setup_id, policy=policy, stamp_setup_id=True)
             if prepared.status == "APPROVED":
                 broker.journal.extend(prepared.broker.journal)
                 outcome = Outcome("SUBMITTED", "STRUCTURE_REVERSE_SUBMITTED" if reversing else "ORDER_SUBMITTED",

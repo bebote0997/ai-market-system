@@ -27,14 +27,32 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     ("ui/views/control.py", "execution.oanda_readonly"), ("ui/views/control.py", "oanda_readonly"),
                     # Emergency button / drift-clear request (writes only the state DB; never orders): lazy + guarded.
                     ("ui/views/control.py", "execution.operator_actions"), ("ui/views/control.py", "operator_actions"),
+                    # Floor «Cerrar operación» (owner-only manual close REQUEST in the state DB; the router closes):
+                    # lazy + guarded.
+                    ("ui/views/floor_actions.py", "execution.operator_actions"),
+                    ("ui/views/floor_actions.py", "operator_actions"),
                     ("runtime/service.py", "execution.broker_demo_router"), ("runtime/service.py", "broker_demo_router"),
                     # OANDA demo numbers (GET-only reads + broker state DB mode=ro; no writes, no orders): lazy + guarded.
                     ("ui/views/luxury.py", "execution.demo_dashboard"), ("ui/views/luxury.py", "demo_dashboard"),
                     ("ui/views/experiment.py", "execution.demo_dashboard"), ("ui/views/experiment.py", "demo_dashboard"),
                     # DEC-DEMO-GATE-1: daily Slack summary with OANDA demo figures while routing is ON: lazy + guarded.
                     ("runtime/notifications.py", "execution.demo_dashboard"),
-                    ("runtime/notifications.py", "demo_dashboard")}
-LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
+                    ("runtime/notifications.py", "demo_dashboard"),
+                    # DEC-ALERTS-REDESIGN-1: Floor-style trade alerts from OANDA demo data (GET-only reads + broker
+                    # state DB mode=ro; no writes, no orders), in the alert worker thread: lazy + guarded.
+                    ("runtime/trade_alert_source.py", "execution.demo_dashboard"),
+                    ("runtime/trade_alert_source.py", "demo_dashboard"),
+                    ("runtime/trade_alert_source.py", "execution.oanda_readonly"),
+                    ("runtime/trade_alert_source.py", "oanda_readonly"),
+                    # Floor page: peek-only reader of the oanda_readonly TTL caches via sys.modules (never imports or
+                    # fetches; no network, no orders), plugged into demo_dashboard.demo_snapshot readers.
+                    # DEC-OANDA-ONLY-1 Process view: OANDA-demo rows of one run (state DB mode=ro; no writes): lazy.
+                    ("ui/views/process.py", "execution.broker_demo_state"), ("ui/views/process.py", "broker_demo_state"),
+                    ("ui/floor_cache.py", "execution.oanda_readonly"), ("ui/floor_cache.py", "oanda_readonly"),
+                    ("ui/floor_cache.py", "execution.demo_dashboard"), ("ui/floor_cache.py", "demo_dashboard")}
+LAZY_IMPORTS = {"ui/views/process.py": {"execution.broker_demo_state": [["CLOSED", "CLOSED_AT_BROKER",
+                                                                          "read_run_trades"]]},
+                "ui/views/control.py": {"execution.account_registry": [["read_control_snapshot"], ["ensure_registry_initialized"]],
                                         "execution.broker_demo_state": [["read_router_status"]],
                                         "execution.oanda_readonly": [["cached_account_view"]],
                                         "execution.historial": [["load_baselines"]],
@@ -42,11 +60,16 @@ LAZY_IMPORTS = {"ui/views/control.py": {"execution.account_registry": [["read_co
                                                                         "request_drift_clear",
                                                                         "request_emergency_stop"]]},
                 "runtime/service.py": {"execution.broker_demo_router": [["router_from_env"]]},
+                "ui/views/floor_actions.py": {"execution.operator_actions": [["manual_close_target", "operator_state",
+                                                                              "practice_problem",
+                                                                              "request_manual_close"]]},
                 "ui/views/luxury.py": {"execution.demo_dashboard": [["demo_epoch", "demo_progress",
                                                                      "demo_snapshot"]]},
                 "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_progress"]]},
-                "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"],
-                                                                          ["demo_mode"]]}}
+                "runtime/trade_alert_source.py": {"execution.demo_dashboard": [["state_db_path"], ["demo_progress"]],
+                                                  "execution.oanda_readonly": [["account_view", "demo_trades"]]},
+                "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"]],
+                                             "execution.results_source": [["demo_results"]]}}
 
 
 def guarded_sources():
