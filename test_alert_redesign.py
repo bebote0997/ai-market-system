@@ -94,6 +94,37 @@ class SlackBuilderTests(unittest.TestCase):
                     "https://floor.example.com/a.jpg", "javascript:alert(1)//.png"):
             self.assertIsNone(ta.image_url({"AI_FLOOR_ALERT_IMAGE_URL": bad}), bad)
         self.assertIsNone(ta.image_url({}))
+        for bad in ("https://[invalid/banner.png", "https://floor.example.com:99999/a.png",
+                    "https://floor.example.com:x/a.png", "https://floor.example.com/a b.png",
+                    "https://floor.example.com/a\n.png"):
+            self.assertIsNone(ta.image_url({"AI_FLOOR_ALERT_IMAGE_URL": bad}), bad)  # never raises
+        for bad in ("https://[invalid", "https://floor.example.com:99999", "https://floor.example.com:x",
+                    "https://floor.example.com/a b", "https://floor.example.com/a\tb"):
+            self.assertIsNone(ta.floor_url({"AI_FLOOR_PUBLIC_URL": bad}), bad)
+
+    def test_rejected_thumbnail_retries_once_without_image(self):
+        from urllib.error import HTTPError
+        from runtime.notifications import SlackNotificationError, send_slack
+        payload = ta.trade_slack_payload(opened(image_url="https://floor.example.com/t.png"))
+        posts = []
+
+        def transport(code):
+            def post(url, body, timeout):
+                posts.append(body)
+                if len(posts) == 1:
+                    raise HTTPError(url, code, "x", {}, None)
+            return post
+
+        send_slack(transport(400), WEBHOOK, payload, 1)
+        self.assertEqual(len(posts), 2)
+        self.assertIn("accessory", blocks(posts[0])[3])
+        self.assertNotIn("accessory", blocks(posts[1])[3])
+        self.assertEqual(ta.payload_text(posts[0]), ta.payload_text(posts[1]))
+        for code, body in ((500, payload), (400, ta.trade_slack_payload(opened()))):  # never a duplicate post
+            posts.clear()
+            with self.assertRaises(SlackNotificationError):
+                send_slack(transport(code), WEBHOOK, body, 1)
+            self.assertEqual(len(posts), 1)
 
     def test_link_buttons_only(self):
         buttons = blocks(ta.trade_slack_payload(opened()))[-1]["elements"]

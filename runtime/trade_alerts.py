@@ -148,11 +148,26 @@ def floor_url(env):
         value = str((env or {}).get(name) or "").strip()
         if not value:
             continue
-        parts = urlsplit(value)
-        if (parts.scheme == "https" and parts.hostname and not parts.username and not parts.password
-                and not parts.query and "#" not in value and "?" not in value):
+        parts = _https_parts(value)
+        if parts is not None:
             return urlunsplit(("https", parts.netloc, parts.path.rstrip("/") + "/", FLOOR_QUERY, ""))
     return None
+
+
+def _https_parts(value):
+    """Parsed parts of a plain https URL (host, optional valid port, path only: no credentials, query, fragment,
+    whitespace or control characters), else None. Never raises (a malformed optional URL just means no link)."""
+    if not value or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value) or "?" in value \
+            or "#" in value or "\\" in value:
+        return None
+    try:
+        parts = urlsplit(value)
+        parts.port  # noqa: B018 - raises ValueError for an invalid port
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query:
+        return None
+    return parts
 
 
 # -- events --------------------------------------------------------------------------------------------------------
@@ -586,11 +601,9 @@ def daily_email(alert):
 def image_url(env):
     """Optional public https PNG (``AI_FLOOR_ALERT_IMAGE_URL``) shown as the Slack thumbnail; None (no image) unless
     it is an https URL without credentials / query / fragment ending in ``.png``. Slack rejects a message whose image
-    cannot be downloaded, so nothing is derived or defaulted."""
-    value = str((env or {}).get("AI_FLOOR_ALERT_IMAGE_URL") or "").strip()
-    parts = urlsplit(value)
-    if (value and parts.scheme == "https" and parts.hostname and not parts.username and not parts.password
-            and "?" not in value and "#" not in value and parts.path.lower().endswith(".png")):
+    cannot be downloaded, so nothing is derived or defaulted (and ``send_slack`` retries a 400 once without it)."""
+    parts = _https_parts(str((env or {}).get("AI_FLOOR_ALERT_IMAGE_URL") or "").strip())
+    if parts is not None and parts.path.lower().endswith(".png"):
         return urlunsplit(("https", parts.netloc, parts.path, "", ""))
     return None
 

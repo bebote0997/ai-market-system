@@ -283,12 +283,38 @@ def _demo_lines(timestamp_utc, window_start_utc, sent_at=None, meta=None):
                     f"Operaciones abiertas {at}: {len(snapshot.get('open_rows') or ())}"]
 
 
+def _without_images(payload):
+    """Copy of a Block Kit payload without image accessories / image blocks; None when it has none."""
+    found = False
+    attachments = []
+    for attachment in payload.get("attachments") or ():
+        blocks = []
+        for block in attachment.get("blocks") or ():
+            if block.get("type") == "image":
+                found = True
+                continue
+            if (block.get("accessory") or {}).get("type") == "image":
+                found = True
+                block = {key: value for key, value in block.items() if key != "accessory"}
+            blocks.append(block)
+        attachments.append({**attachment, "blocks": blocks})
+    return {**payload, "attachments": attachments} if found else None
+
+
 def send_slack(transport, url, payload, timeout):
     """Post one Slack payload; failures surface only as typed SlackNotificationError codes."""
     if isinstance(payload.get("text"), str):
         payload = {**payload, "text": slack_escape(payload["text"])}
     try:
-        transport(url, payload, timeout)
+        try:
+            transport(url, payload, timeout)
+        except HTTPError as exc:
+            # 400 = Slack rejected the message (nothing was posted), e.g. it could not download the optional Floor
+            # thumbnail: retry once without images. Any other failure is never retried (no duplicate posts).
+            stripped = _without_images(payload) if exc.code == 400 else None
+            if stripped is None:
+                raise
+            transport(url, stripped, timeout)
     except HTTPError as exc:
         raise SlackNotificationError("RATE_LIMITED" if exc.code == 429 else "PROVIDER_FAILURE") from None
     except (URLError, TimeoutError, ConnectionError):
