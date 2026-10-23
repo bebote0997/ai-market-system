@@ -181,7 +181,7 @@ def trade_alert(kind, detail, env, *, now=None, trades_fetch=None, account_fetch
             demo_day=_safe(lambda: demo_progress(now, env)[2]), demo_length=DEMO_LENGTH_DAYS,
             closes=_safe(candle_cache.closes, candle_cache.path_from_env(env), symbol, now.isoformat(),
                          default=()) or (),
-            url=ta.floor_url(env))
+            url=ta.floor_url(env), image_url=ta.image_url(env))
     except Exception as exc:  # noqa: BLE001 - the plain one-line alert is the fallback
         LOG.warning("component=alerts event=TRADE_ALERT_FAILED error_type=%s", type(exc).__name__)
         return None
@@ -203,7 +203,7 @@ def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None, window=
     bounds = _safe(_window, date_label, window)
     macro = None if bounds is None else _safe(latest_macro, env, *bounds)
     return ta.DailyAlert(lines=tuple(pairs), date_label=date_label, macro=macro, pnl=pnl,
-                         demo_day=demo_day, demo_length=DEMO_LENGTH_DAYS, url=ta.floor_url(env))
+                         demo_day=demo_day, demo_length=DEMO_LENGTH_DAYS, url=ta.floor_url(env), image_url=ta.image_url(env))
 
 
 __all__ = ["CLOSE_KINDS", "FOLDED_KINDS", "OPEN_KINDS", "RICH_KINDS", "daily_alert", "setup_facts",

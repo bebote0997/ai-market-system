@@ -74,8 +74,9 @@ class GmailEmailChannel:
             msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
         return msg
 
-    def rendered_message(self, subject_line, text, html, *, event_id):
-        """Floor-style email (``runtime.trade_alerts``): plain-text part + dark HTML alternative."""
+    def rendered_message(self, subject_line, text, html, images=(), *, event_id):
+        """Floor-style email (``runtime.trade_alerts``): plain-text part + dark HTML alternative, with ``images``
+        ((cid, png bytes), ...) as inline related parts referenced by ``cid:`` from the HTML."""
         msg = EmailMessage()
         msg["Subject"] = subject_line
         msg["From"] = self.sender
@@ -85,12 +86,15 @@ class GmailEmailChannel:
         msg["X-AI-Floor-Event-ID"] = str(event_id)
         msg.set_content(text)
         msg.add_alternative(html, subtype="html")
+        for cid, png in images or ():
+            msg.get_payload()[-1].add_related(png, maintype="image", subtype="png", cid=f"<{cid}>",
+                                             disposition="inline", filename=cid.split("@", 1)[0] + ".png")
         return msg
 
-    def send_rendered(self, subject_line, text, html, *, event_id):
+    def send_rendered(self, subject_line, text, html, images=(), *, event_id):
         if not self.configured:
             raise AlertChannelError("NOT_CONFIGURED")
-        self._smtp_send(self.rendered_message(subject_line, text, html, event_id=event_id))
+        self._smtp_send(self.rendered_message(subject_line, text, html, images, event_id=event_id))
 
     def send(self, event, attachments=()):
         if not self.configured:

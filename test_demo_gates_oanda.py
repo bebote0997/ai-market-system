@@ -24,6 +24,8 @@ from execution.risk_reservation import prepare_reservation
 from runtime.config import RuntimeConfig
 from runtime.notifications import NotificationEvent, SlackNotificationSink, oanda_demo_summary_text, paper_summary_text
 from runtime.trade_alerts import payload_text
+
+BRAND_LINE = "AI Trading Floor\n"  # the Floor title block heads every Slack alert
 from runtime.scheduler import slot_key
 from runtime.service import OperationalRuntime
 from test_dec14_opposite_policy import reports, snapshot
@@ -310,7 +312,7 @@ class SlackSummaryTests(unittest.TestCase):
     def send(self, env, **patches):
         sent = []
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x",
-                                     transport=lambda url, payload, timeout: sent.append(payload_text(payload)),
+                                     transport=lambda url, payload, timeout: sent.append(payload_text(payload).removeprefix(BRAND_LINE)),
                                      clock=lambda: SENT_AT)
         with patch.dict(os.environ, env), \
                 patch("execution.demo_dashboard.demo_snapshot", **patches.get("snapshot", {"return_value": SNAPSHOT})), \
@@ -384,7 +386,7 @@ class SlackSummaryTests(unittest.TestCase):
         # are read and labelled at the send time; each day's aggregates keep its own 17:00 -> 17:00 NY window.
         sent = []
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x", clock=lambda: SENT_AT,
-                                     transport=lambda url, payload, timeout: sent.append(payload_text(payload)))
+                                     transport=lambda url, payload, timeout: sent.append(payload_text(payload).removeprefix(BRAND_LINE)))
         events = [NotificationEvent("1.0", f"evt-{date}", f"daily:{date}", SENT_AT.isoformat(), "INFO",
                                     "DAILY_SUMMARY", None, (), (), None, (), (), (),
                                     daily_summary={"date_ny": date, "close_at_utc": close, "window_start_utc": start})

@@ -15,6 +15,8 @@ from runtime.config import RuntimeConfig
 from runtime.demo_runner import DemoRunner
 from runtime.notifications import SlackNotificationSink
 from runtime.trade_alerts import payload_text
+
+BRAND_LINE = "AI Trading Floor\n"  # the Floor title block heads every Slack alert
 from runtime.review_export import review_bundle, review_bundle_json
 from runtime.service import OperationalRuntime
 from storage.database import Store, SCHEMA_VERSION
@@ -88,7 +90,7 @@ class CloudDB(unittest.TestCase):
         runner = DemoRunner(config, notification_sink=sink, clock=lambda: T)
         try:
             self.assertEqual(runner.store.db.execute("SELECT version FROM schema_info").fetchone()[0], SCHEMA_VERSION)
-            first = [payload_text(item) for item in sent]
+            first = [payload_text(item).removeprefix(BRAND_LINE) for item in sent]
             self.assertEqual(len([item for item in first if item.startswith("⚠️ Ciclo fallido")]), 1)
             self.assertEqual({r[0] for r in runner.store.db.execute("SELECT status FROM notification_deliveries")}, {"DELIVERED"})
             self.assertNotIn("dummy", json.dumps(sent))
@@ -96,7 +98,7 @@ class CloudDB(unittest.TestCase):
             runner.close()
         runner = DemoRunner(config, notification_sink=sink, clock=lambda: T)
         try:
-            all_items = [payload_text(item) for item in sent]
+            all_items = [payload_text(item).removeprefix(BRAND_LINE) for item in sent]
             self.assertEqual(len([item for item in all_items if item.startswith("⚠️ Ciclo fallido")]), 1)
         finally:
             runner.close()

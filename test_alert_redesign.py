@@ -57,20 +57,43 @@ def blocks(payload):
     return payload["attachments"][0]["blocks"]
 
 
+def event_line(payload):
+    """The bold event line (``rich_text``) under the «AI Trading Floor» title."""
+    block = blocks(payload)[2]
+    assert block["type"] == "rich_text", block
+    return "".join(e["text"] for s in block["elements"] for e in s["elements"])
+
+
 class SlackBuilderTests(unittest.TestCase):
     def test_opened_short_block_kit(self):
         payload = ta.trade_slack_payload(opened())
         self.assertNotIn("text", payload)  # no duplicate top-level text
         attachment = payload["attachments"][0]
         self.assertEqual(attachment["color"], ta.RED)
-        self.assertEqual([b["type"] for b in blocks(payload)], ["header", "section", "context", "actions"])
-        self.assertEqual(blocks(payload)[0]["text"]["text"], "🔴 EURUSD SHORT abierta · OANDA Demo")
-        lines = blocks(payload)[1]["text"]["text"].splitlines()
+        self.assertEqual([b["type"] for b in blocks(payload)],
+                         ["header", "divider", "rich_text", "section", "context", "actions"])
+        self.assertEqual(blocks(payload)[0]["text"], {"type": "plain_text", "text": "AI Trading Floor", "emoji": True})
+        self.assertEqual(event_line(payload), "🔴 EURUSD SHORT abierta · OANDA Demo")
+        self.assertEqual(blocks(payload)[2]["elements"][0]["elements"][0]["style"], {"bold": True})
+        self.assertNotIn("accessory", blocks(payload)[3])  # no thumbnail unless AI_FLOOR_ALERT_IMAGE_URL is set
+        lines = blocks(payload)[3]["text"]["text"].splitlines()
         self.assertEqual(lines[0], "Entrada 1.12186 · SL 1.12696 (51 pips) · TP 1.11166 (1:2)")
         self.assertEqual(lines[1], "Riesgo 0.5% ($500) · Sesión Nueva York")
         self.assertEqual(lines[2], "Por qué: Barrida de liquidez 5M + ruptura bajista 15M + estructura bajista 1H")
         self.assertLessEqual(len(lines[2]) - len("Por qué: "), ta.WHY_LIMIT)
-        self.assertEqual(blocks(payload)[2]["elements"][0]["text"], "OANDA Demo · Día 3 de 30")
+        self.assertEqual(blocks(payload)[4]["elements"][0]["text"], "OANDA Demo · Día 3 de 30")
+
+    def test_optional_floor_thumbnail(self):
+        thumb = "https://floor.example.com/static/floor_thumb.png"
+        payload = ta.trade_slack_payload(opened(image_url=thumb))
+        self.assertEqual(blocks(payload)[3]["accessory"],
+                         {"type": "image", "image_url": thumb, "alt_text": "AI Trading Floor"})
+        self.assertEqual(ta.image_url({"AI_FLOOR_ALERT_IMAGE_URL": thumb}), thumb)
+        for bad in (None, "", "http://floor.example.com/a.png", "https://u:p@floor.example.com/a.png",
+                    "https://floor.example.com/a.png?x=1", "https://floor.example.com/a.png#x",
+                    "https://floor.example.com/a.jpg", "javascript:alert(1)//.png"):
+            self.assertIsNone(ta.image_url({"AI_FLOOR_ALERT_IMAGE_URL": bad}), bad)
+        self.assertIsNone(ta.image_url({}))
 
     def test_link_buttons_only(self):
         buttons = blocks(ta.trade_slack_payload(opened()))[-1]["elements"]
@@ -86,7 +109,7 @@ class SlackBuilderTests(unittest.TestCase):
     def test_long_is_green(self):
         payload = ta.trade_slack_payload(opened(side="LONG", stop="1.11676", target="1.13206"))
         self.assertEqual(payload["attachments"][0]["color"], ta.GREEN)
-        self.assertTrue(blocks(payload)[0]["text"]["text"].startswith("🟢 EURUSD LONG abierta"))
+        self.assertTrue(event_line(payload).startswith("🟢 EURUSD LONG abierta"))
 
     def test_closed_colours_and_result(self):
         for alert, color, emoji in ((closed(2.0, 1000), ta.GREEN, "✅"), (closed(-1.0, -500, "SL"), ta.RED, "❌"),
@@ -94,7 +117,7 @@ class SlackBuilderTests(unittest.TestCase):
             with self.subTest(r=alert.result_r):
                 payload = ta.trade_slack_payload(alert)
                 self.assertEqual(payload["attachments"][0]["color"], color)
-                self.assertTrue(blocks(payload)[0]["text"]["text"].startswith(emoji))
+                self.assertTrue(event_line(payload).startswith(emoji))
         text = ta.payload_text(ta.trade_slack_payload(closed(2.0, 1000)))
         self.assertIn("EURUSD SHORT cerrada · Take profit · +2.0R · OANDA Demo", text)
         self.assertIn("Resultado +2.0R (+$1,000) · Take profit", text)
@@ -109,6 +132,8 @@ class SlackBuilderTests(unittest.TestCase):
         payload = ta.trade_slack_payload(hostile)
         # Untrusted text is plain_text only: never parsed as mrkdwn (no mentions, links or formatting), kept literal.
         texts = [b["text"] for b in blocks(payload) if "text" in b]
+        rich = [e for b in blocks(payload) if b["type"] == "rich_text" for s in b["elements"] for e in s["elements"]]
+        self.assertEqual({e["type"] for e in rich}, {"text"})  # our own event line, structured (never parsed)
         texts += [e for b in blocks(payload) if b["type"] == "context" for e in b["elements"]]
         self.assertTrue(texts)
         self.assertEqual({t["type"] for t in texts}, {"plain_text"})
@@ -166,7 +191,7 @@ class SlackBuilderTests(unittest.TestCase):
 
     def test_system_and_daily(self):
         payload = ta.system_slack_payload("RUN_FAILED", "EURUSD", "OSError")
-        self.assertEqual(blocks(payload)[0]["text"]["text"], "⚠️ Ciclo fallido · EURUSD")
+        self.assertEqual(event_line(payload), "⚠️ Ciclo fallido · EURUSD")
         self.assertEqual(payload["attachments"][0]["color"], ta.GOLD)
         self.assertEqual(ta.system_slack_payload("STATE_INCONSISTENCY")["attachments"][0]["color"], ta.RED)
         daily = ta.DailyAlert(lines=(("P&L del día de trading", "+45.50 USD"),), date_label="2026-10-20",
@@ -174,52 +199,66 @@ class SlackBuilderTests(unittest.TestCase):
         payload = ta.daily_slack_payload(daily)
         self.assertEqual(payload["attachments"][0]["color"], ta.GREEN)
         self.assertEqual(ta.payload_text(payload).splitlines(),
-                         ["📊 Resumen diario · OANDA Demo · 2026-10-20", "P&L del día de trading: +45.50 USD",
+                         ["AI Trading Floor", "📊 Resumen diario · OANDA Demo · 2026-10-20", "P&L del día de trading: +45.50 USD",
                           "Macro: Dólar fuerte.", "OANDA Demo · Día 4 de 30", "Ver en el Floor"])
 
 
 class EmailBuilderTests(unittest.TestCase):
     def test_opened_email(self):
-        subject, text, html = ta.trade_email(opened())
+        subject, text, html, images = ta.trade_email(opened())
         self.assertEqual(subject, "🔴 EURUSD SHORT abierta · +0.0R · OANDA Demo")
+        self.assertEqual([cid for cid, _ in images], [ta.BANNER_CID, ta.CHART_CID])
+        for cid, png in images:
+            self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"), cid)
+            self.assertIn(f'src="cid:{cid}"', html)
         self.assertIn("EURUSD SHORT abierta · +0.0R", html)
         self.assertIn("AI Trading Floor", html)
-        self.assertIn("Georgia", html)  # gold serif title
-        for color in (ta.NAVY, ta.GOLD, ta.TEAL):
+        self.assertIn("Georgia", html)  # gold serif fallback when the banner image is blocked
+        for color in (ta.NAVY, ta.GOLD, ta.BORDER):
             self.assertIn(color, html)
         for label in ("Entrada", "Riesgo", "SL", "Sesión", "TP", "Por qué:", "Abrir el Floor"):
             self.assertIn(label, html)
         self.assertIn(f'href="{FLOOR}"', html)
         self.assertIn("OANDA Demo · Día 3 de 30", html)
-        self.assertIn("Precio (5m)", html)  # table-bar sparkline
-        for forbidden in ("<svg", "<script", "<style", "<img", "PAPER", "{"):
+        self.assertIn("Precio 5m (gráfico)", html)  # sparkline alt text
+        for forbidden in ("<svg", "<script", "<style", "http://", "src=\"http", "PAPER", "{"):
             self.assertNotIn(forbidden, html)
+        self.assertEqual(html.count("<img"), 2)  # only the two inline CID images, never a remote one
         self.assertTrue(text.startswith("EURUSD SHORT abierta · +0.0R\n"))
         self.assertIn("Entrada 1.12186 · SL 1.12696 (51 pips) · TP 1.11166 (1:2)", text)
         self.assertIn(f"Abrir el Floor: {FLOOR}", text)
 
     def test_closed_email_and_escaping(self):
-        subject, text, html = ta.trade_email(closed(-1.0, -500, "SL", why="<b>x</b> & y"))
+        subject, text, html, _ = ta.trade_email(closed(-1.0, -500, "SL", why="<b>x</b> & y"))
         self.assertEqual(subject, "❌ EURUSD SHORT cerrada · -1.0R · OANDA Demo")
         self.assertIn("Resultado -1.0R (-$500) · Stop loss", text)
         self.assertIn("&lt;b&gt;x&lt;/b&gt; &amp; y", html)
         self.assertIn(ta.RED, html)
 
-    def test_sparkline_bars(self):
-        self.assertIsNone(ta.bars_html(()))
-        self.assertIsNone(ta.bars_html((1.1,)))
-        bars = ta.bars_html((1.0, 2.0, 3.0))
-        self.assertEqual(bars.count("<td"), 3)
-        self.assertIn("height:2px", bars)
-        self.assertIn("height:48px", bars)
+    def test_sparkline_png(self):
+        self.assertIsNone(ta.sparkline_png(()))
+        self.assertIsNone(ta.sparkline_png((1.1, None, "x")))
+        png = ta.sparkline_png((1.0, 2.0, 1.5, 3.0))
+        self.assertTrue(png.startswith(b"\x89PNG"))
+        self.assertIsNotNone(ta.sparkline_png((1.0, 1.0)))  # flat series: no zero-height axis error
+        # No chart -> no chart image / no <img> for it; a missing banner falls back to the serif text title.
+        subject, text, html, images = ta.trade_email(opened(closes=()))
+        self.assertEqual([cid for cid, _ in images], [ta.BANNER_CID])
+        self.assertNotIn(ta.CHART_CID, html)
+        with mock.patch.object(ta, "_asset", return_value=None):
+            _, _, html, images = ta.trade_email(opened(closes=()))
+        self.assertEqual(images, ())
+        self.assertNotIn("<img", html)
+        self.assertIn("AI Trading Floor", html)
 
     def test_daily_email(self):
-        subject, text, html = ta.daily_email(ta.DailyAlert(lines=(("NAV", "100,000.00 USD"),), macro="Dólar fuerte",
+        subject, text, html, images = ta.daily_email(ta.DailyAlert(lines=(("NAV", "100,000.00 USD"),), macro="Dólar fuerte",
                                                            date_label="2026-10-20", demo_day=4))
         self.assertEqual(subject, "📊 Resumen diario · OANDA Demo · 2026-10-20")
         self.assertIn("Macro:", html)
         self.assertNotIn("Por qué", html)
         self.assertIn("OANDA Demo · Día 4 de 30", text)
+        self.assertEqual([cid for cid, _ in images], [ta.BANNER_CID])
 
     def test_gmail_channel_send_rendered(self):
         smtp = mock.MagicMock()
@@ -227,8 +266,15 @@ class EmailBuilderTests(unittest.TestCase):
                                     smtp_factory=lambda *a, **k: smtp)
         channel.send_rendered(*ta.trade_email(opened()), event_id="ACCEPTED:1")
         message = smtp.send_message.call_args[0][0]
+        self.assertEqual([part.get_content_type() for part in message.walk()][1:],
+                         ["text/plain", "multipart/related", "text/html", "image/png", "image/png"])
+        images = [part for part in message.walk() if part.get_content_type() == "image/png"]
+        self.assertEqual([part["Content-ID"] for part in images], [f"<{ta.BANNER_CID}>", f"<{ta.CHART_CID}>"])
+        self.assertTrue(all(part.get_content_disposition() == "inline" for part in images))
+        channel.send_rendered("s", "t", "<p>h</p>", event_id="ACCEPTED:2")  # no images: plain alternative
+        message = smtp.send_message.call_args[0][0]
         self.assertEqual([part.get_content_type() for part in message.walk()][1:], ["text/plain", "text/html"])
-        self.assertEqual(message["X-AI-Floor-Event-ID"], "ACCEPTED:1")
+        self.assertEqual(message["X-AI-Floor-Event-ID"], "ACCEPTED:2")
 
 
 class FakeEmail:
@@ -237,7 +283,7 @@ class FakeEmail:
     def __init__(self, fail=False):
         self.sent, self.fail = [], fail
 
-    def send_rendered(self, subject, text, html, *, event_id):
+    def send_rendered(self, subject, text, html, images=(), *, event_id):
         if self.fail:
             raise RuntimeError("smtp down")
         self.sent.append((subject, event_id))
@@ -441,7 +487,8 @@ class DurableSinkTests(unittest.TestCase):
             sent = []
             SlackNotificationSink(webhook_url=WEBHOOK, transport=lambda u, p, t: sent.append(p)).deliver(
                 note("RUN_FAILED", execution={"reason": "OSError"}))
-        self.assertEqual(ta.payload_text(sent[0]).splitlines()[:2], ["⚠️ Ciclo fallido · EURUSD", "Detalle: OSError"])
+        self.assertEqual(ta.payload_text(sent[0]).splitlines()[:3],
+                         ["AI Trading Floor", "⚠️ Ciclo fallido · EURUSD", "Detalle: OSError"])
         self.assertNotIn("{", ta.payload_text(sent[0]))
 
     def test_paper_mode_trade_line_has_no_numbers(self):
