@@ -27,7 +27,8 @@ GREEN, RED, GREY = "#2EB67D", "#E01E5A", "#8A94A6"
 BRAND = "AI Trading Floor"
 VENUE = "OANDA Demo"
 NO_DATA = "sin datos"
-WHY_LIMIT = 120
+WHY_LIMIT = 90  # «Por qué»: one plain sentence; parts are dropped whole, never cut mid-word
+TEXT_LIMIT = 120  # other one-line texts (daily-summary macro line)
 BREAKEVEN_R = 0.05  # |R| below this reads as breakeven
 FLOOR_URL_ENV = ("AI_FLOOR_PUBLIC_URL", "RENDER_EXTERNAL_URL")  # first https value wins
 FLOOR_PAGE = "/?page=floor"
@@ -46,8 +47,7 @@ CLOSE_LABELS = {
     "DRAWDOWN": "Drawdown máximo",
 }
 SESSION_LABELS = {"LONDON": "Londres", "NEW_YORK": "Nueva York"}
-AGENT_LABELS = (("structure", "Estructura"), ("liquidity", "Liquidez"), ("macro", "Macro"),
-                ("trade_reviewer", "Revisor"), ("setup_reviewer", "Setup"))
+DIRECTIONS = {"bullish": "alcista", "bearish": "bajista"}
 _SPACE = re.compile(r"\s+")
 _CODE = re.compile(r"[A-Z0-9_]+")
 
@@ -111,29 +111,30 @@ def session_label(names):
     return " + ".join(labels) if labels else "Fuera de Londres/NY"
 
 
-def plain(text, limit=WHY_LIMIT):
+def plain(text, limit=TEXT_LIMIT):
     """One plain line: whitespace collapsed, truncated with an ellipsis at ``limit`` characters."""
     line = _SPACE.sub(" ", str(text or "")).strip()
     return line if len(line) <= limit else line[:limit - 1].rstrip(" ,;·.") + "…"
 
 
-def why_line(summaries, limit=WHY_LIMIT):
-    """«Por qué» from the agents' summaries ``[(agent_name, summary), ...]`` (macro folded in here)."""
-    found = {}
-    for agent, summary in summaries or ():
-        name = str(agent or "").lower()
-        for key, label in AGENT_LABELS:
-            if name.startswith(key) and summary and key not in found:
-                found[key] = (label, plain(summary, 400).rstrip("."))
-    parts = [found[key] for key, _ in AGENT_LABELS if key in found][:3]
-    if not parts:
-        return None
-    texts = [f"{label}: {text}" for label, text in parts]
-    budget, sizes = limit - 3 * (len(texts) - 1), {}
-    for left, index in enumerate(sorted(range(len(texts)), key=lambda i: len(texts[i]))):
-        sizes[index] = min(len(texts[index]), budget // (len(texts) - left))  # short parts lend their unused share
-        budget -= sizes[index]
-    return plain(" · ".join(plain(text, max(sizes[i], 16)) for i, text in enumerate(texts)), limit)
+def why_line(facts, limit=WHY_LIMIT):
+    """«Por qué» as ONE plain sentence from the structured setup facts of the run (``trade_alert_source.setup_facts``):
+    ``sweep_5m`` (bool), ``equal_levels_5m`` (bool), ``bos_15m`` / ``retracement_15m`` / ``bias_1h`` (``bullish`` /
+    ``bearish``). E.g. «Barrida de liquidez 5M + ruptura bajista 15M + estructura bajista 1H». Over ``limit`` the 15M
+    part, then the 5M part, is dropped whole (no ellipsis). No usable fact -> None («sin datos»)."""
+    facts = facts or {}
+    def direction(key):
+        return DIRECTIONS.get(str(facts.get(key) or "").lower())
+    liquidity = ("barrida de liquidez 5M" if facts.get("sweep_5m") else
+                 "liquidez en niveles iguales 5M" if facts.get("equal_levels_5m") else None)
+    trigger = (f"ruptura {direction('bos_15m')} 15M" if direction("bos_15m") else
+               f"retroceso {direction('retracement_15m')} 15M" if direction("retracement_15m") else None)
+    context = f"estructura {direction('bias_1h')} 1H" if direction("bias_1h") else None
+    for parts in ((liquidity, trigger, context), (liquidity, context), (context,)):
+        text = " + ".join(part for part in parts if part)
+        if text and len(text) <= limit:
+            return text[0].upper() + text[1:]
+    return None
 
 
 def floor_url(env):

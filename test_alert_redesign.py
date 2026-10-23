@@ -31,11 +31,20 @@ NOW = datetime(2026, 10, 21, 14, 0, tzinfo=timezone.utc)
 SUMMARIES = [("structure_ai", "Ruptura bajista del mínimo de 15M con BOS confirmado."),
              ("liquidity_ai", "Barrida de liquidez sobre el máximo asiático."),
              ("macro_ai", "Dólar fuerte tras datos de empleo; sesgo bajista EUR.")]
+FACTS = {"bias_1h": "bearish", "bos_15m": "bearish", "retracement_15m": None, "sweep_5m": True,
+         "equal_levels_5m": True}
+# setups.evidence of a VALID_SETUP as the deterministic validator persists it: [structure, liquidity] per timeframe.
+EVIDENCE = [{"1h": {"bias": "bearish", "structure_state": "bearish"},
+             "15m": {"bias": "bearish", "bos": {"type": "BOS", "direction": "bearish", "broken_level": 1.1225},
+                     "retracement": None},
+             "5m": {"bias": "bearish", "bos": None}},
+            {"1h": {"sweeps": []}, "15m": {"sweeps": []},
+             "5m": {"sweeps": [{"type": "high", "price": 1.1229}], "liquidity_above": [], "liquidity_below": []}}]
 
 
 def opened(**kw):
     base = dict(kind="OPENED", symbol="EURUSD", side="SHORT", entry="1.12186", stop="1.12696", target="1.11166",
-                risk_amount=500.0, risk_pct=0.5, session=("NEW_YORK",), why=ta.why_line(SUMMARIES), demo_day=3,
+                risk_amount=500.0, risk_pct=0.5, session=("NEW_YORK",), why=ta.why_line(FACTS), demo_day=3,
                 closes=tuple(1.12 + i * 0.0001 for i in range(30)), url=FLOOR)
     return ta.TradeAlert(**{**base, **kw})
 
@@ -59,7 +68,7 @@ class SlackBuilderTests(unittest.TestCase):
         lines = blocks(payload)[1]["text"]["text"].splitlines()
         self.assertEqual(lines[0], "Entrada 1.12186 · SL 1.12696 (51 pips) · TP 1.11166 (1:2)")
         self.assertEqual(lines[1], "Riesgo 0.5% ($500) · Sesión Nueva York")
-        self.assertTrue(lines[2].startswith("Por qué: Estructura: Ruptura bajista"))
+        self.assertEqual(lines[2], "Por qué: Barrida de liquidez 5M + ruptura bajista 15M + estructura bajista 1H")
         self.assertLessEqual(len(lines[2]) - len("Por qué: "), ta.WHY_LIMIT)
         self.assertEqual(blocks(payload)[2]["elements"][0]["text"], "OANDA Demo · Día 3 de 30")
 
@@ -116,12 +125,24 @@ class SlackBuilderTests(unittest.TestCase):
         self.assertIn("Día sin datos", text)
 
     def test_why_line(self):
-        why = ta.why_line(SUMMARIES)
-        self.assertLessEqual(len(why), ta.WHY_LIMIT)
-        self.assertEqual([part.split(":")[0] for part in why.split(" · ")], ["Estructura", "Liquidez", "Macro"])
-        self.assertEqual(ta.why_line([("macro_ai", "Dólar fuerte.")]), "Macro: Dólar fuerte")
-        self.assertIsNone(ta.why_line([]))
-        self.assertEqual(ta.why_line([("macro_ai", "a\n  b")]), "Macro: a b")
+        self.assertEqual(ta.why_line(FACTS), "Barrida de liquidez 5M + ruptura bajista 15M + estructura bajista 1H")
+        self.assertEqual(ta.why_line({"bias_1h": "BULLISH", "retracement_15m": "bullish", "equal_levels_5m": True}),
+                         "Liquidez en niveles iguales 5M + retroceso alcista 15M + estructura alcista 1H")
+        self.assertEqual(ta.why_line({"sweep_5m": True, "bias_1h": "bearish"}),
+                         "Barrida de liquidez 5M + estructura bajista 1H")
+        self.assertEqual(ta.why_line({"bias_1h": "neutral", "bos_15m": "bearish"}), "Ruptura bajista 15M")
+        for empty in ({}, None, {"bias_1h": "neutral"}, {"bos_15m": "sideways"}):
+            self.assertIsNone(ta.why_line(empty))
+        # Over the limit: parts are dropped whole (15M first), never cut mid-word, never an ellipsis.
+        self.assertEqual(ta.why_line(FACTS, limit=50), "Barrida de liquidez 5M + estructura bajista 1H")
+        self.assertEqual(ta.why_line(FACTS, limit=30), "Estructura bajista 1H")
+        for facts in (FACTS, {"bias_1h": "bullish", "retracement_15m": "bullish", "equal_levels_5m": True}):
+            why = ta.why_line(facts)
+            self.assertLessEqual(len(why), ta.WHY_LIMIT)
+            self.assertLessEqual(ta.WHY_LIMIT, 90)
+            self.assertNotIn("…", why)
+            self.assertNotIn(":", why)  # no per-agent «Label: fragment» concatenation
+            self.assertEqual(why.count("\n"), 0)
 
     def test_floor_url(self):
         self.assertEqual(ta.floor_url({"AI_FLOOR_PUBLIC_URL": URL + "/"}), FLOOR)
@@ -270,6 +291,9 @@ def experiment_db(path):
         db.execute("CREATE TABLE agent_decisions(slot_key TEXT, agent_name TEXT, as_of TEXT, reasoning_summary TEXT)")
         db.execute("INSERT INTO runs VALUES('s1','run-1','EURUSD')")
         db.executemany("INSERT INTO agent_decisions VALUES('s1',?,'2026-10-21T13:15:00+00:00',?)", SUMMARIES)
+        db.execute("CREATE TABLE setups(slot_key TEXT, status TEXT, side TEXT, invalidation TEXT, evidence TEXT, "
+                   "plan TEXT)")
+        db.execute("INSERT INTO setups VALUES('s1','VALID_SETUP','SHORT','1.1229',?,NULL)", (json.dumps(EVIDENCE),))
         db.commit()
 
 
@@ -305,9 +329,18 @@ class SourceTests(unittest.TestCase):
         self.assertAlmostEqual(alert.risk_amount, 499.8, places=1)  # |1.12186 - 1.12696| * 98000
         self.assertAlmostEqual(alert.risk_pct, 0.4998, places=3)
         self.assertEqual(alert.session, ("NEW_YORK",))
-        self.assertTrue(alert.why.startswith("Estructura: Ruptura bajista"))
+        self.assertEqual(alert.why, "Barrida de liquidez 5M + ruptura bajista 15M + estructura bajista 1H")
         self.assertEqual((alert.demo_day, alert.url), (3, FLOOR))
         self.assertIn("Riesgo 0.5% ($499.80) · Sesión Nueva York", ta.payload_text(ta.trade_slack_payload(alert)))
+
+    def test_why_is_no_data_without_setup_evidence(self):
+        state_db(self.env["AI_FLOOR_BROKER_STATE_DB_PATH"], run_id="run-unknown")
+        self.assertIsNone(self.build("ACCEPTED", {"trade_id": "101"}).why)
+        self.assertEqual(src.setup_facts({"AI_FLOOR_DB_PATH": str(self.dir / "missing.db")}, "run-1"), {})
+        with closing(sqlite3.connect(self.env["AI_FLOOR_DB_PATH"])) as db:
+            db.execute("UPDATE setups SET evidence='[]'")
+            db.commit()
+        self.assertEqual(src.setup_facts(self.env, "run-1"), {})
 
     def test_closed_at_broker_infers_tp_with_oanda_result(self):
         state_db(self.env["AI_FLOOR_BROKER_STATE_DB_PATH"], status="CLOSED_AT_BROKER",

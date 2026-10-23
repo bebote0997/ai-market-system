@@ -2,12 +2,13 @@
 
 Only OANDA practice-demo sources are read: the router's ``broker_demo_trades`` row (``mode=ro``), the OANDA practice
 account (NAV) and closed trades (realized P&L + financing), the demo epoch / day counter and the candle cache. The
-experiment DB is read only for the agents' text summaries of the run that produced the routed plan (the «Por qué»
-line and the macro line of the daily summary): never a PAPER number. Runs in the alert worker thread, never in the
+experiment DB is read only for the deterministic setup evidence of the run that produced the routed plan (structured
+facts behind the «Por qué» sentence) and the macro agent's text (macro line of the daily summary): never a PAPER number. Runs in the alert worker thread, never in the
 router's critical path.
 """
 from contextlib import closing
 from datetime import datetime, timezone
+import json
 import logging
 from pathlib import Path
 import sqlite3
@@ -46,15 +47,28 @@ def _experiment_db(env):
     return _ro(env.get("AI_FLOOR_DB_PATH") or "data/runtime/trading_floor.db")
 
 
-def agent_summaries(env, run_id):
-    """[(agent_name, reasoning_summary)] of ``run_id`` from the experiment DB (text only)."""
+def _direction(value):
+    return value.get("direction") if isinstance(value, dict) else None
+
+
+def setup_facts(env, run_id):
+    """Structured facts of ``run_id``'s VALID_SETUP evidence (``setups.evidence`` = [structure, liquidity] per
+    timeframe, from the deterministic validator) for ``trade_alerts.why_line``: ``bias_1h``, ``bos_15m``,
+    ``retracement_15m`` (direction words), ``sweep_5m`` / ``equal_levels_5m`` (bool). Missing -> {}."""
     con = _experiment_db(env) if run_id else None
     if con is None:
-        return []
+        return {}
     with closing(con):
-        rows = con.execute("SELECT a.agent_name, a.reasoning_summary FROM agent_decisions a JOIN runs r "
-                           "ON r.slot_key=a.slot_key WHERE r.run_id=?", (run_id,)).fetchall()
-    return [(row[0], row[1]) for row in rows]
+        row = con.execute("SELECT s.evidence FROM setups s JOIN runs r ON r.slot_key=s.slot_key WHERE r.run_id=?",
+                          (run_id,)).fetchone()
+    evidence = json.loads(row[0]) if row and row[0] else None
+    if not isinstance(evidence, list) or len(evidence) != 2 or not all(isinstance(e, dict) for e in evidence):
+        return {}
+    structure, liquidity = evidence
+    s1h, s15, l5 = (structure.get("1h") or {}), (structure.get("15m") or {}), (liquidity.get("5m") or {})
+    return {"bias_1h": s1h.get("bias"), "bos_15m": _direction(s15.get("bos")),
+            "retracement_15m": _direction(s15.get("retracement")), "sweep_5m": bool(l5.get("sweeps")),
+            "equal_levels_5m": bool(l5.get("liquidity_above") or l5.get("liquidity_below"))}
 
 
 def latest_macro(env, symbol=SYMBOL):
@@ -142,7 +156,7 @@ def trade_alert(kind, detail, env, *, now=None, trades_fetch=None, account_fetch
             stop=stop, target=row.get("target"), risk_amount=risk,
             risk_pct=None if not risk or not nav else risk / nav * 100,
             session=_safe(session_names, opened_at, default=()) or (),
-            why=ta.why_line(_safe(agent_summaries, env, row.get("run_id"), default=[])),
+            why=ta.why_line(_safe(setup_facts, env, row.get("run_id"), default={})),
             close_reason=None if kind in OPEN_KINDS else reason,
             result_r=None if closed is None else closed.get("realized_r"),
             pnl=None if closed is None else closed.get("net_pnl"), currency=currency or "USD",
@@ -171,5 +185,5 @@ def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None):
                          demo_day=demo_day, demo_length=DEMO_LENGTH_DAYS, url=ta.floor_url(env))
 
 
-__all__ = ["CLOSE_KINDS", "FOLDED_KINDS", "OPEN_KINDS", "RICH_KINDS", "agent_summaries", "daily_alert",
+__all__ = ["CLOSE_KINDS", "FOLDED_KINDS", "OPEN_KINDS", "RICH_KINDS", "daily_alert", "setup_facts",
            "latest_macro", "router_row", "trade_alert"]

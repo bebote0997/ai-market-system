@@ -22,9 +22,7 @@ from runtime import trade_alerts as ta  # noqa: E402
 
 DEFAULT_OUT = Path("/workspace/plans/alert_samples")
 URL = "https://floor.example.com/?page=floor"
-WHY = ta.why_line([("structure_ai", "Ruptura bajista del mínimo de 15M con BOS confirmado en 5M."),
-                   ("liquidity_ai", "Barrida de liquidez sobre el máximo asiático."),
-                   ("macro_ai", "Dólar fuerte tras datos de empleo; sesgo bajista EUR.")])
+WHY = ta.why_line({"bias_1h": "bearish", "bos_15m": "bearish", "sweep_5m": True})
 CLOSES = tuple(1.1235 - i * 0.00004 + (0.00012 if i % 7 == 3 else 0) for i in range(48))
 BASE = dict(symbol="EURUSD", side="SHORT", entry="1.12186", stop="1.12696", target="1.11166", risk_amount=500,
             risk_pct=0.5, session=("NEW_YORK",), why=WHY, demo_day=5, closes=CLOSES, url=URL)
