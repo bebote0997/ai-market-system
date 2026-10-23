@@ -71,16 +71,34 @@ def setup_facts(env, run_id):
             "equal_levels_5m": bool(l5.get("liquidity_above") or l5.get("liquidity_below"))}
 
 
-def latest_macro(env, symbol=SYMBOL):
-    """Latest macro agent summary for ``symbol`` (folded into the daily summary instead of separate alerts)."""
+def latest_macro(env, start, end, symbol=SYMBOL):
+    """Latest macro agent summary for ``symbol`` with ``as_of`` in the reported trading day [``start``, ``end``)
+    (aware datetimes; folded into the daily summary instead of separate alerts). A delayed summary never picks up a
+    later day's macro view."""
     con = _experiment_db(env)
     if con is None:
         return None
+    bounds = tuple(value.astimezone(timezone.utc).isoformat() for value in (start, end))
     with closing(con):
         row = con.execute("SELECT a.reasoning_summary FROM agent_decisions a JOIN runs r ON r.slot_key=a.slot_key "
                           "WHERE r.symbol=? AND a.agent_name LIKE 'macro%' AND a.reasoning_summary IS NOT NULL "
-                          "AND a.reasoning_summary<>'' ORDER BY a.as_of DESC LIMIT 1", (symbol,)).fetchone()
+                          "AND a.reasoning_summary<>'' AND julianday(a.as_of) >= julianday(?) "
+                          "AND julianday(a.as_of) < julianday(?) ORDER BY julianday(a.as_of) DESC LIMIT 1",
+                          (symbol, *bounds)).fetchone()
     return row[0] if row else None
+
+
+def _window(date_label, window):
+    """[start, end) of the reported trading day: ``window`` (aware datetimes), else 17:00 -> 17:00 NY of
+    ``date_label``; None when neither is usable (then no macro line, never an unbounded one)."""
+    if window and all(isinstance(v, datetime) and v.tzinfo for v in window):
+        return tuple(window)
+    if not date_label:
+        return None
+    from datetime import date
+    from storage.daily_summary import summary_window
+    _, start, end, _ = summary_window(date.fromisoformat(str(date_label)[:10]))
+    return start, end
 
 
 def _safe(fn, *args, default=None):
@@ -140,7 +158,7 @@ def trade_alert(kind, detail, env, *, now=None, trades_fetch=None, account_fetch
         if row is None:
             return None
         symbol, units = row["symbol"], as_float(row.get("units"))
-        entry = as_float(row.get("fill_price")) or as_float(row.get("entry"))
+        entry = as_float(row.get("fill_price"))  # confirmed OANDA fill only: the planned entry is never "actual"
         stop = as_float(row.get("initial_stop")) or as_float(row.get("stop"))
         risk = None if None in (entry, stop, units) else abs(entry - stop) * abs(units)
         nav, currency = _safe(_nav, env, account_fetch, default=(None, None))
@@ -169,9 +187,10 @@ def trade_alert(kind, detail, env, *, now=None, trades_fetch=None, account_fetch
         return None
 
 
-def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None):
-    """DailyAlert from the OANDA demo summary lines ("Etiqueta: valor"); the macro view folded in as one line. The
-    first line (demo day text) and the trading-day line become the header/footer, not grid cells."""
+def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None, window=None):
+    """DailyAlert from the OANDA demo summary lines ("Etiqueta: valor"); the macro view of the reported trading day
+    (``window`` = (start, end) aware, else derived from ``date_label``) folded in as one line. The first line (demo
+    day text) and the trading-day line become the header/footer, not grid cells."""
     from execution.demo_metrics import DEMO_LENGTH_DAYS
     pairs = []
     for line in lines:
@@ -181,7 +200,9 @@ def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None):
         if label == "Día de trading" and date_label:
             continue  # in the header
         pairs.append((label, value) if sep else ("Estado", label))
-    return ta.DailyAlert(lines=tuple(pairs), date_label=date_label, macro=_safe(latest_macro, env), pnl=pnl,
+    bounds = _safe(_window, date_label, window)
+    macro = None if bounds is None else _safe(latest_macro, env, *bounds)
+    return ta.DailyAlert(lines=tuple(pairs), date_label=date_label, macro=macro, pnl=pnl,
                          demo_day=demo_day, demo_length=DEMO_LENGTH_DAYS, url=ta.floor_url(env))
 
 

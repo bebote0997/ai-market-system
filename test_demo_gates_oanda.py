@@ -330,8 +330,8 @@ class SlackSummaryTests(unittest.TestCase):
         self.assertEqual(text.splitlines(), [
             "📊 Resumen diario · OANDA Demo · 2026-10-20",
             "NAV (a las 10:00 ET): 100,040.00 USD", "Balance (a las 10:00 ET): 100,039.98 USD",
-            "P&amp;L desde el inicio del demo (a las 10:00 ET): +40.02 USD",
-            "P&amp;L del día de trading: -5.50 USD", "Operaciones cerradas en el día: 3 (ganadoras: 2)",
+            "P&L desde el inicio del demo (a las 10:00 ET): +40.02 USD",
+            "P&L del día de trading: -5.50 USD", "Operaciones cerradas en el día: 3 (ganadoras: 2)",
             "R medio del día: -0.08", "Operaciones abiertas (a las 10:00 ET): 1", "OANDA Demo · Día 2 de 30"])
         self.assertNotIn("1234", text)
         self.assertNotIn("paper", text.lower())
@@ -348,7 +348,7 @@ class SlackSummaryTests(unittest.TestCase):
         self.assertEqual(text.splitlines()[1:], ["Demo OANDA: aún sin operaciones del demo",
                                                  "NAV (a las 10:00 ET): 99,990.00 USD",
                                                  "Balance (a las 10:00 ET): sin datos",
-                                                 "P&amp;L desde el inicio del demo (a las 10:00 ET): sin datos",
+                                                 "P&L desde el inicio del demo (a las 10:00 ET): sin datos",
                                                  "OANDA demo: sin datos de operaciones",
                                                  "OANDA Demo · Día sin datos"])
 
@@ -403,10 +403,10 @@ class SlackSummaryTests(unittest.TestCase):
                                                                "Balance (a las 10:00 ET): 100,039.98 USD",
                                                                "Operaciones abiertas (a las 10:00 ET): 1"])
         self.assertEqual((first[0], first[4:6]), ("📊 Resumen diario · OANDA Demo · 2026-10-19",
-                                                  ["P&amp;L del día de trading: +45.50 USD",
+                                                  ["P&L del día de trading: +45.50 USD",
                                                    "Operaciones cerradas en el día: 1 (ganadoras: 1)"]))
         self.assertEqual((second[0], second[4:6]), ("📊 Resumen diario · OANDA Demo · 2026-10-20",
-                                                    ["P&amp;L del día de trading: -5.50 USD",
+                                                    ["P&L del día de trading: -5.50 USD",
                                                      "Operaciones cerradas en el día: 3 (ganadoras: 2)"]))
 
     def test_day_figures_cover_the_window_and_flag_missing_data(self):

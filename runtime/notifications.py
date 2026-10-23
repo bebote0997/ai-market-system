@@ -91,11 +91,11 @@ class SlackNotificationSink:
             raise ValueError("invalid Slack timeout")
 
     def deliver(self, event: NotificationEvent) -> None:
-        if not self.webhook_url:
-            raise SlackNotificationError("NOT_CONFIGURED")
         if event.type == "DAILY_SUMMARY":
             self._deliver_daily_summary(event)
             return
+        if not self.webhook_url:
+            raise SlackNotificationError("NOT_CONFIGURED")
         payload = compact_payload(event)
         if payload is not None:
             send_slack(self.transport, self.webhook_url, payload, self.timeout)
@@ -103,8 +103,13 @@ class SlackNotificationSink:
     def _deliver_daily_summary(self, event):
         """DEC-DEMO-GATE-1: OANDA demo figures while routing is ON (never PAPER numbers), else the PAPER summary.
         One log line per attempt: source + NY date of the summary only (never the webhook URL or figures). Both
-        cover the summary's trading day [``window_start_utc``, ``close_at_utc``) = 17:00 -> 17:00 America/New_York."""
+        cover the summary's trading day [``window_start_utc``, ``close_at_utc``) = 17:00 -> 17:00 America/New_York.
+        Slack and the OANDA demo email are attempted independently (each once): the email goes out with a Gmail-only
+        setup and after a Slack failure; the delivery record (raised error) reflects the Slack outcome, the email
+        outcome is logged on its own."""
         source = "OANDA_DEMO" if _routing_on() else "PAPER"
+        if not self.webhook_url and (source == "PAPER" or not _daily_email_configured()):
+            raise SlackNotificationError("NOT_CONFIGURED")  # no channel: no OANDA read
         summary = event.daily_summary or {}
         alert = None
         if source == "OANDA_DEMO":
@@ -115,16 +120,21 @@ class SlackNotificationSink:
         else:
             payload = {"text": paper_summary_text(summary)}
         date = str(summary.get("date_ny") or "")[:10] or "-"
+        failure = None
         try:
+            if not self.webhook_url:
+                raise SlackNotificationError("NOT_CONFIGURED")
             send_slack(self.transport, self.webhook_url, payload, self.timeout)
+            LOG.info("component=notifications event=DAILY_SUMMARY_SENT source=%s date=%s", source, date)
         except Exception as exc:
             code = exc.args[0] if isinstance(exc, SlackNotificationError) and exc.args else type(exc).__name__
             LOG.warning("component=notifications event=DAILY_SUMMARY_FAILED source=%s date=%s error_type=%s", source,
                         date, code)
-            raise
-        LOG.info("component=notifications event=DAILY_SUMMARY_SENT source=%s date=%s", source, date)
+            failure = exc
         if alert is not None:
-            _email_daily_summary(alert, event.event_id)
+            _email_daily_summary(alert, event.event_id, date)
+        if failure is not None:
+            raise failure
 
 
 # DEC-ALERTS-REDESIGN-1: what the durable Slack sink sends besides the daily summary. Never a JSON dump.
@@ -175,14 +185,23 @@ def oanda_demo_daily_alert(timestamp_utc=None, window_start_utc=None, sent_at=No
     except Exception:  # noqa: BLE001 - no demo data: never PAPER numbers
         lines = ["OANDA demo: sin datos"]
     return daily_alert(lines, os.environ, date_label=meta.get("label"), demo_day=meta.get("day"),
-                       pnl=meta.get("pnl"))
+                       pnl=meta.get("pnl"), window=meta.get("window"))
 
 
-def _email_daily_summary(alert, event_id):
-    """Best effort, after Slack succeeded (so a Slack retry never re-sends it): OANDA demo summary by email."""
+def _daily_email_configured():
+    try:
+        from runtime.alert_daily_email import email_configured
+        return email_configured()
+    except Exception:  # noqa: BLE001 - unreadable config: no email
+        return False
+
+
+def _email_daily_summary(alert, event_id, date="-"):
+    """Best effort, once per claimed delivery, whatever Slack did: OANDA demo summary by email (own outcome log)."""
     try:
         from runtime.alert_daily_email import send_daily_email
-        send_daily_email(alert, event_id)
+        if send_daily_email(alert, event_id):
+            LOG.info("component=notifications event=DAILY_SUMMARY_EMAIL_SENT date=%s", date)
     except Exception as exc:  # noqa: BLE001
         LOG.warning("component=notifications event=DAILY_SUMMARY_EMAIL_FAILED error_type=%s", type(exc).__name__)
 
@@ -229,6 +248,7 @@ def _demo_lines(timestamp_utc, window_start_utc, sent_at=None, meta=None):
     label, start, end, _ = summary_window(trading_day(close))
     meta["label"] = label
     start = parse_aware(window_start_utc) or start
+    meta["window"] = (start, end)
     now = sent_at if isinstance(sent_at, datetime) and sent_at.tzinfo else datetime.now(timezone.utc)
     at = f"(a las {now.astimezone(ET):%H:%M} ET)"
     snapshot = demo_snapshot(now)

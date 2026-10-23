@@ -1,4 +1,4 @@
-"""OANDA demo daily summary by email (DEC-ALERTS-REDESIGN-1), sent by the durable Slack sink after Slack succeeded.
+"""OANDA demo daily summary by email (DEC-ALERTS-REDESIGN-1), sent by the durable Slack sink independently of Slack.
 
 Best effort and once: OFF unless ``AI_FLOOR_ALERTS_ENABLED`` is exactly ``1`` and Gmail is configured; failures are
 logged by typed code only and never re-send the Slack summary. Never touches trading state.
@@ -10,6 +10,11 @@ from runtime.alert_dispatch import alerts_enabled
 from runtime.trade_alerts import daily_email
 
 LOG = logging.getLogger(__name__)
+
+
+def email_configured(environ=None):
+    """True when the daily email would be attempted (alerts ON and Gmail configured)."""
+    return alerts_enabled(environ) and GmailEmailChannel(environ=environ).configured
 
 
 def send_daily_email(alert, event_id, environ=None):
@@ -27,4 +32,4 @@ def send_daily_email(alert, event_id, environ=None):
         return False
 
 
-__all__ = ["send_daily_email"]
+__all__ = ["email_configured", "send_daily_email"]

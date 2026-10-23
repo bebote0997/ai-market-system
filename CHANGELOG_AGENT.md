@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-10-22 — Correcciones de la revisión Codex r10c de las alertas (branch `feat/fx-sl-week-hold`, chunk 9)
+
+- **M1 · Entrada solo con fill de OANDA**: `trade_alert_source.trade_alert` ya no usa la entrada planificada si falta `fill_price`; entrada, pips, R:R y riesgo (importe / %) ⇒ «sin datos». Test: `test_alert_redesign.py` (+1).
+- **M2 · Slack y email independientes**: `broker_alert_sink_from_env` crea el sink con Slack (webhook válido) y/o Gmail; un webhook inválido solo apaga Slack. `BrokerAlertSink._deliver` intenta cada canal una vez sin depender del otro; contadores separados (`sent` / `failed` de Slack, `email_sent` / `email_failed`). Resumen diario (`SlackNotificationSink._deliver_daily_summary`): el email OANDA sale con configuración solo-Gmail y tras un fallo de Slack (el error de Slack se relanza después, el registro de entrega sigue reflejando Slack; el email tiene su propio log); sin ningún canal no se lee OANDA. `alert_daily_email.email_configured`. Tests: `test_alert_redesign.py` (+5).
+- **M3 · Macro acotado al día de trading**: `latest_macro(env, start, end)` filtra `as_of` en [17:00, 17:00) NY del día reportado (ventana del resumen, si no derivada de `date_label`; sin ventana ⇒ sin línea macro). Un resumen atrasado nunca muestra el macro de un día posterior. Test: `test_alert_redesign.py` (+1).
+- **L1 · URL del Floor**: se rechazan fragmento, `?` vacío, query y credenciales; la URL se reconstruye desde las partes (`<path>/?page=floor`). Test ampliado.
+- **L2 · Texto no confiable sin mrkdwn**: las líneas y el contexto de los mensajes Block Kit son `plain_text` (sin menciones, enlaces ni formato `` ` `` `*` `_` `~`); el texto se muestra literal (ya sin `&amp;`). Los mensajes de texto plano de nivel superior siguen pasando por `slack_escape`. `scripts/render_alert_samples.py` actualizado. Tests: `test_alert_redesign.py`, `test_security_hardening.py`, `test_demo_gates_oanda.py` actualizados.
+- Suite completa (`/workspace/venv-ui/bin/python -m unittest discover -q`) OK y `ruff check .` PASS. Sin push, sin cambios en Render. REAL OFF.
+
 ## 2026-10-22 — Correcciones de la revisión Codex r10b (branch `feat/fx-sl-week-hold`, chunk 8)
 
 - **1 · Solo-OANDA también en Proceso / Historial** (commit propio): con `AI_FLOOR_RESULTS_SOURCE=OANDA_DEMO`, `ui/views/dashboard.hide_paper_results` (presentación; la DB no cambia) quita filas del ledger PAPER, eventos de journal de resultados PAPER (`ORDER_*`, `POSITION_OPENED/CLOSED`, `STOP_HIT`, `TARGET_HIT`, `DAILY_SUMMARY`) y claves de P&L / fill / salida (`net_pnl`, `exit_price`, `equity`…) en Historial, Errores, Proceso (`cycle_evidence`) y el feed del Floor. En Proceso, entrada / salida / resultado final salen de las filas OANDA del mismo run (`broker_demo_state.read_run_trades`, `mode=ro`) o «Sin datos»; etiquetas «Entrada/Salida en la demo OANDA». Tests: `test_results_source.py` (+5); allow-list de `test_broker_wiring.py`.

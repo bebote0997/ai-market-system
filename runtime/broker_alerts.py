@@ -1,7 +1,9 @@
 """Best-effort Slack alerts for broker-demo router events (``BrokerDemoRouter.on_alert``).
 
 ``broker_alert_sink_from_env`` returns None unless ``AI_FLOOR_ALERTS_ENABLED == "1"`` (exact, same rule as
-``runtime.alert_dispatch.alerts_enabled``) and ``SLACK_WEBHOOK_URL`` is a Slack HTTPS webhook. The sink turns a
+``runtime.alert_dispatch.alerts_enabled``) and at least one channel is configured: ``SLACK_WEBHOOK_URL`` as a Slack
+HTTPS webhook and/or (production) Gmail. Each channel is delivered and counted independently: a Gmail-only setup
+still emails, and a Slack failure never suppresses the email (nor an email failure the Slack message). The sink turns a
 whitelisted event kind into one Spanish line built only from a safe subset of the detail (symbol, side, units, reason,
 trade id masked to its last 4 characters, P&L / floor amounts); tokens, account ids, client ids and URLs never reach
 the message. At most one identical (kind, reason) message per minute and 20 messages per hour per process; extras are
@@ -11,7 +13,7 @@ flattening); the sink never raises and failures are logged by type only.
 
 DEC-ALERTS-REDESIGN-1: with a ``rich`` builder (production: ``runtime.trade_alert_source.trade_alert``, OANDA demo
 data only) the opened / closed trade events (ACCEPTED, CLOSED, CLOSED_AT_BROKER) become a short Floor-style Block Kit
-message (coloured side bar, link buttons) plus, when Gmail is configured, the dark HTML email; the builder runs in the
+message (coloured side bar, link buttons) and, when Gmail is configured, the dark HTML email; the builder runs in the
 worker thread and any failure falls back to the one-line text. MANUAL_CLOSE is then folded into the CLOSED alert.
 Trade events are de-duplicated per trade id (two trades closing in the same minute are both reported).
 """
@@ -153,12 +155,15 @@ class BrokerAlertSink:
         self._timeout = min(float(timeout), TIMEOUT_SECONDS)
         self._last = {}
         self._sent = deque()
-        self.sent = 0
+        self.sent = 0  # Slack outcomes
         self.dropped = 0
         self.failed = 0
+        self.email_sent = 0  # email outcomes, tracked separately
+        self.email_failed = 0
 
     def __repr__(self):
-        return f"BrokerAlertSink(sent={self.sent}, dropped={self.dropped}, failed={self.failed})"
+        return (f"BrokerAlertSink(sent={self.sent}, dropped={self.dropped}, failed={self.failed}, "
+                f"email_sent={self.email_sent}, email_failed={self.email_failed})")
 
     __str__ = __repr__
 
@@ -199,29 +204,32 @@ class BrokerAlertSink:
 
     def _payload(self, kind, detail, text):
         """(slack payload, TradeAlert or None): the Floor-style message when the rich builder has the data."""
-        alert = None
         if self._rich is not None and kind in RICH_KINDS:
             try:
                 alert = self._rich(kind, detail)
+                if alert is not None:
+                    return trade_slack_payload(alert), alert
             except Exception as exc:  # noqa: BLE001 - plain line fallback
                 LOG.warning("component=broker_alerts event=RICH_FAILED error_type=%s", type(exc).__name__)
-        return (trade_slack_payload(alert) if alert is not None else {"text": text}), alert
+        return {"text": text}, None
 
     def _deliver(self, item):
+        """Slack and email independently, each once (best effort): one channel's failure never skips the other."""
         kind, detail, text = item
-        alert = None
-        try:
-            payload, alert = self._payload(kind, detail, text)
-            send_slack(self._transport, self._webhook_url, payload, self._timeout)
-            self.sent += 1
-        except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
-            self.failed += 1
-            LOG.warning("component=broker_alerts event=SEND_FAILED error_type=%s", type(exc).__name__)
-            return
+        payload, alert = self._payload(kind, detail, text)
+        if self._webhook_url:
+            try:
+                send_slack(self._transport, self._webhook_url, payload, self._timeout)
+                self.sent += 1
+            except Exception as exc:  # noqa: BLE001 - alerting never breaks routing
+                self.failed += 1
+                LOG.warning("component=broker_alerts event=SEND_FAILED error_type=%s", type(exc).__name__)
         if alert is not None and self._email is not None and self._email.configured:
-            try:  # after Slack, best effort, once: an email failure never re-sends the Slack message
+            try:
                 self._email.send_rendered(*trade_email(alert), event_id=f"{kind}:{detail.get('trade_id')}")
+                self.email_sent += 1
             except Exception as exc:  # noqa: BLE001
+                self.email_failed += 1
                 LOG.warning("component=broker_alerts event=EMAIL_FAILED error_type=%s",
                             getattr(exc, "code", None) or type(exc).__name__)
 
@@ -254,19 +262,18 @@ class BrokerAlertSink:
 
 
 def broker_alert_sink_from_env(env=None, transport=None, clock=None, rich=None):
-    """BrokerAlertSink when alerts are ON and a Slack webhook is configured; else None (nothing sent).
+    """BrokerAlertSink when alerts are ON and Slack (valid webhook) and/or Gmail is configured; else None.
 
-    Production (no injected transport): Floor-style trade alerts from OANDA demo data, also by email when Gmail is
-    configured. Injected transports (tests) keep the plain one-line messages unless ``rich`` is given."""
+    Production (no injected transport): Floor-style trade alerts from OANDA demo data to Slack when the webhook is
+    set and by email when Gmail is configured, independently. Injected transports (tests) keep the plain one-line
+    Slack messages unless ``rich`` is given, and never email."""
     env = os.environ if env is None else env
     if not alerts_enabled(env):
         return None
-    url = env.get("SLACK_WEBHOOK_URL")
-    if not url:
-        return None
-    if not valid_slack_webhook(url):
-        LOG.warning("component=broker_alerts event=DISABLED reason=invalid_webhook_url")
-        return None
+    url = env.get("SLACK_WEBHOOK_URL") or None
+    if url and not valid_slack_webhook(url):
+        LOG.warning("component=broker_alerts event=SLACK_DISABLED reason=invalid_webhook_url")
+        url = None
     email = None
     if transport is None and rich is None:
         from runtime.alert_channels import GmailEmailChannel
@@ -274,6 +281,9 @@ def broker_alert_sink_from_env(env=None, transport=None, clock=None, rich=None):
         snapshot = dict(env)
         rich = lambda kind, detail: trade_alert(kind, detail, snapshot)  # noqa: E731
         email = GmailEmailChannel(environ=snapshot)
+        email = email if email.configured else None
+    if url is None and email is None:
+        return None
     return BrokerAlertSink(url, transport=transport, clock=clock, background=transport is None, rich=rich,
                            email=email)
 

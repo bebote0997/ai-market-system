@@ -50,8 +50,8 @@ def samples():
         pnl=1000, demo_day=5, url=URL)
 
 
-def _mrkdwn(text):
-    return escape(text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")).replace("\n", "<br>")
+def _plain(text):
+    return escape(text).replace("\n", "<br>")
 
 
 def slack_preview(payload):
@@ -64,10 +64,10 @@ def slack_preview(payload):
                          f'{escape(block["text"]["text"])}</div>')
         elif block["type"] == "section":
             parts.append(f'<div style="font:15px/1.5 Lato,Helvetica,Arial,sans-serif;color:#d1d2d3;margin-top:6px;">'
-                         f'{_mrkdwn(block["text"]["text"])}</div>')
+                         f'{_plain(block["text"]["text"])}</div>')
         elif block["type"] == "context":
             parts.append(f'<div style="font:12px/1.5 Lato,Helvetica,Arial,sans-serif;color:#9a9b9e;margin-top:6px;">'
-                         f'{_mrkdwn(block["elements"][0]["text"])}</div>')
+                         f'{_plain(block["elements"][0]["text"])}</div>')
         elif block["type"] == "actions":
             buttons = "".join(
                 f'<span style="display:inline-block;margin:8px 8px 0 0;padding:6px 12px;border:1px solid '

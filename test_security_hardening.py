@@ -323,11 +323,10 @@ class SlackHardeningTests(unittest.TestCase):
         sink = SlackNotificationSink(webhook_url="https://hooks.slack.com/services/T/B/x",
                                      transport=lambda url, payload, timeout: sent.append(payload))
         sink.deliver(event("<!channel> see <https://evil.example|bank> & more"))
-        text = payload_text(sent[0])
-        self.assertNotIn("<", text)
-        self.assertNotIn(">", text)
-        self.assertIn("&lt;!channel&gt;", text)
-        self.assertIn("&amp; more", text)
+        # Block Kit plain_text only: Slack never parses it as mrkdwn (no mention, link or formatting), shown literally.
+        self.assertNotIn("mrkdwn", json.dumps(sent[0]))
+        self.assertNotIn("text", sent[0])  # no top-level mrkdwn text
+        self.assertIn("<!channel> see <https://evil.example|bank> & more", payload_text(sent[0]))
 
     def test_i3_only_https_slack_webhooks_are_opened(self):
         for url in ("file:///etc/passwd", "http://hooks.slack.com/services/x", "https://evil.example/hook",

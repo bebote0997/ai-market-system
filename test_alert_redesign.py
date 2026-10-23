@@ -105,10 +105,18 @@ class SlackBuilderTests(unittest.TestCase):
             self.assertIn(label, ta.payload_text(ta.trade_slack_payload(closed(-0.4, -200, code))))
 
     def test_no_json_dump_no_paper_and_escaped(self):
-        hostile = opened(why="<!channel> & <https://evil.example|x>")
-        text = ta.payload_text(ta.trade_slack_payload(hostile))
-        self.assertNotIn("<!channel>", text)
-        self.assertIn("&lt;!channel&gt;", text)
+        hostile = opened(why="<!channel> & <https://evil.example|x> `code` *bold* _it_ ~strike~")
+        payload = ta.trade_slack_payload(hostile)
+        # Untrusted text is plain_text only: never parsed as mrkdwn (no mentions, links or formatting), kept literal.
+        texts = [b["text"] for b in blocks(payload) if "text" in b]
+        texts += [e for b in blocks(payload) if b["type"] == "context" for e in b["elements"]]
+        self.assertTrue(texts)
+        self.assertEqual({t["type"] for t in texts}, {"plain_text"})
+        self.assertNotIn("mrkdwn", json.dumps(payload))
+        self.assertIn("Por qué: <!channel> & <https://evil.example|x> `code` *bold* _it_ ~strike~",
+                      ta.payload_text(payload))
+        macro = ta.daily_slack_payload(ta.DailyAlert(lines=(), macro="*Fed* _hawkish_ <!here>", demo_day=2))
+        self.assertNotIn("mrkdwn", json.dumps(macro))
         for payload in (ta.trade_slack_payload(opened()), ta.trade_slack_payload(closed(2.0, 1000)),
                         ta.daily_slack_payload(ta.DailyAlert(lines=(("NAV", "100,000.00 USD"),), demo_day=2))):
             text = ta.payload_text(payload)
@@ -147,7 +155,9 @@ class SlackBuilderTests(unittest.TestCase):
     def test_floor_url(self):
         self.assertEqual(ta.floor_url({"AI_FLOOR_PUBLIC_URL": URL + "/"}), FLOOR)
         self.assertEqual(ta.floor_url({"RENDER_EXTERNAL_URL": URL}), FLOOR)
-        for bad in ("http://floor.example.com", "https://u:p@floor.example.com", "https://floor.example.com?x=1", ""):
+        self.assertEqual(ta.floor_url({"AI_FLOOR_PUBLIC_URL": URL + "/app/"}), URL + "/app/?page=floor")
+        for bad in ("http://floor.example.com", "https://u:p@floor.example.com", "https://floor.example.com?x=1", "",
+                    "https://floor.example.com/#section", "https://floor.example.com#", "https://floor.example.com/?"):
             self.assertIsNone(ta.floor_url({"AI_FLOOR_PUBLIC_URL": bad}), bad)
 
     def test_metals_have_no_invented_pips(self):
@@ -164,7 +174,7 @@ class SlackBuilderTests(unittest.TestCase):
         payload = ta.daily_slack_payload(daily)
         self.assertEqual(payload["attachments"][0]["color"], ta.GREEN)
         self.assertEqual(ta.payload_text(payload).splitlines(),
-                         ["📊 Resumen diario · OANDA Demo · 2026-10-20", "P&amp;L del día de trading: +45.50 USD",
+                         ["📊 Resumen diario · OANDA Demo · 2026-10-20", "P&L del día de trading: +45.50 USD",
                           "Macro: Dólar fuerte.", "OANDA Demo · Día 4 de 30", "Ver en el Floor"])
 
 
@@ -267,8 +277,36 @@ class BrokerSinkTests(unittest.TestCase):
         env = {"AI_FLOOR_ALERTS_ENABLED": "1", "SLACK_WEBHOOK_URL": WEBHOOK}
         sink = ba.broker_alert_sink_from_env(env)
         self.assertIsNotNone(sink._rich)
-        self.assertIsNotNone(sink._email)
+        self.assertIsNone(sink._email)  # Gmail not configured
         self.assertIsNone(ba.broker_alert_sink_from_env(env, transport=lambda *a: None)._rich)
+        gmail = {"GMAIL_APP_PASSWORD": "pw", "AI_FLOOR_ALERT_EMAIL_FROM": "a@example.com",
+                 "AI_FLOOR_ALERT_EMAIL_TO": "b@example.com"}
+        self.assertIsNotNone(ba.broker_alert_sink_from_env({**env, **gmail})._email)
+        only_email = ba.broker_alert_sink_from_env({"AI_FLOOR_ALERTS_ENABLED": "1", **gmail})  # Gmail-only setup
+        self.assertIsNotNone(only_email)
+        self.assertIsNone(only_email._webhook_url)
+        self.assertIsNotNone(only_email._rich)
+        bad_slack = ba.broker_alert_sink_from_env({"AI_FLOOR_ALERTS_ENABLED": "1", "SLACK_WEBHOOK_URL": "http://x",
+                                                   **gmail})
+        self.assertIsNone(bad_slack._webhook_url)
+        self.assertIsNone(ba.broker_alert_sink_from_env({"AI_FLOOR_ALERTS_ENABLED": "1"}))
+        self.assertIsNone(ba.broker_alert_sink_from_env({"AI_FLOOR_ALERTS_ENABLED": "0", **gmail}))
+
+    def test_email_and_slack_are_independent(self):
+        email = FakeEmail()
+        sink = ba.BrokerAlertSink(WEBHOOK, transport=mock.Mock(side_effect=OSError("slack down")), clock=lambda: 0.0,
+                                  rich=lambda kind, detail: opened(), email=email)
+        sink("ACCEPTED", {"trade_id": "7"})
+        self.assertEqual((sink.sent, sink.failed, sink.email_sent, sink.email_failed), (0, 1, 1, 0))
+        self.assertEqual([e[1] for e in email.sent], ["ACCEPTED:7"])  # Slack failure never suppresses the email
+        email = FakeEmail()
+        sink = ba.BrokerAlertSink(None, clock=lambda: 0.0, rich=lambda kind, detail: opened(), email=email)
+        sink("ACCEPTED", {"trade_id": "8"})  # Gmail-only
+        self.assertEqual((sink.sent, sink.failed, sink.email_sent), (0, 0, 1))
+        sink = ba.BrokerAlertSink(WEBHOOK, transport=lambda *a: None, clock=lambda: 0.0,
+                                  rich=lambda kind, detail: opened(), email=FakeEmail(fail=True))
+        sink("ACCEPTED", {"trade_id": "9"})
+        self.assertEqual((sink.sent, sink.failed, sink.email_sent, sink.email_failed), (1, 0, 0, 1))
 
 
 def state_db(path, **row):
@@ -333,6 +371,15 @@ class SourceTests(unittest.TestCase):
         self.assertEqual((alert.demo_day, alert.url), (3, FLOOR))
         self.assertIn("Riesgo 0.5% ($499.80) · Sesión Nueva York", ta.payload_text(ta.trade_slack_payload(alert)))
 
+    def test_no_broker_fill_is_no_data_never_the_planned_entry(self):
+        state_db(self.env["AI_FLOOR_BROKER_STATE_DB_PATH"], fill_price=None)
+        alert = self.build("ACCEPTED", {"trade_id": "101"})
+        self.assertEqual((alert.entry, alert.risk_amount, alert.risk_pct), (None, None, None))
+        text = ta.payload_text(ta.trade_slack_payload(alert))
+        self.assertIn("Entrada sin datos · SL 1.12696 · TP 1.11166\n", text)  # no pips / R:R from the plan
+        self.assertIn("Riesgo sin datos", text)
+        self.assertNotIn("1.12180", text)
+
     def test_why_is_no_data_without_setup_evidence(self):
         state_db(self.env["AI_FLOOR_BROKER_STATE_DB_PATH"], run_id="run-unknown")
         self.assertIsNone(self.build("ACCEPTED", {"trade_id": "101"}).why)
@@ -357,11 +404,26 @@ class SourceTests(unittest.TestCase):
         self.assertIsNone(self.build("ACCEPTED", "text"))
 
     def test_daily_alert_folds_macro(self):
-        alert = src.daily_alert(["Día 3 de 30", "Día de trading: 2026-10-20 (17:00 a 17:00 ET)", "NAV: 1.00 USD"],
-                                self.env, date_label="2026-10-20", demo_day=3, pnl=-2.0)
+        # Macro as_of 2026-10-21T13:15Z: inside trading day 2026-10-21 = [10-20 21:00Z, 10-21 21:00Z).
+        alert = src.daily_alert(["Día 3 de 30", "Día de trading: 2026-10-21 (17:00 a 17:00 ET)", "NAV: 1.00 USD"],
+                                self.env, date_label="2026-10-21", demo_day=3, pnl=-2.0)
         self.assertEqual(alert.lines, (("NAV", "1.00 USD"),))
         self.assertTrue(alert.macro.startswith("Dólar fuerte"))
         self.assertEqual(alert.color, ta.RED)
+
+    def test_daily_macro_bounded_to_the_reported_trading_day(self):
+        # A delayed summary of 2026-10-20 never shows the macro view written on 2026-10-21.
+        self.assertIsNone(src.daily_alert([], self.env, date_label="2026-10-20").macro)
+        window = (datetime(2026, 10, 20, 21, tzinfo=timezone.utc), datetime(2026, 10, 21, 21, tzinfo=timezone.utc))
+        self.assertIsNotNone(src.daily_alert([], self.env, window=window).macro)
+        late = (window[0], datetime(2026, 10, 21, 13, 15, tzinfo=timezone.utc))  # end is exclusive
+        self.assertIsNone(src.daily_alert([], self.env, window=late).macro)
+        self.assertIsNone(src.daily_alert([], self.env).macro)  # no window: no unbounded macro
+        with closing(sqlite3.connect(self.env["AI_FLOOR_DB_PATH"])) as db:
+            db.execute("INSERT INTO runs VALUES('s2','run-2','EURUSD')")
+            db.execute("INSERT INTO agent_decisions VALUES('s2','macro_ai','2026-10-21T20:00:00.5+00:00','Más tarde.')")
+            db.commit()
+        self.assertEqual(src.daily_alert([], self.env, window=window).macro, "Más tarde.")
 
 
 def note(kind, **kw):
@@ -389,6 +451,42 @@ class DurableSinkTests(unittest.TestCase):
         text = ta.payload_text(payload)
         self.assertIn("Decisión de ejecución PAPER LONG · EURUSD", text)
         self.assertNotIn("2400", text)
+
+
+class DailyChannelsTests(unittest.TestCase):
+    """The OANDA demo daily summary goes to Slack and email independently (each once)."""
+
+    def deliver(self, transport, webhook=WEBHOOK, email_on=True):
+        summary = note("DAILY_SUMMARY", daily_summary={"date_ny": "2026-10-20"})
+        alert = ta.DailyAlert(lines=(("NAV", "1 USD"),), demo_day=2)
+        with mock.patch.dict(os.environ, {"AI_FLOOR_RESULTS_SOURCE": "OANDA_DEMO"}), \
+                mock.patch("runtime.notifications.oanda_demo_daily_alert", return_value=alert) as build, \
+                mock.patch("runtime.alert_daily_email.email_configured", return_value=email_on), \
+                mock.patch("runtime.alert_daily_email.send_daily_email", return_value=True) as email:
+            try:
+                SlackNotificationSink(webhook_url=webhook, transport=transport).deliver(summary)
+                error = None
+            except Exception as exc:  # noqa: BLE001
+                error = exc
+        return error, build.call_count, [c.args[1] for c in email.call_args_list]
+
+    def test_slack_failure_still_emails_and_reports_the_slack_error(self):
+        error, _, emails = self.deliver(mock.Mock(side_effect=OSError("down")))
+        self.assertIsInstance(error, OSError)
+        self.assertEqual(emails, ["evt"])
+
+    def test_both_channels_once(self):
+        sent = []
+        self.assertEqual(self.deliver(lambda u, p, t: sent.append(p)), (None, 1, ["evt"]))
+        self.assertEqual(len(sent), 1)
+
+    def test_gmail_only_emails_without_slack(self):
+        error, built, emails = self.deliver(None, webhook="")
+        self.assertEqual((str(error), built, emails), ("NOT_CONFIGURED", 1, ["evt"]))
+
+    def test_no_channel_reads_nothing(self):
+        error, built, emails = self.deliver(None, webhook="", email_on=False)
+        self.assertEqual((str(error), built, emails), ("NOT_CONFIGURED", 0, []))
 
 
 class RecordingChannel:

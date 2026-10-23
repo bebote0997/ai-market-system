@@ -8,7 +8,8 @@ Pure builders, no I/O. Every number comes from the caller (OANDA demo trade rows
 - ``system_slack_payload``: one compact line for operational events (no JSON dumps, no PAPER numbers).
 
 Slack: a short message in an attachment with a coloured side bar (LONG green / SHORT red; closed: win green, loss red,
-breakeven grey), a header, two or three mrkdwn lines and URL link buttons only (no interactivity; the close itself
+breakeven grey), a header, two or three ``plain_text`` lines (agent / broker text is never parsed as mrkdwn: no
+mentions, links or `*_~ formatting) and URL link buttons only (no interactivity; the close itself
 happens on the Floor page, with its own confirmation). Email: table layout + inline CSS (Gmail safe), Floor banner,
 2-column grid, «Por qué», a table-bar sparkline (no SVG, no remote image) and a gold «Abrir el Floor» button.
 """
@@ -17,9 +18,8 @@ from decimal import Decimal, InvalidOperation
 from html import escape
 import math
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
-from runtime.notifications import slack_escape
 
 NAVY, PANEL, LINE = "#0B1426", "#111D33", "#1E2C47"
 GOLD, TEAL, TEXT, MUTED = "#D4AF37", "#2EC4B6", "#E8E6DF", "#9AA3B2"
@@ -31,7 +31,7 @@ WHY_LIMIT = 90  # «Por qué»: one plain sentence; parts are dropped whole, nev
 TEXT_LIMIT = 120  # other one-line texts (daily-summary macro line)
 BREAKEVEN_R = 0.05  # |R| below this reads as breakeven
 FLOOR_URL_ENV = ("AI_FLOOR_PUBLIC_URL", "RENDER_EXTERNAL_URL")  # first https value wins
-FLOOR_PAGE = "/?page=floor"
+FLOOR_QUERY = "page=floor"
 
 CLOSE_LABELS = {
     "TP": "Take profit", "TAKE_PROFIT": "Take profit", "SL": "Stop loss", "STOP_LOSS": "Stop loss",
@@ -138,15 +138,16 @@ def why_line(facts, limit=WHY_LIMIT):
 
 
 def floor_url(env):
-    """Floor page deep link from ``AI_FLOOR_PUBLIC_URL`` (else Render's ``RENDER_EXTERNAL_URL``); https only, else
-    None (then no buttons)."""
+    """Floor page deep link from ``AI_FLOOR_PUBLIC_URL`` (else Render's ``RENDER_EXTERNAL_URL``); https only, no
+    credentials / query / fragment, else None (then no buttons). Rebuilt from the parsed parts: ``<path>/?page=floor``."""
     for name in FLOOR_URL_ENV:
         value = str((env or {}).get(name) or "").strip()
         if not value:
             continue
         parts = urlsplit(value)
-        if parts.scheme == "https" and parts.hostname and not parts.username and not parts.query:
-            return value.rstrip("/") + FLOOR_PAGE
+        if (parts.scheme == "https" and parts.hostname and not parts.username and not parts.password
+                and not parts.query and "#" not in value and "?" not in value):
+            return urlunsplit(("https", parts.netloc, parts.path.rstrip("/") + "/", FLOOR_QUERY, ""))
     return None
 
 
@@ -277,8 +278,8 @@ def footer(day, length=30):
 
 
 # -- Slack ---------------------------------------------------------------------------------------------------------
-def _mrkdwn(text):
-    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+def _plain(text):
+    return {"type": "plain_text", "text": text, "emoji": True}
 
 
 def _buttons(url, close=False):
@@ -294,8 +295,8 @@ def _buttons(url, close=False):
 
 def _attachment(fallback, color, header, lines, context, url, close=False):
     blocks = [{"type": "header", "text": {"type": "plain_text", "text": header[:150], "emoji": True}},
-              _mrkdwn("\n".join(slack_escape(line) for line in lines)),
-              {"type": "context", "elements": [{"type": "mrkdwn", "text": slack_escape(context)}]}]
+              {"type": "section", "text": _plain("\n".join(lines))},
+              {"type": "context", "elements": [_plain(context)]}]
     # No top-level "text": Slack would print it above the attachment (twice the header); ``fallback`` feeds the
     # push notification.
     return {"attachments": [{"color": color, "fallback": fallback, "blocks": blocks + _buttons(url, close)}]}
