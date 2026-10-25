@@ -64,3 +64,14 @@ class SpanishDetailTests(unittest.TestCase):
                 shown = '\n'.join(str(item.value) for kind in ('markdown', 'caption', 'info', 'warning',
                                    'error', 'success', 'text', 'json', 'dataframe') for item in getattr(app, kind))
                 self.assertIsNone(FORBIDDEN.search(shown), shown)
+
+    def test_process_leak_scan(self):
+        from test_dashboard_luxury import LuxuryDashboardTests
+        case = LuxuryDashboardTests('test_process_real_rows_refresh_and_links')
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.test_process_real_rows_refresh_and_links()
+        app = case.app()
+        app.radio[0].set_value('Process').run()
+        shown = '\n'.join(str(item.value) for item in app.markdown)
+        self.assertNotRegex(shown, r'schema version:|origin order id:|gross pnl:|cost:|started at:|record:|plan:|market:|provider:|conflict_engine|Lado: LONG|twelve_data')

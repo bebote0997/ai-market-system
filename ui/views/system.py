@@ -42,11 +42,30 @@ def demo_health(health, store, notifications, since):
               if e.get("severity") in {"ERROR", "CRITICAL"}]
     if store is not None:
         errors += since_epoch(records(store.db, "journal", statuses=("ERROR", "CRITICAL")), since)
-        errors += since_epoch(records(store.db, "runs", failed=True), since)
+        errors += [{**row, "record": "runs"} for row in since_epoch(records(store.db, "runs", failed=True), since)]
     last_success = parse_time(result.get("last_success"))
-    # Recovery clears the current incident, not its persisted audit evidence.
-    errors = [error for error in errors
-              if last_success is None or (row_time(error) is not None and row_time(error) > last_success)]
+    # A cycle only recovers cycle failures; other incidents need live component health.
+    healthy = {"OK", "ONLINE", "HEALTHY", "RUNNING", "ACTIVE"}
+
+    def unresolved(error):
+        stamp = row_time(error)
+        if last_success is None or stamp is None or stamp > last_success:
+            return True
+        if error.get("record") == "runs" or error.get("event_type") == "RUN_FAILED":
+            return False
+        payload = error.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        component = error.get("component") or payload.get("component") or error.get("source")
+        aliases = {"provider": "market_data", "market_data_provider": "market_data",
+                   "twelve_data": "market_data", "market": "market_data",
+                   "notification": "notifications", "notification_worker": "notifications"}
+        component = aliases.get(component, component)
+        if component in result:
+            return result[component] not in healthy
+        # Unknown components cannot be declared recovered while live health is degraded.
+        return result.get("status") not in healthy
+
+    errors = [error for error in errors if unresolved(error)]
     current = is_current(result.get("last_run"), since)
     failed = current and result.get("last_cycle_status") in {"ERROR", "CRITICAL", "FAILED"}
     operational_status = health.get("status", "OK")

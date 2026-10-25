@@ -188,7 +188,7 @@ class LuxuryDashboardTests(unittest.TestCase):
         from ui.i18n_es import STEPS as LABELS
         for step in STEPS:
             self.assertIn(LABELS[step], content)
-        for value in ('IA de estructura', 'fixture only', 'closed-1', 'twelve_data', 'Opposite position conflict', 'aún no guardado', 'Datos que faltan'):
+        for value in ('IA de estructura', 'fixture only', 'closed-1', 'Twelve Data', 'Ya hay una posición en la dirección opuesta', 'aún no guardado', 'Datos que faltan'):
             self.assertIn(value, content)
         self.assertEqual(self.digest(), before)
         next(t for t in app.toggle if t.label == 'Actualizar solo · cada 60 s').set_value(False).run()

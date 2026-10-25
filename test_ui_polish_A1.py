@@ -106,3 +106,19 @@ class TechnicalPagesTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ComponentRecoveryTests(unittest.TestCase):
+    def test_recovery_matches_component(self):
+        health = {'status': 'OK', 'last_run': AFTER, 'last_success': AFTER,
+                  'last_cycle_status': 'COMPLETED'}
+        stamp = EPOCH
+        for event, changes, expected in (
+            ({'event_type': 'RUN_FAILED'}, {}, 'OK'),
+            ({'component': 'provider'}, {'market_data': 'DEGRADED'}, 'DEGRADED'),
+            ({'component': 'provider'}, {'market_data': 'OK'}, 'OK'),
+            ({'component': 'notifications'}, {'status': 'DEGRADED'}, 'DEGRADED'),
+        ):
+            with self.subTest(event=event, changes=changes):
+                error = {'timestamp_utc': stamp, 'severity': 'ERROR', **event}
+                self.assertEqual(system.demo_health({**health, **changes}, None, [error], EPOCH)['status'], expected)

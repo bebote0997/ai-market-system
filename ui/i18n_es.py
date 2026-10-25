@@ -561,7 +561,7 @@ def tr(text):
 
 
 def column(key):
-    return COLUMNS.get(key, key.replace("_", " "))
+    return COLUMNS.get(key, key if key in COLUMNS.values() else "Dato adicional")
 
 
 # An engine code ("SOME_CODE", "NOT CALLED"): upper case words joined by "_" or spaces. Single words without "_"
@@ -764,6 +764,19 @@ COLUMNS.update({"event_type": "Tipo de evento", "detail": "Detalle", "details": 
                 "final_status": "Estado final", "error": "Error"})
 
 
+COLUMNS.update({
+    "schema_version": "versión del esquema", "origin_order_id": "orden de origen",
+    "gross_pnl": "P&L bruto", "cost": "costo", "started_at": "inicio", "record": "registro",
+    "plan": "Plan de la operación", "market": "Mercado", "provider": "Proveedor",
+})
+STATUS.update({
+    "setups": "oportunidades", "journal": "bitácora", "paper_orders": "órdenes de práctica",
+    "paper_positions": "posiciones de práctica", "paper_fills": "ejecuciones de práctica",
+    "closed_trades": "operaciones cerradas", "runs": "ciclos", "twelve_data": "Twelve Data",
+    "conflict_engine": "motor de conflictos", "opposite_policy": "regla ante señales opuestas",
+})
+
+
 def readable(value):
     """Compact Spanish display text, with no technical identities or empty JSON."""
     from ui.json_views import structured
@@ -773,7 +786,7 @@ def readable(value):
     if isinstance(value, dict):
         parts = []
         for key, item in value.items():
-            if key in IDENTITY_KEYS:
+            if key in IDENTITY_KEYS or (key == "origin_order_id" and item in (None, "pending", "PENDING")):
                 continue
             text = readable(item)
             if text != MISSING:
@@ -796,7 +809,7 @@ def readable(value):
         return short_datetime_et(parsed) if parsed.tzinfo else "hora sin zona horaria"
 
     text = ISO_PATTERN.sub(local_time, text)
-    text = status_text(text)
+    text = {"LONG": "Compra", "SHORT": "Venta"}.get(text, status_text(text))
     for code, label in (("NO_DATA", "sin datos"), ("NOT CALLED", "no consultado"),
                         ("None reported", "sin novedades"), ("Transfer recorded", "transferencia registrada")):
         text = text.replace(code, label)
@@ -808,4 +821,12 @@ def readable(value):
 def display_rows(rows):
     """Copy rows for a table without changing the source evidence."""
     hidden = IDENTITY_KEYS | {column(key) for key in IDENTITY_KEYS}
-    return [{column(key): readable(value) for key, value in row.items() if key not in hidden} for row in rows]
+    keys = list(dict.fromkeys(key for row in rows for key in row if key not in hidden))
+    numeric_keys = {key for key in keys if any(number(row.get(key)) for row in rows)}
+    labels = {}
+    for key in keys:
+        label = column(key)
+        count = sum(column(previous) == label for previous in labels)
+        labels[key] = f"{label} ({count + 1})" if count else label
+    return [{labels[key]: value if key in numeric_keys and (value is None or number(value)) else readable(value)
+             for key, value in row.items() if key not in hidden} for row in rows]
