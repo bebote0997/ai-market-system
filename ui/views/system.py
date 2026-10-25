@@ -30,6 +30,34 @@ def health_rows(operational_health, since=None):
     return rows
 
 
+def demo_health(health, store, notifications, since):
+    """Read-only demo projection: historical PAPER freshness cannot degrade demo health."""
+    from ui.views.dashboard import FIRST_CYCLE_WAIT, is_current, records, since_epoch
+    if since is None:
+        return health
+    result = dict(health)
+    errors = [e for e in since_epoch(notifications, since)
+              if e.get("severity") in {"ERROR", "CRITICAL"}]
+    if store is not None:
+        errors += since_epoch(records(store.db, "journal", statuses=("ERROR", "CRITICAL")), since)
+        errors += since_epoch(records(store.db, "runs", failed=True), since)
+    current = is_current(result.get("last_run"), since)
+    failed = current and result.get("last_cycle_status") in {"ERROR", "CRITICAL", "FAILED"}
+    result["status"] = "DEGRADED" if errors or failed else (health.get("status", "OK") if current else "OK")
+    if not current:
+        for key in (*CYCLE_KEYS, "freshness", "phase7_readiness", "last_review_agents"):
+            if key in result:
+                result[key] = FIRST_CYCLE_WAIT
+    if store is not None:
+        from ui.views.dashboard import notification_rows, payloads
+        result["notification_events"] = len(since_epoch(payloads(store.db, "notification_events"), since))
+        result["slack_delivery_attempts"] = len(notification_rows(store.db, since))
+    else:
+        for key in ("notification_events", "slack_delivery_attempts"):
+            result.pop(key, None)
+    return result
+
+
 def filter_evidence_json(evidence_json, since):
     """Filter the already sanitized export in the presentation layer using the dashboard epoch rule."""
     from ui.views.dashboard import is_current, since_epoch
@@ -53,6 +81,9 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
     since = demo_since() if since is None else since
     if review and not is_current(review.get("as_of"), since):
         review = None
+    notifications = since_epoch(notifications, since, ("timestamp_utc",))
+    if operational_health:
+        operational_health = demo_health(operational_health, store, notifications, since)
     evidence_json = filter_evidence_json(evidence_json, since)
     st.header(tr("SYSTEM"))
     st.caption(tr("Read-only service inventory"))
@@ -84,7 +115,8 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
                      **({} if since is not None else {"paper": review["paper"]}),
                      "error": review["error"]}), expanded=False)
         else:
-            st.write(NO_DATA)
+            from ui.views.dashboard import FIRST_CYCLE_WAIT
+            st.write(FIRST_CYCLE_WAIT if since is not None else NO_DATA)
         if store is not None:
             st.subheader(tr("Audit by run ID"))
             run_id = st.text_input(tr("Run ID"), key="system_audit_run_id").strip()
@@ -105,6 +137,9 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
                                        filter_evidence_json(run_evidence_json(store, run_id), since),
                                        file_name="paper-run-evidence.json", mime="application/json")
         st.subheader(tr("Notifications"))
+        if not notifications and since is not None:
+            from ui.views.dashboard import FIRST_CYCLE_WAIT
+            st.info(FIRST_CYCLE_WAIT)
         dataframe(st, [{column("timestamp_utc"): e["timestamp_utc"], column("type"): e["type"],
                        column("severity"): e["severity"], column("run_id"): e["run_id"]}
                       for e in notifications[-20:]], hide_index=True, width="stretch")

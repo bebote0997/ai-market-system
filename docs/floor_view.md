@@ -44,7 +44,7 @@ o previos al epoch.
 
 | Campo | Real (fuente) | Si no hay dato |
 |---|---|---|
-| `header.equity` (+ `equity_stale`, `equity_as_of`) | Demo: NAV OANDA en caché; si es la última lectura buena (`stale`) o se observó hace más de 120 s se muestra con "(dato antiguo · HH:MM ET)"; sin hora de observación ⇒ `—`. PAPER: `paper_accounts.equity` (nunca el id de cuenta). | `—` |
+| `header.equity` (+ `equity_stale`, `equity_as_of`) | Demo: NAV OANDA en caché; si es la última lectura buena (`stale`) o se observó hace más de 120 s (30 min con mercado FX cerrado y sin ciclo activo), se muestra un único aviso breve «dato de HH:MM ET» en la cabecera; sin hora de observación ⇒ `—`. PAPER: `paper_accounts.equity` (nunca el id de cuenta). | `—` |
 | `header.pnl`, `win_rate`, `drawdown`, `trades` | Demo: `demo_statistics` desde el epoch. PAPER: `ledger_statistics` (ledger completo). | `—` |
 | `header.r_total` | R medio × nº de operaciones cerradas (solo si el R de todas es conocido). | `—` |
 | `header.drawdown_pct` | Demo: drawdown / capital de inicio del demo. PAPER: no disponible. | se muestra el drawdown en $ o `—` |
@@ -136,3 +136,5 @@ crudos en el HTML.
 `test_manual_close.py`: solicitud, rechazos (enrutado OFF, cuenta no práctica, REAL, sin operación, acción sin
 resolver), idempotencia (doble clic y 6 hilos concurrentes), cierre del router (manage/on_cycle, rechazo, UNKNOWN,
 ya cerrada, dry-run, solicitud corrupta), alerta Slack, motivo en español y flujo de dos clics con sesión del owner.
+
+Polish B: KPI móviles en dos columnas; pasos en dos filas de cuatro y nota fuera del canvas para evitar solapamientos. El texto de los paneles se ajusta al ancho sin elipsis. Refresco del payload cada 60 s (si Auto-refresh está activo); sin TTL adicional ni caché de órdenes/acciones. Mercado FX cerrado: viernes 17:00 a domingo 17:00 NY. Un fallo explícito de lectura sigue marcado aunque sea reciente.

@@ -136,6 +136,26 @@ def since_epoch(rows, since, keys=TIME_KEYS):
     return kept
 
 
+def current_states(states, since):
+    """Configuration and heartbeat stay live; cycle evidence requires a current timestamp."""
+    result = dict(states)
+    if since is not None:
+        for key in ("last_run", "last_success", "scheduler_slot"):
+            if not is_current(states.get(key), since):
+                result[key] = FIRST_CYCLE_WAIT
+        if not is_current(states.get("last_run"), since):
+            result["phase7_readiness"] = FIRST_CYCLE_WAIT
+    return result
+
+
+def notification_rows(db, since):
+    """Old events remain hidden even when their delivery was retried today."""
+    events = {row["event_id"]: row for row in since_epoch(payloads(db, "notification_events"), since)}
+    return [{**events.get(row["event_id"], {}), **row}
+            for row in since_epoch(records(db, "notification_deliveries"), since, ("attempted_at",))
+            if since is None or row["event_id"] in events]
+
+
 def scrub_paper_results(value):
     if isinstance(value, dict):
         return {k: scrub_paper_results(v) for k, v in value.items() if k not in PAPER_RESULT_KEYS}
@@ -332,9 +352,10 @@ def render(st, page):
                 trading_path = Path(os.environ.get("AI_FLOOR_DB_PATH", "data/runtime/trading_floor.db"))
                 health_path = os.environ.get("AI_FLOOR_HEALTH_DB_PATH", str(trading_path.with_name("system_health.db")))
                 with dashboard_database(health_path) as health_db:
-                    table(st, payloads(health_db, "component_health"))
+                    table(st, since_epoch(payloads(health_db, "component_health"), since,
+                                           ("last_checked_at", "observed_at")), wait)
                 st.caption(tr("Persisted component observations; no probes or health policy changes are performed."))
-                states = {row["key"]: row["value"] for row in records(db, "system_state")}
+                states = current_states({row["key"]: row["value"] for row in records(db, "system_state")}, since)
                 table(st, [{es.column("service"): key, es.column("status"): states.get(key, es.NO_DATA)} for key in
                            ("scheduler", "heartbeat", "scheduler_slot", "market_data_provider",
                             "market_provider_mode", "ai_provider", "macro_provider", "api_status",
@@ -349,15 +370,12 @@ def render(st, page):
                 ledger_path = os.environ.get("AI_FLOOR_ALERTS_LEDGER_PATH")
                 if ledger_path:
                     with dashboard_database(ledger_path) as ledger_db:
-                        table(st, since_epoch(records(ledger_db, "alert_deliveries"), since))
+                        table(st, since_epoch(records(ledger_db, "alert_deliveries"), since), wait)
                 else:
                     st.info(es.NO_DATA)
                 st.subheader(tr("V1 notification deliveries"))
-                events = {row["event_id"]: json.loads(row["payload"])
-                          for row in records(db, "notification_events")}
-                rows = [{**events.get(row["event_id"], {}), **row}
-                        for row in since_epoch(records(db, "notification_deliveries"), since, ("attempted_at",))]
-                table(st, sorted(rows, key=lambda row: row["attempted_at"], reverse=True)[:50])
+                rows = notification_rows(db, since)
+                table(st, sorted(rows, key=lambda row: row["attempted_at"], reverse=True)[:50], wait)
             elif page == "HISTORY":
                 run_id = st.text_input(tr("Run ID"), key="history_run_id").strip()
                 setup_id = st.text_input(tr("Setup ID"), key="history_setup_id").strip()
