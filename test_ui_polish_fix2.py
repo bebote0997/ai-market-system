@@ -77,5 +77,5 @@ class PresentationTests(unittest.TestCase):
 
 class StatusLabelTests(unittest.TestCase):
     def test_stopped_stays_operational_label(self):
-        from ui.i18n_es import STATUS, close_reason_text
+        from ui.i18n_es import STATUS
         self.assertEqual(STATUS["STOPPED"], "Detenido")
