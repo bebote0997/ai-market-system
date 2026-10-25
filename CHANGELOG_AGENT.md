@@ -2175,3 +2175,19 @@ Tests: `test_reversal.py` (+3), `test_floor_view.py` (+3). Baseline 2435 tests O
 - Narrow stage (< 600 px, `body.mob`): the scene fits the rooms + wall screens bounding box (not the empty floor corners); no wall-screen text or room names; the EURUSD/XAUUSD status boxes become an HTML legend strip under the canvas (EURUSD opens the trade drawer when live); name plates that would overlap another text box are skipped, and bubbles avoid the plates.
 - Step bar: tighter letter-spacing below 1280 px so labels stay within two lines. Idle stays static; `?step=` / `?agent=` / `?detail=` and sample mode unchanged.
 - Docs `docs/floor_view.md`; tests `test_floor_view.py` (+1). Checked with a Node stub-canvas harness at 360/390/1100/1600 px (idle, sample, `?step=`, `?agent=`, `?detail`): no JS errors, no overlapping text boxes. `test_floor_view` OK; `test_results_source` has 1 failure from the concurrent luxury/dashboard edits ("Equity (NAV) · OANDA demo"), not from this chunk.
+
+- Chunk B (2026-10-25): Floor con antigüedad contextual, aviso único, panel NAV ajustado y layout móvil; baseline 38 PASS, regresiones y análisis de rendimiento locales.
+
+- A1 (2026-10-25): Salud/Sistema/Alertas/Bitácora filtran evidencia anterior a la época demo; estado Bien antes del primer ciclo, ERROR/CRITICAL actuales conservados; baseline 44 y validación enfocada 51 tests OK, Ruff OK.
+
+- A2 (2026-10-25): Detalle/Control/Mesa con estados en español, horas ET y resúmenes sin UUIDs/JSON vacío; evidencia y descargas intactas; 144 tests relevantes OK (1 omitido), A2 4 OK, Ruff y diff-check OK.
+- A3 (2026-10-25): Detalle elige el primer símbolo habilitado no pausado (EURUSD), muestra reloj/gráficos y etiquetas en ET, unifica títulos y avisos oscuros con borde dorado; baseline 37 OK, validación enfocada 70 OK, Ruff y diff-check OK; sin commit/push.
+
+- polish_fix1: conserva evidencia cruda en tablas ocultas, restaura marcas y textos, mantiene fallos operativos actuales y muestra horas NAV/operaciones; regresiones UI verificadas.
+- polish_fix2 (2026-10-25): alertas oscuras en stAlertContainer, KPI vacíos compactos y pérdida diaria en fila móvil propia, salud recuperada tras último éxito sin borrar errores históricos y etiquetas españolas de ejecución/riesgo/notificaciones; 203 tests dirigidos PASS, Ruff y diff-check PASS; sin commit/push.
+- polish_fix3 (2026-10-25): Detalle usa empty_market ante snapshots UI incompatibles sin ocultar otros errores; ui/state.py y test_ui_polish_A3.py, baseline 14 y validación 17 tests OK, Ruff OK; sin commit/push.
+- Fix4: etiquetas españolas en Proceso y detalles, recuperación de Estado por componente y tablas con números ordenables; regresiones de presentación añadidas, sin cambios de ejecución ni commit/push.
+
+- Polish fix5: demo_health solo resuelve fallos de runs/RUN_FAILED con un éxito estrictamente posterior; otros errores de época y salud operativa se conservan; 73 tests relevantes OK, ruff OK.
+
+- Fix6: etiquetas y estados de Sistema/Salud en español; métricas de detalle sin elipsis; regresiones de traducción y CSS.

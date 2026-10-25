@@ -128,8 +128,8 @@ class Phase10DashboardTests(unittest.TestCase):
         app.radio[0].set_value("HEALTH").run()
         self.assertEqual(app.dataframe[0].value.iloc[0]["status"], "DEGRADED")
         services = app.dataframe[1].value.set_index("Servicio")["Estado"]
-        self.assertEqual(services["scheduler"], "DISABLED")
-        self.assertEqual(services["api_status"], "NO_DATA")
+        self.assertEqual(services["Programador"], "DISABLED")
+        self.assertEqual(services["Estado de la API"], "NO_DATA")
         app.radio[0].set_value("SETUPS").run()
         self.assertEqual(set(app.dataframe[0].value["symbol"]), {"XAUUSD", "EURUSD"})
         app.radio[0].set_value("DECISIONS").run()

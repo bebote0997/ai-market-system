@@ -4,7 +4,10 @@ from ui.tables import dataframe
 
 def render(st, vm, durable_rows=()):
     """``durable_rows``: persisted journal rows (demo mode: already filtered to the epoch by the caller)."""
+    from ui.views.dashboard import FIRST_CYCLE_WAIT, demo_since, since_epoch
     from ui.views.luxury import display
+    since = demo_since()
+    durable_rows = since_epoch(durable_rows, since, ("timestamp",))
     st.header(tr("JOURNAL"))
     st.caption(tr("In-memory snapshot only · durable persistence deferred") if vm.sample else
                "Eventos guardados del sistema · horas de Nueva York (ET)")
@@ -17,7 +20,7 @@ def render(st, vm, durable_rows=()):
     rows = []
     for item in (vm.journal if vm.sample else durable_rows):
         row = {"timestamp": str(item.timestamp), "run_id": item.run_id, "symbol": item.symbol,
-               "source": item.entity_id, "event": item.event_type, "details": str(item.details)} if vm.sample else {
+               "source": item.entity_id, "event": item.event_type, "details": item.details} if vm.sample else {
                "timestamp": item["timestamp"], "run_id": item["run_id"], "symbol": item["symbol"],
                "source": item["source"], "event": item["event_type"], "details": item["payload"]}
         if symbol != "ALL" and row["symbol"] != symbol:
@@ -32,4 +35,8 @@ def render(st, vm, durable_rows=()):
             continue
         rows.append(row)
     shown = [{**row, "timestamp": display(row["timestamp"]), "event": status_text(row["event"])} for row in rows]
-    dataframe(st, [{column(k): v for k, v in row.items()} for row in shown], width="stretch", hide_index=True) if rows else st.info(tr("NO_DATA — no journal events in this snapshot."))
+    if rows:
+        dataframe(st, [{column(k): v for k, v in row.items()} for row in shown], width="stretch", hide_index=True)
+    else:
+        st.info(FIRST_CYCLE_WAIT if since is not None and not vm.sample else
+                tr("NO_DATA — no journal events in this snapshot."))

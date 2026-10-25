@@ -568,8 +568,8 @@ class FloorStaticTests(unittest.TestCase):
 
     def test_hud_and_narrow_stage_layout(self):
         asset = floor_view.ASSET.read_text(encoding="utf-8")
-        # HUD: short muted "sin operaciones" cells that wrap; balance only when it differs from the NAV
-        self.assertIn("NOOPK='sin operaciones'", asset)
+        # HUD: compact empty values; balance only when it differs from the NAV
+        self.assertIn("NOOPK='—'", asset)
         self.assertIn("const wr=NOTR?NOOPK:", asset)
         self.assertIn("const BALX=ok(HD.balance)&&!(ok(HD.equity)&&Math.abs(HD.balance-HD.equity)<.005);", asset)
         self.assertIn(".kpis{display:flex;flex-wrap:wrap;", asset)

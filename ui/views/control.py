@@ -19,7 +19,7 @@ from ui.i18n_es import status_text
 
 ACCOUNT_KEYS = ("paper", "broker_demo", "real")
 BALANCE_REFRESH = "10s"  # the read-only summary itself is cached >= 5 s (execution/oanda_readonly.py)
-VIEW_LABELS = {"practice": "Demo · cuenta practice OANDA", "live": "Real · solo lectura (operar bloqueado)"}
+VIEW_LABELS = {"practice": "Demo · cuenta de práctica OANDA", "live": "Real · solo lectura (operar bloqueado)"}
 MISSING_ENV_NAMES = {"practice": ("OANDA_PRACTICE_TOKEN", "OANDA_ACCOUNT_ID"),  # variable NAMES only
                      "live": ("OANDA_LIVE_TOKEN", "OANDA_LIVE_ACCOUNT_ID")}
 # What the owner reads instead of the variable name (presentation only; the names stay in MISSING_ENV_NAMES).
@@ -29,14 +29,14 @@ MISSING_TEXT = {"OANDA_PRACTICE_TOKEN": "falta configurar el acceso a OANDA (tok
                 "OANDA_LIVE_ACCOUNT_ID": "falta configurar el número de la cuenta real de OANDA"}
 VIEW_STATUS = {"SIN_TOKEN": "sin token", "SIN_CUENTA": "sin cuenta", "ERROR": "error de lectura"}
 ROUTING_CHIPS = {"off": ("Enrutado a broker demo: apagado", ""), "dry_run": ("Enrutado a broker demo: dry-run", "warn"),
-                 "on": ("Enrutado a broker demo: activo (cuenta practice)", "pos")}
+                 "on": ("Enrutado a broker demo: activo (cuenta de práctica)", "pos")}
 DASH = "—"
 LABELS = {"paper": "Cuenta de práctica interna", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
 # Mirrors execution.historial.SOURCES (kept here so a failed lazy import still names the expected files).
-HISTORY_SOURCES = (("v1_replay", "v1_replay_eurusd.json", "Replay estrategia V1 (velas Twelve Data)"),
+HISTORY_SOURCES = (("v1_replay", "v1_replay_eurusd.json", "Simulación histórica de la estrategia V1 (velas Twelve Data)"),
                    ("paper", "paper_closed_trades_eurusd.json", "Operaciones cerradas de práctica interna (agregado)"))
-HISTORY_TITLE = "📚 Historial (referencia) · no son trades de OANDA"
-HISTORY_CHIP = "Referencia · no son trades de OANDA"
+HISTORY_TITLE = "📚 Historial (referencia) · no son operaciones de OANDA"
+HISTORY_CHIP = "Referencia · no son operaciones de OANDA"
 HISTORY_EMPTY = "sin datos todavía (se cargará con la exportación)"
 EMERGENCY_PHRASE, DRIFT_PHRASE = "PARAR TODO", "LIMPIAR DRIFT"
 DRIFT_SENT = ("Solicitud enviada: el sistema la verificará en el próximo ciclo; se limpia solo si las posiciones del "
@@ -186,7 +186,7 @@ def render_balances(st, real):
     rows = "".join(f'<div class="small">{escape(label)}: <b>{escape(text)}</b></div>'
                    for label, text in balance_lines(account_view(environment)))
     note = ("Solo se lee el saldo (GET resumen de cuenta). No hay botones de operar: la ejecución REAL sigue bloqueada."
-            if real else "Cuenta demo (practice) de OANDA. Saldo leído en modo solo lectura.")
+            if real else "Cuenta de práctica de OANDA. Saldo leído en modo solo lectura.")
     html(st, f'<div class="card"><h3>{escape(VIEW_LABELS[environment])}</h3>{rows}'
              f'<div class="small">{escape(note)}</div></div>')
 
@@ -324,7 +324,7 @@ def render_emergency(st, snapshot, api):
                  '(se ejecuta en el próximo ciclo del sistema).</span>')
     elif result == "error":
         html(st, '<span class="chip neg">Error: la parada no se pudo guardar por completo. Revisa el sistema; como '
-                 'respaldo, el owner puede activar la parada de emergencia en la configuración del servidor.</span>')
+                 'respaldo, el propietario puede activar la parada de emergencia en la configuración del servidor.</span>')
     if api is None:
         note = "el botón no está disponible (no se pudo cargar el módulo de acciones)"
     elif not enabled:
@@ -345,7 +345,7 @@ def render_drift(st, api):
              'que no coinciden con el estado local del sistema, así que no se abren operaciones nuevas.</div>')
     if api["flags"].get("drift_clear") is not True:
         html(st, '<div class="small">La limpieza desde el panel está desactivada. Revisa y cierra a mano en OANDA las '
-                 'posiciones que no correspondan; el bloqueo se mantiene hasta que el owner lo limpie.</div>')
+                 'posiciones que no correspondan; el bloqueo se mantiene hasta que el propietario lo limpie.</div>')
         return
     if api["state"].get("drift_clear_pending") is True:
         html(st, '<div class="small">Ya hay una solicitud pendiente de verificación.</div>')
@@ -380,7 +380,7 @@ def render_history(st):
         cards.append(f'<div class="card"><h4>{escape(label)} · EURUSD</h4>'
                      f'<span class="chip">{escape(HISTORY_CHIP)}</span>{body}</div>')
     html(st, f'<div class="card"><h3>{escape(HISTORY_TITLE)}</h3>'
-             '<div class="bubble">Estadísticas de referencia (baseline) de sistemas anteriores, solo en R y conteos. '
+             '<div class="bubble">Estadísticas de referencia de sistemas anteriores, solo en R y conteos. '
              'Están separadas de las estadísticas de la demo en vivo de OANDA y nunca se mezclan con ellas.</div>'
              f'{"".join(cards)}</div>')
 

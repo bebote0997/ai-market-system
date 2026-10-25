@@ -113,10 +113,13 @@ header[data-testid="stHeader"]{background:transparent}
 .stButton > button:disabled{border-color:#25322f;color:#7f9593;background:#0d0d0e}
 /* Alerts (st.info / warning / error / success) */
 [data-testid="stAlert"]{border-radius:12px}
-[data-testid="stAlertContentInfo"],[data-testid="stAlert"]:has([data-testid="stAlertContentInfo"]){background:#0b2523;color:#cdfaf6;border:1px solid #14423e}
-[data-testid="stAlertContentWarning"],[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]){background:#271c0b;color:#f6d79a;border:1px solid #5a421a}
+[data-testid="stAlert"]:has([data-testid="stAlertContentInfo"]){background:#0d1416;color:#e8eceb;border:1px solid #1a2325;border-left:3px solid #d9b45a}
+[data-testid="stAlertContentInfo"]{background:transparent;color:inherit}
+[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]){background:#0d1416;color:#e8eceb;border:1px solid #1a2325;border-left:3px solid #d9b45a}
+[data-testid="stAlertContentWarning"]{background:transparent;color:inherit}
 [data-testid="stAlertContentError"],[data-testid="stAlert"]:has([data-testid="stAlertContentError"]){background:#2a0f16;color:#ffc2cd;border:1px solid #5c1f2c}
-[data-testid="stAlertContentSuccess"],[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]){background:#0d2419;color:#b9f3d2;border:1px solid #1d4a33}
+[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]){background:#0d1416;color:#e8eceb;border:1px solid #1a2325;border-left:3px solid #d9b45a}
+[data-testid="stAlertContentSuccess"]{background:transparent;color:inherit}
 [data-testid="stAlert"] p{color:inherit}
 .safety{background:#1d1910;color:#e9cd85;border:1px solid #4a3e22;border-radius:12px;padding:10px 14px;font-weight:700;letter-spacing:.04em;overflow-wrap:anywhere}
 .critical{background:#2a0f16;color:#ff8da1;border:1px solid #5c1f2c;border-radius:12px;padding:12px;font-weight:700}
@@ -157,4 +160,27 @@ header[data-testid="stHeader"]{background:transparent}
  .tf .card,.tf .kpi{min-width:0}
  .tf .scroll{max-width:100%}
  .block-container{padding:20px 14px}
+}
+
+/* Streamlit 1.65 paints the inner container, including its text and icon. */
+[data-testid="stAlertContainer"]{background:#0d1416!important;color:#e8eceb!important;border:1px solid #1a2325!important;border-left:3px solid #d9b45a!important;border-radius:12px}
+[data-testid="stAlertContainer"] :is(p,a,[data-testid^="stAlertContent"]){background:transparent!important;color:inherit!important}
+[data-testid="stAlertContainer"] :is(svg,[data-testid="stIconMaterial"]){color:#d9b45a!important}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]){background:#2a0f16!important;color:#ffc2cd!important;border:1px solid #5c1f2c!important;border-left:3px solid #e05b70!important}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) :is(svg,[data-testid="stIconMaterial"]){color:#e05b70!important}
+
+/* Detail KPIs must remain readable in six-column desktop and mobile layouts. */
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] > div,
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] p {
+  white-space:normal!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] > div {
+  font-size:20px!important;
+  line-height:1.35;
 }

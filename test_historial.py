@@ -440,8 +440,8 @@ class HistoryCardTests(unittest.TestCase):
                    historial.Baseline("paper", "paper_closed_trades_eurusd.json", "Trades cerrados PAPER (agregado)",
                                       historial.OK, stats=VALID)]
         text = self.render(records)
-        self.assertIn("📚 Historial (referencia) · no son trades de OANDA", text)
-        self.assertEqual(text.count("Referencia · no son trades de OANDA"), 2)
+        self.assertIn("📚 Historial (referencia) · no son operaciones de OANDA", text)
+        self.assertEqual(text.count("Referencia · no son operaciones de OANDA"), 2)
         self.assertIn("separadas de las estadísticas de la demo en vivo de OANDA", text)
         self.assertIn("sin datos todavía (se cargará con la exportación)", text)
         self.assertIn("data/historial/v1_replay_eurusd.json", text)

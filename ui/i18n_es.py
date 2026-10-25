@@ -126,6 +126,7 @@ TEXT = {
     "Failed runs": "Ciclos fallidos",
     "Error journal": "Bitácora de errores",
     "AI TRADING FLOOR": "AI TRADING FLOOR",
+    "EXPERIMENT": "Experimento",
     "SAMPLE / DEMO — NOT CURRENT PRICES": "DATOS DE EJEMPLO — NO SON PRECIOS ACTUALES",
     "CRITICAL — STALE DATA": "CRÍTICO — DATOS VIEJOS",
     "NEXT ANALYSIS: NOT SCHEDULED · AI INTERPRETS. PYTHON VALIDATES. RISK ENGINE AUTHORIZES. PAPER BROKER EXECUTES.":
@@ -152,17 +153,17 @@ TEXT = {
     "NO_DATA — no sourced event facts in this snapshot.": "Sin datos — no hay noticias con fuente en esta foto.",
     "JOURNAL PREVIEW": "VISTA PREVIA DE LA BITÁCORA",
     "No journal events in this snapshot.": "No hay eventos en la bitácora de esta foto.",
-    "JOURNAL": "BITÁCORA",
+    "JOURNAL": "Bitácora",
     "In-memory snapshot only · durable persistence deferred": "Solo la foto en memoria",
     "NO_DATA — no journal events in this snapshot.": "Sin datos — no hay eventos en la bitácora.",
-    "MARKETS": "MERCADOS",
+    "MARKETS": "Mercados",
     "1H context · 15M structure · 5M timing. Bias is context, not an order.":
         "1 h contexto · 15 min estructura · 5 min momento de entrada. La tendencia es contexto, no una orden.",
-    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS (OANDA Demo)",
+    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS",
     "30-DAY DEMO IN PROGRESS": "Demo de 30 días en curso en la cuenta de práctica OANDA Demo",
     "The demo runs on the cloud scheduler with durable history. Metrics and the OANDA demo evidence report grow with observed trades.":
         "El demo corre en el programador de la nube con historial duradero. Las métricas y el informe de evidencia del demo OANDA crecen con las operaciones observadas.",
-    "SYSTEM": "SISTEMA",
+    "SYSTEM": "Sistema",
     "Read-only service inventory": "Inventario de servicios · solo lectura",
     "Latest review": "Última revisión",
     "Audit by run ID": "Auditar por ID de ciclo",
@@ -190,7 +191,7 @@ COLUMNS = {
     "account_id": "Cuenta", "realized_pnl": "P&L realizado", "equity": "Capital (equity)", "setup_id": "ID del setup",
     "timestamp": "Hora", "service": "Servicio", "event": "Evento", "details": "Detalles", "experiment": "Experimento",
     "analysis_state": "Estado del análisis", "AI contextual bias": "Tendencia según la IA", "risk_state": "Riesgo",
-    "freshness": "Actualidad de datos", "timestamp_utc": "Hora (UTC)", "type": "Tipo", "severity": "Gravedad",
+    "freshness": "Actualidad de datos", "timestamp_utc": "Hora (ET)", "type": "Tipo", "severity": "Gravedad",
     "state": "Estado", "setup": "Setup", "open_position": "Posición abierta", "scheduler": "Programador",
     "last_success": "Último ciclo exitoso", "heartbeat": "Última señal de vida", "last_run": "Último ciclo",
     "market_data_provider": "Proveedor de precios", "ai_provider": "Proveedor de IA", "decision": "Decisión",
@@ -229,6 +230,229 @@ STATUS = {
     "CLOSED_AT_BROKER": "Cerrada en el broker", "TRIGGERED": "Activado",
 }
 
+# Explicit labels for persisted execution, risk, health and notification evidence.
+STATUS.update({
+    'OPPOSITE_POSITION_CONFLICT': 'Ya hay una posición en la dirección opuesta',
+    'OPPOSITE_PENDING_CONFLICT': 'Ya hay una orden pendiente en la dirección opuesta',
+    'SAME_DIRECTION_POSITION_CONFLICT': 'Ya hay una posición en la misma dirección',
+    'SAME_DIRECTION_PENDING_CONFLICT': 'Ya hay una orden pendiente en la misma dirección',
+    'NO_CONFLICT': 'Sin conflictos',
+    'DUPLICATE_SETUP': 'Setup repetido',
+    'UNKNOWN_EXISTING_SETUP_ID': 'Falta el ID del setup existente',
+    'MISSING_NEW_SETUP_ID': 'Falta el ID del nuevo setup',
+    'INVALID_DIRECTION': 'Dirección inválida',
+    'SAME_DIRECTION_NEW_SETUP': 'Nuevo setup en la misma dirección',
+    'OPPOSITE_SETUP': 'Setup opuesto',
+    'UNKNOWN_SETUP_ID': 'ID del setup desconocido',
+    'INVALID_CANDIDATE': 'Candidato inválido',
+    'EXISTING_POSITION_CONFLICT': 'Conflicto con una posición existente',
+    'EXISTING_PENDING_CONFLICT': 'Conflicto con una orden pendiente',
+    'BLOCK_NEW_EXPOSURE': 'Bloquear nueva exposición',
+    'CONTINUE_TO_RISK': 'Continuar al motor de riesgo',
+    'CONFLICT_DECISION': 'Decisión sobre conflictos',
+    'CONFLICT_ATTEMPT_STALE': 'Intento de conflicto desactualizado',
+    'RUN_ID_CANDIDATE_MISMATCH': 'El ciclo no coincide con el candidato',
+    'RUN_ID_IDENTITY_UNKNOWN': 'Identidad del ciclo desconocida',
+    'RISK_POLICY_NOT_REGISTERED': 'Política de riesgo no registrada',
+    'NOT_EVALUATED': 'Sin evaluar',
+    'NOT_SUBMITTED': 'Sin enviar',
+    'RESERVED': 'Reservado',
+    'SUBMITTED': 'Enviada',
+    'BLOCKED': 'Bloqueado',
+    'DUPLICATE': 'Repetido',
+    'DUPLICATE_RUN': 'Ciclo repetido',
+    'STALE_STATE': 'Estado desactualizado',
+    'STALE_EVENT': 'Evento desactualizado',
+    'STALE': 'Desactualizado',
+    'MISMATCH': 'No coincide',
+    'NONE': 'Ninguno',
+    'COMMITTED': 'Guardado',
+    'ACCEPTED': 'Aceptada',
+    'ACTION_UNRESOLVED': 'Acción sin resolver',
+    'UNRESOLVED_ACTION': 'Acción sin resolver',
+    'ALREADY_ROUTED': 'Ya enviada al broker',
+    'BREAKEVEN': 'Stop ajustado al precio de entrada',
+    'BREAKEVEN_BLOCKED': 'Ajuste del stop bloqueado',
+    'BREAKEVEN_REJECTED': 'Ajuste del stop rechazado',
+    'BREAKEVEN_UNKNOWN': 'Resultado del ajuste del stop desconocido',
+    'CLOSE': 'Cerrar',
+    'CLOSE_FAILED': 'Falló el cierre',
+    'CLOSE_REJECTED': 'Cierre rechazado',
+    'CLOSE_UNKNOWN': 'Resultado del cierre desconocido',
+    'DAILY_LOSS': 'Pérdida diaria',
+    'DAILY_LOSS_HALT': 'Detenido por pérdida diaria',
+    'DAILY_LOSS_RESUMED': 'Reanudado tras el bloqueo de pérdida diaria',
+    'DAILY_LOSS_TRANSFERS_UNAVAILABLE': 'Sin datos de transferencias para el límite diario',
+    'DAILY_LOSS_UNAVAILABLE': 'Sin datos para calcular la pérdida diaria',
+    'DRAWDOWN': 'Caída del capital',
+    'DRAWDOWN_HALT': 'Detenido por caída del capital',
+    'DRIFT': 'Diferencia entre el estado local y el broker',
+    'DRIFT_CLEARED': 'Diferencia con el broker resuelta',
+    'DRIFT_CLEAR_REFUSED': 'No se pudo dar por resuelta la diferencia con el broker',
+    'DRY_RUN': 'Simulación sin envío',
+    'EMERGENCY': 'Emergencia',
+    'EMERGENCY_ACTIVE': 'Parada de emergencia activa',
+    'FLATTEN_DAILY_LOSS': 'Cerrar posiciones por pérdida diaria',
+    'FLATTEN_DRAWDOWN': 'Cerrar posiciones por caída del capital',
+    'FLATTEN_REQUEST_DONE': 'Solicitud de cierre completada',
+    'FLATTEN_REQUEST_PENDING': 'Solicitud de cierre pendiente',
+    'FRIDAY_FLATTEN_FAILED': 'Falló el cierre del viernes',
+    'FRIDAY_PREFLATTEN': 'Cierre preventivo del viernes',
+    'FRIDAY_PREFLATTEN_SKIPPED': 'Cierre preventivo del viernes omitido',
+    'IGNORED': 'Ignorado',
+    'INTENT': 'Intención registrada',
+    'KEEP': 'Conservar posición',
+    'MANUAL_CLOSE_DRY_RUN': 'Simulación de cierre manual',
+    'MANUAL_CLOSE_FAILED': 'Falló el cierre manual',
+    'MANUAL_CLOSE_NOT_OPEN': 'La operación ya no está abierta',
+    'MANUAL_CLOSE_PENDING': 'Cierre manual pendiente',
+    'MANUAL_CLOSE_REFUSED': 'Cierre manual rechazado',
+    'MARKET_CLOSED': 'Mercado cerrado',
+    'NOT_ROUTED': 'Sin envío al broker',
+    'NOT_SENT_CONFIRMED': 'Confirmado que no se envió',
+    'NO_OPEN_TIME': 'Sin hora de apertura',
+    'NO_PRICE': 'Sin precio',
+    'OANDA_DEMO': 'OANDA de práctica',
+    'PAPER': 'Práctica interna',
+    'OTHER': 'Otro',
+    'READ_FAILED': 'Falló la lectura',
+    'RECONCILE_READ_FAILED': 'Falló la lectura para conciliar',
+    'RESOLVED': 'Resuelto',
+    'REVERSAL_DRY_RUN': 'Simulación de giro de posición',
+    'REVERSAL_FLAT': 'Sin posición tras el giro',
+    'REVERSAL_SKIPPED': 'Giro de posición omitido',
+    'SKIPPED_ZERO_UNITS': 'Omitido por tamaño de cero unidades',
+    'TRANSFER_FUNDS': 'Transferencia de fondos',
+    'ONLINE': 'En línea',
+    'NOT_APPLICABLE': 'No corresponde',
+    'NOT_RECORDED': 'Sin registro',
+    'NOT_CONFIGURED': 'Sin configurar',
+    'NOT_CHECKED': 'Sin comprobar',
+    'NOT_CERTIFIED': 'Sin certificar',
+    'READY': 'Listo',
+    'NOT_READY': 'Aún no está listo',
+    'PASSED': 'Comprobación superada',
+    'SUCCESS': 'Éxito',
+    'HALTED': 'Sistema detenido',
+    'HALT_REFUSED': 'Solicitud de parada rechazada',
+    'HALT_UNCONFIRMED': 'Parada sin confirmar',
+    'HALT_OBSERVED': 'Parada detectada',
+    'CLEAN_SHUTDOWN': 'Cierre normal del sistema',
+    'SLOTS_MISSED': 'Ciclos programados omitidos',
+    'AI_REVIEW_RECOVERED': 'Revisión de IA recuperada',
+    'AI_REVIEW_UNHEALTHY': 'Revisión de IA con fallas',
+    'AI_PROVIDER_FAILED': 'Falló el proveedor de IA',
+    'AI_PROVIDER_RECOVERED': 'Proveedor de IA recuperado',
+    'PROVIDER_RECOVERED': 'Proveedor recuperado',
+    'BROKER_DECLINED_PLAN': 'El broker rechazó el plan',
+    'CLOSED_BY_MANAGEMENT': 'Cerrada por gestión de la posición',
+    'DATA_CHECK': 'Comprobación de datos',
+    'DATA_STALE': 'Datos desactualizados',
+    'DATA_UNAVAILABLE': 'Datos no disponibles',
+    'DIAGNOSTIC_OUTSIDE_SESSION': 'Diagnóstico fuera de sesión',
+    'EVIDENCE_OBSERVE_BUDGET_EXCEEDED': 'Se agotó el tiempo de lectura de evidencia',
+    'EVIDENCE_OBSERVE_FAILED': 'Falló la lectura de evidencia',
+    'EVIDENCE_OBSERVE_SKIPPED_BUSY': 'Lectura de evidencia omitida por estar ocupada',
+    'EVIDENCE_UNAVAILABLE': 'Evidencia no disponible',
+    'EXECUTION_GATE_BLOCKED': 'Ejecución bloqueada por seguridad',
+    'EXISTING_POSITION': 'Posición existente',
+    'FRIDAY_FLATTEN_WINDOW': 'Ventana de cierre del viernes',
+    'NO_TRADE': 'Sin operación',
+    'ORDERS_CANCELLED': 'Órdenes canceladas',
+    'PAPER_DIAGNOSTIC_BLOCKED': 'Diagnóstico de práctica bloqueado',
+    'PAPER_ORDER_SUBMITTED': 'Orden de práctica enviada',
+    'PENDING_ORDER': 'Orden pendiente',
+    'PENDING_FILL': 'Ejecución pendiente',
+    'NOT_FILLED': 'Sin ejecutar',
+    'POLICY_NOT_READY': 'Política aún no disponible',
+    'POLICY_REVIEW_UNAVAILABLE': 'Revisión de política no disponible',
+    'RETRY': 'Reintento',
+    'SESSION_SKIPPED': 'Fuera de la sesión operativa',
+    'STALE_BAR': 'Vela desactualizada',
+    'STALE_PAPER_STATE': 'Estado de práctica desactualizado',
+    'STRUCTURE_CHANGE': 'Cambio de estructura',
+    'STRUCTURE_REVERSE_SUBMITTED': 'Orden de giro por estructura enviada',
+    'SYMBOL_PAUSED_EXIT': 'Salida por símbolo pausado',
+    'TRADE_DURATION_EXIT': 'Salida por duración de la operación',
+    'TRADE_DURATION_NO_DATA': 'Sin datos para calcular la duración',
+    'V2_OPPOSITE_SETUP_POLICY_INVALID': 'Política de setups opuestos inválida',
+    'TIME_CANCEL_FRIDAY_NY_CLOSE': 'Orden cancelada por cierre del viernes',
+    'TIME_CANCEL_DAY2_NY_CLOSE': 'Orden cancelada por cierre del segundo día',
+    'RATE_LIMITED': 'Límite de solicitudes alcanzado',
+    'CONNECTION_ERROR': 'Error de conexión',
+    'INVALID_WEBHOOK_URL': 'Dirección de notificaciones inválida',
+    'MACRO_HIGH_IMPORTANCE': 'Noticia macro de gran importancia',
+    'MACRO_HIGH_RELEVANCE': 'Noticia macro muy relevante',
+    'AUTH_ERROR': 'Error de autenticación',
+    'AUTH_FAILURE': 'Falló la autenticación',
+    'ACCESS_DENIED': 'Acceso denegado',
+    'BILLING_OR_QUOTA': 'Problema de facturación o cuota',
+    'DATABASE_ERROR': 'Error de base de datos',
+    'DISK_ERROR': 'Error de disco',
+    'EMAIL_FAILURE': 'Falló el envío de correo',
+    'INCOMPLETE_RESPONSE': 'Respuesta incompleta',
+    'INTERNAL_ERROR': 'Error interno',
+    'INVALID_RESPONSE': 'Respuesta inválida',
+    'INVALID_STRUCTURED_RESPONSE': 'Respuesta estructurada inválida',
+    'MODEL_UNAVAILABLE': 'Modelo no disponible',
+    'NOT_ENTITLED': 'Sin permiso para estos datos',
+    'PAPER_BROKER_ERROR': 'Error del broker de práctica',
+    'PROVIDER_5XX': 'Error del servidor del proveedor',
+    'PROVIDER_ERROR': 'Error del proveedor',
+    'QUOTA_EXHAUSTED': 'Cuota agotada',
+    'RISK_ENGINE_ERROR': 'Error del motor de riesgo',
+    'SCHEDULER_ERROR': 'Error del programador',
+    'TIMEOUT': 'Tiempo de espera agotado',
+    'UNKNOWN_PROVIDER_FAILURE': 'Falla del proveedor sin clasificar',
+    'SYSTEM_CRITICAL': 'Problema crítico del sistema',
+    'SYSTEM_DEGRADED': 'Sistema con problemas',
+    'RUN_FAILED': 'Ciclo fallido',
+    'RECOVERY': 'Recuperación',
+    'RECOVERY_STARTED': 'Recuperación iniciada',
+    'RECOVERY_COMPLETED': 'Recuperación completada',
+    'TEST_ALERT': 'Alerta de prueba',
+    'STOP_LOSS': 'Stop loss alcanzado',
+    'TAKE_PROFIT': 'Take profit alcanzado',
+    'LOSS': 'Pérdida',
+    'OPENED': 'Abierta',
+    'ENTITLEMENT_ERROR': 'Error de permisos de datos',
+    'instrument_contract_data_unavailable': 'Sin especificaciones del contrato',
+    'invalid_numeric': 'Dato numérico inválido',
+    'invalid_numeric_value': 'Valor numérico inválido',
+    'invalid_basis': 'Base de cálculo inválida',
+    'rr_above_maximum': 'R:R por encima del máximo',
+    'rr_below_minimum': 'R:R por debajo del mínimo',
+    'rr_declared_mismatch': 'El R:R declarado no coincide',
+    'rr_policy_mismatch': 'El R:R no cumple la política',
+    'approved': 'Aprobada',
+    'broker_refused_submission': 'El broker rechazó el envío',
+})
+
+STATUS.update({
+    'ACCOUNT_DRAWDOWN_LIMIT': 'Límite de caída de la cuenta alcanzado',
+    'ACCOUNT_DRAWDOWN_UNAVAILABLE': 'Sin datos de caída de la cuenta',
+    'INVALID_ACCOUNT_STATE': 'Estado de cuenta inválido',
+    'PAPER_QUANTITY_BELOW_INCREMENT': 'Tamaño inferior al incremento permitido',
+    'PER_TRADE_RISK_LIMIT': 'Límite de riesgo por operación alcanzado',
+    'PORTFOLIO_RISK_LIMIT': 'Límite de riesgo total alcanzado',
+    'SYMBOL_EXPOSURE_LIMIT': 'Límite de exposición del símbolo alcanzado',
+    'UNKNOWN_PENDING_RISK_POLICY': 'Política de riesgo de la orden pendiente desconocida',
+    'UNRESOLVED_ACTION_RESOLVED': 'Acción pendiente resuelta',
+    'UNRESOLVED_CLEARED': 'Bloqueo por acción pendiente resuelto',
+    'NO_SUCH_TRADE': 'La operación no existe en el broker',
+    'TRADE_DOES_NOT_EXIST': 'La operación no existe',
+})
+
+STATUS.update({
+    'fill_invalid_geometry': 'Niveles de ejecución inválidos',
+    'fill_rr_below_minimum': 'R:R de ejecución inferior al mínimo',
+    'post_fill_risk_or_geometry': 'Riesgo o niveles inválidos tras la ejecución',
+    'fill_money_risk_above_limit': 'Riesgo monetario de ejecución superior al límite',
+    'risk_approval_missing': 'Falta la aprobación del motor de riesgo',
+    'risk_not_approved': 'Riesgo no aprobado',
+    'risk_approval_mismatch': 'La aprobación de riesgo no coincide con el plan',
+})
+
 # Stored close reason -> one plain sentence. Unknown reasons are shown as stored.
 CLOSE_REASONS = {
     "STOP": "Stop loss alcanzado (SL)",
@@ -255,6 +479,9 @@ CLOSE_REASONS = {
     "EXIT_ERROR": "Salida · error del sistema",
     "SYMBOL_PAUSED": "Salida · símbolo pausado (decisión del owner)",
 }
+
+for _code, _label in CLOSE_REASONS.items():
+    STATUS.setdefault(_code, _label)  # never override operational labels such as STOPPED = Detenido
 
 COMPONENTS = {
     "market_data": "Datos de mercado", "ai": "Inteligencia artificial", "scheduler": "Programador",
@@ -335,7 +562,7 @@ def tr(text):
 
 
 def column(key):
-    return COLUMNS.get(key, key.replace("_", " "))
+    return COLUMNS.get(key, key if key in COLUMNS.values() else "Dato adicional")
 
 
 # An engine code ("SOME_CODE", "NOT CALLED"): upper case words joined by "_" or spaces. Single words without "_"
@@ -520,3 +747,122 @@ def tip(text):
     """Small '¿Qué significa?' hint using a native tooltip (no JavaScript)."""
     return (f'<span class="tip" title="{escape(text, quote=True)}" tabindex="0">'
             f'ⓘ {escape(TEXT["What does it mean?"])}</span>')
+
+
+# Readable projections only: stored contracts and downloadable evidence stay untouched.
+IDENTITY_KEYS = frozenset({"id", "run_id", "last_run_id", "setup_id", "slot_key", "account_id",
+                           "position_id", "order_id", "event_id", "delivery_id"})
+UUID_PATTERN = re.compile(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b")
+ISO_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?")
+STATUS.update({"None reported": "sin novedades",
+               "broker_demo": "broker demo", "real": "real (bloqueado)",
+               "Transfer recorded": "transferencia registrada", "TRANSFER_RECORDED": "transferencia registrada"})
+TEXT.update({"None reported": "sin novedades"})
+COLUMNS.update({"event_type": "Tipo de evento", "detail": "Detalle", "details": "Detalles", "payload": "Detalles", "provider_metadata": "Proveedores",
+                "last_checked_at": "Última comprobación", "observed_at": "Observado",
+                "component": "Componente", "message": "Mensaje", "kind": "Evento",
+                "agents": "Agentes", "execution": "Ejecución", "risk_decision": "Decisión de riesgo",
+                "final_status": "Estado final", "error": "Error"})
+
+
+COLUMNS.update({
+    "schema_version": "versión del esquema", "origin_order_id": "orden de origen",
+    "gross_pnl": "P&L bruto", "cost": "costo", "started_at": "inicio", "record": "registro",
+    "plan": "Plan de la operación", "market": "Mercado", "provider": "Proveedor",
+})
+STATUS.update({
+    "setups": "oportunidades", "journal": "bitácora", "paper_orders": "órdenes de práctica",
+    "paper_positions": "posiciones de práctica", "paper_fills": "ejecuciones de práctica",
+    "closed_trades": "operaciones cerradas", "runs": "ciclos", "twelve_data": "Twelve Data",
+    "conflict_engine": "motor de conflictos", "opposite_policy": "regla ante señales opuestas",
+})
+
+
+def readable(value):
+    """Compact Spanish display text, with no technical identities or empty JSON."""
+    from ui.json_views import structured
+    value = structured(value)
+    if value is None:
+        return MISSING
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            if key in IDENTITY_KEYS or (key == "origin_order_id" and item in (None, "pending", "PENDING")):
+                continue
+            text = readable(item)
+            if text != MISSING:
+                parts.append(f"{column(key)}: {text}")
+        return " · ".join(parts) or MISSING
+    if isinstance(value, (list, tuple)):
+        return "; ".join(text for item in value if (text := readable(item)) != MISSING) or MISSING
+    if isinstance(value, datetime):
+        return short_datetime_et(value)
+    text = str(value).strip()
+    if text in ("", "None", "null", "[]", "{}"):
+        return MISSING
+    text = UUID_PATTERN.sub("", text)
+
+    def local_time(match):
+        try:
+            parsed = datetime.fromisoformat(match.group().replace("Z", "+00:00"))
+        except ValueError:
+            return "hora inválida"
+        return short_datetime_et(parsed) if parsed.tzinfo else "hora sin zona horaria"
+
+    text = ISO_PATTERN.sub(local_time, text)
+    text = {"LONG": "Compra", "SHORT": "Venta"}.get(text, status_text(text))
+    for code, label in (("NO_DATA", "sin datos"), ("NOT CALLED", "no consultado"),
+                        ("None reported", "sin novedades"), ("Transfer recorded", "transferencia registrada")):
+        text = text.replace(code, label)
+    text = re.sub(r"\bpractice\b", "práctica", text)
+    text = re.sub(r"\bNone\b", MISSING, text)
+    return text.strip(" ·:;") or MISSING
+
+
+def display_rows(rows):
+    """Copy rows for a table without changing the source evidence."""
+    hidden = IDENTITY_KEYS | {column(key) for key in IDENTITY_KEYS}
+    keys = list(dict.fromkeys(key for row in rows for key in row if key not in hidden))
+    numeric_keys = {key for key in keys if any(number(row.get(key)) for row in rows)}
+    labels = {}
+    for key in keys:
+        label = column(key)
+        count = sum(column(previous) == label for previous in labels)
+        labels[key] = f"{label} ({count + 1})" if count else label
+    return [{labels[key]: value if key in numeric_keys and (value is None or number(value)) else readable(value)
+             for key, value in row.items() if key not in hidden} for row in rows]
+
+
+# Shared presentation labels for operational inventory and persisted health services.
+COLUMNS.update({
+    "supported_symbols": "Símbolos soportados", "enabled_symbols": "Símbolos activos",
+    "database": "Base de datos", "schema_version": "Versión del esquema",
+    "runtime_heartbeat": "Latido del programador", "heartbeat": "Latido del programador",
+    "scheduler_slot": "Turno del programador", "market_data": "Datos de mercado",
+    "market_provider_mode": "Modo del proveedor de precios", "massive_adapter": "Adaptador Massive",
+    "macro_provider": "Proveedor macroeconómico", "api_status": "Estado de la API",
+    "macro_provider_certification": "Certificación del proveedor macroeconómico",
+    "experiment_ready": "Demo preparado", "finnhub_adapter": "Adaptador Finnhub",
+    "phase7_readiness": "Preparación de los agentes", "real_execution": "Ejecución real",
+    "last_cycle_status": "Estado del último ciclo", "last_review_agents": "Agentes de la última revisión",
+    "notification_events": "Eventos de notificación", "slack_delivery_attempts": "Intentos de envío a Slack",
+    "paper_broker": "Broker de práctica", "freshness": "Actualidad de datos",
+})
+STATUS.update({
+    "NOT STARTED": "No iniciado", "Not started": "No iniciado", "none": "ninguno",
+    "SUPPORTED / NOT ACTIVE": "Compatible · no activo", "ACTIVE": "Activo",
+})
+
+
+def service_label(key):
+    """Spanish health label; unknown contract fields never leak raw identifiers."""
+    if key in COLUMNS or key in COLUMNS.values():
+        return column(key)
+    words = {"last": "último", "success": "éxito", "run": "ciclo", "status": "estado",
+             "provider": "proveedor", "market": "mercado", "data": "datos",
+             "scheduler": "programador", "heartbeat": "latido", "mode": "modo",
+             "adapter": "adaptador", "enabled": "activo", "symbols": "símbolos"}
+    tokens = str(key).lower().replace("_", " ").split()
+    if tokens and all(token in words for token in tokens):
+        return " ".join(words[token] for token in tokens).capitalize()
+    return "Dato adicional"

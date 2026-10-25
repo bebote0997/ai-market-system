@@ -83,10 +83,9 @@ class PresentationMemoryTests(unittest.TestCase):
                  'run_id':'run-1', 'status':'VALID_SETUP'}
         self.assertEqual(list(ordered(value))[:3], ['run_id', 'symbol', 'status'])
         html = details(json.dumps(value))
-        self.assertIn('<details class="json-details">', html)
-        self.assertNotIn('<details open', html)
-        self.assertIn('\n  &quot;run_id&quot;', html)
-        self.assertLess(html.index('run_id'), html.index('payload'))
+        self.assertNotIn('<details', html)
+        self.assertNotIn('run-1', html)
+        self.assertIn('Setup válido', html)
         self.assertNotIn('<script>', html)
         self.assertIn('&lt;script&gt;', html)
 

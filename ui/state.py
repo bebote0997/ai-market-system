@@ -48,6 +48,13 @@ def enabled_market_symbols():
         return tuple(symbol for symbol in enabled if symbol not in BLOCKED_SYMBOLS) or DEFAULT_ENABLED_SYMBOLS
 
 
+def default_market_index(enabled_symbols, markets=MARKETS):
+    """First published active market; preserve the old first option if none is known."""
+    from runtime.symbol_pause import is_paused
+    return next((markets.index(symbol) for symbol in enabled_symbols
+                 if symbol in markets and symbol not in BLOCKED_SYMBOLS and not is_paused(symbol)), 0)
+
+
 def current_market(st, symbol, sample_factory):
     if symbol not in MARKETS:
         raise ValueError("unsupported floor market")
@@ -61,7 +68,12 @@ def current_market(st, symbol, sample_factory):
         return empty_market(symbol)
     try:
         payload = store.load_snapshot(symbol)
-        vm = from_persisted_snapshot(payload) if payload else empty_market(symbol)
+        try:
+            vm = from_persisted_snapshot(payload) if payload else empty_market(symbol)
+        except ValueError as exc:
+            if str(exc) != "incompatible UI snapshot":
+                raise
+            vm = empty_market(symbol)
         # Runtime load_paper also reconstructs every historical fill/trade. Display
         # only needs account totals, open positions and a bounded order history.
         from storage.codec import paper_decode

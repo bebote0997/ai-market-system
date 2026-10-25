@@ -45,6 +45,7 @@ TRADE_LIMIT = 10
 SIGNAL_LIMIT = 5
 PIP = 0.0001  # EURUSD
 CURVE_POINTS = 40
+IDLE_FRESH_SECONDS = 30 * 60
 FRESH_SECONDS = 120  # a cached demo NAV / trades read observed longer ago than this is "(dato antiguo · HH:MM ET)"
 LIVE_SECONDS = 15 * 60  # "datos reales" only when the newest NAV read / cycle is younger than this
 RUNNING_MAX_SECONDS = 15 * 60  # an older RUNNING row is a crashed process, never a running cycle
@@ -168,18 +169,24 @@ def curve_values(curve):
     return values or None
 
 
-def demo_header(snapshot, day, now):
+def demo_header(snapshot, day, now, *, running=False):
     """Demo KPIs. NAV freshness is kept: ``equity_stale`` when the cached read is the last good one (``stale``) or was
-    observed more than ``FRESH_SECONDS`` ago; ``equity_as_of`` = its observation time. Stale without a known
+    observed more than 120 s ago (30 min when closed and idle); ``equity_as_of`` = its observation time. Stale without a known
     observation time => equity None ("—"), never shown as current. ``trades_stale``/``trades_as_of``: the same for the
     cached trades read behind every trade-derived section (unknown observation time => stale, without a time)."""
+    from zoneinfo import ZoneInfo
+    local = now.astimezone(ZoneInfo('America/New_York'))
+    # FX weekly session: Friday 17:00 through Sunday 17:00 NY is closed.
+    closed = (local.weekday() == 5 or (local.weekday() == 4 and local.hour >= 17)
+              or (local.weekday() == 6 and local.hour < 17))
+    threshold = IDLE_FRESH_SECONDS if closed and not running else FRESH_SECONDS
     stats = snapshot.get('stats')
     known = stats is not None
     header = header_from_stats(stats if known else {}, equity=snapshot.get('nav'),
                                start=(snapshot.get('capital') or {}).get('start') if known else None,
                                daily_loss=snapshot.get('daily_loss'), day=day)
     at = as_utc(snapshot.get('as_of'))
-    stale = snapshot.get('stale') is True or at is None or (now - at).total_seconds() > FRESH_SECONDS
+    stale = snapshot.get('stale') is True or at is None or (now - at).total_seconds() > threshold
     if header['equity'] is None:
         stale = None
     elif stale and at is None:
@@ -189,7 +196,7 @@ def demo_header(snapshot, day, now):
     header['equity_as_of'] = et_text(at, with_date=False) if header['equity'] is not None else None
     if known:  # trade-derived sections (PnL, R, win rate, drawdown, curve, trades, hit rates): same freshness rule
         seen = as_utc(snapshot.get('trades_as_of'))
-        header['trades_stale'] = seen is None or (now - seen).total_seconds() > FRESH_SECONDS
+        header['trades_stale'] = seen is None or (now - seen).total_seconds() > threshold
         header['trades_as_of'] = et_text(seen, with_date=False)
         header['open_positions'] = len(snapshot.get('open_rows') or ())
     return header
@@ -604,7 +611,6 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         from ui.demo_clock import demo_day_from_epoch
         day = guarded(lambda: demo_day_from_epoch(since, now))
         if isinstance(demo_snap, dict):
-            payload["header"] = guarded(lambda: demo_header(demo_snap, day, now))
             payload["curve"] = guarded(lambda: curve_values(demo_snap.get('curve')))
             payload["trades"] = guarded(lambda: demo_trades(db, demo_snap))
     elif db is not None:
@@ -625,6 +631,9 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         payload["feed"] = guarded(lambda: journal_feed(db, since))
         payload["market"] = guarded(lambda: market_lines(snapshot))
         payload["running"] = guarded(lambda: running_state(db, now, since, payload["trades"]), payload["running"])
+    if isinstance(demo_snap, dict):
+        payload["header"] = guarded(lambda: demo_header(
+            demo_snap, day, now, running=payload["running"]["active"]))
     if demo is not None and run is None and snapshot is None:
         payload["waiting"], payload["waiting_text"] = True, WAITING_TEXT
     payload["note_real"], payload["cycle_text"] = guarded(

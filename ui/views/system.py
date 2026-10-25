@@ -1,8 +1,8 @@
 import json
 
-from ui.i18n_es import COLUMNS, NO_DATA, column, enabled_caption, status_text, tr
+from ui.i18n_es import NO_DATA, column, enabled_caption, service_label, status_text, tr
 from ui.tables import dataframe
-from ui.json_views import ordered
+from ui.i18n_es import readable, IDENTITY_KEYS
 
 # OANDA demo mode: the PAPER account's numbers are not shown; cycle values before the epoch are not "current".
 PAPER_HEALTH_KEYS = frozenset({"equity", "realized_pnl", "unrealized_pnl", "open_positions", "paper_broker"})
@@ -22,12 +22,71 @@ def health_rows(operational_health, since=None):
             health["last_success"] = FIRST_CYCLE_WAIT
     rows = []
     for key, value in health.items():
+        if key in IDENTITY_KEYS:
+            continue
         if isinstance(value, (tuple, list)):
             value = ", ".join(map(str, value))
         elif isinstance(value, str):
             value = display(value) if value[:2] == "20" else status_text(value)
-        rows.append((column(key) if key in COLUMNS else key.replace("_", " ").capitalize(), value))
+        rows.append((service_label(key), value))
     return rows
+
+
+def demo_health(health, store, notifications, since):
+    """Read-only demo projection: historical PAPER freshness cannot degrade demo health."""
+    from ui.views.dashboard import FIRST_CYCLE_WAIT, is_current, parse_time, records, row_time, since_epoch
+    if since is None:
+        return health
+    result = dict(health)
+    errors = [e for e in since_epoch(notifications, since)
+              if e.get("severity") in {"ERROR", "CRITICAL"}]
+    if store is not None:
+        errors += since_epoch(records(store.db, "journal", statuses=("ERROR", "CRITICAL")), since)
+        errors += [{**row, "record": "runs"} for row in since_epoch(records(store.db, "runs", failed=True), since)]
+    last_success = parse_time(result.get("last_success"))
+    # A later successful cycle recovers run failures only. Other errors have
+    # no component-level recovery evidence and remain visible as degraded health.
+    def unresolved(error):
+        cycle_failure = error.get("record") == "runs" or error.get("event_type") == "RUN_FAILED"
+        stamp = row_time(error)
+        return not (cycle_failure and last_success is not None and stamp is not None
+                    and last_success > stamp)
+
+    errors = [error for error in errors if unresolved(error)]
+    current = is_current(result.get("last_run"), since)
+    failed = current and result.get("last_cycle_status") in {"ERROR", "CRITICAL", "FAILED"}
+    operational_status = health.get("status", "OK")
+    if result.get("scheduler") in {"STOPPED", "DISABLED", "NOT STARTED"}:
+        operational_status = "STOPPED"
+    if not current:
+        from datetime import datetime, timezone
+        from storage.codec import parse_utc
+        stopped = result.get("scheduler") in {"STOPPED", "DISABLED", "NOT STARTED"}
+        heartbeat = result.get("runtime_heartbeat")
+        heartbeat_bad = False
+        if "runtime_heartbeat" in result:
+            try:
+                age = (datetime.now(timezone.utc) - parse_utc(heartbeat)).total_seconds()
+                heartbeat_bad = not 0 <= age <= 60
+            except (ValueError, TypeError, AttributeError):
+                heartbeat_bad = True
+        provider_bad = result.get("market_data") == "NOT CONFIGURED"
+        operational_status = ("STOPPED" if stopped or operational_status == "STOPPED" else
+                              "DEGRADED" if heartbeat_bad or provider_bad else "OK")
+    result["status"] = ("DEGRADED" if (errors or failed) and operational_status != "STOPPED"
+                        else operational_status)
+    if not current:
+        for key in (*CYCLE_KEYS, "freshness", "phase7_readiness", "last_review_agents"):
+            if key in result:
+                result[key] = FIRST_CYCLE_WAIT
+    if store is not None:
+        from ui.views.dashboard import notification_rows, payloads
+        result["notification_events"] = len(since_epoch(payloads(store.db, "notification_events"), since))
+        result["slack_delivery_attempts"] = len(notification_rows(store.db, since))
+    else:
+        for key in ("notification_events", "slack_delivery_attempts"):
+            result.pop(key, None)
+    return result
 
 
 def filter_evidence_json(evidence_json, since):
@@ -53,6 +112,9 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
     since = demo_since() if since is None else since
     if review and not is_current(review.get("as_of"), since):
         review = None
+    notifications = since_epoch(notifications, since, ("timestamp_utc",))
+    if operational_health:
+        operational_health = demo_health(operational_health, store, notifications, since)
     evidence_json = filter_evidence_json(evidence_json, since)
     st.header(tr("SYSTEM"))
     st.caption(tr("Read-only service inventory"))
@@ -61,7 +123,7 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
         {S: "Símbolos soportados", E: "XAUUSD, NAS100, EURUSD"},
         {S: "Símbolos activos", E: enabled_caption(("XAUUSD", "EURUSD"))},
         {S: "Proveedor de precios", E: "Twelve Data configurado para la práctica interna"},
-        {S: "Adaptador Massive", E: "Soportado / no activo"},
+        {S: "Adaptador Massive", E: "Compatible · no activo"},
         {S: "Proveedor de IA", E: "No iniciado"},
         {S: "Programador", E: "No configurado"},
         {S: "Broker de práctica", E: "No iniciado"},
@@ -72,19 +134,20 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
     if operational_health and not vm.sample:
         rows = [{S: label, E: value} for label, value in health_rows(operational_health, since)]
     dataframe(st, rows, hide_index=True, width="stretch")
-    st.write("Avisos:", vm.warnings or "—")
-    st.write("Versiones de prompts:", dict(vm.prompt_versions) if vm.prompt_versions else NO_DATA)
+    st.write("Avisos:", readable(vm.warnings))
+    st.write("Versiones de prompts:", readable(dict(vm.prompt_versions)))
     st.write("Versión del esquema:", vm.schema_version or NO_DATA)
     if operational_health and not vm.sample:
         st.subheader(tr("Latest review"))
         if review:
-            st.json(ordered({"run_id": review["run_id"], "final_status": review["final_status"],
+            st.write(readable({"run_id": review["run_id"], "final_status": review["final_status"],
                      "setup_status": review["setup_status"], "agents": review["agents"],
                      "risk_decision": review["risk_decision"], "execution": review.get("execution"),
                      **({} if since is not None else {"paper": review["paper"]}),
-                     "error": review["error"]}), expanded=False)
+                     "error": review["error"]}))
         else:
-            st.write(NO_DATA)
+            from ui.views.dashboard import FIRST_CYCLE_WAIT
+            st.write(FIRST_CYCLE_WAIT if since is not None else NO_DATA)
         if store is not None:
             st.subheader(tr("Audit by run ID"))
             run_id = st.text_input(tr("Run ID"), key="system_audit_run_id").strip()
@@ -96,15 +159,18 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
                 elif not is_current(record.get("as_of"), since):
                     st.info("ese ciclo es anterior al inicio del demo y no se muestra")
                 else:
-                    st.json(ordered({key: record.get(key) for key in ("run_id", "symbol", "as_of",
+                    st.write(readable({key: record.get(key) for key in ("run_id", "symbol", "as_of",
                             "final_status", "setup_status", "risk_decision", "execution",
-                            "paper", "error")}), expanded=False)
+                            "paper", "error")}))
                     dataframe(st, since_epoch(store.journal(run_id=run_id, limit=500), since),
                                  hide_index=True, width="stretch")
                     st.download_button(tr("Download run evidence (JSON)"),
                                        filter_evidence_json(run_evidence_json(store, run_id), since),
                                        file_name="paper-run-evidence.json", mime="application/json")
         st.subheader(tr("Notifications"))
+        if not notifications and since is not None:
+            from ui.views.dashboard import FIRST_CYCLE_WAIT
+            st.info(FIRST_CYCLE_WAIT)
         dataframe(st, [{column("timestamp_utc"): e["timestamp_utc"], column("type"): e["type"],
                        column("severity"): e["severity"], column("run_id"): e["run_id"]}
                       for e in notifications[-20:]], hide_index=True, width="stretch")

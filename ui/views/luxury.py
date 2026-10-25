@@ -471,7 +471,7 @@ def side_panel(st, now, states, since=None):
     rows += [(es.COMPONENTS[key], es.status_text(states.get(key)) if states.get(key) else MISSING)
              for key in ('market_data_provider', 'ai_provider')]
     card(st, tr('System'), rows)
-    card(st, tr('Active policies'), [(es.POLICIES[key], f'{display(value)} · origen: {source}')
+    card(st, tr('Active policies'), [(es.POLICIES[key], f'{display(value)} · origen: {"configuración del servidor" if source == "env" else es.readable(source)}')
          for key in ('V2_PLANNER_POLICY', 'V2_OPPOSITE_SETUP_POLICY')
          for value, source in [policy_value(states, key)]])
 

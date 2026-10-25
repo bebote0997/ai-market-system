@@ -21,7 +21,7 @@ from ui.views import dashboard, experiment, floor, journal, markets, system, lux
 from ui.views import floor_view
 from ui import i18n_es as es
 from ui.i18n_es import tr
-from ui.state import current_market, enabled_market_symbols, operational_store
+from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
 
 st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊")
 require_dashboard_access(st)
@@ -36,7 +36,7 @@ with st.sidebar:
                     + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation",
                     format_func=lambda key: floor_view.LABEL if key == floor_view.PAGE else es.page_label(key))
     enabled_symbols = enabled_market_symbols()
-    symbol = st.selectbox(tr("Market"), MARKETS,
+    symbol = st.selectbox(tr("Market"), MARKETS, index=default_market_index(enabled_symbols),
                           format_func=lambda market: f"{market} · {es.symbol_status(market, enabled_symbols)}")
     st.caption(tr("Enabled for experiment: ") + es.enabled_caption(enabled_symbols))
     st.toggle(tr("SAMPLE / DEMO · FLOOR, MARKETS, JOURNAL, SYSTEM"), value=not remote_dashboard_enabled(), key="sample_mode")

@@ -101,18 +101,20 @@ class SystemEpochTests(unittest.TestCase):
 
     def test_pre_epoch_audit_shows_no_record_journal_or_download(self):
         st, store = Mock(), Mock()
+        store.db.execute.return_value.fetchone.return_value = None
         st.text_input.return_value = 'old-run'
         store.review_report.return_value = {'run_id': 'old-run', 'as_of': OLD}
         vm = SimpleNamespace(sample=False, freshness='CURRENT', warnings=(), prompt_versions={}, schema_version='1')
         with patch('ui.views.system.dataframe'), patch('ui.views.dashboard.demo_since', return_value=EPOCH):
             system.render(st, vm, operational_health={'status': 'OK'}, store=store)
-        st.info.assert_called_once_with('ese ciclo es anterior al inicio del demo y no se muestra')
+        st.info.assert_any_call('ese ciclo es anterior al inicio del demo y no se muestra')
         st.json.assert_not_called()
         st.download_button.assert_not_called()
         store.journal.assert_not_called()
 
     def test_current_audit_keeps_record_and_download_with_filtered_journal(self):
         st, store = Mock(), Mock()
+        store.db.execute.return_value.fetchone.return_value = None
         st.text_input.return_value = 'new-run'
         store.review_report.return_value = {'run_id': 'new-run', 'as_of': NEW}
         store.journal.return_value = [{'timestamp': OLD}, {'timestamp': NEW}]
@@ -120,7 +122,8 @@ class SystemEpochTests(unittest.TestCase):
         with patch('ui.views.system.dataframe') as table, patch('runtime.review_export.run_evidence_json',
                 return_value=json.dumps({'review': {'as_of': NEW}, 'journal': store.journal.return_value})):
             system.render(st, vm, operational_health={'status': 'OK'}, store=store, since=EPOCH)
-        st.json.assert_called_once()
+        st.json.assert_not_called()
+        self.assertTrue(any("ET" in str(call) for call in st.write.call_args_list))
         self.assertEqual(table.call_args_list[1].args[1], [{'timestamp': NEW}])
         exported = json.loads(st.download_button.call_args.args[1])
         self.assertEqual(exported['journal'], [{'timestamp': NEW}])

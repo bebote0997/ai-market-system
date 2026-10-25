@@ -1,5 +1,6 @@
 """Plotly price action, based solely on supplied closed bars and annotations."""
 from ui.theme import TOKENS
+from ui.i18n_es import ET
 
 ALLOWED_ANNOTATIONS = {"BOS", "SWING_HIGH", "SWING_LOW", "SUPPORT", "RESISTANCE", "LIQUIDITY", "SWEEP", "ORDER_BLOCK_POTENTIAL", "ENTRY", "STOP", "TARGET"}
 ALLOWED_SOURCES = {"PYTHON", "AI", "PLAN", "USER_CONFIG"}
@@ -9,7 +10,7 @@ def price_action_figure(bars, annotations=()):
     if not bars:
         return None
     import plotly.graph_objects as go
-    fig = go.Figure(go.Candlestick(x=[b.timestamp for b in bars], open=[b.open for b in bars],
+    fig = go.Figure(go.Candlestick(x=[b.timestamp.astimezone(ET).replace(tzinfo=None) for b in bars], open=[b.open for b in bars],
         high=[b.high for b in bars], low=[b.low for b in bars], close=[b.close for b in bars],
         increasing_line_color=TOKENS["success"], decreasing_line_color=TOKENS["danger"], name="15M"))
     for item in annotations:
@@ -24,6 +25,6 @@ def price_action_figure(bars, annotations=()):
     fig.update_layout(height=480, margin=dict(l=10, r=15, t=15, b=10),
         paper_bgcolor=TOKENS["surface-1"], plot_bgcolor=TOKENS["surface-1"],
         font_color=TOKENS["text-primary"], xaxis_rangeslider_visible=False,
-        xaxis=dict(gridcolor=TOKENS["border"]), yaxis=dict(gridcolor=TOKENS["border"], side="right"),
+        xaxis=dict(gridcolor=TOKENS["border"], title="Hora (ET)"), yaxis=dict(gridcolor=TOKENS["border"], side="right"),
         showlegend=False)
     return fig

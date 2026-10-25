@@ -41,7 +41,7 @@ def demo_numbers(st, now=None):
 
 
 def render(st, vm, enabled_symbols):
-    st.header(tr("30-DAY AUTONOMOUS DEMO TEST"))
+    st.header(tr("EXPERIMENT"))
     progress = demo_progress_text()
     st.info(progress if progress is not None else tr("30-DAY DEMO IN PROGRESS"))
     demo_numbers(st)
