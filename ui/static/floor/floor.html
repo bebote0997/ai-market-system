@@ -92,7 +92,8 @@ const EXF=new Set(DATA.sample_mode?(DATA.example_fields||[]):[]);
 const isEx=k=>EXF.has(k)||[...EXF].some(f=>f.startsWith(k+'.'));
 const BADGE='<span class="ex">EJEMPLO</span>',badge=k=>isEx(k)?BADGE:'';
 // a cycle is "running" ONLY when the DB has a fresh RUNNING run (payload.running, built in ui/floor_payload.py)
-const RUN=DATA.running||{},ACTIVE=RUN.active===true;
+const RUN=DATA.running||{},DEADLINE=Date.parse(RUN.deadline);
+let ACTIVE=RUN.active===true&&Number.isFinite(DEADLINE)&&Date.now()<DEADLINE;
 const WAITING=DATA.waiting===true,WTXT=DATA.waiting_text||'Esperando el primer ciclo';
 // a stale (last good / old) demo NAV is never shown as current: value + "(dato antiguo · HH:MM ET)"
 const STALE=HD.equity_stale===true&&HD.equity_as_of?`(dato antiguo · ${HD.equity_as_of} ET)`:'';
@@ -135,7 +136,7 @@ document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi" title="${e
 const noteMain=EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:DATA.note_real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:
  WAITING?`<i>${esc(WTXT)}</i>${DATA.epoch_text?' · demo desde '+esc(DATA.epoch_text):''}`:DATA.cycle_text?'':`<i>${EMPTY}</i>`;
 document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura`+
- (noteMain?' · '+noteMain:'')+(DATA.cycle_text?` · ${esc(DATA.cycle_text)}`:'')+(ACTIVE?` · <i>ciclo en marcha</i>${RUN.started_at_text?' desde '+esc(RUN.started_at_text):''}`:'');
+ (noteMain?' · '+noteMain:'')+(DATA.cycle_text?` · ${esc(DATA.cycle_text)}`:'')+(ACTIVE?`<span id="running-note"> · <i>ciclo en marcha</i>${RUN.started_at_text?' desde '+esc(RUN.started_at_text):''}</span>`:'');
 
 const STEPS=["Datos","Análisis","Revisor","Motor de conflictos","Motor de riesgo","Plan R:R","Entrada / Salida","Resultado"];
 const CSTEPS=(CY&&CY.steps)||[];
@@ -146,8 +147,8 @@ const rgba=(h,a)=>{const n=parseInt(h.slice(1),16);return `rgba(${n>>16},${n>>8&
 const W=18,D=14,H=3.9,STEP_MS=4200,MINPX=10;
 const q=new URLSearchParams(location.search);const FIX=q.has('step')?+q.get('step'):null;
 // the step shown: ?step=N (screenshots / tests) > the step a really running cycle reached > none (idle: static)
-const STEP=FIX!=null&&FIX>=0&&FIX<8?Math.floor(FIX):ACTIVE&&Number.isInteger(RUN.step)&&RUN.step>=0&&RUN.step<8?RUN.step:null;
-const ANIM=ACTIVE&&FIX==null&&STEP!=null;  // time-based animation ONLY while a real cycle runs
+let STEP=FIX!=null&&FIX>=0&&FIX<8?Math.floor(FIX):ACTIVE&&Number.isInteger(RUN.step)&&RUN.step>=0&&RUN.step<8?RUN.step:null;
+let ANIM=ACTIVE&&FIX==null&&STEP!=null;  // time-based animation ONLY while a real cycle runs
 if(STEP==null)document.body.classList.add('idle');
 const cv=document.getElementById('c'),cx=cv.getContext('2d');let U=30,ox=0,oy=0,Z=1,PX=0,PY=0,dpr=1,vw=0,vh=0;
 const P=(x,y,z=0)=>[ox+(x-y)*U,oy+(x+y)*U/2-z*U];
@@ -356,7 +357,12 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  if(!MOB()&&!WAITING)Object.values(A).forEach(a=>{if(!say[a.id])bubble(a,IDLE(a.id),false)});
  if(say.wall){const [hx,hy]=P(0,9.6,3.0);bubble({head:[hx,hy],al:1},say.wall[0],true,say.wall[1])}}
 // the only animation loop: a cycle really running (payload.running.active) and not a ?step= screenshot
-if(ANIM){const tick=n=>{draw(n-t0);requestAnimationFrame(tick)};requestAnimationFrame(tick)}
+function expireRunning(){
+ if(ACTIVE&&Date.now()>=DEADLINE){
+  ACTIVE=false;ANIM=false;
+  if(FIX==null){STEP=null;document.body.classList.add('idle')}
+  document.getElementById('running-note')?.remove();return true}return false}
+if(ANIM){const tick=n=>{if(expireRunning()){draw(0);return}draw(n-t0);requestAnimationFrame(tick)};requestAnimationFrame(tick)}
 fit();
 const pts=new Map();let lastD=0,moved=0;cv.style.touchAction='none';
 cv.addEventListener('pointerdown',e=>{pts.set(e.pointerId,[e.clientX,e.clientY]);moved=0});

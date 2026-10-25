@@ -206,7 +206,7 @@ class ControlViewTests(unittest.TestCase):
         self.assertEqual([a['key'] for a in snapshot['accounts']], list(control.ACCOUNT_KEYS))
         real = snapshot['accounts'][2]
         self.assertEqual(control.account_status(real, snapshot), ('Real: bloqueado por seguridad', 'neg'))
-        self.assertEqual(control.account_status(snapshot['accounts'][1], snapshot)[0], 'Aún no conectado')
+        self.assertEqual(control.account_status(snapshot['accounts'][1], snapshot)[0], 'Cuenta apagada · Saldo no disponible')
 
         def boom():
             raise RuntimeError('registry down')
@@ -264,7 +264,7 @@ class ControlViewTests(unittest.TestCase):
         self.assertTrue(stop.disabled)
         self.assertIn('PARADA DE EMERGENCIA', stop.label)
         content = '\n'.join(m.value for m in app.markdown)
-        self.assertIn('Aún no conectado', content)
+        self.assertIn('Cuenta apagada · Saldo no disponible', content)
         self.assertIn('Real: bloqueado por seguridad', content)
         self.assertEqual(hashlib.sha256(case.path.read_bytes()).hexdigest(), before)
 

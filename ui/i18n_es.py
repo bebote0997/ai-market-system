@@ -320,7 +320,17 @@ MONTHS_LONG = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
                "octubre", "noviembre", "diciembre")
 
 
+def safety_label():
+    """Safety caption for the effective results source; no execution settings are changed."""
+    from ui.views.luxury import demo_results_on
+    source = "Cuenta de práctica OANDA Demo" if demo_results_on() else "práctica interna"
+    return f"{source} · sin dinero real · ejecución real desactivada"
+
+
 def tr(text):
+    if text in ("PAPER · REAL EXECUTION DISABLED", "PAPER · REAL EXECUTION DISABLED · NO REAL MONEY",
+                "PAPER MODE · REAL EXECUTION DISABLED · NO REAL MONEY"):
+        return safety_label()
     return TEXT.get(text, text)
 
 

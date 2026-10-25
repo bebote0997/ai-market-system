@@ -16,7 +16,7 @@ In sample mode only, sections without real data are filled from ``ui.fixtures.fl
 ``example_fields`` (the page badges them "EJEMPLO"). ``real_fields`` lists every field that came from real data.
 No account id, token or other secret is ever read into the payload.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import math
 import re
@@ -486,7 +486,7 @@ def running_state(db, now, since=None, trades=None):
     while a cycle executes) for SYMBOLS, started at/after ``since`` (demo epoch) and at most ``RUNNING_MAX_SECONDS``
     ago (an older RUNNING row is a crashed process). ``step`` = index of the first floor step without persisted
     evidence (the step actually reached), None if unknown. Pure read-only SQL; never raises."""
-    idle = {"active": False, "step": None, "symbol": None, "started_at_text": None}
+    idle = {"active": False, "step": None, "symbol": None, "started_at_text": None, "started_at": None, "deadline": None}
     if db is None:
         return idle
     best = None
@@ -508,7 +508,9 @@ def running_state(db, now, since=None, trades=None):
         if evidence is not None:
             steps = cycle_view(run, evidence, trades)["steps"]
             step = next((i for i, s in enumerate(steps) if not s["done"]), len(steps) - 1)
-    return {"active": True, "step": step, "symbol": run['symbol'], "started_at_text": et_text(started)}
+    return {"active": True, "step": step, "symbol": run['symbol'], "started_at_text": et_text(started),
+            "started_at": started.isoformat(),
+            "deadline": (started + timedelta(seconds=RUNNING_MAX_SECONDS)).isoformat()}
 
 
 def freshness(header, demo_snap, run, now, waiting):

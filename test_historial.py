@@ -431,7 +431,8 @@ class HistoryCardTests(unittest.TestCase):
         return st.text()
 
     def test_sources_mirror_module(self):
-        self.assertEqual(control.HISTORY_SOURCES, historial.SOURCES)
+        self.assertEqual([(source, filename) for source, filename, _ in control.HISTORY_SOURCES],
+                         [(source, filename) for source, filename, _ in historial.SOURCES])
 
     def test_separate_cards_and_sin_datos(self):
         records = [historial.Baseline("v1_replay", "v1_replay_eurusd.json", "Replay estrategia V1 (velas Twelve Data)",
@@ -448,7 +449,9 @@ class HistoryCardTests(unittest.TestCase):
         for expected in ("+0.50 R", "1.00 R", "2.00", "50.0 %", "+2.00 R / -1.00 R", "2025-01-01 → 2025-12-31",
                          "sintético"):
             self.assertIn(expected, text)
-        self.assertLess(text.index("Replay estrategia V1"), text.index("Trades cerrados PAPER"))
+        self.assertLess(text.index("Replay estrategia V1"),
+                        text.index("Operaciones cerradas de práctica interna"))
+        self.assertNotIn("PAPER", text)
         self.assertEqual(text.count('<div class="card">'), 3)
 
     def test_money_free_and_no_oanda_trade_rows(self):

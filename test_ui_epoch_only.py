@@ -138,7 +138,7 @@ class SpanishTextTests(unittest.TestCase):
 
 
 class ControlConsistencyTests(unittest.TestCase):
-    ACCOUNT = {"key": "broker_demo", "enabled": False, "label": "Broker demo (OANDA)"}
+    ACCOUNT = {"key": "broker_demo", "enabled": True, "mode": "DEMO", "label": "Broker demo (OANDA)"}
 
     def test_demo_row_matches_routing_chip_and_balance_read(self):
         snapshot = {"connected": False}
@@ -147,7 +147,7 @@ class ControlConsistencyTests(unittest.TestCase):
         self.assertEqual(control.account_status(self.ACCOUNT, snapshot, "off", True)[0],
                          "Conectado (saldo leído) · enrutado apagado")
         self.assertIn("no se pudo leer el saldo", control.account_status(self.ACCOUNT, snapshot, "on", False)[0])
-        self.assertEqual(control.account_status(self.ACCOUNT, snapshot)[0], "Aún no conectado")
+        self.assertEqual(control.account_status(self.ACCOUNT, snapshot)[0], "Saldo no disponible · enrutado apagado")
         real = {"key": "real", "enabled": False, "locked": True}
         self.assertEqual(control.account_status(real, snapshot, "on", True)[0], "Real: bloqueado por seguridad")
 

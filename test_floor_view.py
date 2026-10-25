@@ -462,6 +462,8 @@ class FloorRunningTests(unittest.TestCase):
         state = self.running(NOW - timedelta(minutes=2))
         self.assertEqual((state["active"], state["symbol"], state["step"]), (True, "EURUSD", 0))
         self.assertEqual(state["started_at_text"], "20 oct 09:28 ET")
+        self.assertEqual(state["started_at"], (NOW - timedelta(minutes=2)).isoformat())
+        self.assertEqual(state["deadline"], (NOW + timedelta(minutes=13)).isoformat())
 
     def test_step_is_the_first_step_not_done(self):
         state = self.running(NOW - timedelta(minutes=2), metadata=json.dumps({"provider": "x"}), agents=True)
@@ -469,7 +471,8 @@ class FloorRunningTests(unittest.TestCase):
 
     def test_stale_running_row_is_not_active(self):
         state = self.running(NOW - timedelta(minutes=20))  # a crashed process left it RUNNING
-        self.assertEqual(state, {"active": False, "step": None, "symbol": None, "started_at_text": None})
+        self.assertEqual(state, {"active": False, "step": None, "symbol": None, "started_at_text": None,
+                                 "started_at": None, "deadline": None})
 
     def test_pre_epoch_running_row_is_not_active(self):
         state = self.running(NOW - timedelta(minutes=2), demo=demo_since(NOW - timedelta(minutes=1)))
@@ -528,12 +531,12 @@ class FloorStaticTests(unittest.TestCase):
         asset = floor_view.ASSET.read_text(encoding="utf-8")
         self.assertNotIn("%8", asset)  # the old endless 8-step loop
         self.assertNotIn("Math.random", asset)
-        self.assertIn("RUN=DATA.running||{},ACTIVE=RUN.active===true", asset)
-        self.assertIn("const ANIM=ACTIVE&&FIX==null&&STEP!=null;", asset)
+        self.assertIn("let ACTIVE=RUN.active===true&&Number.isFinite(DEADLINE)&&Date.now()<DEADLINE", asset)
+        self.assertIn("let ANIM=ACTIVE&&FIX==null&&STEP!=null;", asset)
         # exactly two requestAnimationFrame uses: the coalesced on-demand redraw, and the tick gated on ANIM
         self.assertEqual(asset.count("requestAnimationFrame("), 3)
         self.assertIn("function redraw(){if(queued)return;queued=1;requestAnimationFrame(", asset)
-        self.assertIn("if(ANIM){const tick=n=>{draw(n-t0);requestAnimationFrame(tick)};requestAnimationFrame(tick)}",
+        self.assertIn("if(ANIM){const tick=n=>{if(expireRunning()){draw(0);return}",
                       asset)
         self.assertIn("q.has('step')", asset)  # ?step=N screenshots keep working
         self.assertIn("q.has('agent')", asset)

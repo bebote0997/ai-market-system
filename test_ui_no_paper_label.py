@@ -10,14 +10,10 @@ from ui.views import luxury
 
 ROOT = Path(__file__).resolve().parent
 WORD = "PAPER"  # case-sensitive: "paper_*" identifiers and English keys are internal
-# Rendered text produced outside ui/ (execution/ is read-only for the UI): explicitly allowed internal names.
-ALLOWED = ("Trades cerrados PAPER (agregado)",)  # execution.historial.SOURCES label, mirrored in ui.views.control
 
 
 def visible(text):
     text = re.sub(r"data:image/[a-z]+;base64,[A-Za-z0-9+/=]+", "", text)  # the inline banner bytes
-    for allowed in ALLOWED:
-        text = text.replace(allowed, "")
     return text
 
 
@@ -39,9 +35,21 @@ class SpanishValuesTests(unittest.TestCase):
         self.assertEqual(es.PAGE_TITLES["Overview"], "Inicio")
         self.assertEqual(es.page_key(es.page_label("Overview")), "Overview")
         self.assertEqual(es.tr("PAPER · V2"), "OANDA Demo · V2.1")
-        self.assertEqual(es.tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"),
-                         "Cuenta de práctica OANDA Demo · sin dinero real · ejecución real desactivada")
+        for mode, source in ((False, "práctica interna"), (True, "Cuenta de práctica OANDA Demo")):
+            with patch("ui.views.luxury.demo_results_on", return_value=mode):
+                for key in ("PAPER · REAL EXECUTION DISABLED", "PAPER · REAL EXECUTION DISABLED · NO REAL MONEY",
+                            "PAPER MODE · REAL EXECUTION DISABLED · NO REAL MONEY"):
+                    self.assertEqual(es.tr(key), f"{source} · sin dinero real · ejecución real desactivada")
         self.assertEqual(es.tr("Paper trading only · observation only"), "Solo práctica · solo observación")
+
+    def test_safety_uses_effective_results_mode(self):
+        for results, routing, demo in (("", "0", False), ("OANDA_DEMO", "0", True), ("", "1", True)):
+            with patch.dict(os.environ, {"AI_FLOOR_RESULTS_SOURCE": results,
+                                         "AI_FLOOR_BROKER_DEMO_ROUTING": routing}):
+                label = es.tr("PAPER MODE · REAL EXECUTION DISABLED · NO REAL MONEY")
+                self.assertEqual("OANDA Demo" in label, demo)
+                self.assertIn("sin dinero real · ejecución real desactivada", label)
+                self.assertNotIn(WORD, label)
 
     def test_hero_subline(self):
         self.assertEqual(luxury.hero_subline(True, 3), "V2.1 · OANDA Demo · Día 3 de 30")

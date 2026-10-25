@@ -34,7 +34,7 @@ DASH = "—"
 LABELS = {"paper": "Cuenta de práctica interna", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
 # Mirrors execution.historial.SOURCES (kept here so a failed lazy import still names the expected files).
 HISTORY_SOURCES = (("v1_replay", "v1_replay_eurusd.json", "Replay estrategia V1 (velas Twelve Data)"),
-                   ("paper", "paper_closed_trades_eurusd.json", "Trades cerrados PAPER (agregado)"))
+                   ("paper", "paper_closed_trades_eurusd.json", "Operaciones cerradas de práctica interna (agregado)"))
 HISTORY_TITLE = "📚 Historial (referencia) · no son trades de OANDA"
 HISTORY_CHIP = "Referencia · no son trades de OANDA"
 HISTORY_EMPTY = "sin datos todavía (se cargará con la exportación)"
@@ -81,19 +81,24 @@ def checked_account(base, account):
 
 def account_status(account, snapshot, routing=None, read_ok=False):
     """Chip text of one account row. For the OANDA demo row the same facts as the routing chip and the balance panel:
-    ``routing`` (``router_status()['state']``) and ``read_ok`` (the read-only practice summary read is OK) win over the
-    registry's ``connected`` flag, which is only set by the account registry and may lag behind (presentation only)."""
+    Emergency stop and account OFF take priority. Routing and the read-only balance determine the remaining
+    connectivity text; the registry's ``connected`` flag may lag behind (presentation only)."""
     if account["key"] == "real" and (account.get("locked") or not account.get("enabled")):
         return "Real: bloqueado por seguridad", "neg"
-    if account["key"] == "broker_demo" and read_ok:
-        if routing == "on":
-            return "Conectado · activo (enrutado encendido, saldo leído)", "pos"
+    if account["key"] == "broker_demo":
+        connection = "Conectado (saldo leído)" if read_ok else "Saldo no disponible"
+        if snapshot.get("emergency_stop") is True:
+            return f"Parada de emergencia activada · {connection}", "neg"
+        if account.get("enabled") is not True or account.get("mode") == "OFF":
+            return f"Cuenta apagada · {connection}", "warn"
         if routing == "dry_run":
-            return "Conectado · enrutado en prueba (dry-run)", "warn"
-        return "Conectado (saldo leído) · enrutado apagado", ""
+            return f"{connection} · enrutado en prueba (dry-run)", "warn"
+        if routing != "on":
+            return f"{connection} · enrutado apagado", ""
+        if read_ok:
+            return "Conectado · activo (enrutado encendido, saldo leído)", "pos"
+        return "Enrutado encendido · no se pudo leer el saldo de OANDA", "warn"
     if not snapshot["connected"]:
-        if account["key"] == "broker_demo" and routing in ("on", "dry_run"):
-            return "Enrutado encendido · no se pudo leer el saldo de OANDA", "warn"
         return "Aún no conectado", "warn"
     return ("Encendido" if account.get("enabled") else "Apagado"), ("pos" if account.get("enabled") else "")
 
@@ -241,8 +246,10 @@ def history_baselines():
     try:
         from execution.historial import load_baselines
         records = load_baselines()
-        rows = [(r.source, r.filename, r.label, r.stats if r.status == "OK" and isinstance(r.stats, dict) else None)
-                for r in records]
+        rows = [(r.source, r.filename,
+                 r.label.replace("Trades cerrados PAPER (agregado)", HISTORY_SOURCES[1][2])
+                        .replace("PAPER", "práctica interna"),
+                 r.stats if r.status == "OK" and isinstance(r.stats, dict) else None) for r in records]
     except Exception:  # The baseline is optional: unreadable => "sin datos".
         rows = []
     known = {row[0]: row for row in rows}
