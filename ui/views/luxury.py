@@ -1,4 +1,5 @@
-"""Main observation screens over published PAPER evidence only (dark + gold Floor theme, plain Spanish)."""
+"""Main observation screens (dark + gold Floor theme, plain Spanish). OANDA demo mode: OANDA numbers and only
+cycles / events at/after the demo epoch (``dashboard.since_epoch``); PAPER mode: the published PAPER evidence."""
 import base64
 from datetime import datetime, timezone
 from html import escape
@@ -15,7 +16,8 @@ from runtime.scheduler import session_names
 from storage.codec import parse_utc
 from ui import i18n_es as es
 from ui.adapters import from_persisted_snapshot
-from ui.views.dashboard import ROW_LIMIT, payloads, records
+from ui.views.dashboard import (FIRST_CYCLE_WAIT, PAPER_SIZING_KEYS, ROW_LIMIT, epoch_or_far, is_current, payloads,
+                                records, since_epoch)
 from ui.state import dashboard_database
 from ui.json_views import details, structured
 
@@ -94,11 +96,11 @@ def kpi_grid(st, tiles):
     html(st, f'<div class="kpis">{"".join(tiles)}</div>')
 
 
-def table(st, title, rows, columns=None, render=None):
-    """Spanish column headers; ``render`` maps a data key to an HTML cell renderer."""
+def table(st, title, rows, columns=None, render=None, empty=None):
+    """Spanish column headers; ``render`` maps a data key to an HTML cell renderer; ``empty``: text with no rows."""
     render = render or {}
     if not rows:
-        card(st, title, summary=MISSING)
+        card(st, title, summary=empty or MISSING)
         return
     columns = columns or list(dict.fromkeys(key for row in rows for key in row if key != 'payload'))
     head = ''.join(f'<th title="{escape(key, quote=True)}">{escape(es.column(key))}</th>' for key in columns)
@@ -332,7 +334,6 @@ def demo_api():
 
 BANNER = Path(__file__).resolve().parents[2] / 'runtime' / 'assets' / 'floor_banner.png'
 VERSION = 'V2.1'
-FIRST_CYCLE_WAIT = 'Esperando el primer ciclo'
 FLOOR_BUTTON = 'Abrir La mesa animada (Floor)'
 
 
@@ -404,7 +405,7 @@ def overview(st, db, now):
             tone=es.tone(stats['today_pnl']), technical='P&L realizado · día de Nueva York', hint=es.TOOLTIPS['today']),
         kpi('⚖️', es.avg_r_phrase(stats['avg_r'], stats['avg_r_reason']),
             escape(f"{stats['avg_r']:+.2f} R") if number(stats['avg_r']) else '', tone=es.tone(stats['avg_r']),
-            technical='Expectativa por operación (R)', hint=es.TOOLTIPS['avg_r']),
+            technical='Media del R realizado por operación', hint=es.TOOLTIPS['avg_r']),
     ]
     kpi_grid(st, tiles)
     left, right = st.columns([1.7, 1])
@@ -413,10 +414,10 @@ def overview(st, db, now):
             curve_chart(st, curve, tr('Closed-trade curve'),
                         tr('Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger'))
         else:
-            card(st, tr('Closed-trade curve'), summary='Aún no hay closed trades.')
+            card(st, tr('Closed-trade curve'), summary='Aún no hay operaciones cerradas.')
         opened = open_position_rows(db)
         table(st, tr('Open positions'), opened, ['symbol', 'side', 'quantity', 'entry_price', 'stop', 'target',
-                                                 'unrealized_pnl'], render=POSITION_CELLS)
+                                                 'unrealized_pnl'], render=POSITION_CELLS, empty='Sin posiciones abiertas.')
     with right:
         side_panel(st, now, states)
 
@@ -436,17 +437,29 @@ def curve_chart(st, curve, title, caption):
                       hoverlabel=dict(bgcolor='#0d0d0e', bordercolor='#d9b45a', font=dict(color='#e8eceb')),
                       xaxis=dict(gridcolor='#1f2c2e', linecolor='#25322f', tickformat='%d/%m %H:%M'),
                       yaxis=dict(gridcolor='#1f2c2e', linecolor='#25322f', zerolinecolor='#25322f', automargin=True,
-                                 tickprefix='$', title='Cumulative realized PnL'))
+                                 tickprefix='$', title='P&L realizado acumulado'))
     with st.container(key='curve-card'):
         html(st, f'<h3 style="margin:0">{escape(title)}</h3><div class="small">{escape(caption)} · hora ET'
                  '</div>')
         st.plotly_chart(fig, width='stretch', theme=None, key='equity-curve')
 
 
-def side_panel(st, now, states):
+def cycle_time(states, key, since=None):
+    """``last_success`` / ``last_run`` with ONE rule: a value before the demo epoch (or unparsable in demo mode) is
+    not the current cycle => "Esperando el primer ciclo"."""
+    value = states.get(key)
+    if since is not None and not is_current(value, since):
+        return FIRST_CYCLE_WAIT
+    return display(value)
+
+
+def side_panel(st, now, states, since=None):
+    """``since``: demo epoch (None in PAPER mode). The heartbeat is live and always shown as stored."""
     sessions = ', '.join(es.SESSIONS.get(name, name) for name in session_names(now)) or tr('Outside sessions')
     card(st, tr('Session'), [('Ahora mismo', sessions), (es.column('scheduler'), health_dot(states.get('scheduler'))),
-         (es.column('last_success'), states.get('last_success')), (es.column('heartbeat'), states.get('heartbeat'))])
+         (es.column('last_run'), cycle_time(states, 'last_run', since)),
+         (es.column('last_success'), cycle_time(states, 'last_success', since)),
+         (es.column('heartbeat'), display(states.get('heartbeat')))])
     path = Path(os.environ.get('AI_FLOOR_DB_PATH', 'data/runtime/trading_floor.db'))
     with dashboard_database(os.environ.get('AI_FLOOR_HEALTH_DB_PATH', str(path.with_name('system_health.db')))) as health_db:
         health = payloads(health_db, 'component_health')
@@ -454,7 +467,6 @@ def side_panel(st, now, states):
             for name in [r.get('component', r.get('component_id', MISSING))]]
     rows += [(es.COMPONENTS[key], es.status_text(states.get(key)) if states.get(key) else MISSING)
              for key in ('market_data_provider', 'ai_provider')]
-    rows += [(es.COMPONENTS['last_run'], display(states.get('last_run')))]
     card(st, tr('System'), rows)
     card(st, tr('Active policies'), [(es.POLICIES[key], f'{display(value)} · origen: {source}')
          for key in ('V2_PLANNER_POLICY', 'V2_OPPOSITE_SETUP_POLICY')
@@ -462,8 +474,7 @@ def side_panel(st, now, states):
 
 
 DEMO_NO_DATA = 'sin datos'
-DEMO_ARCHIVE_NOTE = ('Los datos de la práctica interna anteriores al demo están archivados y no cuentan aquí '
-                     '(ver Historial en Control).')
+DEMO_ARCHIVE_NOTE = 'Los datos de la práctica anterior están archivados y no cuentan aquí.'
 
 
 DEMO_TRADES_ERRORS = {'incomplete': 'totales incompletos: OANDA tiene más operaciones que el límite de páginas',
@@ -476,10 +487,16 @@ def demo_no_data(demo):
     return f"{DEMO_NO_DATA} ({DEMO_TRADES_ERRORS.get(demo.get('trades_error'), 'no se pudo leer OANDA')})"
 
 
+def demo_since(demo):
+    """Epoch filter of the demo screens: None in PAPER mode (``demo`` None); an unreadable epoch => nothing passes."""
+    return None if demo is None else epoch_or_far(demo['epoch'])
+
+
 def demo_day(demo, now):
-    """Uncapped demo day (``demo_progress``) or None; never raises."""
+    """Uncapped demo day counted from the EPOCH's New York date (``ui.demo_clock``) or None; never raises."""
+    from ui.demo_clock import demo_day_from_epoch
     try:
-        return demo['progress'](now)[2]
+        return demo_day_from_epoch(demo['epoch'](), now)
     except Exception:  # noqa: BLE001 - no day counter rather than a broken screen
         return None
 
@@ -492,59 +509,97 @@ def demo_money(value, signed=False):
     return es.money(value, signed=signed) if number(value) else DEMO_NO_DATA
 
 
+NO_TRADES_YET = 'sin operaciones aún'
+
+
 def demo_pnl_phrase(total):
     if not number(total):
-        return f'Realized PnL: {DEMO_NO_DATA}'
-    return 'Realized PnL · desde el inicio del demo'
+        return f'P&L realizado: {DEMO_NO_DATA}'
+    return 'P&L realizado · desde el inicio del demo'
+
+
+def unrealized_total(open_rows):
+    """Sum of the open positions' unrealized P&L; 0.0 with no open position; None when any value is unknown."""
+    values = [row.get('unrealized_pnl') for row in open_rows or ()]
+    return float(sum(values)) if all(number(v) for v in values) else None
+
+
+def mute(text):
+    return f'<span class="mute">{escape(text)}</span>'
+
+
+def demo_kpis(demo):
+    """Start page tiles: real OANDA practice numbers only. A failed read => "sin datos (motivo)"; no closed trade yet
+    => "sin operaciones aún" for win rate / R / drawdown (never a blank tile)."""
+    stats = demo['stats']
+    known = stats is not None
+    reason = demo_no_data(demo)
+    count = stats['trades'] if known else 0
+    traded = known and count > 0
+    stale = ' · datos anteriores' if demo.get('stale') else ''
+    total = stats['total_pnl'] if known else None
+    today = stats['today_pnl'] if known else None
+    open_rows = demo['open_rows'] if known else []
+    unrealized = unrealized_total(open_rows) if known else None
+    avg_r = stats['avg_r'] if traded else None
+
+    def money_value(value):
+        return escape(demo_money(value, signed=True)) if number(value) else mute(reason if not known else DEMO_NO_DATA)
+
+    def by_trades(value_html):
+        return value_html if traded else mute(NO_TRADES_YET if known else reason)
+
+    rate = escape(f"{100 * stats['wins'] / count:.0f}%") if traded else ''
+    r_value = (escape(f'{avg_r:+.2f} R') if number(avg_r) else mute(stats['avg_r_reason'] or MISSING)) if traded else ''
+    drawdown = escape(demo_money(stats['max_drawdown'])) if traded else ''
+    return [
+        kpi('💰', 'NAV (equity) · OANDA demo', escape(demo_money(demo['nav'])),
+            technical=f"Capital inicial {demo_money(demo['capital']['start'])}{stale}", hint=es.TOOLTIPS['equity']),
+        kpi('🏦', 'Balance · OANDA demo', escape(demo_money(demo['balance'])),
+            technical=f'Saldo sin contar las posiciones abiertas{stale}'),
+        kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total), money_value(total),
+            tone=es.tone(total), technical='Suma del P&L neto de las operaciones cerradas', hint=es.TOOLTIPS['pnl']),
+        kpi('📊', 'P&L no realizado', money_value(unrealized), tone=es.tone(unrealized),
+            technical='Posiciones abiertas a precio de mercado', hint=es.TOOLTIPS['unrealized']),
+        kpi('📅', 'P&L de hoy (ET)', money_value(today), tone=es.tone(today),
+            technical='P&L realizado · día de Nueva York', hint=es.TOOLTIPS['today']),
+        kpi('📂', 'Posiciones abiertas', escape(str(len(open_rows))) if known else mute(reason), tone='teal',
+            technical='Abiertas ahora en la cuenta demo'),
+        kpi('✅', 'Operaciones cerradas', escape(str(count)) if known else mute(reason), tone='teal',
+            technical='Desde el inicio del demo'),
+        kpi('🎯', es.wins_phrase(stats['wins'], count) if traded else 'Acierto', by_trades(rate), tone='teal',
+            technical='Ganadoras / operaciones cerradas', hint=es.TOOLTIPS['win_rate']),
+        kpi('⚖️', 'R medio (expectativa)', by_trades(r_value), tone=es.tone(avg_r),
+            technical='Media del R realizado por operación', hint=es.TOOLTIPS['avg_r']),
+        kpi('🛡️', 'Caída máxima (P&L realizado)', by_trades(drawdown), tone='orange',
+            technical='Mayor caída desde un máximo', hint=es.TOOLTIPS['drawdown']),
+    ]
 
 
 def demo_overview(st, db, now, demo, day=None):
     """Overview while broker-demo routing is ON: every number comes from the OANDA practice account since the demo
     epoch; a failed read is "sin datos", never PAPER numbers. Shows "Día N de 30" and the daily-loss status."""
     states = {r['key']: r['value'] for r in records(db, 'system_state')}
-    stats = demo['stats']
-    known = stats is not None
-    total = stats['total_pnl'] if known else None
-    trades_count = stats['trades'] if known else 0
-    rate = f"{100*stats['wins']/trades_count:.0f}%" if known and trades_count else ''
-    start = demo['capital']['start']
-    stale = ' · datos anteriores' if demo.get('stale') else ''
+    known = demo['stats'] is not None
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
-             f'<div class="small"><b>{escape(es.demo_day_text(day))}</b> · {escape(DEMO_ARCHIVE_NOTE)}</div></div>')
-    tiles = [
-        kpi('💰', 'Equity (NAV) · OANDA demo', escape(demo_money(demo['nav'])),
-            technical=f'Capital inicial {demo_money(start)}{stale}', hint=es.TOOLTIPS['equity']),
-        kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total),
-            escape(demo_money(total, signed=True)), tone=es.tone(total), technical='P&L neto · operaciones cerradas',
-            hint=es.TOOLTIPS['pnl']),
-        kpi('🎯', es.wins_phrase(stats['wins'], trades_count) if known else f'Win rate: {DEMO_NO_DATA}',
-            escape(rate), tone='teal', technical='Ganadoras / operaciones cerradas', hint=es.TOOLTIPS['win_rate']),
-        kpi('🛡️', f'Max drawdown (realized PnL): {demo_money(stats and stats["max_drawdown"])}',
-            tone='orange', technical='Mayor caída desde un máximo', hint=es.TOOLTIPS['drawdown']),
-        kpi('📅', es.today_phrase(stats['today_pnl']) if known else f'Today PnL (ET): {DEMO_NO_DATA}',
-            escape(demo_money(stats and stats['today_pnl'], signed=True)), tone=es.tone(stats and stats['today_pnl']),
-            technical='P&L realizado · día de Nueva York', hint=es.TOOLTIPS['today']),
-        kpi('⚖️', es.avg_r_phrase(stats['avg_r'], stats['avg_r_reason']) if known
-            else f'Avg R (expectancy): {DEMO_NO_DATA}',
-            escape(f"{stats['avg_r']:+.2f} R") if known and number(stats['avg_r']) else '',
-            tone=es.tone(stats and stats['avg_r']), technical='Expectativa por operación (R)', hint=es.TOOLTIPS['avg_r']),
-    ]
-    kpi_grid(st, tiles)
+             f'<div class="small"><b>{escape(es.demo_day_text(day) if day else FIRST_CYCLE_WAIT)}</b> · '
+             f'{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
+    kpi_grid(st, demo_kpis(demo))
     left, right = st.columns([1.7, 1])
     with left:
-        title = 'Closed-trade curve · OANDA demo'
+        title = 'Curva de operaciones cerradas · OANDA demo'
         if demo['curve']:
-            curve_chart(st, demo['curve'], title, 'Cumulative realized PnL desde el inicio del demo')
+            curve_chart(st, demo['curve'], title, 'P&L realizado acumulado desde el inicio del demo')
         else:
-            card(st, title, summary='Aún no hay closed trades en el demo.' if known else demo_no_data(demo))
+            card(st, title, summary='Aún no hay operaciones cerradas en el demo.' if known else demo_no_data(demo))
         if known:
             table(st, tr('Open positions'), demo['open_rows'], ['symbol', 'side', 'quantity', 'entry_price', 'stop',
-                                                                'target', 'unrealized_pnl'], render=POSITION_CELLS)
+                  'target', 'unrealized_pnl'], render=POSITION_CELLS, empty='Sin posiciones abiertas.')
         else:
-            card(st, tr('Open positions'), summary=DEMO_NO_DATA)
+            card(st, tr('Open positions'), summary=demo_no_data(demo))
     with right:
         card(st, es.DAILY_LOSS_TITLE, es.daily_loss_rows(demo.get('daily_loss')))
-        side_panel(st, now, states)
+        side_panel(st, now, states, epoch_or_far(lambda: demo['epoch']))
 
 
 def money_cell(key):
@@ -582,27 +637,47 @@ TRADE_CELLS = {'side': lambda row: state_chip(row.get('side')), 'net_pnl': money
 DEMO_TRADE_CELLS = {**TRADE_CELLS, 'realized_r': demo_r_cell}
 
 
+def paused(symbol):
+    """``runtime.symbol_pause.is_paused`` (read only, same source as floor_payload.symbol_states); never raises."""
+    return es.symbol_status(symbol, ()) == es.PAUSED_TEXT
+
+
+def current_snapshots(db, since):
+    """Latest ``ui_snapshots`` per symbol; in demo mode only those whose ``as_of`` is at/after the epoch."""
+    return {r['symbol']: r for r in since_epoch(payloads(db, 'ui_snapshots'), since, ('as_of',))}
+
+
 def floor(st, db, symbols):
-    snapshots = {r['symbol']: r for r in payloads(db, 'ui_snapshots')}
+    since = demo_since(demo_api())
+    snapshots = current_snapshots(db, since)
     hidden = paper_hidden()  # DEC-OANDA-ONLY-1: no PAPER position on the desks
     positions = [] if hidden else payloads(db, 'paper_positions', statuses=('OPEN',))
     cols = st.columns(max(1, len(symbols)))
     for col, symbol in zip(cols, symbols):
         with col:
+            if paused(symbol):
+                card(st, f'Mesa · {symbol}', summary=f'{symbol} · {es.PAUSED_TEXT}')
+                continue
             snapshot = snapshots.get(symbol)
+            if snapshot is None and since is not None:
+                card(st, f'Mesa · {symbol}', summary=FIRST_CYCLE_WAIT)
+                continue
             vm = from_persisted_snapshot(snapshot) if snapshot is not None else None
             opened = [p for p in positions if p.get('symbol') == symbol]
             card(st, f'Mesa · {symbol}', [('Estado', state_chip(vm.state if vm else None)),
                  ('Setup', state_chip(vm.setup_status if vm else None)),
-                 ('Side', state_chip(vm.setup_side) if vm and vm.setup_side else MISSING),
+                 ('Lado', state_chip(vm.setup_side) if vm and vm.setup_side else MISSING),
                  (es.column('freshness'), state_chip(vm.freshness if vm else None)),
                  ('Última actualización', vm.as_of if vm else None),
-                 ('Open position', 'ver Floor / Operaciones (demo OANDA)' if hidden else
-                  ', '.join(es.status_text(p.get('side')) + ' · open' for p in opened) or tr('No open position'))])
+                 ('Posición abierta', 'ver La mesa animada / Trades (demo OANDA)' if hidden else
+                  ', '.join(es.status_text(p.get('side')) + ' · abierta' for p in opened) or tr('No open position'))])
     for symbol in symbols:
         snapshot = snapshots.get(symbol)
+        if paused(symbol):
+            continue
         if snapshot is None:
-            card(st, f'{symbol} · {tr("Agent rooms")} / {tr("Risk Engine")}', summary=MISSING)
+            card(st, f'{symbol} · {tr("Agent rooms")} / {tr("Risk Engine")}',
+                 summary=FIRST_CYCLE_WAIT if since is not None else MISSING)
             continue
         vm = from_persisted_snapshot(snapshot)
         html(st, f'<h3 style="margin:8px 0 0">{escape(symbol)} · {escape(tr("Agent rooms"))}</h3>')
@@ -614,7 +689,10 @@ def floor(st, db, symbols):
                      ('Tendencia', state_chip(agent.bias) if ok else MISSING),
                      ('Confianza', agent.confidence), ('Hora', agent.timestamp)],
                      summary=agent.reasoning_summary or MISSING)
-        decision = [(k, v) for k, v in vars(vm.risk_decision).items() if k != 'status'] if vm.risk_decision else []
+        decision = ([(k, v) for k, v in vars(vm.risk_decision).items() if k not in ('status', 'schema_version')]
+                    if vm.risk_decision else [])
+        if since is not None:  # the PAPER account's sizing (equity at decision ~10k) is not the OANDA demo's
+            decision = [(k, v) for k, v in decision if k not in PAPER_SIZING_KEYS]
         card(st, f'{symbol} · {tr("Risk Engine")}', [('Estado', state_chip(vm.risk_status))]
              + [(es.column(key), value) for key, value in decision])
 
@@ -643,15 +721,15 @@ def slippage(trade, plan):
                                 plan.get('planned_entry'), plan.get('entry')) if number(v)), None)
     fill = trade.get('entry_price')
     if not number(planned) or not number(fill):
-        return [('Planned entry', MISSING), ('Fill', fill), ('Slippage', 'sin planned entry guardada')]
+        return [('Entrada planificada', MISSING), ('Ejecución', fill), ('Deslizamiento', 'sin entrada planificada guardada')]
     diff = fill - planned
     worse = diff > 0 if trade.get('side') == 'LONG' else diff < 0 if trade.get('side') == 'SHORT' else None
     text = f'{diff:+.5f}'.rstrip('0').rstrip('.') if abs(diff) < 10 else f'{diff:+,.2f}'
     if trade.get('symbol') == 'EURUSD':
         text += f' ({diff/0.0001:+.1f} pips)'
-    verdict = '0 · sin slippage' if diff == 0 else 'adverse' if worse else 'favorable' if worse is False else ''
-    return [('Planned entry', planned), ('Fill', fill),
-            ('Slippage', f'{text} · {verdict}' if verdict else text)]
+    verdict = '0 · sin deslizamiento' if diff == 0 else 'en contra' if worse else 'a favor' if worse is False else ''
+    return [('Entrada planificada', planned), ('Ejecución', fill),
+            ('Deslizamiento', f'{text} · {verdict}' if verdict else text)]
 
 
 def trade_label(row):
@@ -659,7 +737,7 @@ def trade_label(row):
     if row['record'] == 'closed':
         return (f"{row.get('symbol', '')} · {side} · {es.money(row.get('net_pnl'), signed=True)} · "
                 f"{display(row.get('exited_at'))}")
-    return f"{row.get('symbol', '')} · {side} · open since {display(row.get('opened_at'))}"
+    return f"{row.get('symbol', '')} · {side} · abierta desde {display(row.get('opened_at'))}"
 
 
 def demo_trades(st, demo):
@@ -667,13 +745,14 @@ def demo_trades(st, demo):
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
              f'<div class="small">{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
     if demo['stats'] is None:
-        card(st, 'OANDA demo trades', summary=demo_no_data(demo))
+        card(st, 'Operaciones · OANDA demo', summary=demo_no_data(demo))
         return
     closed = list(reversed(demo['closed_rows']))
-    table(st, 'Closed trades · OANDA demo', closed, ['exited_at', 'symbol', 'side', 'quantity',
-          'entry_price', 'exit_price', 'net_pnl', 'realized_r'], render=DEMO_TRADE_CELLS)
+    table(st, 'Operaciones cerradas · OANDA demo', closed, ['exited_at', 'symbol', 'side', 'quantity',
+          'entry_price', 'exit_price', 'net_pnl', 'realized_r'], render=DEMO_TRADE_CELLS,
+          empty='Aún no hay operaciones cerradas en el demo.')
     table(st, tr('Open positions'), demo['open_rows'], ['opened_at', 'symbol', 'side', 'quantity', 'entry_price',
-          'stop', 'target', 'unrealized_pnl'], render=POSITION_CELLS)
+          'stop', 'target', 'unrealized_pnl'], render=POSITION_CELLS, empty='Sin posiciones abiertas.')
 
 
 def trades(st, db):
@@ -685,14 +764,15 @@ def trades(st, db):
     opened = [{**r, 'record': 'open'} for r in open_position_rows(db)]
     rows = closed + opened
     table(st, tr('Closed trades · latest published'), closed, ['exited_at', 'symbol', 'side', 'entry_price',
-          'exit_price', 'net_pnl', 'realized_r', 'close_reason'], render=TRADE_CELLS)
+          'exit_price', 'net_pnl', 'realized_r', 'close_reason'], render=TRADE_CELLS,
+          empty='Aún no hay operaciones cerradas.')
     table(st, tr('Open positions'), opened, ['opened_at', 'symbol', 'side', 'quantity', 'entry_price', 'stop', 'target',
-          'unrealized_pnl'], render=POSITION_CELLS)
+          'unrealized_pnl'], render=POSITION_CELLS, empty='Sin posiciones abiertas.')
     if not rows:
         return
     selected = st.selectbox(tr('Trade detail'), range(len(rows)), format_func=lambda i: trade_label(rows[i]))
     trade = rows[selected]
-    process_link(st, trade.get('run_id'), 'trade-process')
+    process_link(st, trade.get('run_id'), 'trade-process', 'ciclo de esta operación')
     plan = linked_plan(db, trade)
     left, right = st.columns(2)
     with left:
@@ -700,7 +780,7 @@ def trades(st, db):
         target = plan.get('target', trade.get('position_target', trade.get('target')))
         entry = next((v for v in (plan.get('entry'), plan.get('planned_entry'), trade.get('planned_entry'),
                                   trade.get('position_planned_entry')) if number(v)), None)
-        card(st, tr('Plan'), [('Planned entry', entry),
+        card(st, tr('Plan'), [('Entrada planificada', entry),
              ('Stop loss (SL)', stop), ('Take profit (TP)', target),
              ('R:R', f"1 : {display(plan['risk_reward'])}" if number(plan.get('risk_reward')) else None)])
         rows_html = ''.join(f'<div class="row"><span class="mute">{e(k)}</span><span>{e(v)}</span></div>'
@@ -709,27 +789,28 @@ def trades(st, db):
                  f'<div class="meta">{es.tip(es.TOOLTIPS["slippage"])}</div></div>')
     with right:
         pnl = trade.get('net_pnl') if trade['record'] == 'closed' else trade.get('unrealized_pnl')
-        fields = [('Símbolo', escape(str(trade.get('symbol') or MISSING))), ('Side', state_chip(trade.get('side'))),
-                  ('Fill', e(trade.get('entry_price')))]
+        fields = [('Símbolo', escape(str(trade.get('symbol') or MISSING))), ('Lado', state_chip(trade.get('side'))),
+                  ('Ejecución', e(trade.get('entry_price')))]
         if trade['record'] == 'closed':
-            fields += [('Exit', e(trade.get('exit_price'))), ('Net PnL', money_cell('net_pnl')(trade)),
-                       ('R realized', r_cell(trade)), ('Exit reason', reason_cell(trade)),
-                       ('Closed', e(trade.get('exited_at')))]
+            fields += [('Salida', e(trade.get('exit_price'))), ('P&L neto', money_cell('net_pnl')(trade)),
+                       ('R realizado', r_cell(trade)), ('Motivo de salida', reason_cell(trade)),
+                       ('Cerrada', e(trade.get('exited_at')))]
         else:
-            fields += [('Unrealized PnL', money_cell('unrealized_pnl')(trade)),
-                       ('Opened', e(trade.get('opened_at')))]
+            fields += [('P&L no realizado', money_cell('unrealized_pnl')(trade)),
+                       ('Abierta', e(trade.get('opened_at')))]
         big = (f'<div class="big num {es.tone(pnl)}">{escape(es.money(pnl, signed=True))}</div>' if number(pnl)
                else f'<div class="big mute" style="font-size:22px">{escape(es.NO_PRICE if trade["record"] == "open" else MISSING)}</div>')
         rows_html = ''.join(f'<div class="row"><span class="mute">{escape(k)}</span><span>{v}</span></div>' for k, v in fields)
         html(st, f'<div class="card"><h3>{escape(tr("Execution"))}</h3>{big}{rows_html}</div>')
 
 
-def process_link(st, run_id, key):
+def process_link(st, run_id, key, label=None):
+    """Button to the run on Proceso; ``label`` (e.g. ``es.cycle_label``) instead of the raw run UUID."""
     def select():
         st.session_state['process_run_id'] = run_id
         st.session_state['luxury_navigation'] = 'Process'
     if run_id:
-        if st.button(tr('Open Process · ') + run_id, key=key, on_click=select):
+        if st.button(tr('Open Process · ') + (label or es.short_id(run_id)), key=key, on_click=select):
             st.rerun(scope='app')
 
 
@@ -776,26 +857,26 @@ DECISION_CELLS = {
 }
 
 
-def since_epoch(rows, epoch):
-    """Rows whose ``as_of`` is at/after ``epoch`` (missing or unparsable timestamps are left out)."""
-    kept = []
+def run_labels(rows):
+    """{run_id: "Ciclo del 26 oct 03:00 ET · EURUSD"} from the rows' own ``as_of`` / ``symbol`` (first row wins)."""
+    labels = {}
     for row in rows:
-        try:
-            if parse_utc(row.get('as_of')) >= epoch:
-                kept.append(row)
-        except (ValueError, TypeError):
-            continue
-    return kept
+        if row.get('run_id') and row['run_id'] not in labels:
+            labels[row['run_id']] = es.cycle_label(row.get('as_of'), row.get('symbol'))
+    return labels
 
 
 def decisions(st, db):
     rows = decision_rows(db)
-    demo = demo_api()
-    if demo is not None:
-        rows = since_epoch(rows, demo['epoch']())
+    since = demo_since(demo_api())
+    rows = since_epoch(rows, since, ('as_of',))
+    if not rows and since is not None:
+        card(st, tr('Decisions · newest first'), summary=FIRST_CYCLE_WAIT)
+        return
     if rows:
-        selected = st.selectbox(tr('Decision process'), list(dict.fromkeys(r['run_id'] for r in rows if r.get('run_id'))))
-        process_link(st, selected, 'decision-process')
+        labels = run_labels(rows)
+        selected = st.selectbox(tr('Decision process'), list(labels), format_func=lambda run: labels[run])
+        process_link(st, selected, 'decision-process', labels.get(selected))
     rows.sort(key=lambda r: r.get('as_of') or '', reverse=True)
     table(st, tr('Decisions · newest first'), rows[:ROW_LIMIT], ['as_of', 'symbol', 'source', 'agent_name', 'status',
           'bias', 'confidence', 'reasoning_summary', 'reason', 'run_id'], render=DECISION_CELLS)

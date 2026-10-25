@@ -539,6 +539,21 @@ class FloorStaticTests(unittest.TestCase):
         self.assertIn("q.has('agent')", asset)
         self.assertIn("q.has('detail')", asset)
 
+    def test_hud_and_narrow_stage_layout(self):
+        asset = floor_view.ASSET.read_text(encoding="utf-8")
+        # HUD: short muted "sin operaciones" cells that wrap; balance only when it differs from the NAV
+        self.assertIn("NOOPK='sin operaciones'", asset)
+        self.assertIn("const wr=NOTR?NOOPK:", asset)
+        self.assertIn("const BALX=ok(HD.balance)&&!(ok(HD.equity)&&Math.abs(HD.balance-HD.equity)<.005);", asset)
+        self.assertIn(".kpis{display:flex;flex-wrap:wrap;", asset)
+        # narrow stage: fit to the rooms, desk legend strip as HTML, no wall / room text, no overlapping plates
+        self.assertIn("document.body.classList.toggle('mob',document.getElementById('stage').clientWidth<600)", asset)
+        self.assertIn('<div id="legend"></div>', asset)
+        self.assertIn("document.getElementById('legend').innerHTML=DESKS.map(", asset)
+        self.assertIn("const wallTxt=!MOB();", asset)
+        self.assertIn("const b=MOB()?[0,0,0,0]:tag(", asset)
+        self.assertIn("if(PLACED.some(o=>bx<o[0]+o[2]+2&&bx+w+2>o[0]&&by<o[1]+o[3]+2&&by+h+2>o[1]))return;", asset)
+
     def test_no_env_names_or_raw_codes_in_rendered_floor(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "floor.db"

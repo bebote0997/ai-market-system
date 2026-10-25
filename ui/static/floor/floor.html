@@ -9,19 +9,24 @@
 :root{--gold:#19e3d3;--gold2:#9ff5ee;--ink:#0a0a0b;--line:#1a2325;--mute:#7f9593;--dim:#6f8583}
 *{box-sizing:border-box}html,body{margin:0;height:100%;display:flex;flex-direction:column;background:var(--ink);color:#e6eef0;font-family:"Helvetica Neue",Inter,Arial,sans-serif;overflow:hidden}
 .serif{font-family:Didot,"Bodoni 72","Playfair Display",Georgia,serif}
-header{height:78px;display:flex;align-items:center;justify-content:space-between;padding:0 36px;border-bottom:1px solid var(--line);gap:24px}
+header{min-height:78px;display:flex;align-items:center;justify-content:space-between;padding:10px 36px;border-bottom:1px solid var(--line);gap:24px}
 .brand{display:flex;flex-direction:column;gap:4px;flex:none}
 .brand h1{margin:0;font-weight:400;font-size:24px;letter-spacing:.32em;text-transform:uppercase;color:var(--gold2)}
 .brand div{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute)}
 .brand b{color:var(--gold);font-weight:600}
 .ex{border:1px solid var(--gold);color:var(--gold);padding:2px 7px;margin-left:8px;font-size:10px;letter-spacing:.2em;font-weight:400;vertical-align:middle}
-.kpis{display:flex;gap:26px}.kpi{text-align:right;min-width:0}.kpi .ex{margin-left:5px;padding:1px 4px;font-size:10px;letter-spacing:.12em}
-.kpi b{display:block;font-size:17px;font-weight:300;letter-spacing:.02em;white-space:nowrap}.kpi b.txt{font-size:12px;padding:3px 0 2px;letter-spacing:.04em}
+/* HUD cells wrap onto a second row instead of overlapping / being cut at the right edge */
+.kpis{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px 24px;min-width:0}.kpi{text-align:right;min-width:56px;max-width:150px}.kpi .ex{margin-left:5px;padding:1px 4px;font-size:10px;letter-spacing:.12em}
+.kpi b{display:block;font-size:17px;font-weight:300;letter-spacing:.02em;white-space:nowrap}.kpi b.txt{font-size:11px;line-height:1.25;padding:0 0 2px;letter-spacing:.04em;white-space:normal;width:min-content;margin-left:auto}
 .kpi small{display:block;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}.kpi small.b2{letter-spacing:.06em;text-transform:none}
 .pos{color:#3ddc84}.neg{color:#ff4d6d}.na{color:var(--mute)}
 main{position:relative;flex:1;min-height:0;overflow:hidden}header,footer{flex:none}
-#stage{position:absolute;left:0;top:0;bottom:0;right:0;transition:right .5s cubic-bezier(.2,.8,.2,1),bottom .5s}
-canvas{width:100%;height:100%;display:block;cursor:default}
+#stage{position:absolute;left:0;top:0;bottom:0;right:0;display:flex;flex-direction:column;transition:right .5s cubic-bezier(.2,.8,.2,1),bottom .5s}
+canvas{flex:1 1 0;min-height:0;width:100%;display:block;cursor:default}
+/* narrow stage (body.mob, set in fit()): the desk status boxes become this HTML strip under the canvas */
+#legend{display:none;flex:none;flex-wrap:wrap;gap:2px 16px;padding:8px 14px 10px;border-top:1px solid var(--line);font-size:11px;line-height:1.5;letter-spacing:.04em;color:var(--mute)}
+#legend b{color:var(--gold2);font-weight:600;letter-spacing:.08em}#legend .on{color:#3ddc84}#legend .pa{color:#ffb020}#legend [onclick]{cursor:pointer}
+body.mob #legend{display:flex}body.mob .note{bottom:auto;top:6px}body.mob .hint{display:none}
 body.open #stage{right:440px}
 footer{height:78px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 36px;gap:0;position:relative}
 .step{flex:1;position:relative;font-size:10px;line-height:1.25;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:16px 8px 0 0}
@@ -50,10 +55,11 @@ tr.pick{cursor:pointer}tr.pick:hover td{color:var(--gold2)}
 .rr .t.l{left:0;transform:none}.rr .t.r{right:0;transform:none}.rr .t2{top:28px}.rr .dot{position:absolute;top:14px;width:12px;height:12px;border-radius:50%;background:var(--gold);transform:translateX(-50%);box-shadow:0 0 10px var(--gold)}
 .chain{font-size:12px;line-height:2;color:#a9bfbd;font-weight:300}.chain span{color:var(--gold)}
 .empty{font-size:12px;color:var(--mute);letter-spacing:.08em}
-@media (max-width:1100px){.kpis{gap:16px}.kpi b{font-size:15px}.kpi small{letter-spacing:.1em}}
+@media (max-width:1280px){.step{letter-spacing:.05em;padding-right:6px}}
+@media (max-width:1100px){.brand h1{font-size:20px;letter-spacing:.26em}.kpis{column-gap:16px}.kpi b{font-size:15px}.kpi small{letter-spacing:.1em}}
 @media (max-width:820px){
  header{height:auto;flex-direction:column;align-items:flex-start;padding:14px 16px;gap:10px}
- .brand h1{font-size:17px}.kpis{gap:0;width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));row-gap:8px;column-gap:8px}.kpi{text-align:left}.kpi b{font-size:14px}.kpi b.txt{font-size:11px}
+ .brand h1{font-size:17px}.kpis{gap:0;width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));row-gap:8px;column-gap:8px}.kpi{text-align:left;min-width:0;max-width:none}.kpi b{font-size:14px;overflow:hidden;text-overflow:ellipsis}.kpi b.txt{font-size:11px;margin-left:0}
  .kpi small{letter-spacing:.06em}
  footer{height:64px;padding:0 14px;overflow:hidden}.step{font-size:0;padding-right:0}.step.on{font-size:10px;flex:3}.step em{font-size:0}.step.on em{font-size:10px}
  body.idle .snote{display:block;position:absolute;left:14px;right:14px;bottom:8px;font-size:11px;letter-spacing:.06em;color:#9fc9c6}
@@ -73,7 +79,7 @@ tr.pick{cursor:pointer}tr.pick:hover td{color:var(--gold2)}
  <div class="kpis" id="kpis"></div>
 </header>
 <main>
- <div id="stage"><canvas id="c"></canvas><div class="note" id="note"></div></div>
+ <div id="stage"><canvas id="c"></canvas><div id="legend"></div><div class="note" id="note"></div></div>
  <aside id="drawer"><span class="x" onclick="closeD()">×</span><div id="agentV" style="display:none"></div><div id="tradeV"></div></aside>
 </main>
 <footer id="steps"></footer>
@@ -93,7 +99,7 @@ const STALE=HD.equity_stale===true&&HD.equity_as_of?`(dato antiguo · ${HD.equit
 // same for every section derived from the cached demo trades read (PnL, R, win rate, drawdown, curve, trades, hit rate)
 const TSTALE=HD.trades_stale===true?`(dato antiguo${HD.trades_as_of?` · ${HD.trades_as_of} ET`:''})`:'';
 const TKP=new Set(['pnl','today_pnl','r_total','win_rate','drawdown']);
-const NA='—',EMPTY='sin datos aún',NOOP='sin operaciones aún';
+const NA='—',EMPTY='sin datos aún',NOOP='sin operaciones aún',NOOPK='sin operaciones';  // NOOPK: HUD cell, two muted lines
 const NOTR=HD.trades===0;  // stats known and no closed trade yet
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ok=v=>typeof v==='number'&&isFinite(v);
@@ -113,10 +119,12 @@ document.getElementById('brandSub').innerHTML=`V2.1 · ${esc(SRC||EMPTY)} · <b>
 const dl=(ok(HD.daily_loss_used_pct)||ok(HD.daily_loss_limit_pct))?`${ok(HD.daily_loss_used_pct)?HD.daily_loss_used_pct.toFixed(1):NA} / ${pct(HD.daily_loss_limit_pct)}`:NA;
 const DLT=HD.daily_loss_text||'';
 const dd=ok(HD.drawdown_pct)?(HD.drawdown_pct>0?'−':'')+HD.drawdown_pct.toFixed(2)+'%':ok(HD.drawdown)?money(-HD.drawdown):NA;
-const wr=NOTR?NOOP:ok(HD.win_rate)?HD.win_rate.toFixed(0)+'%':NA;
-const rt=NOTR?NOOP:fR(HD.r_total);
+const wr=NOTR?NOOPK:ok(HD.win_rate)?HD.win_rate.toFixed(0)+'%':NA;
+const rt=NOTR?NOOPK:fR(HD.r_total);
+// the balance appears under the NAV only when it differs from it (never the same figure twice)
+const BALX=ok(HD.balance)&&!(ok(HD.equity)&&Math.abs(HD.balance-HD.equity)<.005);
 // [value, label, class, payload keys, extra small line, tooltip]
-const KP=[[money(HD.equity),'NAV',ok(HD.equity)?'':'na',['equity','balance'],ok(HD.balance)?'Balance '+money(HD.balance):''],
+const KP=[[money(HD.equity),'NAV',ok(HD.equity)?'':'na',['equity','balance'],BALX?'Balance '+money(HD.balance):''],
  [money(HD.pnl,1),'P&L realizado',tone(HD.pnl),['pnl']],[money(HD.today_pnl,1),'P&L hoy',tone(HD.today_pnl),['today_pnl']],
  [rt,'R total',NOTR?'na txt':tone(HD.r_total),['r_total']],[wr,'Tasa de acierto',NOTR?'na txt':ok(HD.win_rate)?'':'na',['win_rate']],
  [dd,'Caída máx.',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],
@@ -144,9 +152,14 @@ if(STEP==null)document.body.classList.add('idle');
 const cv=document.getElementById('c'),cx=cv.getContext('2d');let U=30,ox=0,oy=0,Z=1,PX=0,PY=0,dpr=1,vw=0,vh=0;
 const P=(x,y,z=0)=>[ox+(x-y)*U,oy+(x+y)*U/2-z*U];
 let Z0=null;
-// the whole scene fits the canvas (also 390×844 portrait); pinch / wheel zoom and drag move it on demand
-function fit(){const r=cv.getBoundingClientRect();dpr=devicePixelRatio||1;vw=r.width;vh=r.height;cv.width=vw*dpr;cv.height=vh*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
- const padT=vh*.12,pad=12;U=Math.min((vw-pad*2)/(W+D),(vh-padT-pad)/((W+D)/2+H));ox=pad+D*U+((vw-pad*2)-(W+D)*U)/2;oy=padT+H*U+((vh-padT-pad)-((W+D)/2+H)*U)/2;
+// the whole scene fits the canvas (also 390×844 portrait); pinch / wheel zoom and drag move it on demand.
+// Narrow stage (< 600 px, body.mob): fit the rooms + wall screens (x−y from XL to XR), not the empty floor corners,
+// and show the desk legend strip under the canvas (toggled before measuring: it changes the canvas height)
+const XL=-13.4,XR=17.4;
+function fit(){document.body.classList.toggle('mob',document.getElementById('stage').clientWidth<600);
+ const r=cv.getBoundingClientRect();dpr=devicePixelRatio||1;vw=r.width;vh=r.height;cv.width=vw*dpr;cv.height=vh*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
+ const m=MOB(),xl=m?XL:-D,xr=m?XR:W,padT=vh*.12,pad=m?4:12;
+ U=Math.min((vw-pad*2)/(xr-xl),(vh-padT-pad)/((W+D)/2+H));ox=pad-xl*U+((vw-pad*2)-(xr-xl)*U)/2;oy=padT+H*U+((vh-padT-pad)-((W+D)/2+H)*U)/2;
  if(Z0==null)Z0=1; const Zt=Z0*Z; const cxm=vw/2,cym=vh/2; ox=cxm+(ox-cxm)*Zt+PX; oy=cym+(oy-cym)*Zt+PY; U*=Zt;redraw()}
 // draw on demand: one coalesced redraw per frame at most (idle never loops)
 let queued=0;function redraw(){if(queued)return;queued=1;requestAnimationFrame(n=>{queued=0;draw(ANIM?n-t0:0)})}
@@ -178,7 +191,9 @@ function room(r,hot){const C=RCOL[r.n];const g=rgba(C,hot?.95:.42);cx.shadowColo
   if(r.door=='f'){poly([P(r.x,fy),P(r.dx-.5,fy),P(r.dx-.5,fy,z),P(r.x,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(r.dx+.5,fy),P(fx,fy),P(fx,fy,z),P(r.dx+.5,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.y),P(fx,fy),P(fx,fy,z),P(fx,r.y,z)],rgba(C,hot?.08:.025),g,.8)}
   else{poly([P(r.x,fy),P(fx,fy),P(fx,fy,z),P(r.x,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.y),P(fx,r.dy-.5),P(fx,r.dy-.5,z),P(fx,r.y,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.dy+.5),P(fx,fy),P(fx,fy,z),P(fx,r.dy+.5,z)],rgba(C,hot?.08:.025),g,.8)}
   cx.shadowBlur=0;
-  // room name: shrunk to fit the front wall, never below 9px (skipped when it cannot fit: the name plates remain)
+  // room name: shrunk to fit the front wall, never below 9px (skipped when it cannot fit: the name plates remain);
+  // never on a narrow stage (secondary label: it would sit on the name plates)
+  if(MOB())return;
   const label=RLAB[r.n].toUpperCase(),room=(r.w-.4)*U;let fs=Math.max(MINPX,U*.30);cx.font=`${fs}px Didot,Georgia,serif`;const lw=cx.measureText(label).width;
   if(lw>room)fs=fs*room/lw;if(fs<9)return;
   const [lx,ly]=P(r.x+.25,fy-.1);cx.save();cx.translate(lx,ly);cx.transform(1,-.5,0,1,0,0);
@@ -195,6 +210,9 @@ const SPARE=[[8.5,10.6],[12.6,10.6]];
 function deskSub(d){const st=SYM[d.s];if(st==='PAUSED')return 'PAUSADO por el planificador';if(st==='DISABLED')return 'APAGADO';
  if(d.s==='EURUSD'){if(OPEN)return `${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)} · ${money(OPEN.pnl,1)}`;return st==='ACTIVE'?'ACTIVO · sin posición':EMPTY}
  return st==='ACTIVE'?'ACTIVO':EMPTY}
+// narrow stage: the desk status boxes as one HTML line each under the canvas (EURUSD opens the trade drawer when live)
+const legCls=d=>SYM[d.s]==='ACTIVE'?'on':SYM[d.s]==='PAUSED'?'pa':'';
+document.getElementById('legend').innerHTML=DESKS.map(d=>`<span${d.s==='EURUSD'&&d.live?' onclick="openD()"':''}><b>${esc(d.s)}</b> · <span class="${legCls(d)}">${esc(deskSub(d).replace(/^(ACTIVO|PAUSADO|APAGADO)/,w=>w.toLowerCase()))}</span></span>`).join('');
 function person(a,t,hot){const C=COL[a.id];const [x,y]=P(a.x,a.y,0);const s=U/30;const moving=ANIM&&a.walk;
  const bob=moving?Math.abs(Math.sin(t/120))*2*s:0;  // idle: standing still, no bob
  cx.fillStyle='rgba(0,0,0,.55)';cx.beginPath();cx.ellipse(x,y,7*s,3.5*s,0,0,7);cx.fill();
@@ -251,6 +269,8 @@ const SAY={
 const NAMES={Structure:['Atlas','Analista de estructura','Estructura'],Liquidity:['Nova','Analista de liquidez','Liquidez'],Macro:['Orion','Analista macro','Macro'],Risk:['Vega','Revisor de la operación (riesgo)','Riesgo'],Reviewer:['Sage','Revisor de consenso','Revisor'],Conflict:['Arbiter','Motor de conflictos','Motor de conflictos'],RiskEng:['Sentinel','Motor de riesgo (límites)','Motor de riesgo'],Exec:['Echo','Ejecución','Mesa EURUSD']};
 let NHITS=[];
 function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));const f=Math.max(MINPX,9.5*s);cx.font=`${f}px Didot,Georgia,serif`;const t=NAMES[a.id][0].toUpperCase().split('').join(String.fromCharCode(8202));const w=cx.measureText(t).width+14*s,h=f+5*s,bx=x-w/2,by=y+5*s;
+ // never two text boxes on top of each other: a plate that would overlap one already drawn is skipped
+ if(PLACED.some(o=>bx<o[0]+o[2]+2&&bx+w+2>o[0]&&by<o[1]+o[3]+2&&by+h+2>o[1]))return;PLACED.push([bx,by,w,h]);
  cx.fillStyle='rgba(10,10,11,.88)';const C=COL[a.id];cx.strokeStyle=C;cx.shadowColor=C;cx.shadowBlur=6;cx.lineWidth=.9;cx.beginPath();cx.roundRect(bx,by,w,h,h/2);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.textAlign='center';cx.textBaseline='middle';cx.fillText(t,x,by+h/2+.5);cx.textAlign='left';
  const pad=MOB()?8:3;NHITS.push([bx-pad,by-pad-34*s,w+pad*2,h+pad*2+34*s,a.id]);}
 // idle label: the real saved status, else "sin datos aún" (never a leftover of an older cycle: the payload is epoch-only)
@@ -266,6 +286,7 @@ const fits=(txt,sz,font,maxU)=>{cx.font=`${fpx(sz)}px ${font||'"Helvetica Neue",
 function stack(x,y,zTop,zBot,lines,maxU,strict){let z=zTop;for(const l of lines){const h=fpx(l[1])/U;if(z-h<zBot)break;if(strict&&!fits(l[0],l[1],l[3],maxU))continue;z-=h;wt(x,y,z,l[0],l[1],l[2],l[3],maxU);z-=h*.22}return z}
 const NAVSTALE=STALE?'  '+STALE.toUpperCase():'';
 function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compact=U<22;
+ const wallTxt=!MOB();  // narrow stage: wall screens without text (it cannot be legible there; the HUD carries it)
  cx.clearRect(0,0,vw,vh);
  const g=cx.createRadialGradient(vw/2,vh*.55,10,vw/2,vh*.55,vw*.7);g.addColorStop(0,'#0d1416');g.addColorStop(1,'#0a0a0b');cx.fillStyle=g;cx.fillRect(0,0,vw,vh);
  poly([P(0,0),P(0,D),P(0,D,H),P(0,0,H)],'#121110',null);poly([P(0,0),P(W,0),P(W,0,H),P(0,0,H)],'#151412',null);
@@ -277,18 +298,18 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  const E=[P(3,0,1.9),P(9,0,1.9),P(9,0,3.7),P(3,0,3.7)];scr(E,step==7);
  const navLab='NAV · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':'')+NAVSTALE;
  const eq=[[navLab,8,STALE?'#ffb020':'#3fa9a4'],[money(HD.equity),14,'#9ff5ee','Didot,Georgia,serif'],
-  [`Balance ${money(HD.balance)}`,7,'#aebfc0']];
- const zc=stack(3.3,0,3.66,1.93,compact?eq.slice(1,3):eq,5.4,compact);
+  BALX?[`Balance ${money(HD.balance)}`,7,'#aebfc0']:null].filter(Boolean);
+ const zc=wallTxt?stack(3.3,0,3.66,1.93,compact?eq.slice(1,3):eq,5.4,compact):3.66;
  if(CURVE.length>1&&zc-1.98>.3){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1,top=zc-.06,bot=2.02;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=ANIM?8:4;cx.lineWidth=1.6;cx.beginPath();
   CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,bot+(top-bot)*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0;
-  if(isEx('curve'))wt(6.6,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4');else if(TSTALE)wt(6.0,0,2.05,'CURVA '+TSTALE.toUpperCase(),7,'#ffb020',null,3)}
- else if(!compact&&zc-1.98>.3)wt(3.3,0,Math.max(2.05,zc-fpx(7)/U),NOTR?NOOP:EMPTY,7,'#7f9593',null,5.4);
+  if(wallTxt&&isEx('curve'))wt(6.6,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4');else if(wallTxt&&TSTALE)wt(6.0,0,2.05,'CURVA '+TSTALE.toUpperCase(),7,'#ffb020',null,3)}
+ else if(wallTxt&&!compact&&zc-1.98>.3)wt(3.3,0,Math.max(2.05,zc-fpx(7)/U),NOTR?NOOP:EMPTY,7,'#7f9593',null,5.4);
  const F=[P(9.8,0,1.9),P(16.6,0,1.9),P(16.6,0,3.7),P(9.8,0,3.7)];scr(F,false);
  const feed=(FEED.length?FEED:[WAITING?WTXT:EMPTY]).slice(0,5).map((l,i)=>[l,7.2,i==0&&FEED.length?'#39ff88':'#aebfc0']);
- stack(10.1,0,3.66,1.93,compact?feed:[['FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(feed),6.2,compact);
+ if(wallTxt)stack(10.1,0,3.66,1.93,compact?feed:[['FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(feed),6.2,compact);
  const M=[P(0,6.4,1.9),P(0,12.8,1.9),P(0,12.8,3.7),P(0,6.4,3.7)];scr(M,step==0);
  const mk=[[ML[0]||(WAITING?WTXT:EMPTY),10,'#9ff5ee']].concat(ML.slice(1,3).map(l=>[l,8,'#8aa3a1']));
- const zm=stack(0,12.5,3.66,2.1,compact?mk:[['DATOS DE MERCADO Y MACRO'+(isEx('market')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(mk),5.9,compact);
+ const zm=!wallTxt?3.66:stack(0,12.5,3.66,2.1,compact?mk:[['DATOS DE MERCADO Y MACRO'+(isEx('market')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(mk),5.9,compact);
  // demo status wall: "Día N de 30", realised / today P&L, daily-loss state, trade counts (all from the payload header)
  const S=[P(0,.5,1.9),P(0,6.0,1.9),P(0,6.0,3.7),P(0,.5,3.7)];scr(S,false);
  const cnt=Number.isInteger(HD.closed_trades)?`${HD.closed_trades} cerradas · ${Number.isInteger(HD.open_positions)?HD.open_positions:NA} abiertas`:null;
@@ -296,7 +317,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
   [HD.day_text||(WAITING?WTXT:NA),10,'#e8c873'],[`P&L ${money(HD.pnl,1)} · hoy ${money(HD.today_pnl,1)}${TSTALE?' '+TSTALE:''}`,7,'#aebfc0'],
   [`Pérdida diaria ${dl.replace(' / ','/')}${HD.daily_loss_status==='TRIGGERED'?' · límite alcanzado':DLT?' · '+DLT:''}`,7,HD.daily_loss_status==='TRIGGERED'?'#ff4d6d':'#aebfc0'],
   cnt?[NOTR?NOOP:cnt,7,'#8aa3a1']:null].filter(Boolean);
- stack(0,5.8,3.66,1.93,compact?sl.slice(1,3):sl,5.2,compact);
+ if(wallTxt)stack(0,5.8,3.66,1.93,compact?sl.slice(1,3):sl,5.2,compact);
  // market wall baseline: a flat rule while idle; it waves only while a real cycle runs
  if(zm>2.05){cx.strokeStyle='#0b7f7c';cx.beginPath();for(let i=0;i<=30;i++){const p=P(0,7.0+i*.1,1.98+(ANIM?.2*Math.abs(Math.sin(i*.5+t/2000)):.02));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke()}
  if(ANIM&&step==0){for(let k=0;k<4;k++){const r=ROOMS[k];for(let j=0;j<3;j++){const ff=((f*1.6+j/3)%1);const a=P(0,8.5,2.3),b=P(r.x+r.w/2,r.y+1,1);const px=a[0]+(b[0]-a[0])*ff,py=a[1]+(b[1]-a[1])*ff-Math.sin(ff*Math.PI)*40;const C=RCOL[r.n];cx.fillStyle=rgba(C,1-ff*.7);cx.shadowColor=C;cx.shadowBlur=10;cx.beginPath();cx.arc(px,py,2.6,0,7);cx.fill();cx.shadowBlur=0}}}
@@ -313,7 +334,8 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
     // the open routed trade: a steady indicator (colour = sign of the payload P&L), never an animated tick
     if(d.s==='EURUSD'&&OPEN&&m==1){const [ix,iy]=P(mx+.66,my,.82);cx.fillStyle=ok(OPEN.pnl)&&OPEN.pnl<0?'#ff4d6d':'#3ddc84';cx.shadowColor=cx.fillStyle;cx.shadowBlur=8;cx.beginPath();cx.arc(ix,iy,Math.max(2,U*.07),0,7);cx.fill();cx.shadowBlur=0}}
    cx.globalAlpha=1}
-  if(!d.spare){const b=tag(d.x+2.0,d.y+.3,1.1,d.s,deskSub(d),d.live);hits.push({b,box:[Math.min(P(d.x,d.y,.45)[0],P(d.x,d.y+1)[0]),P(d.x,d.y,1)[1],(3.4)*U,2.2*U],s:d.s,live:d.s==='EURUSD'})}
+  // narrow stage: no floating status box (it is the legend strip under the canvas); the desk itself stays clickable
+  if(!d.spare){const b=MOB()?[0,0,0,0]:tag(d.x+2.0,d.y+.3,1.1,d.s,deskSub(d),d.live);hits.push({b,box:[Math.min(P(d.x,d.y,.45)[0],P(d.x,d.y+1)[0]),P(d.x,d.y,1)[1],(3.4)*U,2.2*U],s:d.s,live:d.s==='EURUSD'})}
  });
  [[17.3,13.3],[4.7,13.3],[17.3,4.3]].forEach(([x,y])=>{box(x-.25,y-.25,0,.5,.5,.4,['#20272a','#141a1c','#192023']);const [px,py]=P(x,y,.4);cx.fillStyle='#163a33';cx.beginPath();cx.ellipse(px,py-U*.35,U*.32,U*.42,0,0,7);cx.fill();cx.strokeStyle='#1f5a4c';cx.stroke()});
  // everyone stands at the desk; only the step shown may walk / carry (moving only while a real cycle runs)
@@ -327,8 +349,8 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  if(step==null&&OPEN)say.Exec=[`${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)}`,`P&L ${money(OPEN.pnl,1)}${TSTALE?' '+TSTALE:''}`];
  Object.values(A).sort((p,q)=>(p.x+p.y)-(q.x+q.y)).forEach(a=>person(a,t,!!say[a.id]));
  ROOMS.forEach(r=>r.after());
+ PLACED=hits.filter(h=>h.b[2]).map(h=>h.b.slice());
  NHITS=[];Object.values(A).forEach(plate);
- PLACED=hits.map(h=>h.b.slice());
  if(step==null&&WAITING){const [hx,hy]=P(9.6,5.6,2.4);bubble({head:[hx,hy]},WTXT,true,DATA.epoch_text?'demo desde '+DATA.epoch_text:null)}
  Object.values(A).forEach(a=>{if(say[a.id])bubble(a,say[a.id][0],true,MOB()?null:say[a.id][1])});
  if(!MOB()&&!WAITING)Object.values(A).forEach(a=>{if(!say[a.id])bubble(a,IDLE(a.id),false)});

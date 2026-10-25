@@ -84,8 +84,14 @@ el ejemplo.
 - Con una operación enrutada abierta solo Echo (mesa EURUSD) la refleja: lado, R y P&L del payload (sin ticks
   inventados). XAUUSD pausado: "PAUSADO por el planificador".
 - `?step=N` (capturas/tests) fija un paso; `?agent=<id>` abre la ficha; `?detail` abre el panel de operación.
-- Textos ≥ 10 px en el canvas (en teléfono se omiten las líneas del muro que no caben, nunca recortadas); la escena
-  entera cabe en 390×844. Códigos del motor traducidos o humanizados (`floor_payload.code_text`).
+- Textos ≥ 10 px en el canvas; códigos del motor traducidos o humanizados (`floor_payload.code_text`).
+- HUD: las celdas pasan a una segunda fila en vez de solaparse o cortarse (360–1600 px); con 0 operaciones R total y
+  tasa de acierto dicen "sin operaciones" en gris, en dos líneas. "Balance $x" bajo el NAV (HUD y muro) solo si difiere
+  del NAV.
+- Escenario estrecho (< 600 px, clase `body.mob`): la escena se ajusta al recuadro de salas y pantallas (no a las
+  esquinas vacías del suelo); sin texto en las pantallas del muro ni nombres de sala; los recuadros EURUSD/XAUUSD se
+  convierten en una tira HTML bajo el canvas (EURUSD abre el panel si está activo). Las placas de nombre que se
+  solaparían con otro recuadro de texto se omiten: nunca dos textos encima.
 
 ## Seguridad
 

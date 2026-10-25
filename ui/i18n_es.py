@@ -6,6 +6,7 @@ original text so unknown values are shown as persisted (never invented).
 from datetime import datetime
 from html import escape
 import math
+import re
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -49,22 +50,22 @@ TEXT = {
     "PAPER · V2": "OANDA Demo · V2.1",
     # Overview
     "Equity · PAPER": "Equity · práctica interna",
-    "Closed-trade curve": "Closed-trade curve",
+    "Closed-trade curve": "Curva de operaciones cerradas",
     "Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger":
-        "Cumulative realized PnL · closed trades (últimos 200 puntos)",
+        "P&L realizado acumulado · operaciones cerradas (últimos 200 puntos)",
     "Session": "Sesión de mercado",
     "System": "Estado del sistema",
-    "Open positions": "Open positions",
+    "Open positions": "Posiciones abiertas",
     "Active policies": "Reglas activas",
     "Outside sessions": "Fuera de sesión",
-    "No open position": "No open position",
+    "No open position": "Sin posición abierta",
     # Trades
-    "Closed trades · latest published": "Closed trades",
-    "Trade detail": "Trade detail",
-    "Plan": "Trade plan",
+    "Closed trades · latest published": "Operaciones cerradas",
+    "Trade detail": "Detalle de la operación",
+    "Plan": "Plan de la operación",
     "Order planned entry": "Entrada planeada de la orden",
-    "Execution": "Execution",
-    "Slippage · plan vs fill": "Slippage · plan vs fill",
+    "Execution": "Ejecución",
+    "Slippage · plan vs fill": "Deslizamiento · plan vs ejecución",
     "Open Process · ": "Ver el proceso · ",
     # Decisions / Floor / Process / Setups / Analysts
     "Decision process": "Ver el proceso de una decisión",
@@ -89,10 +90,10 @@ TEXT = {
     "None": "Ninguno",
     "Latest 200 setups · cache: closed 5m prices as of setup; OHLC only when persisted.":
         "Últimos 200 setups. Gráfico con cierres de 5 min hasta el momento del setup.",
-    "Validated setups": "Valid setups",
+    "Validated setups": "Setups válidos",
     "Setups symbol": "Símbolo",
     "Setup · newest first": "Setup · más reciente primero",
-    "Setup ID not persisted; setup email dedup unavailable": "Setup ID no guardado",
+    "Setup ID not persisted; setup email dedup unavailable": "ID del setup no guardado",
     "Chart": "Gráfico",
     "chart unavailable: bars not persisted": "gráfico no disponible: no hay velas guardadas",
     "Exact-cycle 15m OHLC bars not persisted": "No hay velas de 15 min guardadas para este ciclo",
@@ -104,8 +105,8 @@ TEXT = {
     "Persisted PAPER evidence · SQLite read-only · missing evidence = NO_DATA":
         "Datos guardados de la cuenta de práctica · solo lectura · lo que falta se muestra como «Sin datos»",
     "Market state / charts": "Estado del mercado y gráficos",
-    "Open positions · all symbols": "Open positions · todos los símbolos",
-    "Pending orders · all symbols": "Pending orders · todos los símbolos",
+    "Open positions · all symbols": "Posiciones abiertas · todos los símbolos",
+    "Pending orders · all symbols": "Órdenes pendientes · todos los símbolos",
     "Latest setup per symbol": "Último setup por símbolo",
     "AI decisions · interpretation": "Decisiones de la IA · interpretación",
     "Risk decisions · deterministic authority": "Decisiones del motor de riesgo · autoridad final",
@@ -118,7 +119,7 @@ TEXT = {
     "Phase 9 alert deliveries": "Envíos de alertas (fase 9)",
     "V1 notification deliveries": "Envíos de notificaciones (V1)",
     "Run ID": "ID del ciclo",
-    "Setup ID": "Setup ID",
+    "Setup ID": "ID del setup",
     "History page": "Página del historial",
     "Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first.":
         "IDs exactos; si llenas ambos se combinan. Hasta 200 filas por tabla y página, lo más reciente primero.",
@@ -142,7 +143,7 @@ TEXT = {
     "PYTHON DETERMINISTIC": "CALCULADO POR PYTHON, SIN IA",
     "PAPER POSITION": "POSICIÓN DE PRÁCTICA",
     "NO REAL MONEY": "SIN DINERO REAL",
-    "FLAT": "FLAT",
+    "FLAT": "Sin posición",
     "PIPELINE": "PASOS DEL ANÁLISIS",
     "AI MEETING": "REUNIÓN DE LA IA",
     "MACRO / NEWS · FACT vs AI INTERPRETATION": "NOTICIAS · HECHOS vs INTERPRETACIÓN DE LA IA",
@@ -157,8 +158,8 @@ TEXT = {
     "MARKETS": "MERCADOS",
     "1H context · 15M structure · 5M timing. Bias is context, not an order.":
         "1 h contexto · 15 min estructura · 5 min momento de entrada. La tendencia es contexto, no una orden.",
-    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS (OANDA DEMO)",
-    "30-DAY DEMO IN PROGRESS": "DEMO DE 30 DÍAS EN CURSO: cuenta de práctica interna desde el 14 oct 2026; el broker demo OANDA cuenta sus propios 30 días desde su primer trade enrutado",
+    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS (OANDA Demo)",
+    "30-DAY DEMO IN PROGRESS": "Demo de 30 días en curso en la cuenta de práctica OANDA Demo",
     "The demo runs on the cloud scheduler with durable history. Metrics and the OANDA demo evidence report grow with observed trades.":
         "El demo corre en el programador de la nube con historial duradero. Las métricas y el informe de evidencia del demo OANDA crecen con las operaciones observadas.",
     "SYSTEM": "SISTEMA",
@@ -178,30 +179,33 @@ TEXT = {
 
 # Table columns and field labels (data key -> Spanish header). Keys stay untranslated in the data itself.
 COLUMNS = {
-    "symbol": "Símbolo", "side": "Side", "quantity": "Size", "entry_price": "Entry (fill)",
-    "exit_price": "Exit", "stop": "Stop loss (SL)", "target": "Take profit (TP)", "unrealized_pnl": "Unrealized PnL",
-    "net_pnl": "Net PnL", "realized_r": "R realized", "close_reason": "Exit reason",
-    "exited_at": "Exit time (ET)", "opened_at": "Entry time (ET)", "trade_id": "Trade ID", "position_id": "Position ID",
+    "symbol": "Símbolo", "side": "Lado", "quantity": "Tamaño", "entry_price": "Entrada (ejecución)",
+    "exit_price": "Salida", "stop": "Stop loss (SL)", "target": "Take profit (TP)", "unrealized_pnl": "P&L no realizado",
+    "net_pnl": "P&L neto", "realized_r": "R realizado", "close_reason": "Motivo de salida",
+    "exited_at": "Hora de salida (ET)", "opened_at": "Hora de entrada (ET)", "trade_id": "ID de la operación",
+    "position_id": "ID de la posición",
     "as_of": "Hora (ET)", "run_id": "ID del ciclo", "source": "Origen", "agent_name": "Agente", "status": "Estado",
-    "bias": "Bias", "confidence": "Confianza", "reasoning_summary": "Resumen", "reason": "Razón",
-    "error": "Error", "entry": "Entry", "risk_reward": "R:R", "planned_entry": "Planned entry",
-    "account_id": "Cuenta", "realized_pnl": "Realized PnL", "equity": "Equity", "setup_id": "Setup ID",
+    "bias": "Tendencia", "confidence": "Confianza", "reasoning_summary": "Resumen", "reason": "Razón",
+    "error": "Error", "entry": "Entrada", "risk_reward": "R:R", "planned_entry": "Entrada planificada",
+    "account_id": "Cuenta", "realized_pnl": "P&L realizado", "equity": "Capital (equity)", "setup_id": "ID del setup",
     "timestamp": "Hora", "service": "Servicio", "event": "Evento", "details": "Detalles", "experiment": "Experimento",
-    "analysis_state": "Estado del análisis", "AI contextual bias": "AI bias", "risk_state": "Riesgo",
+    "analysis_state": "Estado del análisis", "AI contextual bias": "Tendencia según la IA", "risk_state": "Riesgo",
     "freshness": "Actualidad de datos", "timestamp_utc": "Hora (UTC)", "type": "Tipo", "severity": "Gravedad",
-    "state": "Estado", "setup": "Setup", "open_position": "Open position", "scheduler": "Programador",
+    "state": "Estado", "setup": "Setup", "open_position": "Posición abierta", "scheduler": "Programador",
     "last_success": "Último ciclo exitoso", "heartbeat": "Última señal de vida", "last_run": "Último ciclo",
     "market_data_provider": "Proveedor de precios", "ai_provider": "Proveedor de IA", "decision": "Decisión",
-    "risk_fraction": "Risk per trade (fracción)", "equity_at_decision": "Equity at decision", "capital_at_risk": "Cash at risk",
+    "risk_fraction": "Riesgo por operación (fracción)", "equity_at_decision": "Capital al decidir",
+    "capital_at_risk": "Dinero en riesgo",
     "contract_multiplier": "Multiplicador", "Status": "Estado", "Timestamp": "Hora (ET)",
+    "setup_status": "Estado", "levels": "Entrada / SL / TP", "traded": "¿Operado?",
 }
 
 # Persisted states/values -> plain Spanish (the original stays visible as a tooltip/small text).
 STATUS = {
-    "OPEN": "Abierta", "CLOSED": "Cerrada", "PENDING": "Pendiente", "FILLED": "Filled", "CANCELLED": "Cancelada",
+    "OPEN": "Abierta", "CLOSED": "Cerrada", "PENDING": "Pendiente", "FILLED": "Ejecutada", "CANCELLED": "Cancelada",
     "LONG": "LONG", "SHORT": "SHORT", "BULLISH": "Alcista", "BEARISH": "Bajista",
     "NEUTRAL": "Neutral", "UNKNOWN": "Desconocida", "MIXED": "Mixta",
-    "NO_SETUP": "No setup", "WATCH": "Watch", "VALID_SETUP": "Valid setup",
+    "NO_SETUP": "Sin setup", "WATCH": "En observación", "VALID_SETUP": "Setup válido",
     "PLAN_READY": "Plan listo", "PAPER PLAN READY": "Plan de práctica listo", "AI_CAUTION": "La IA pide cautela",
     "RISK_REJECTED": "Rechazada por riesgo", "APPROVED": "Aprobada", "REJECTED": "Rechazada",
     "NOT CALLED": "No consultado", "NOT_REQUIRED": "No hacía falta", "MISSING": "Sin respuesta",
@@ -215,33 +219,41 @@ STATUS = {
     "INFO": "Información", "WARNING": "Aviso", "CRITICAL": "Crítico", "DELIVERED": "Entregado",
     "DONE": "Hecho", "WAITING": "En espera", "SKIPPED": "Omitido", "COMPLETE": "Completo",
     "BARS PROVIDED": "Velas disponibles", "SAMPLE / DEMO": "Datos de ejemplo", "OFF": "Apagado", "ON": "Encendido",
+    "CONFIGURED": "Configurado", "NOT CONFIGURED": "Sin configurar", "PAUSED": "Pausado por el planificador",
+    "DEC14_DECISION": "Decisión ante setups opuestos", "EXECUTION_DECISION": "Decisión de ejecución",
+    "RISK_V2_DECISION": "Decisión del motor de riesgo", "PLAN_CREATED": "Plan creado",
+    "POSITION_OPENED": "Posición abierta", "POSITION_CLOSED": "Posición cerrada", "MANAGE_SKIPPED": "Gestión omitida",
+    "ORDER_SUBMITTED": "Orden enviada", "ORDER_FILLED": "Orden ejecutada", "ORDER_REJECTED": "Orden rechazada",
+    "ORDER_CANCELLED": "Orden cancelada", "STOP_HIT": "Stop loss alcanzado", "TARGET_HIT": "Take profit alcanzado",
+    "DAILY_SUMMARY": "Resumen diario", "CYCLE_STARTED": "Ciclo iniciado", "CYCLE_COMPLETED": "Ciclo completado",
+    "CLOSED_AT_BROKER": "Cerrada en el broker", "TRIGGERED": "Activado",
 }
 
 # Stored close reason -> one plain sentence. Unknown reasons are shown as stored.
 CLOSE_REASONS = {
-    "STOP": "Stop loss hit (SL)",
-    "STOP_HIT": "Stop loss hit (SL)",
-    "STOPPED": "Stop loss hit (SL)",
-    "TARGET": "Take profit hit (TP)",
-    "TIME_EXIT_DAY1_BELOW_0_5R": "Time exit · día 1 < 0.5R",
-    "TIME_EXIT_DAY2_STRUCTURE_CHANGE": "Time exit · día 2 · cambio de estructura",
-    "TIME_EXIT_DAY2_NY_CLOSE": "Time exit · día 2 · cierre NY",
-    "TIME_EXIT_FRIDAY_NY_CLOSE": "Time exit · viernes 16:45 ET (sin exposición de fin de semana)",
-    "TIME_EXIT_MAX_HOLD": "Time exit · máximo de días de trading",
-    "EXIT_STRUCTURE_CHANGE": "Exit · cambio de estructura",
-    "EXIT_REVERSAL_IN_PROFIT": "Exit · reversión en beneficio (setup opuesto)",
-    "REVERSAL_IN_PROFIT": "Exit · reversión en beneficio (setup opuesto)",
-    "MANUAL_CLOSE": "Exit · cierre manual del owner (botón «Cerrar operación»)",
+    "STOP": "Stop loss alcanzado (SL)",
+    "STOP_HIT": "Stop loss alcanzado (SL)",
+    "STOPPED": "Stop loss alcanzado (SL)",
+    "TARGET": "Take profit alcanzado (TP)",
+    "TIME_EXIT_DAY1_BELOW_0_5R": "Salida por tiempo · día 1 < 0.5R",
+    "TIME_EXIT_DAY2_STRUCTURE_CHANGE": "Salida por tiempo · día 2 · cambio de estructura",
+    "TIME_EXIT_DAY2_NY_CLOSE": "Salida por tiempo · día 2 · cierre de Nueva York",
+    "TIME_EXIT_FRIDAY_NY_CLOSE": "Salida por tiempo · viernes 16:45 ET (sin exposición de fin de semana)",
+    "TIME_EXIT_MAX_HOLD": "Salida por tiempo · máximo de días de trading",
+    "EXIT_STRUCTURE_CHANGE": "Salida · cambio de estructura",
+    "EXIT_REVERSAL_IN_PROFIT": "Salida · giro con beneficio (setup opuesto)",
+    "REVERSAL_IN_PROFIT": "Salida · giro con beneficio (setup opuesto)",
+    "MANUAL_CLOSE": "Salida · cierre manual del owner (botón «Cerrar operación»)",
     "SL_TP_OR_EXTERNAL": "Cerrada en el broker (SL/TP o externa)",
-    "EMERGENCY_BUTTON": "Exit · botón de parada de emergencia",
-    "EXIT_SESSION": "Exit · fin de sesión",
-    "EXIT_HALT": "Exit · halt del sistema",
-    "EXIT_DATA": "Exit · datos de mercado inválidos",
-    "EXIT_NO_PROVIDER": "Exit · sin proveedor de precios",
-    "EXIT_PROVIDER_ERROR": "Exit · error del proveedor de precios",
-    "EXIT_EXECUTION_GATE": "Exit · execution gate",
-    "EXIT_ERROR": "Exit · error del sistema",
-    "SYMBOL_PAUSED": "Exit · símbolo pausado (decisión del owner)",
+    "EMERGENCY_BUTTON": "Salida · botón de parada de emergencia",
+    "EXIT_SESSION": "Salida · fin de sesión",
+    "EXIT_HALT": "Salida · sistema detenido",
+    "EXIT_DATA": "Salida · datos de mercado inválidos",
+    "EXIT_NO_PROVIDER": "Salida · sin proveedor de precios",
+    "EXIT_PROVIDER_ERROR": "Salida · error del proveedor de precios",
+    "EXIT_EXECUTION_GATE": "Salida · bloqueo de ejecución",
+    "EXIT_ERROR": "Salida · error del sistema",
+    "SYMBOL_PAUSED": "Salida · símbolo pausado (decisión del owner)",
 }
 
 COMPONENTS = {
@@ -272,33 +284,33 @@ SESSIONS = {"LONDON": "Londres", "NEW_YORK": "Nueva York"}
 POLICIES = {"V2_PLANNER_POLICY": "Regla del planificador", "V2_OPPOSITE_SETUP_POLICY": "Regla ante señales opuestas"}
 
 TOOLTIPS = {
-    "equity": "Equity = balance + unrealized PnL de las open positions.",
-    "pnl": "Realized PnL = suma del net PnL de los closed trades.",
-    "today": "Realized PnL de los closed trades de hoy (fecha de Nueva York).",
-    "win_rate": "Win rate = closed trades con net PnL > 0 / total de closed trades.",
-    "drawdown": "Max drawdown = mayor caída pico-valle del realized PnL acumulado.",
-    "avg_r": "Avg R (expectancy) = media del R realizado; R = net PnL / riesgo inicial (|entry − SL| × size).",
-    "unrealized": "Unrealized PnL de las open positions (mark-to-market).",
-    "slippage": "Slippage = diferencia entre la entrada planeada y el fill.",
+    "equity": "NAV (equity) = balance + P&L no realizado de las posiciones abiertas.",
+    "pnl": "P&L realizado = suma del P&L neto de las operaciones cerradas.",
+    "today": "P&L realizado de las operaciones cerradas hoy (fecha de Nueva York).",
+    "win_rate": "Acierto = operaciones cerradas con P&L neto > 0 / total de operaciones cerradas.",
+    "drawdown": "Caída máxima = mayor caída de pico a valle del P&L realizado acumulado.",
+    "avg_r": "R medio (expectativa) = media del R realizado; R = P&L neto / riesgo inicial (|entrada − SL| × tamaño).",
+    "unrealized": "P&L no realizado de las posiciones abiertas (a precio de mercado).",
+    "slippage": "Deslizamiento = diferencia entre la entrada planificada y la ejecución.",
 }
 
 # OANDA demo: "Día N de 30" counter and the daily-loss status card (DEC-5.5a).
 DEMO_LENGTH_DAYS = 30
 DEMO_NO_TRADES = "Demo OANDA: aún sin operaciones del demo"
-DAILY_LOSS_TITLE = "Daily loss limit"
+DAILY_LOSS_TITLE = "Límite de pérdida diaria"
 DAILY_LOSS_STATUS = {
-    "OK": "OK",
-    "TRIGGERED": "TRIGGERED · sin nuevas entradas hasta las 17:00 ET",
-    "PENDING": "OK · pending (aún sin evaluar en este trading day)",
-    "OFF": "OFF",
-    "NO_DATA": "NO DATA",
+    "OK": "Bien",
+    "TRIGGERED": "Límite alcanzado · sin nuevas entradas hasta las 17:00 ET",
+    "PENDING": "Bien · aún sin evaluar en este día de trading",
+    "OFF": "Apagado",
+    "NO_DATA": "Sin datos",
 }
 DAILY_LOSS_LABELS = {
     "status": "Estado",
-    "loss": "Daily loss (realized + unrealized)",
-    "used": "Limit used",
-    "day_start_nav": "Start-of-day NAV (17:00 ET)",
-    "drawdown": "Max drawdown halt (5 %)",
+    "loss": "Pérdida del día (realizada + no realizada)",
+    "used": "Límite usado",
+    "day_start_nav": "NAV al inicio del día (17:00 ET)",
+    "drawdown": "Freno por caída máxima (5 %)",
 }
 R_UNKNOWN = "—"
 
@@ -316,16 +328,30 @@ def column(key):
     return COLUMNS.get(key, key.replace("_", " "))
 
 
+# An engine code ("SOME_CODE", "NOT CALLED"): upper case words joined by "_" or spaces. Single words without "_"
+# (symbols such as XAUUSD, LONG / SHORT, USD) are kept as they are.
+ENGINE_CODE = re.compile(r"[A-Z][A-Z0-9]*(?:[_ ][A-Z0-9]+)+")
+
+
+def humanize(code):
+    """"SOME_CODE" -> "Some code" (no underscores, no shouting); anything that is not an engine code is kept."""
+    text = str(code).strip()
+    if not ENGINE_CODE.fullmatch(text):
+        return text
+    words = text.replace("_", " ").lower()
+    return words[:1].upper() + words[1:]
+
+
 def status_text(value):
     if value is None or value == "":
         return MISSING
-    return STATUS.get(str(value), str(value))
+    return STATUS.get(str(value)) or humanize(value)
 
 
 def close_reason_text(reason):
     if reason is None or reason == "":
         return MISSING
-    return CLOSE_REASONS.get(str(reason).upper(), str(reason))
+    return CLOSE_REASONS.get(str(reason).upper()) or humanize(reason)
 
 
 def page_label(key):
@@ -372,27 +398,72 @@ def long_date_et(value):
     return f"{DAYS[local.weekday()]} {local.day} de {MONTHS_LONG[local.month-1]} de {local.year} · {local:%H:%M} ET"
 
 
-# Metric labels for the KPI tiles (standard trading terminology).
+def short_datetime_et(value):
+    """"26 oct 03:00 ET" (no year) for an aware datetime; MISSING otherwise."""
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        return MISSING
+    local = value.astimezone(ET)
+    return f"{local.day} {MONTHS[local.month-1]} {local:%H:%M} ET"
+
+
+def cycle_label(as_of, symbol=None):
+    """"Ciclo del 26 oct 03:00 ET · EURUSD": what the owner reads instead of a run UUID."""
+    if isinstance(as_of, str):
+        try:
+            as_of = datetime.fromisoformat(as_of.strip().replace("Z", "+00:00"))
+        except ValueError:
+            as_of = None
+    when = short_datetime_et(as_of)
+    text = f"Ciclo del {when}" if when != MISSING else "Ciclo sin hora guardada"
+    return f"{text} · {symbol}" if symbol else text
+
+
+def short_id(value):
+    """First 8 characters of a technical id ("1a2b3c4d…"); never a full UUID in headline text."""
+    text = str(value or "")
+    return text if len(text) <= 8 else text[:8] + "…"
+
+
+PAUSED_TEXT = "pausado por el planificador"
+
+
+def symbol_status(symbol, enabled):
+    """"pausado por el planificador" (runtime.symbol_pause, read only) / "activo" / "no activo"."""
+    try:
+        from runtime.symbol_pause import is_paused
+        paused = is_paused(symbol)
+    except Exception:  # noqa: BLE001 - presentation only: unknown pause state => the enabled list decides
+        paused = False
+    return PAUSED_TEXT if paused else "activo" if symbol in enabled else "no activo"
+
+
+def enabled_caption(enabled):
+    """"EURUSD · XAUUSD · pausado por el planificador" for the sidebar / Experimento captions."""
+    return ", ".join(symbol if symbol_status(symbol, enabled) == "activo" else f"{symbol} · {symbol_status(symbol, enabled)}"
+                     for symbol in enabled)
+
+
+# Metric labels for the KPI tiles.
 def pnl_since_start(total):
     if not number(total):
-        return f"Realized PnL: {MISSING}"
-    return "Realized PnL · desde el inicio del historial"
+        return f"P&L realizado: {MISSING}"
+    return "P&L realizado · desde el inicio del historial"
 
 
 def today_phrase(value):
     if not number(value):
-        return f"Today PnL (ET): {MISSING}"
-    return "Today PnL (ET)"
+        return f"P&L de hoy (ET): {MISSING}"
+    return "P&L de hoy (ET)"
 
 
 def wins_phrase(wins, total):
     if not total:
-        return "Closed trades: 0"
-    return f"Win rate · {wins}/{total} closed trades"
+        return "Operaciones cerradas: 0"
+    return f"Acierto · {wins}/{total} operaciones cerradas"
 
 
 def drawdown_phrase(value):
-    return f"Max drawdown (realized PnL): {money(value) if number(value) else MISSING}"
+    return f"Caída máxima (P&L realizado): {money(value) if number(value) else MISSING}"
 
 
 def r_phrase(value, reason=None):
@@ -403,12 +474,12 @@ def r_phrase(value, reason=None):
 
 def avg_r_phrase(value, reason=None):
     if not number(value):
-        return f"Avg R (expectancy): {reason or MISSING}"
-    return "Avg R (expectancy)"
+        return f"R medio (expectativa): {reason or MISSING}"
+    return "R medio (expectativa)"
 
 
 def demo_day_text(day, length=DEMO_LENGTH_DAYS):
-    """"Día N de 30" (day 1 = NY date of the first routed trade); past the end "Día 30 de 30 – completo"."""
+    """"Día N de 30" (day 1 = NY date of the demo epoch, ``ui.demo_clock``); past the end "Día 30 de 30 – completo"."""
     if not isinstance(day, int) or isinstance(day, bool) or day < 1:
         return DEMO_NO_TRADES
     if day > length:
@@ -430,7 +501,8 @@ def daily_loss_rows(view):
              (f'{DAILY_LOSS_LABELS["used"]} ({limit})', f"{used:.0f} %" if number(used) else NO_DATA),
              (DAILY_LOSS_LABELS["day_start_nav"],
               money(view.get("day_start_nav")) if number(view.get("day_start_nav")) else NO_DATA),
-             (DAILY_LOSS_LABELS["drawdown"], "TRIGGERED" if view.get("drawdown_halted") else "OK")]
+             (DAILY_LOSS_LABELS["drawdown"], DAILY_LOSS_STATUS["TRIGGERED"].split(" · ")[0] if view.get("drawdown_halted")
+              else DAILY_LOSS_STATUS["OK"])]
     return rows
 
 

@@ -127,7 +127,9 @@ class MissingEnvHintTests(unittest.TestCase):
             view = account_view(environment, env={})
             self.assertEqual(view.status, SIN_TOKEN)
             lines = self.lines(view)
-            self.assertEqual(lines["Falta en el entorno"], name)
+            self.assertIn("falta configurar el acceso a OANDA (token", lines["Falta"])
+            self.assertNotIn(name, repr(lines))  # readable Spanish, no variable name
+            self.assertEqual(lines["Falta"], control.MISSING_TEXT[name])
             self.assertEqual(lines["Estado"], "sin token")
 
     def test_hint_names_match_the_read_only_client_env_names(self):
@@ -137,14 +139,15 @@ class MissingEnvHintTests(unittest.TestCase):
     def test_sin_cuenta_names_the_account_variable(self):
         view = account_view("practice", env={"OANDA_PRACTICE_TOKEN": TOKEN})
         self.assertEqual(view.status, SIN_CUENTA)
-        self.assertEqual(self.lines(view)["Falta en el entorno"], "OANDA_ACCOUNT_ID")
+        self.assertEqual(self.lines(view)["Falta"], "falta configurar el número de la cuenta demo de OANDA")
         view = account_view("live", env={"OANDA_LIVE_TOKEN": TOKEN})
-        self.assertEqual(self.lines(view)["Falta en el entorno"], "OANDA_LIVE_ACCOUNT_ID")
+        self.assertEqual(self.lines(view)["Falta"], "falta configurar el número de la cuenta real de OANDA")
+        self.assertEqual(set(control.MISSING_TEXT), {n for names in control.MISSING_ENV_NAMES.values() for n in names})
 
     def test_no_hint_when_connected_or_on_error_and_no_secret_in_text(self):
         for status in (OK, ERROR):
             view = AccountView(status, "practice")
-            self.assertNotIn("Falta en el entorno", self.lines(view))
+            self.assertNotIn("Falta", self.lines(view))
         text = repr(control.balance_lines(account_view("practice", env={"OANDA_PRACTICE_TOKEN": TOKEN,
                                                                          "OANDA_ACCOUNT_ID": PRACTICE_ACCOUNT},
                                                        transport=lambda *a, **k: (500, {}, b""))))

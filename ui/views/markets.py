@@ -1,4 +1,4 @@
-from ui.i18n_es import column, status_text, tr
+from ui.i18n_es import column, status_text, symbol_status, tr, PAUSED_TEXT
 from ui.tables import dataframe
 from ui.adapters import MARKETS, symbol_enablement
 from ui.components import panels
@@ -9,7 +9,9 @@ def render(st, vm, market_lookup, enabled_symbols):
     rows = []
     for symbol in MARKETS:
         item = market_lookup(symbol)
-        rows.append({column("symbol"): symbol, column("experiment"): status_text(symbol_enablement(symbol, enabled_symbols)),
+        paused = symbol_status(symbol, enabled_symbols) == PAUSED_TEXT  # runtime.symbol_pause, read only
+        rows.append({column("symbol"): symbol,
+                     column("experiment"): PAUSED_TEXT if paused else status_text(symbol_enablement(symbol, enabled_symbols)),
                      column("analysis_state"): status_text(item.state),
                      column("AI contextual bias"): status_text(next((a.bias for a in item.agents if a.status == "OK"), "UNKNOWN")),
                      column("risk_state"): status_text(item.risk_status), column("freshness"): status_text(item.freshness)})

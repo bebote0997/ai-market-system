@@ -323,7 +323,7 @@ class FloorButtonTests(unittest.TestCase):
         return next(b for b in st.buttons if b["key"] == key)
 
     def test_disabled_states(self):
-        cases = ((False, api(), "Solo el owner"), (True, api(problem="routing_off"), "AI_FLOOR_BROKER_DEMO_ROUTING"),
+        cases = ((False, api(), "Solo el owner"), (True, api(problem="routing_off"), "enrutado a la cuenta demo de OANDA está apagado"),
                  (True, api(problem="not_practice"), "práctica"), (True, api(target=None), "No hay ninguna"),
                  (True, api(target={**TARGET, "unresolved": True}), "sin resolver"),
                  (True, api(pending=True), "ya solicitado"))

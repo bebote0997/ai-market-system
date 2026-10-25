@@ -44,7 +44,7 @@ def manual_close_disabled(api, owner):
     if not isinstance(api, dict):
         return "Acciones del operador no disponibles."
     if api.get("problem") == "routing_off":
-        return "El enrutado al demo OANDA está apagado (AI_FLOOR_BROKER_DEMO_ROUTING ≠ 1)."
+        return "El enrutado a la cuenta demo de OANDA está apagado."
     if api.get("problem"):
         return "Solo disponible en la cuenta de práctica OANDA (la cuenta real está bloqueada)."
     target = api.get("target")

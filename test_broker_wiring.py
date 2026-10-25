@@ -65,7 +65,8 @@ LAZY_IMPORTS = {"ui/views/process.py": {"execution.broker_demo_state": [["CLOSED
                                                                               "request_manual_close"]]},
                 "ui/views/luxury.py": {"execution.demo_dashboard": [["demo_epoch", "demo_progress",
                                                                      "demo_snapshot"]]},
-                "ui/views/experiment.py": {"execution.demo_dashboard": [["demo_progress"]]},
+                # Experimento counts the day from the epoch (ui.demo_clock) and reads numbers via luxury.demo_api.
+                "ui/views/experiment.py": {"execution.demo_dashboard": []},
                 "runtime/trade_alert_source.py": {"execution.demo_dashboard": [["state_db_path"], ["demo_progress"]],
                                                   "execution.oanda_readonly": [["account_view", "demo_trades"]]},
                 "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"]],

@@ -60,6 +60,8 @@
 .tf th{font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--gold);text-align:left;background:var(--panel2);padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
 .tf td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;font-variant-numeric:tabular-nums;min-width:90px}
 .tf tr:last-child td{border-bottom:0}
+/* Muted text (no trades yet / failed read) inside a KPI value: readable text, not a big number */
+.tf .kpi .value .mute{font-size:15px;font-weight:600;letter-spacing:0;color:var(--mute)}
 .tf tbody tr:hover{background:var(--panel3)}
 /* Control */
 .tf .switch{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}

@@ -1,14 +1,41 @@
-from ui.i18n_es import COLUMNS, NO_DATA, column, status_text, tr
+from ui.i18n_es import COLUMNS, NO_DATA, column, enabled_caption, status_text, tr
 from ui.tables import dataframe
 from ui.json_views import ordered
+
+# OANDA demo mode: the PAPER account's numbers are not shown; cycle values before the epoch are not "current".
+PAPER_HEALTH_KEYS = frozenset({"equity", "realized_pnl", "unrealized_pnl", "open_positions", "paper_broker"})
+CYCLE_KEYS = ("last_run", "last_success", "last_run_id", "last_cycle_status")
+
+
+def health_rows(operational_health, since=None):
+    """(label, readable value) rows of ``runtime.health.health``; ``since`` = demo epoch (None in PAPER mode)."""
+    from ui.views.dashboard import FIRST_CYCLE_WAIT, is_current
+    from ui.views.luxury import display
+    health = dict(operational_health)
+    if since is not None:
+        health = {k: v for k, v in health.items() if k not in PAPER_HEALTH_KEYS}
+        if not is_current(health.get("last_run"), since):
+            health.update({key: FIRST_CYCLE_WAIT for key in CYCLE_KEYS if key in health})
+        elif not is_current(health.get("last_success"), since):
+            health["last_success"] = FIRST_CYCLE_WAIT
+    rows = []
+    for key, value in health.items():
+        if isinstance(value, (tuple, list)):
+            value = ", ".join(map(str, value))
+        elif isinstance(value, str):
+            value = display(value) if value[:2] == "20" else status_text(value)
+        rows.append((column(key) if key in COLUMNS else key.replace("_", " ").capitalize(), value))
+    return rows
+
+
 def render(st, vm, operational_health=None, review=None, notifications=(), evidence_json=None,
-           store=None):
+           store=None, since=None):
     st.header(tr("SYSTEM"))
     st.caption(tr("Read-only service inventory"))
     S, E = column("service"), column("status")
     rows = [
         {S: "Símbolos soportados", E: "XAUUSD, NAS100, EURUSD"},
-        {S: "Símbolos activos", E: "XAUUSD, EURUSD"},
+        {S: "Símbolos activos", E: enabled_caption(("XAUUSD", "EURUSD"))},
         {S: "Proveedor de precios", E: "Twelve Data configurado para la práctica interna"},
         {S: "Adaptador Massive", E: "Soportado / no activo"},
         {S: "Proveedor de IA", E: "No iniciado"},
@@ -19,8 +46,7 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
         {S: "Actualidad de datos", E: status_text(vm.freshness)},
     ]
     if operational_health and not vm.sample:
-        rows = [{S: column(key) if key in COLUMNS else key.replace("_", " ").title(), E: value}
-                for key, value in operational_health.items()]
+        rows = [{S: label, E: value} for label, value in health_rows(operational_health, since)]
     dataframe(st, rows, hide_index=True, width="stretch")
     st.write("Avisos:", vm.warnings or "—")
     st.write("Versiones de prompts:", dict(vm.prompt_versions) if vm.prompt_versions else NO_DATA)
@@ -31,7 +57,7 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
             st.json(ordered({"run_id": review["run_id"], "final_status": review["final_status"],
                      "setup_status": review["setup_status"], "agents": review["agents"],
                      "risk_decision": review["risk_decision"], "execution": review.get("execution"),
-                     "paper": review["paper"],
+                     **({} if since is not None else {"paper": review["paper"]}),
                      "error": review["error"]}), expanded=False)
         else:
             st.write(NO_DATA)
