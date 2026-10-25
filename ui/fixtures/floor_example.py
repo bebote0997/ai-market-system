@@ -6,9 +6,10 @@ figures are illustrative and never describe the engine.
 """
 import math
 
-HEADER = {"equity": 100412.50, "pnl": 412.50, "r_total": 0.83, "win_rate": 57.0, "drawdown": 612.50,
-          "drawdown_pct": 0.61, "daily_loss_used_pct": 0.0, "daily_loss_limit_pct": 2.0,
-          "daily_loss_status": "OK", "day_text": "Día 3 de 30", "trades": 7}
+HEADER = {"equity": 100412.50, "balance": 100202.50, "pnl": 412.50, "today_pnl": 210.0, "r_total": 0.83,
+          "win_rate": 57.0, "drawdown": 612.50, "drawdown_pct": 0.61, "daily_loss_used_pct": 0.0,
+          "daily_loss_limit_pct": 2.0, "daily_loss_status": "OK", "daily_loss_text": "Bien", "day_text": "Día 3 de 30",
+          "trades": 7, "closed_trades": 7, "open_positions": 1}
 
 TRADES = [
     {"id": "14", "symbol": "EURUSD", "side": "LONG", "status": "OPEN", "opened_at": "20 oct 08:01 ET",

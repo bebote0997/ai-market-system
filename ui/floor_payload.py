@@ -7,13 +7,19 @@ by what the dashboard caches already hold (``ui.floor_cache`` peek readers: the 
 call; nothing cached => None) and never PAPER numbers in demo mode (header, trades and the analysts' signal outcomes). Every section is built inside a guard: a read error yields ``None`` for that
 section, never an exception. Missing data stays ``None`` (the page shows "—" / "sin datos aún"); nothing is invented.
 
+OANDA demo mode shows ONLY cycles / events at/after the demo epoch (``dashboard.demo_since()``): snapshot, runs, agent
+decisions, cycle evidence, journal feed and market lines older than it (old PAPER cycles still in the DB) or with a
+missing / unparsable time are left out; nothing left => ``waiting`` ("Esperando el primer ciclo"). ``running`` is
+active only for a fresh ``runs`` row with status RUNNING (the page animates only then). PAPER mode keeps the full DB.
+
 In sample mode only, sections without real data are filled from ``ui.fixtures.floor_example`` and listed in
 ``example_fields`` (the page badges them "EJEMPLO"). ``real_fields`` lists every field that came from real data.
 No account id, token or other secret is ever read into the payload.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import math
+import re
 
 from ui import i18n_es as es
 
@@ -24,12 +30,13 @@ AI_AGENTS = {"Structure": ("Structure AI", "structure_ai"), "Liquidity": ("Liqui
              "Macro": ("Macro AI", "macro_ai"), "Risk": ("Trade Reviewer", "trade_reviewer_ai"),
              "Reviewer": ("Setup Reviewer", "setup_reviewer_ai")}
 SIDE_OF_BIAS = {"BULLISH": "LONG", "BEARISH": "SHORT", "LONG": "LONG", "SHORT": "SHORT"}
-# Floor step (8) <- ui.views.process.STEPS evidence (9); "Entry / Exit" is done when either broker step is.
+# Floor step (8) <- ui.views.process.STEPS evidence (9); "Entrada / Salida" is done when either broker step is.
+ENTRY_STEP, RESULT_STEP = "Entrada / Salida", "Resultado"
 CYCLE_STEPS = (("Datos", ("Data intake",)), ("Análisis", ("Agent outputs",)),
-               ("Reviewer", ("Setup reviewer + deterministic setup",)),
-               ("Conflict Engine", ("Conflict engine / opposite-setup policy",)), ("Risk Engine", ("Risk Engine",)),
-               ("Plan R:R", ("Planner R:R and plan",)), ("Entry / Exit", ("Paper Broker entry", "Paper Broker exit")),
-               ("Resultado", ("Final outcome",)))
+               ("Revisor", ("Setup reviewer + deterministic setup",)),
+               ("Motor de conflictos", ("Conflict engine / opposite-setup policy",)),
+               ("Motor de riesgo", ("Risk Engine",)), ("Plan R:R", ("Planner R:R and plan",)),
+               (ENTRY_STEP, ("Paper Broker entry", "Paper Broker exit")), (RESULT_STEP, ("Final outcome",)))
 TIME_KEYS = ('timestamp', 'timestamp_utc', 'as_of', 'opened_at', 'exited_at', 'completed_at', 'started_at',
              'filled_at', 'fill_timestamp')
 SYMBOL = "EURUSD"
@@ -39,6 +46,22 @@ SIGNAL_LIMIT = 5
 PIP = 0.0001  # EURUSD
 CURVE_POINTS = 40
 FRESH_SECONDS = 120  # a cached demo NAV / trades read observed longer ago than this is "(dato antiguo · HH:MM ET)"
+LIVE_SECONDS = 15 * 60  # "datos reales" only when the newest NAV read / cycle is younger than this
+RUNNING_MAX_SECONDS = 15 * 60  # an older RUNNING row is a crashed process, never a running cycle
+WAITING_TEXT = "Esperando el primer ciclo"
+# Engine codes the Floor may show that ui.i18n_es.STATUS has no (natural Spanish) text for.
+FLOOR_TEXT = {"PLAN_READY": "Plan listo", "APPROVED": "Aprobado", "REJECTED": "Rechazado",
+              "CONFIGURED": "Configurado", "DEC14_DECISION": "Decisión de la política de setups opuestos",
+              "EXECUTION_DECISION": "Decisión de ejecución", "POSITION_OPENED": "Posición abierta",
+              "POSITION_CLOSED": "Posición cerrada", "RISK_V2_DECISION": "Decisión del motor de riesgo",
+              "PLAN_CREATED": "Plan creado", "MANAGE_SKIPPED": "Gestión omitida", "CLOSED": "Cerrada",
+              "RUNNING": "En marcha", "COMPLETED": "Completado", "FAILED": "Falló", "VALID_SETUP": "Setup válido",
+              "NO_SETUP": "Sin setup", "WATCH": "En observación", "NOT CALLED": "No consultado",
+              "OK": "Bien", "TRIGGERED": "Activado: sin nuevas entradas hasta las 17:00 ET",
+              "PENDING": "Bien · aún sin evaluar hoy", "OFF": "Apagado", "NO_DATA": "sin datos"}
+DAILY_LOSS_TEXT = {"OK": "Bien", "TRIGGERED": "Límite alcanzado · sin nuevas entradas hasta las 17:00 ET",
+                   "PENDING": "Bien · aún sin evaluar hoy", "OFF": "Apagado", "NO_DATA": "sin datos"}
+CODE = re.compile(r"[A-Z][A-Z0-9_ ./·-]*")
 
 
 def number(value):
@@ -69,6 +92,29 @@ def as_utc(value):
     return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
 
 
+def code_text(value):
+    """Spanish text of an engine code (Floor map, then ``i18n_es.STATUS``); an unknown CODE is humanised ("SOME_CODE"
+    -> "Some code"), prose is kept. None when empty."""
+    if value is None or str(value).strip() == '':
+        return None
+    text = str(value).strip()
+    mapped = FLOOR_TEXT.get(text) or es.STATUS.get(text)
+    if mapped:
+        return mapped
+    if not CODE.fullmatch(text):
+        return text
+    words = text.replace('_', ' ').lower()
+    return words[:1].upper() + words[1:]
+
+
+def at_or_after(value, since):
+    """True when ``since`` is None (no epoch filter) or ``value`` is a parsable aware time at/after it."""
+    if since is None:
+        return True
+    at = as_utc(value)
+    return at is not None and at >= since
+
+
 def et_text(value, with_date=True):
     """"19 oct 08:01 ET" (or "08:01") for an aware timestamp / ISO string; None when unknown."""
     at = as_utc(value)
@@ -90,7 +136,8 @@ def header_from_stats(stats, *, equity, start=None, daily_loss=None, day=None):
     loss = daily_loss or {}
     fraction = num(loss.get('fraction'))
     known_loss = loss.get('status') not in (None, 'OFF', 'NO_DATA')
-    return {"equity": num(equity), "pnl": num(stats.get('total_pnl')),
+    return {"equity": num(equity), "balance": None, "pnl": num(stats.get('total_pnl')),
+            "today_pnl": num(stats.get('today_pnl')) if trades is not None else None,
             "r_total": avg_r * trades if avg_r is not None and trades else None,
             "win_rate": 100.0 * stats['wins'] / trades if trades and isinstance(stats.get('wins'), int) else None,
             "drawdown": drawdown,
@@ -99,8 +146,9 @@ def header_from_stats(stats, *, equity, start=None, daily_loss=None, day=None):
                                     if known_loss and number(loss.get('used_pct')) and fraction is not None else None),
             "daily_loss_limit_pct": 100.0 * fraction if fraction is not None and loss.get('status') != 'OFF' else None,
             "daily_loss_status": loss.get('status') if loss.get('status') else None,
+            "daily_loss_text": DAILY_LOSS_TEXT.get(loss.get('status')) or code_text(loss.get('status')),
             "day_text": es.demo_day_text(day) if isinstance(day, int) and not isinstance(day, bool) else None,
-            "trades": trades, "equity_stale": None, "equity_as_of": None, "trades_stale": None,
+            "trades": trades, "closed_trades": trades, "open_positions": None, "equity_stale": None, "equity_as_of": None, "trades_stale": None,
             "trades_as_of": None}
 
 
@@ -137,11 +185,13 @@ def demo_header(snapshot, day, now):
     elif stale and at is None:
         header['equity'], stale = None, None
     header['equity_stale'] = stale
+    header['balance'] = num(snapshot.get('balance')) if header['equity'] is not None else None
     header['equity_as_of'] = et_text(at, with_date=False) if header['equity'] is not None else None
     if known:  # trade-derived sections (PnL, R, win rate, drawdown, curve, trades, hit rates): same freshness rule
         seen = as_utc(snapshot.get('trades_as_of'))
         header['trades_stale'] = seen is None or (now - seen).total_seconds() > FRESH_SECONDS
         header['trades_as_of'] = et_text(seen, with_date=False)
+        header['open_positions'] = len(snapshot.get('open_rows') or ())
     return header
 
 
@@ -228,24 +278,27 @@ def demo_trades(db, snapshot):
 
 
 # -- agents ------------------------------------------------------------------------------------------------------
-def latest_snapshot(db):
+def latest_snapshot(db, since=None):
+    """Newest EURUSD ``ui_snapshots`` payload (demo mode: only one whose ``as_of`` is at/after the epoch)."""
     from ui.views.dashboard import payloads
-    return next((s for s in payloads(db, 'ui_snapshots') if s.get('symbol') == SYMBOL), None)
+    return next((s for s in payloads(db, 'ui_snapshots')
+                 if s.get('symbol') == SYMBOL and at_or_after(s.get('as_of'), since)), None)
 
 
-def agent_decision_rows(db):
+def agent_decision_rows(db, since=None):
     if db is None or not db.execute("SELECT 1 FROM sqlite_master WHERE name='agent_decisions'").fetchone():
         return []
-    return [dict(r) for r in db.execute(
+    rows = [dict(r) for r in db.execute(
         "SELECT a.agent_name, a.as_of, a.status, a.bias, a.confidence, a.reasoning_summary, r.run_id "
         "FROM agent_decisions a JOIN runs r ON r.slot_key=a.slot_key WHERE r.symbol=? "
         "ORDER BY a.as_of DESC, a.rowid DESC LIMIT 400", (SYMBOL,))]
+    return [r for r in rows if at_or_after(r.get('as_of'), since)]
 
 
 def short_status(status, bias=None):
-    parts = [es.status_text(status)] if status else []
+    parts = [code_text(status)] if status else []
     if bias and bias not in ('UNKNOWN',):
-        parts.append(es.status_text(bias))
+        parts.append(code_text(bias))
     return ' · '.join(parts) or None
 
 
@@ -294,12 +347,13 @@ def signals_and_hit_rate(decisions, closed):
     return (signals or None), (100.0 * hits / linked_count if linked_count else None)
 
 
-def ai_agents(db, snapshot, closed):
+def ai_agents(db, snapshot, closed, since=None):
     """``closed``: closed trades by run of the SELECTED source (PAPER ledger, or the OANDA demo trades while routing
-    is ON: never PAPER outcomes in demo metrics); None = unknown."""
+    is ON: never PAPER outcomes in demo metrics); None = unknown. ``since``: demo epoch (older rows never shown)."""
     agents = {}
-    decisions = guarded(lambda: agent_decision_rows(db), [])
-    persisted = {a.get('name') or a.get('agent_name'): a for a in (snapshot or {}).get('agents') or ()}
+    decisions = guarded(lambda: agent_decision_rows(db, since), [])
+    persisted = {a.get('name') or a.get('agent_name'): a for a in (snapshot or {}).get('agents') or ()
+                 if at_or_after(a.get('timestamp') or (snapshot or {}).get('as_of'), since)}
     for agent_id, names in AI_AGENTS.items():
         mine = [d for d in decisions if d.get('agent_name') in names]
         latest = next((persisted[n] for n in names if n in persisted), None)
@@ -317,9 +371,10 @@ def ai_agents(db, snapshot, closed):
     return agents
 
 
-def latest_run(db):
+def latest_run(db, since=None):
     from ui.views.dashboard import records
-    runs = [r for r in records(db, 'runs') if r.get('symbol') == SYMBOL]
+    runs = [r for r in records(db, 'runs')
+            if r.get('symbol') == SYMBOL and at_or_after(r.get('as_of') or r.get('started_at'), since)]
     runs.sort(key=lambda r: (r.get('as_of') or '', r.get('started_at') or ''), reverse=True)
     return runs[0] if runs else None
 
@@ -338,11 +393,12 @@ def engine_agents(db, snapshot, run, evidence):
     if conflict:
         event = conflict[0]
         body = event.get('payload') if isinstance(event.get('payload'), dict) else {}
-        agents["Conflict"] = agent_view(event.get('event_type'), analysis=body.get('reason') or body.get('decision'),
+        agents["Conflict"] = agent_view(event.get('event_type'),
+                                        analysis=code_text(body.get('reason') or body.get('decision')),
                                         as_of=event.get('timestamp'))
     risk = guarded(lambda: run_risk(db, run))
     if risk:
-        parts = [risk.get('reason')] if risk.get('reason') else []
+        parts = [code_text(risk.get('reason'))] if risk.get('reason') else []
         if number(risk.get('risk_fraction')):
             parts.append(f"riesgo {100 * risk['risk_fraction']:.2f} %")
         if number(risk.get('capital_at_risk')):
@@ -351,7 +407,7 @@ def engine_agents(db, snapshot, run, evidence):
                                        as_of=run.get('completed_at') or run.get('as_of'))
     elif snapshot and snapshot.get('risk_status') and snapshot.get('risk_status') != 'NOT CALLED':
         decision = snapshot.get('risk_decision') or {}
-        agents["RiskEng"] = agent_view(snapshot['risk_status'], analysis=decision.get('reason'),
+        agents["RiskEng"] = agent_view(snapshot['risk_status'], analysis=code_text(decision.get('reason')),
                                        as_of=snapshot.get('as_of'))
     return agents
 
@@ -360,7 +416,7 @@ def exec_agent(trades, source):
     if not trades:
         return None
     trade = trades[0]
-    venue = 'OANDA demo' if source == 'OANDA_DEMO' else 'PAPER'
+    venue = 'OANDA demo' if source == 'OANDA_DEMO' else 'práctica interna'
     parts = [f"{es.status_text(trade['side'])} {SYMBOL}"]
     if trade['units'] is not None:
         parts.append(f"{trade['units']:,.0f} unidades")
@@ -398,29 +454,77 @@ def cycle_view(run, evidence, trades):
     steps = []
     for label, sources in CYCLE_STEPS:
         rows = [r for s in sources for r in evidence.get(s) or ()]
-        if label == 'Resultado':
+        if label == RESULT_STEP:
             done = bool(run.get('completed_at')) or run.get('status') in ('COMPLETED', 'FAILED')
             at = run.get('completed_at')
         else:
-            done = bool(rows) or (label == 'Entry / Exit' and run.get('run_id') in routed)
+            done = bool(rows) or (label == ENTRY_STEP and run.get('run_id') in routed)
             at = first_time(rows)
         steps.append({"done": done, "at": et_text(at, with_date=False)})
-    return {"as_of": et_text(run.get('as_of')), "status": es.status_text(run.get('final_status') or run.get('status')),
+    return {"as_of": et_text(run.get('as_of')), "status": code_text(run.get('final_status') or run.get('status')),
             "steps": steps}
 
 
-def journal_feed(db):
+def journal_feed(db, since=None):
     from ui.views.dashboard import PAPER_RESULT_EVENTS, paper_hidden, records
     hidden = paper_hidden()
     lines = []
     for row in records(db, 'journal'):
         if row.get('symbol') not in SYMBOLS or (hidden and row.get('event_type') in PAPER_RESULT_EVENTS):
             continue
+        if not at_or_after(row.get('timestamp'), since):
+            continue
         at = et_text(row.get('timestamp'), with_date=False)
-        lines.append(f"{at or '—'}  {row['symbol']}  {es.status_text(row.get('event_type'))}")
+        lines.append(f"{at or '—'}  {row['symbol']}  {code_text(row.get('event_type')) or '—'}")
         if len(lines) == 5:
             break
     return lines or None
+
+
+def running_state(db, now, since=None, trades=None):
+    """The cycle executing right now: the newest ``runs`` row with status RUNNING (written by ``storage.database.Store``
+    while a cycle executes) for SYMBOLS, started at/after ``since`` (demo epoch) and at most ``RUNNING_MAX_SECONDS``
+    ago (an older RUNNING row is a crashed process). ``step`` = index of the first floor step without persisted
+    evidence (the step actually reached), None if unknown. Pure read-only SQL; never raises."""
+    idle = {"active": False, "step": None, "symbol": None, "started_at_text": None, "started_at": None, "deadline": None}
+    if db is None:
+        return idle
+    best = None
+    for row in db.execute("SELECT * FROM runs WHERE status='RUNNING'"):
+        run = dict(row)
+        started = as_utc(run.get('started_at'))
+        if run.get('symbol') not in SYMBOLS or started is None or not at_or_after(started, since):
+            continue
+        age = (now - started).total_seconds()
+        if -60 <= age <= RUNNING_MAX_SECONDS and (best is None or started > best[0]):
+            best = (started, run)
+    if best is None:
+        return idle
+    started, run = best
+    step = None
+    if run.get('run_id'):
+        from ui.views.process import cycle_evidence
+        evidence = guarded(lambda: cycle_evidence(db, run)[0])
+        if evidence is not None:
+            steps = cycle_view(run, evidence, trades)["steps"]
+            step = next((i for i, s in enumerate(steps) if not s["done"]), len(steps) - 1)
+    return {"active": True, "step": step, "symbol": run['symbol'], "started_at_text": et_text(started),
+            "started_at": started.isoformat(),
+            "deadline": (started + timedelta(seconds=RUNNING_MAX_SECONDS)).isoformat()}
+
+
+def freshness(header, demo_snap, run, now, waiting):
+    """``note_real``: the newest data point (cached NAV read / last cycle) is younger than ``LIVE_SECONDS``;
+    ``cycle_text``: "último ciclo 26 oct 03:00 ET" (+ " (antiguo)" when older). Never "datos reales" on old data."""
+    def fresh(at):
+        return at is not None and 0 <= (now - at).total_seconds() <= LIVE_SECONDS
+    nav_at = as_utc((demo_snap or {}).get('as_of')) if (header or {}).get('equity') is not None else None
+    cycle_at = as_utc(run.get('as_of') or run.get('started_at')) if run else None
+    real = not waiting and (fresh(nav_at) or fresh(cycle_at))
+    cycle_text = None
+    if cycle_at is not None:
+        cycle_text = f"último ciclo {et_text(cycle_at)}" + ("" if fresh(cycle_at) else " (antiguo)")
+    return real, cycle_text
 
 
 def symbol_states(enabled):
@@ -431,8 +535,8 @@ def symbol_states(enabled):
 def market_lines(snapshot):
     if not snapshot:
         return None
-    lines = [f"{SYMBOL} · {es.status_text(snapshot.get('state'))}" if snapshot.get('state') else None,
-             f"Datos: {es.status_text(snapshot.get('freshness'))}" if snapshot.get('freshness') else None,
+    lines = [f"{SYMBOL} · {code_text(snapshot.get('state'))}" if snapshot.get('state') else None,
+             f"Datos: {code_text(snapshot.get('freshness'))}" if snapshot.get('freshness') else None,
              f"Actualizado {et_text(snapshot.get('as_of'))}" if et_text(snapshot.get('as_of')) else None]
     lines = [line for line in lines if line]
     return {"lines": lines} if lines else None
@@ -482,16 +586,23 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
     now = now or datetime.now(timezone.utc)
     payload = {"version": 1, "sample_mode": bool(sample_mode), "generated_at": et_text(now),
                "source": None, "header": None, "trades": None, "agents": {}, "cycle": None, "symbols": None,
-               "feed": None, "market": None, "curve": None}
-    snapshot = demo_snap = None
+               "feed": None, "market": None, "curve": None, "waiting": False, "waiting_text": None,
+               "epoch_text": None, "running": running_state(None, now), "note_real": False, "cycle_text": None}
+    snapshot = demo_snap = run = None
+    since = None
     if demo is not None:
         payload["source"] = "OANDA_DEMO"
+        # OANDA demo mode: only cycles / events at/after the epoch (old PAPER history stays in the DB, never shown).
+        # Unknown epoch => nothing passes (the far future), never pre-epoch data.
+        from ui.views.dashboard import FAR_FUTURE, demo_since
+        since = guarded(demo_since) or FAR_FUTURE
+        payload["epoch_text"] = et_text(since) if since.year < 9999 else None
         from ui.floor_cache import peek_account_view, peek_demo_trades
         # peek-only readers: the stored cache contents, never a refresh (no broker / network call from the Floor)
         demo_snap = guarded(lambda: demo['snapshot'](now, trades_reader=peek_demo_trades,
                                                      account_reader=peek_account_view))
-        from ui.views.luxury import demo_day
-        day = guarded(lambda: demo_day(demo, now))
+        from ui.demo_clock import demo_day_from_epoch
+        day = guarded(lambda: demo_day_from_epoch(since, now))
         if isinstance(demo_snap, dict):
             payload["header"] = guarded(lambda: demo_header(demo_snap, day, now))
             payload["curve"] = guarded(lambda: curve_values(demo_snap.get('curve')))
@@ -502,17 +613,22 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         payload["curve"] = guarded(lambda: curve_values(curve))
         payload["trades"] = guarded(lambda: paper_trades(db))
     if db is not None:
-        snapshot = guarded(lambda: latest_snapshot(db))
-        run = guarded(lambda: latest_run(db))
+        snapshot = guarded(lambda: latest_snapshot(db, since))
+        run = guarded(lambda: latest_run(db, since))
         from ui.views.process import cycle_evidence
         evidence = guarded(lambda: cycle_evidence(db, run)[0]) if run else None
         closed = (guarded(lambda: demo_closed_by_run(demo_snap)) if demo is not None
                   else guarded(lambda: closed_by_run(db)))
-        payload["agents"].update(guarded(lambda: ai_agents(db, snapshot, closed), {}))
+        payload["agents"].update(guarded(lambda: ai_agents(db, snapshot, closed, since), {}))
         payload["agents"].update(guarded(lambda: engine_agents(db, snapshot, run, evidence), {}))
         payload["cycle"] = guarded(lambda: cycle_view(run, evidence, payload["trades"])) if run else None
-        payload["feed"] = guarded(lambda: journal_feed(db))
+        payload["feed"] = guarded(lambda: journal_feed(db, since))
         payload["market"] = guarded(lambda: market_lines(snapshot))
+        payload["running"] = guarded(lambda: running_state(db, now, since, payload["trades"]), payload["running"])
+    if demo is not None and run is None and snapshot is None:
+        payload["waiting"], payload["waiting_text"] = True, WAITING_TEXT
+    payload["note_real"], payload["cycle_text"] = guarded(
+        lambda: freshness(payload["header"], demo_snap, run, now, payload["waiting"]), (False, None))
     executed = guarded(lambda: exec_agent(payload["trades"], payload["source"]))
     if executed:
         payload["agents"]["Exec"] = executed

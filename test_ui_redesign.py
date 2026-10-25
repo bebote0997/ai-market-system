@@ -109,25 +109,25 @@ class RealizedRTests(unittest.TestCase):
 
 class SpanishPresentationTests(unittest.TestCase):
     def test_professional_metric_labels(self):
-        self.assertEqual(es.pnl_since_start(47.05), 'Realized PnL · desde el inicio del historial')
-        self.assertEqual(es.today_phrase(-3.5), 'Today PnL (ET)')
-        self.assertEqual(es.wins_phrase(3, 4), 'Win rate · 3/4 closed trades')
-        self.assertEqual(es.wins_phrase(0, 0), 'Closed trades: 0')
-        self.assertEqual(es.drawdown_phrase(3.39), 'Max drawdown (realized PnL): $3.39')
-        self.assertEqual(es.avg_r_phrase(0.46), 'Avg R (expectancy)')
-        self.assertEqual(es.avg_r_phrase(None, 'sin stop'), 'Avg R (expectancy): sin stop')
+        self.assertEqual(es.pnl_since_start(47.05), 'P&L realizado · desde el inicio del historial')
+        self.assertEqual(es.today_phrase(-3.5), 'P&L de hoy (ET)')
+        self.assertEqual(es.wins_phrase(3, 4), 'Acierto · 3/4 operaciones cerradas')
+        self.assertEqual(es.wins_phrase(0, 0), 'Operaciones cerradas: 0')
+        self.assertEqual(es.drawdown_phrase(3.39), 'Caída máxima (P&L realizado): $3.39')
+        self.assertEqual(es.avg_r_phrase(0.46), 'R medio (expectativa)')
+        self.assertEqual(es.avg_r_phrase(None, 'sin stop'), 'R medio (expectativa): sin stop')
         self.assertEqual(es.money(-2, signed=True), '−$2.00')
         self.assertEqual(es.tone(-1), 'neg')
         self.assertEqual(es.datetime_et(datetime(2026, 10, 14, 14, 15, tzinfo=timezone.utc)), '14 oct 2026 10:15 ET')
 
     def test_close_reasons_states_and_fallbacks(self):
-        self.assertEqual(es.close_reason_text('stop'), 'Stop loss hit (SL)')
-        self.assertEqual(es.close_reason_text('target'), 'Take profit hit (TP)')
-        self.assertEqual(es.close_reason_text('TIME_EXIT_DAY1_BELOW_0_5R'), 'Time exit · día 1 < 0.5R')
+        self.assertEqual(es.close_reason_text('stop'), 'Stop loss alcanzado (SL)')
+        self.assertEqual(es.close_reason_text('target'), 'Take profit alcanzado (TP)')
+        self.assertEqual(es.close_reason_text('TIME_EXIT_DAY1_BELOW_0_5R'), 'Salida por tiempo · día 1 < 0.5R')
         from execution.trade_duration import CLOSE_REASONS
         for reason in CLOSE_REASONS:
             self.assertNotEqual(es.close_reason_text(reason), reason)
-        self.assertEqual(es.close_reason_text('SOMETHING_NEW'), 'SOMETHING_NEW')
+        self.assertEqual(es.close_reason_text('SOMETHING_NEW'), 'Something new')  # unknown codes humanised
         self.assertEqual(es.status_text('NO_DATA'), 'Sin datos')
         self.assertEqual(es.status_text('LONG'), 'LONG')
         self.assertEqual(es.status_text('ODD'), 'ODD')
@@ -145,10 +145,10 @@ class SpanishPresentationTests(unittest.TestCase):
         self.assertIn('title="REJECTED"', chip)
 
     def test_phrases_do_not_overclaim_scope(self):
-        self.assertEqual(es.pnl_since_start(None), f'Realized PnL: {es.MISSING}')
+        self.assertEqual(es.pnl_since_start(None), f'P&L realizado: {es.MISSING}')
         self.assertNotIn('demo', es.pnl_since_start(1))
         self.assertNotIn('cuenta', es.drawdown_phrase(1))
-        self.assertEqual(es.drawdown_phrase(None), f'Max drawdown (realized PnL): {es.MISSING}')
+        self.assertEqual(es.drawdown_phrase(None), f'Caída máxima (P&L realizado): {es.MISSING}')
 
     def test_card_trusts_values_not_labels(self):
         markdown = []
@@ -168,20 +168,23 @@ class SpanishPresentationTests(unittest.TestCase):
     def test_slippage_plan_vs_fill(self):
         rows = dict(luxury.slippage({'symbol': 'EURUSD', 'side': 'LONG', 'entry_price': 1.1002,
                                      'planned_entry': 1.1}, {}))
-        self.assertIn('+2.0 pips', rows['Slippage'])
-        self.assertIn('adverse', rows['Slippage'])
+        self.assertIn('+2.0 pips', rows['Deslizamiento'])
+        self.assertIn('en contra', rows['Deslizamiento'])
+        self.assertEqual(rows['Entrada planificada'], 1.1)
         rows = dict(luxury.slippage({'symbol': 'XAUUSD', 'side': 'SHORT', 'entry_price': 2000.5}, {'entry': 2000}))
-        self.assertIn('favorable', rows['Slippage'])
-        self.assertNotIn('pips', rows['Slippage'])
+        self.assertIn('a favor', rows['Deslizamiento'])
+        self.assertNotIn('pips', rows['Deslizamiento'])
         rows = dict(luxury.slippage({'symbol': 'XAUUSD', 'entry_price': 1}, {}))
-        self.assertEqual(rows['Slippage'], 'sin planned entry guardada')
+        self.assertEqual(rows['Deslizamiento'], 'sin entrada planificada guardada')
 
-    def test_ui_stylesheet_is_light_and_offline(self):
+    def test_ui_stylesheet_is_dark_gold_and_offline(self):
         css = Path('ui/static/theme.css').read_text()
         self.assertFalse(Path('ui/static/luxury.css').exists())
         self.assertNotIn('@import', css)
         self.assertNotIn('http', css)
-        self.assertIn('#f3f6fb', css)
+        self.assertIn('#0a0a0b', css)
+        self.assertIn('#d9b45a', css)
+        self.assertNotIn('#f3f6fb', css)  # no light page background left
 
 
 class ControlViewTests(unittest.TestCase):
@@ -203,7 +206,7 @@ class ControlViewTests(unittest.TestCase):
         self.assertEqual([a['key'] for a in snapshot['accounts']], list(control.ACCOUNT_KEYS))
         real = snapshot['accounts'][2]
         self.assertEqual(control.account_status(real, snapshot), ('Real: bloqueado por seguridad', 'neg'))
-        self.assertEqual(control.account_status(snapshot['accounts'][1], snapshot)[0], 'Aún no conectado')
+        self.assertEqual(control.account_status(snapshot['accounts'][1], snapshot)[0], 'Cuenta apagada · Saldo no disponible')
 
         def boom():
             raise RuntimeError('registry down')
@@ -261,7 +264,7 @@ class ControlViewTests(unittest.TestCase):
         self.assertTrue(stop.disabled)
         self.assertIn('PARADA DE EMERGENCIA', stop.label)
         content = '\n'.join(m.value for m in app.markdown)
-        self.assertIn('Aún no conectado', content)
+        self.assertIn('Cuenta apagada · Saldo no disponible', content)
         self.assertIn('Real: bloqueado por seguridad', content)
         self.assertEqual(hashlib.sha256(case.path.read_bytes()).hexdigest(), before)
 

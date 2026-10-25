@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from ui.adapters import assistant_lines, state_label
 from ui.components.charts import price_action_figure
-from ui.i18n_es import AGENTS, NO_DATA, column, status_text, tr
+from ui.i18n_es import AGENTS, NO_DATA, column, datetime_et, short_id, status_text, tr
 
 
 def show_value(value):
@@ -12,8 +12,8 @@ def show_value(value):
 
 def header(st, vm):
     st.title(tr("AI TRADING FLOOR"))
-    st.markdown('<div class="safety">MODO PRÁCTICA (PAPER) &nbsp; · &nbsp; EJECUCIÓN REAL DESACTIVADA &nbsp; · &nbsp; '
-                'SIN DINERO REAL</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="safety">{tr("PAPER MODE · REAL EXECUTION DISABLED · NO REAL MONEY")}</div>',
+                unsafe_allow_html=True)
     if vm.sample:
         st.warning(tr("SAMPLE / DEMO — NOT CURRENT PRICES"))
     if vm.freshness == "STALE_DATA":
@@ -22,7 +22,7 @@ def header(st, vm):
     for col, label, value in zip(c, ("SÍMBOLO", "ESTADO", "ACTUALIDAD", "SESIÓN", "HORA UTC", "ÚLTIMO ANÁLISIS"),
             (vm.symbol, tr("CRITICAL — STALE DATA") if vm.freshness == "STALE_DATA" else status_text(state_label(vm.state)),
              status_text(vm.freshness), "—", datetime.now(timezone.utc).strftime("%H:%M"),
-             vm.as_of.isoformat() if vm.as_of else "—")):
+             datetime_et(vm.as_of) if vm.as_of else "—")):
         col.metric(label, value)
     st.caption(tr("NEXT ANALYSIS: NOT SCHEDULED · AI INTERPRETS. PYTHON VALIDATES. RISK ENGINE AUTHORIZES. PAPER BROKER EXECUTES."))
 
@@ -67,17 +67,17 @@ def agents(st, vm):
             st.write("Evidencia:", ", ".join(a.evidence) or "—")
             st.write("Conflictos:", ", ".join(a.conflicts) or "—")
             st.write("Avisos:", ", ".join(a.warnings) or "—")
-            st.write("Hora:", a.timestamp.isoformat() if a.timestamp else "—")
+            st.write("Hora:", datetime_et(a.timestamp) if a.timestamp else "—")
 
 
 def setup(st, vm):
     st.subheader(tr("SETUP"))
     st.write("Estado:", tr("CRITICAL — STALE DATA") if vm.freshness == "STALE_DATA" else
              status_text(state_label(vm.state)) if vm.state == "PLAN_READY" else status_text(vm.setup_status))
-    st.write("Side:", status_text(vm.setup_side) if vm.setup_side else "—")
-    for label, value in (("Entry", getattr(vm.plan, "entry", None)), ("Stop loss", getattr(vm.plan, "stop", None)),
+    st.write("Lado:", status_text(vm.setup_side) if vm.setup_side else "—")
+    for label, value in (("Entrada", getattr(vm.plan, "entry", None)), ("Stop loss (SL)", getattr(vm.plan, "stop", None)),
                          ("Take profit (TP)", getattr(vm.plan, "target", None)), ("R:R", getattr(vm.plan, "risk_reward", None)),
-                         ("Invalidation", vm.setup_invalidation)):
+                         ("Invalidación", vm.setup_invalidation)):
         st.write(f"{label}:", show_value(value))
     st.caption("Evidencia: " + (", ".join(map(str, vm.setup_evidence)) or "—"))
 
@@ -87,10 +87,10 @@ def risk(st, vm):
     st.caption(tr("PYTHON DETERMINISTIC"))
     st.write("Decisión:", status_text(vm.risk_status))
     d = vm.risk_decision
-    for label, value in (("Max risk per trade", "≤ 1%"), (column("risk_fraction"), getattr(d, "risk_fraction", None)),
+    for label, value in (("Riesgo máximo por operación", "≤ 1%"), (column("risk_fraction"), getattr(d, "risk_fraction", None)),
                          (column("equity_at_decision"), getattr(d, "equity_at_decision", None)),
                          (column("capital_at_risk"), getattr(d, "capital_at_risk", None)),
-                         ("Position size", getattr(d, "quantity", None)),
+                         ("Tamaño de la posición", getattr(d, "quantity", None)),
                          (column("reason"), getattr(d, "reason", None))):
         st.write(f"{label}:", show_value(value))
 
@@ -101,14 +101,14 @@ def positions(st, vm):
     if not vm.positions and not vm.orders:
         st.write(tr("FLAT"))
     for order in vm.orders:
-        st.write(f"{order.symbol} · {status_text(order.status)} · planned entry {show_value(order.planned_entry)} · "
-                 f"size {show_value(order.quantity)}")
+        st.write(f"{order.symbol} · {status_text(order.status)} · entrada planificada {show_value(order.planned_entry)} · "
+                 f"tamaño {show_value(order.quantity)}")
     for position in vm.positions:
-        st.write(f"{position.symbol} · {status_text(position.status)} · fill {show_value(position.entry_price)} · "
+        st.write(f"{position.symbol} · {status_text(position.status)} · ejecución {show_value(position.entry_price)} · "
                  f"SL {show_value(position.stop)} · TP {show_value(position.target)}")
     if vm.account is not None:
-        st.write("Unrealized PnL:", show_value(vm.account.unrealized_pnl))
-        st.write("Realized PnL:", show_value(vm.account.realized_pnl))
+        st.write("P&L no realizado:", show_value(vm.account.unrealized_pnl))
+        st.write("P&L realizado:", show_value(vm.account.realized_pnl))
 
 
 def pipeline(st, vm):
@@ -129,7 +129,7 @@ def pipeline(st, vm):
 
 def meeting(st, vm):
     st.subheader(tr("AI MEETING"))
-    st.caption(f"ID DEL CICLO: {show_value(vm.run_id)} · estado final: {status_text(vm.setup_status)} · "
+    st.caption(f"ID DEL CICLO: {short_id(vm.run_id) if vm.run_id else '—'} · estado final: {status_text(vm.setup_status)} · "
                f"motor de riesgo: {status_text(vm.risk_status)}")
     for a in vm.agents:
         with st.expander(f"{AGENTS.get(a.name, a.name)} · {status_text(a.status)}"):

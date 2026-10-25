@@ -1,7 +1,8 @@
 """Per-cycle evidence, joined only by persisted identities."""
 import json
 
-from ui.views.dashboard import hide_paper_results, history, paper_hidden, payloads, records
+from ui.views.dashboard import (FIRST_CYCLE_WAIT, PAPER_SIZING_KEYS, hide_paper_results, history, paper_hidden,
+                                payloads, records, since_epoch)
 
 STEPS = ('Data intake', 'Agent outputs', 'Setup reviewer + deterministic setup',
          'Conflict engine / opposite-setup policy', 'Planner R:R and plan',
@@ -92,16 +93,35 @@ def gap_label(gap):
     return LABELS.get(gap, gap)
 
 
+def scrub_paper_sizing(value):
+    """Demo mode: drop the PAPER account's sizing fields (equity at decision ~10k), any depth."""
+    if isinstance(value, dict):
+        return {k: scrub_paper_sizing(v) for k, v in value.items() if k not in PAPER_SIZING_KEYS}
+    if isinstance(value, list):
+        return [scrub_paper_sizing(item) for item in value]
+    return value
+
+
+def symbol_option(symbol):
+    from ui.i18n_es import PAUSED_TEXT, symbol_status
+    if symbol == 'All':
+        return 'Todos'
+    return f'{symbol} · {PAUSED_TEXT}' if symbol_status(symbol, ()) == PAUSED_TEXT else symbol
+
+
 def render(st, db):
-    from ui.views.luxury import card, MISSING, state_chip, tr
-    from ui.i18n_es import STEPS as LABELS, AGENTS, status_text
-    runs = records(db, 'runs')
+    from ui.views.luxury import card, MISSING, demo_api, demo_since, state_chip, tr
+    from ui.i18n_es import STEPS as LABELS, AGENTS, cycle_label, status_text
+    since = demo_since(demo_api())  # OANDA demo: only runs at/after the epoch (a pre-epoch deep link is ignored)
+    runs = since_epoch(records(db, 'runs'), since, ('as_of', 'started_at'))
     requested = st.session_state.get('process_run_id')
     if requested and requested not in {r['run_id'] for r in runs}:
-        runs = records(db, 'runs', run_id=requested) + runs[:199]
+        runs = since_epoch(records(db, 'runs', run_id=requested), since, ('as_of', 'started_at')) + runs[:199]
+    if since is not None and not runs:
+        card(st, tr('Process'), summary=FIRST_CYCLE_WAIT)
+        return
     st.caption(tr('Latest 200 cycles; exact run links can open older cycles.'))
-    symbol = st.selectbox(tr('Process symbol'), ['All'] + sorted({r['symbol'] for r in runs}),
-                          format_func=lambda value: 'Todos' if value == 'All' else value)
+    symbol = st.selectbox(tr('Process symbol'), ['All'] + sorted({r['symbol'] for r in runs}), format_func=symbol_option)
     runs = [r for r in runs if symbol == 'All' or r['symbol'] == symbol]
     runs.sort(key=lambda r: (r['as_of'], r['started_at']), reverse=True)
     pending = tr('not persisted yet')
@@ -112,11 +132,16 @@ def render(st, db):
         card(st, tr('Gaps'), summary=', '.join(LABELS[step] for step in STEPS))
         return
     ids = [r['run_id'] for r in runs]
+    labels = {r['run_id']: cycle_label(r.get('as_of'), r.get('symbol')) for r in runs}
     requested = st.session_state.get('process_run_id')
-    selected = st.selectbox(tr('Cycle · newest first'), ids,
+    selected = st.selectbox(tr('Cycle · newest first'), ids, format_func=lambda run: labels.get(run, run),
                             index=ids.index(requested) if requested in ids else 0)
     st.session_state['process_run_id'] = selected
+    with st.expander('ID técnico'):
+        st.code(selected or MISSING, language=None)
     evidence, gaps = cycle_evidence(db, runs[ids.index(selected)])
+    if since is not None:
+        evidence = {step: scrub_paper_sizing(rows) for step, rows in evidence.items()}
     st.caption(tr('Timestamps below are persisted record timestamps; absent step timestamps are not inferred.'))
     for index, (step, rows) in enumerate(evidence.items(), 1):
         timestamps = []

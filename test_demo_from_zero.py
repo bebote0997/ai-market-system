@@ -415,7 +415,7 @@ class DashboardTests(unittest.TestCase):
         os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
         with patch("execution.demo_dashboard.demo_snapshot", side_effect=AssertionError("demo read")):
             _app, content = self.page("Overview")
-        self.assertIn("Equity · PAPER", content)
+        self.assertIn("Equity · práctica interna", content)
         self.assertIn("+$3.00", content)  # the PAPER fixture trade
         self.assertNotIn("Demo OANDA", content)
 
@@ -424,12 +424,17 @@ class DashboardTests(unittest.TestCase):
         with self.env():
             _app, content = self.page("Overview")
         self.assertIn("Demo OANDA (práctica) · desde 18 oct 2026 18:25 ET", content)
-        self.assertIn("Equity (NAV) · OANDA demo", content)
+        self.assertIn("NAV (equity) · OANDA demo", content)
         self.assertIn("$100,012.25", content)
-        self.assertIn("Start equity $100,000.00", content)
+        self.assertIn("Balance · OANDA demo", content)
+        self.assertIn("$100,009.50", content)
+        for label in ("P&amp;L no realizado", "P&amp;L de hoy (ET)", "Posiciones abiertas", "Operaciones cerradas",
+                      "Acierto", "R medio (expectativa)", "Caída máxima (P&amp;L realizado)"):
+            self.assertIn(label, content)
+        self.assertIn("Capital inicial $100,000.00", content)
         self.assertIn("+$9.50", content)
         self.assertIn("archivados y no cuentan", content)
-        self.assertNotIn("Equity · PAPER", content)
+        self.assertNotIn("Equity · práctica interna", content)
         self.assertNotIn("+$3.00", content)
         self.assertEqual(self.case.digest(), before)
         self.assertFalse(self.state.exists())  # read-only: the broker state DB is never created
@@ -440,7 +445,7 @@ class DashboardTests(unittest.TestCase):
             _app, content = self.page("Overview")
         self.assertIn("sin datos", content)
         self.assertNotIn("+$3.00", content)
-        self.assertNotIn("Equity · PAPER", content)
+        self.assertNotIn("Equity · práctica interna", content)
 
     def test_routing_on_incomplete_or_slow_read_shows_sin_datos_for_totals(self):
         for code, reason in (("incomplete", "totales incompletos"), ("deadline", "OANDA tardó demasiado")):
@@ -448,16 +453,15 @@ class DashboardTests(unittest.TestCase):
             with self.subTest(code=code), self.env():
                 _app, content = self.page("Overview")
                 self.assertIn(f"sin datos ({reason}", content)
-                self.assertIn("Realized PnL: sin datos", content)
+                self.assertIn("P&amp;L realizado: sin datos", content)
                 self.assertNotIn("+$3.00", content)
                 _app, content = self.page("Trades")
                 self.assertIn(f"sin datos ({reason}", content)
-                self.assertNotIn("Closed trades · OANDA demo", content)
+                self.assertNotIn("Operaciones cerradas · OANDA demo", content)
 
     def test_routing_on_demo_module_unavailable_never_shows_paper(self):
         import sys
         from ui.views import luxury
-        self.assertEqual(luxury.DEMO_DEFAULT_EPOCH, EPOCH)
         with self.env(), patch.dict(sys.modules, {"execution.demo_dashboard": None}):
             api = luxury.demo_api()
             self.assertIsNotNone(api)
@@ -467,13 +471,13 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("sin datos", content)
             self.assertIn("Demo OANDA (práctica)", content)
             self.assertNotIn("+$3.00", content)
-            self.assertNotIn("Equity · PAPER", content)
+            self.assertNotIn("Equity · práctica interna", content)
             _app, content = self.page("Trades")
             self.assertIn("sin datos (la vista del demo no está disponible)", content)
             self.assertNotIn("+$3.00", content)
             self.page("Decisions")
-            from ui.views.experiment import demo_progress_text
-            self.assertEqual(demo_progress_text(NOW), "Demo OANDA: sin datos")
+            from ui.views.experiment import demo_progress_text  # the epoch does not need the demo module
+            self.assertEqual(demo_progress_text(NOW), "Cuenta de práctica OANDA Demo desde 18 oct 2026 18:25 ET; Día 3 de 30")
         with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "0"}), \
                 patch.dict(sys.modules, {"execution.demo_dashboard": None}):
             self.assertIsNone(luxury.demo_api())
@@ -482,15 +486,18 @@ class DashboardTests(unittest.TestCase):
         self.trades = {"closed": [], "open": []}
         with self.env():
             _app, content = self.page("Overview")
-        self.assertIn("Realized PnL · desde el inicio del demo", content)
-        self.assertIn("Aún no hay closed trades en el demo.", content)
+        self.assertIn("P&amp;L realizado · desde el inicio del demo", content)
+        self.assertIn("Aún no hay operaciones cerradas en el demo.", content)
+        self.assertIn("Sin posiciones abiertas.", content)
+        self.assertEqual(content.count("sin operaciones aún"), 3)  # win rate, avg R, max drawdown: never blank
+        self.assertIn("$0.00", content)  # unrealized P&L with no open position
         self.assertNotIn("+$3.00", content)
 
     def test_routing_on_trades_lists_oanda_demo(self):
         self.trades = {"closed": SCENARIO, "open": safe(*SCENARIO_RAW)}
         with self.env():
             _app, content = self.page("Trades")
-        self.assertIn("Closed trades · OANDA demo", content)
+        self.assertIn("Operaciones cerradas · OANDA demo", content)
         self.assertIn("−$40.00", content)
         self.assertIn("−$3.25", content)
         self.assertNotIn("+$3.00", content)
@@ -513,8 +520,9 @@ class DashboardTests(unittest.TestCase):
         from ui.views.experiment import demo_progress_text
         os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
         self.assertIsNone(demo_progress_text(NOW))
+        expected = "Cuenta de práctica OANDA Demo desde 18 oct 2026 18:25 ET; Día 3 de 30"  # day 1 = epoch's NY date
         with self.env():
-            self.assertEqual(demo_progress_text(NOW), "Demo OANDA: aún sin operaciones del demo")
+            self.assertEqual(demo_progress_text(NOW), expected)
             with closing(sqlite3.connect(self.state)) as con:
                 con.executescript(SCHEMA)
                 for client_id, opened in (("aif-test-20261018T150000Z", "2026-10-18T23:00:00+00:00"),
@@ -524,7 +532,7 @@ class DashboardTests(unittest.TestCase):
                                 (client_id, "r", "EURUSD", "LONG", 1000, "1.1", "1.09", "1.13", "CLOSED", "t", "t",
                                  opened))
                 con.commit()
-            self.assertEqual(demo_progress_text(NOW), "Demo OANDA: Día 2 de 30")
+            self.assertEqual(demo_progress_text(NOW), expected)  # routed trades never move day 1
             app = self.case.app()
             app.radio[0].set_value("EXPERIMENT").run()
             self.assertFalse(app.exception, str(app.exception))

@@ -1,8 +1,13 @@
-from ui.i18n_es import column, tr
+from ui.i18n_es import column, status_text, tr
 from ui.tables import dataframe
+
+
 def render(st, vm, durable_rows=()):
+    """``durable_rows``: persisted journal rows (demo mode: already filtered to the epoch by the caller)."""
+    from ui.views.luxury import display
     st.header(tr("JOURNAL"))
-    st.caption(tr("In-memory snapshot only · durable persistence deferred"))
+    st.caption(tr("In-memory snapshot only · durable persistence deferred") if vm.sample else
+               "Eventos guardados del sistema · horas de Nueva York (ET)")
     c = st.columns(5)
     symbol = c[0].selectbox("Símbolo", ["ALL", "XAUUSD", "NAS100", "EURUSD"], format_func=lambda v: "Todos" if v == "ALL" else v)
     run_id = c[1].text_input(tr("Run ID"))
@@ -26,4 +31,5 @@ def render(st, vm, durable_rows=()):
         if date and str(date) not in row["timestamp"]:
             continue
         rows.append(row)
-    dataframe(st, [{column(k): v for k, v in row.items()} for row in rows], width="stretch", hide_index=True) if rows else st.info(tr("NO_DATA — no journal events in this snapshot."))
+    shown = [{**row, "timestamp": display(row["timestamp"]), "event": status_text(row["event"])} for row in rows]
+    dataframe(st, [{column(k): v for k, v in row.items()} for row in shown], width="stretch", hide_index=True) if rows else st.info(tr("NO_DATA — no journal events in this snapshot."))

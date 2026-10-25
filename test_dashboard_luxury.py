@@ -51,6 +51,9 @@ class LuxuryDashboardTests(unittest.TestCase):
                 'setup_id': 'setup-1', 'entry': 100, 'stop': 99, 'target': 103, 'risk_reward': 3}), 'slot-1'))
 
     def test_new_screens_escape_data_and_do_not_write(self):
+        unpaused = patch('runtime.symbol_pause.PAUSED_SYMBOLS', frozenset())  # the fixture desk is XAUUSD
+        unpaused.start()
+        self.addCleanup(unpaused.stop)
         before = self.digest()
         health_before = hashlib.sha256(self.health_path.read_bytes()).hexdigest()
         app = self.app()
@@ -68,8 +71,8 @@ class LuxuryDashboardTests(unittest.TestCase):
         app.radio[0].set_value('Trades').run()
         content = '\n'.join(m.value for m in app.markdown)
         self.assertIn('+$3.00', content)
-        self.assertIn('Net PnL', content)
-        self.assertIn('Take profit hit (TP)', content)
+        self.assertIn('P&amp;L neto', content)
+        self.assertIn('Take profit alcanzado (TP)', content)
         self.assertIn('sin datos de la posición original', content)
         self.assertTrue(app.selectbox)
 
@@ -81,7 +84,10 @@ class LuxuryDashboardTests(unittest.TestCase):
                 app.radio[0].set_value(page).run()
                 self.assert_rendered(app)
                 content = '\n'.join(m.value for m in app.markdown)
-                if page not in ('Analysts · soon', 'Control'):
+                if page == 'Trades':  # explicit empty states instead of the generic text
+                    self.assertIn('Aún no hay operaciones cerradas.', content)
+                    self.assertIn('Sin posiciones abiertas.', content)
+                elif page not in ('Analysts · soon', 'Control'):
                     self.assertIn('no disponible aún', content)
             self.assertFalse((Path(self.tmp.name)/'missing.db').exists())
 
@@ -102,7 +108,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             app = self.app()
             app.radio[0].set_value('SYSTEM').run()
             self.assert_rendered(app)
-            self.assertEqual(app.dataframe[0].value.iloc[0]['Estado'], '["A", "B"]')
+            self.assertEqual(app.dataframe[0].value.iloc[0]['Estado'], 'A, B')
 
     def test_auth_gate_is_first_and_unchanged(self):
         with patch('ui.state.sqlite3.connect', side_effect=AssertionError('unauthenticated read')):
@@ -121,8 +127,8 @@ class LuxuryDashboardTests(unittest.TestCase):
         self.assertEqual(stats['max_drawdown'], 4)
         self.assertIsNone(stats['avg_r'])
         from ui import i18n_es as es
-        self.assertEqual(es.wins_phrase(stats['wins'], stats['trades']), 'Win rate · 1/2 closed trades')
-        self.assertEqual(es.drawdown_phrase(stats['max_drawdown']), 'Max drawdown (realized PnL): $4.00')
+        self.assertEqual(es.wins_phrase(stats['wins'], stats['trades']), 'Acierto · 1/2 operaciones cerradas')
+        self.assertEqual(es.drawdown_phrase(stats['max_drawdown']), 'Caída máxima (P&L realizado): $4.00')
         self.assertEqual(curve[-1]['Cumulative realized PnL'], 6)
         self.assertEqual(luxury.trade_statistics([], datetime.now(timezone.utc))[1], [])
 
@@ -137,7 +143,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             self.assertEqual(luxury.policy_value({'V2_PLANNER_POLICY': 'V1'}, 'V2_PLANNER_POLICY'),
                              ('V1', 'system_state'))
 
-    def test_styles_scoped_light_and_injected_once(self):
+    def test_styles_scoped_dark_gold_and_injected_once(self):
         app = self.app()
         styles = [m.value for m in app.markdown if '<style>' in m.value and '.tf table' in m.value]
         self.assertEqual(len(styles), 1)
@@ -147,7 +153,11 @@ class LuxuryDashboardTests(unittest.TestCase):
         for dark in ('#0b0b0c', '#c8a96a', 'Cormorant'):
             self.assertNotIn(dark, styles[0])
         config = Path('.streamlit/config.toml').read_text()
-        self.assertIn('base = "light"', config)
+        self.assertIn('base = "dark"', config)
+        self.assertIn('backgroundColor = "#0a0a0b"', config)
+        self.assertIn('showSidebarNavigation = false', config)
+        self.assertIn('#d9b45a', styles[0])  # brand gold
+        self.assertIn('Didot', styles[0])  # serif brand headings (system fonts, no download)
 
     def test_empty_database_screens_are_read_only(self):
         path = Path(self.tmp.name)/'empty.db'
@@ -449,10 +459,10 @@ class StoredDashboardEvidenceTests(unittest.TestCase):
         app.radio[0].set_value('Trades').run()
         self.assert_rendered(app)
         content = '\n'.join(m.value for m in app.markdown)
-        self.assertIn('Exit reason</th>', content)
-        self.assertIn('Take profit hit (TP)', content)
+        self.assertIn('Motivo de salida</th>', content)
+        self.assertIn('Take profit alcanzado (TP)', content)
         self.assertIn('title="TARGET"', content)
-        self.assertIn('R realized</th>', content)
+        self.assertIn('R realizado</th>', content)
         self.assertIn('+3.00R', content)
         app.radio[0].set_value('Overview').run()
         self.assert_rendered(app)

@@ -41,8 +41,10 @@ class FlagTests(unittest.TestCase):
             self.assertIsNotNone(luxury.demo_api())  # Overview / Trades / Decisions / Floor use the demo view
             self.assertTrue(luxury.paper_hidden())
             self.assertTrue(dashboard.paper_hidden())
-            with patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 3)):
-                self.assertIn("Demo OANDA", experiment.demo_progress_text())
+            with patch("execution.demo_dashboard.demo_progress", side_effect=AssertionError("first-trade rule")):
+                text = experiment.demo_progress_text()
+            self.assertIn("Cuenta de práctica OANDA Demo desde ", text)
+            self.assertRegex(text, r"Día \d+ de 30|Esperando el primer ciclo")
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("AI_FLOOR_RESULTS_SOURCE", None)
             os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
@@ -81,15 +83,16 @@ class DashboardOnlyTests(unittest.TestCase):
     def test_overview_routing_off_shows_only_oanda(self):
         with self.only():
             _app, content = self.page("Overview")
-        self.assertIn("Equity (NAV) · OANDA demo", content)
-        self.assertNotIn("Equity · PAPER", content)
+        self.assertIn("NAV (equity) · OANDA demo", content)
+        self.assertNotIn("Equity · práctica interna", content)
         self.assertNotIn("+$3.00", content)  # the PAPER fixture trade
 
     def test_command_center_hides_paper_ledger(self):
         with self.only():
             app, content = self.page("OVERVIEW")
             infos = "\n".join(i.value for i in app.info)
-            self.assertIn("ledger PAPER es interno", infos)
+            self.assertIn("Los datos de la práctica anterior están archivados y no cuentan aquí", infos)
+            self.assertNotIn("PAPER", infos)
             self.assertFalse([m for m in app.metric if m.label in ("Equity", "Realized PnL", "Unrealized PnL")])
             app, _ = self.page("POSITIONS")
             self.assertFalse(app.dataframe)
@@ -105,7 +108,7 @@ class DashboardOnlyTests(unittest.TestCase):
         os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
         with nullcontext():
             _app, content = self.page("Overview")
-        self.assertIn("Equity · PAPER", content)
+        self.assertIn("Equity · práctica interna", content)
 
 
 class ProcessHistoryOnlyTests(unittest.TestCase):

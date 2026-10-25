@@ -1,6 +1,7 @@
 """Demo dashboard additions (feat/ops-diag-fixes): daily-loss status vs the 2 % limit (from the router's persisted
 flags + OANDA NAV), R per routed trade ("—" without an initial stop) and the "Día N de 30" counter (day 1 = NY date
-of the first routed trade; capped "30 de 30 – completo"). Synthetic data only; no network."""
+of the first routed trade for the Slack summary; the screens count from the demo EPOCH, ``ui.demo_clock``; capped
+"30 de 30 – completo"). Synthetic data only; no network."""
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
@@ -48,15 +49,19 @@ class DayCounterTests(unittest.TestCase):
         for missing in (None, 0, True, "3"):
             self.assertEqual(es.demo_day_text(missing), es.DEMO_NO_TRADES)
 
-    def test_experiment_and_slack_use_the_capped_text(self):
+    def test_experiment_counts_from_the_epoch_in_et(self):
         from ui.views.experiment import demo_progress_text
-        epoch = datetime(2026, 10, 18, 22, 25, tzinfo=UTC)
-        with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), \
-                patch("execution.demo_dashboard.demo_progress", return_value=(epoch, self.FIRST, 31)):
-            self.assertEqual(demo_progress_text(NOW), "Demo OANDA: Día 30 de 30 – completo")
-        with patch.dict(os.environ, {"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), \
-                patch("execution.demo_dashboard.demo_progress", return_value=(epoch, None, None)):
-            self.assertEqual(demo_progress_text(NOW), es.DEMO_NO_TRADES)
+        env = {"AI_FLOOR_BROKER_DEMO_ROUTING": "1", "AI_FLOOR_DEMO_EPOCH": "2026-10-25T15:30:20Z"}
+        prefix = "Cuenta de práctica OANDA Demo desde 25 oct 2026 11:30 ET; "
+        with patch.dict(os.environ, env), \
+                patch("execution.demo_dashboard.demo_progress", side_effect=AssertionError("first-trade rule")):
+            self.assertEqual(demo_progress_text(datetime(2026, 10, 25, 16, tzinfo=UTC)), prefix + "Día 1 de 30")
+            self.assertEqual(demo_progress_text(datetime(2026, 10, 26, 7, tzinfo=UTC)), prefix + "Día 2 de 30")
+            self.assertEqual(demo_progress_text(datetime(2026, 11, 23, 17, tzinfo=UTC)), prefix + "Día 30 de 30")
+            self.assertEqual(demo_progress_text(datetime(2026, 11, 24, 17, tzinfo=UTC)),
+                             prefix + "Día 30 de 30 – completo")
+            self.assertEqual(demo_progress_text(datetime(2026, 10, 25, 15, tzinfo=UTC)),
+                             prefix + "Esperando el primer ciclo")  # before the epoch: no day yet
 
     def test_slack_summary_day_line(self):
         from runtime.notifications import oanda_demo_summary_text
@@ -98,18 +103,18 @@ class DailyLossViewTests(unittest.TestCase):
     def test_off_unless_enabled(self):
         view = daily_loss_view(self.flags(), 99000, NOW, {})
         self.assertEqual((view["status"], view["used_pct"]), ("OFF", None))
-        self.assertEqual(es.daily_loss_rows(view), [("Estado", "OFF")])
+        self.assertEqual(es.daily_loss_rows(view), [("Estado", "Apagado")])
 
     def test_ok_with_percent_used(self):
         view = daily_loss_view(self.flags(), 99500.0, NOW, ON)  # -500 of a 2 000 limit
         self.assertEqual((view["status"], view["loss"], view["day_start_nav"]), ("OK", 500.0, 100000.0))
         self.assertAlmostEqual(view["used_pct"], 25.0)
         rows = dict(es.daily_loss_rows(view))
-        self.assertEqual(rows["Estado"], "OK")
-        self.assertEqual(rows["Limit used (2 %)"], "25 %")
-        self.assertEqual(rows["Daily loss (realized + unrealized)"], "$500.00")
-        self.assertEqual(rows["Start-of-day NAV (17:00 ET)"], "$100,000.00")
-        self.assertEqual(rows["Max drawdown halt (5 %)"], "OK")
+        self.assertEqual(rows["Estado"], "Bien")
+        self.assertEqual(rows["Límite usado (2 %)"], "25 %")
+        self.assertEqual(rows["Pérdida del día (realizada + no realizada)"], "$500.00")
+        self.assertEqual(rows["NAV al inicio del día (17:00 ET)"], "$100,000.00")
+        self.assertEqual(rows["Freno por caída máxima (5 %)"], "Bien")
 
     def test_gain_is_zero_used_and_transfers_excluded(self):
         view = daily_loss_view(self.flags(**{dl.TRANSFERS_FLAG: "1000"}), 100500, NOW, ON)  # +1000 deposit, -500
@@ -120,7 +125,7 @@ class DailyLossViewTests(unittest.TestCase):
     def test_triggered_is_latched_even_after_recovery(self):
         view = daily_loss_view(self.flags(**{dl.HALT_FLAG: KEY}), 100100, NOW, ON)
         self.assertEqual(view["status"], "TRIGGERED")
-        self.assertIn("TRIGGERED", dict(es.daily_loss_rows(view))["Estado"])
+        self.assertIn("Límite alcanzado", dict(es.daily_loss_rows(view))["Estado"])
 
     def test_previous_day_halt_is_not_today(self):
         old = dl.day_key(NOW - timedelta(days=1))
@@ -151,8 +156,8 @@ class DailyLossViewTests(unittest.TestCase):
         self.assertTrue(view["drawdown_halted"])
         self.assertAlmostEqual(view["used_pct"], 50.0)
         rows = dict(es.daily_loss_rows(view))
-        self.assertEqual(rows["Limit used (1 %)"], "50 %")
-        self.assertEqual(rows["Max drawdown halt (5 %)"], "TRIGGERED")
+        self.assertEqual(rows["Límite usado (1 %)"], "50 %")
+        self.assertEqual(rows["Freno por caída máxima (5 %)"], "Límite alcanzado")
 
 
 class LoadLossFlagsTests(unittest.TestCase):
@@ -215,9 +220,9 @@ class OverviewCardTests(unittest.TestCase):
             con.commit()
         with case.env(**ON):
             _app, content = case.page("Overview")
-        self.assertIn("Daily loss limit", content)
-        self.assertIn("TRIGGERED", content)
-        self.assertIn("Start-of-day NAV", content)
+        self.assertIn("Límite de pérdida diaria", content)
+        self.assertIn("Límite alcanzado", content)
+        self.assertIn("NAV al inicio del día", content)
         self.assertRegex(content, r"Día \d+ de 30")
 
 

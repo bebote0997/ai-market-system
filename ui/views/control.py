@@ -22,14 +22,19 @@ BALANCE_REFRESH = "10s"  # the read-only summary itself is cached >= 5 s (execut
 VIEW_LABELS = {"practice": "Demo · cuenta practice OANDA", "live": "Real · solo lectura (operar bloqueado)"}
 MISSING_ENV_NAMES = {"practice": ("OANDA_PRACTICE_TOKEN", "OANDA_ACCOUNT_ID"),  # variable NAMES only
                      "live": ("OANDA_LIVE_TOKEN", "OANDA_LIVE_ACCOUNT_ID")}
+# What the owner reads instead of the variable name (presentation only; the names stay in MISSING_ENV_NAMES).
+MISSING_TEXT = {"OANDA_PRACTICE_TOKEN": "falta configurar el acceso a OANDA (token de la cuenta demo)",
+                "OANDA_ACCOUNT_ID": "falta configurar el número de la cuenta demo de OANDA",
+                "OANDA_LIVE_TOKEN": "falta configurar el acceso a OANDA (token de la cuenta real)",
+                "OANDA_LIVE_ACCOUNT_ID": "falta configurar el número de la cuenta real de OANDA"}
 VIEW_STATUS = {"SIN_TOKEN": "sin token", "SIN_CUENTA": "sin cuenta", "ERROR": "error de lectura"}
 ROUTING_CHIPS = {"off": ("Enrutado a broker demo: apagado", ""), "dry_run": ("Enrutado a broker demo: dry-run", "warn"),
                  "on": ("Enrutado a broker demo: activo (cuenta practice)", "pos")}
 DASH = "—"
-LABELS = {"paper": "Cuenta de práctica interna (PAPER)", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
+LABELS = {"paper": "Cuenta de práctica interna", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
 # Mirrors execution.historial.SOURCES (kept here so a failed lazy import still names the expected files).
 HISTORY_SOURCES = (("v1_replay", "v1_replay_eurusd.json", "Replay estrategia V1 (velas Twelve Data)"),
-                   ("paper", "paper_closed_trades_eurusd.json", "Trades cerrados PAPER (agregado)"))
+                   ("paper", "paper_closed_trades_eurusd.json", "Operaciones cerradas de práctica interna (agregado)"))
 HISTORY_TITLE = "📚 Historial (referencia) · no son trades de OANDA"
 HISTORY_CHIP = "Referencia · no son trades de OANDA"
 HISTORY_EMPTY = "sin datos todavía (se cargará con la exportación)"
@@ -74,9 +79,28 @@ def checked_account(base, account):
             "locked": True if real else account.get("locked") is True}
 
 
-def account_status(account, snapshot):
+def account_status(account, snapshot, routing=None, read_ok=False, stale=False):
+    """Chip text of one account row. For the OANDA demo row the same facts as the routing chip and the balance panel:
+    Emergency stop and account OFF take priority. Routing and the read-only balance determine the remaining
+    connectivity text; the registry's ``connected`` flag may lag behind (presentation only)."""
     if account["key"] == "real" and (account.get("locked") or not account.get("enabled")):
         return "Real: bloqueado por seguridad", "neg"
+    if account["key"] == "broker_demo":
+        connection = ("Conectado · datos de saldo desactualizados" if stale else
+                      "Conectado (saldo leído)" if read_ok else "Saldo no disponible")
+        if snapshot.get("emergency_stop") is True:
+            return f"Parada de emergencia activada · {connection}", "neg"
+        if account.get("enabled") is not True or account.get("mode") == "OFF":
+            return f"Cuenta apagada · {connection}", "warn"
+        if routing == "dry_run":
+            return f"{connection} · enrutado en prueba (dry-run)", "warn"
+        if routing != "on":
+            return f"{connection} · enrutado apagado", "warn" if stale else ""
+        if stale:
+            return connection, "warn"
+        if read_ok:
+            return "Conectado · activo (enrutado encendido, saldo leído)", "pos"
+        return "Enrutado encendido · no se pudo leer el saldo de OANDA", "warn"
     if not snapshot["connected"]:
         return "Aún no conectado", "warn"
     return ("Encendido" if account.get("enabled") else "Apagado"), ("pos" if account.get("enabled") else "")
@@ -139,14 +163,14 @@ def balance_lines(view, now=None):
     lines = [("Estado", ("conectado" if status == "OK" else VIEW_STATUS[status]) + stale)]
     missing = _missing_env_name(view, status)
     if missing:
-        lines.append(("Falta en el entorno", missing))  # variable NAME only, never a value
+        lines.append(("Falta", MISSING_TEXT.get(missing, "falta configurar el acceso a OANDA")))  # never a value
     account = getattr(view, "account_masked", None)
     lines.append(("Cuenta", account if isinstance(account, str) and account else DASH))
-    for label, name in (("Balance", "balance"), ("NAV", "nav"), ("Margin used", "margin_used"),
-                        ("Unrealized PnL", "unrealized_pl")):
+    for label, name in (("Balance", "balance"), ("NAV (equity)", "nav"), ("Margen usado", "margin_used"),
+                        ("P&L no realizado", "unrealized_pl")):
         lines.append((label, money(getattr(view, name, None), currency)))
     trades = getattr(view, "open_trades", None)
-    lines.append(("Open positions", str(trades) if type(trades) is int else DASH))
+    lines.append(("Posiciones abiertas", str(trades) if type(trades) is int else DASH))
     as_of = getattr(view, "as_of", None)
     now = now or datetime.now(timezone.utc)
     if isinstance(as_of, datetime) and as_of.tzinfo is not None:
@@ -183,18 +207,39 @@ def render_accounts_view(st):
         balances()
 
 
-def render_router(st, status):
+BLOCKED_TEXT = {"drift": "las posiciones del broker no coinciden con el estado local (drift)",
+                "emergency": "parada de emergencia activada", "daily_loss": "límite de pérdida diaria alcanzado"}
+
+
+def current_events(events, since=None):
+    """Router events for display: ET time + readable kind; in demo mode only those at/after the epoch."""
+    from ui.i18n_es import datetime_et
+    from ui.views.dashboard import is_current, parse_time
+    rows = []
+    for event in events or ():
+        if since is not None and not is_current(event.get("ts"), since):
+            continue
+        at = parse_time(event.get("ts"))
+        rows.append((datetime_et(at) if at else str(event.get("ts") or DASH),
+                     status_text(event.get("kind")) if event.get("kind") else DASH))
+    return rows
+
+
+def render_router(st, status, since=None):
     from ui.views.luxury import html
     text, kind = routing_chip(status)
     trade = status.get("open_trade")
-    parts = (("trade", "trade_id"), ("lado", "side"), ("unidades", "units"), ("estado", "status"))
+    parts = (("lado", "side"), ("unidades", "units"), ("estado", "status"))
     trade_text = DASH if not trade else " · ".join(
-        f"{label} {escape(str(trade.get(key)))}" for label, key in parts if trade.get(key) is not None)
-    events = "".join(f'<div class="small">{escape(str(e.get("ts") or DASH))} · {escape(str(e.get("kind") or DASH))}'
-                     '</div>' for e in status.get("last_events") or ()) or f'<div class="small">{DASH}</div>'
+        [f"operación …{escape(str(trade['trade_id'])[-4:])}"] * bool(trade.get("trade_id"))
+        + [f"{label} {escape(status_text(trade.get(key)))}" for label, key in parts if trade.get(key) is not None])
+    events = "".join(f'<div class="small">{escape(at)} · {escape(what)}</div>'
+                     for at, what in current_events(status.get("last_events"), since))
+    events = events or f'<div class="small">{"Esperando el primer ciclo" if since is not None else DASH}</div>'
     blocked = status.get("blocked_reason")
+    blocked = BLOCKED_TEXT.get(blocked, status_text(blocked)) if blocked else "ninguno"
     html(st, f'<div class="card"><span class="chip {kind}">{escape(text)}</span>'
-             f'<div class="small">Bloqueo: {escape(blocked) if blocked else "ninguno"}</div>'
+             f'<div class="small">Bloqueo: {escape(blocked)}</div>'
              f'<div class="small">Operación abierta en el broker demo: {trade_text}</div>'
              f'<div class="small">Últimos eventos:</div>{events}</div>')
 
@@ -204,8 +249,10 @@ def history_baselines():
     try:
         from execution.historial import load_baselines
         records = load_baselines()
-        rows = [(r.source, r.filename, r.label, r.stats if r.status == "OK" and isinstance(r.stats, dict) else None)
-                for r in records]
+        rows = [(r.source, r.filename,
+                 r.label.replace("Trades cerrados PAPER (agregado)", HISTORY_SOURCES[1][2])
+                        .replace("PAPER", "práctica interna"),
+                 r.stats if r.status == "OK" and isinstance(r.stats, dict) else None) for r in records]
     except Exception:  # The baseline is optional: unreadable => "sin datos".
         rows = []
     known = {row[0]: row for row in rows}
@@ -224,12 +271,12 @@ def history_lines(stats):
     pf = stats.get("profit_factor")
     rate = stats.get("win_rate")
     return [("Periodo", f"{period.get('from') or DASH} → {period.get('to') or DASH}"),
-            ("Closed trades", str(stats.get("trades", DASH))),
-            ("Wins / losses", f"{stats.get('wins', DASH)} / {stats.get('losses', DASH)}"),
-            ("Win rate", f"{rate * 100:.1f} %" if type(rate) in (int, float) else DASH),
-            ("Expectancy", r_text(stats.get("expectancy_r"))),
-            ("Profit factor", f"{pf:.2f}" if type(pf) in (int, float) else DASH),
-            ("Max drawdown", r_text(stats.get("max_drawdown_r"), signed=False)),
+            ("Operaciones cerradas", str(stats.get("trades", DASH))),
+            ("Ganadoras / perdedoras", f"{stats.get('wins', DASH)} / {stats.get('losses', DASH)}"),
+            ("Acierto", f"{rate * 100:.1f} %" if type(rate) in (int, float) else DASH),
+            ("Expectativa (R medio)", r_text(stats.get("expectancy_r"))),
+            ("Factor de beneficio", f"{pf:.2f}" if type(pf) in (int, float) else DASH),
+            ("Caída máxima", r_text(stats.get("max_drawdown_r"), signed=False)),
             ("Media ganadora / perdedora",
              f"{r_text(stats.get('avg_r_win'))} / {r_text(stats.get('avg_r_loss'))}"),
             ("Generado", str(stats.get("generated_at") or DASH))]
@@ -277,7 +324,7 @@ def render_emergency(st, snapshot, api):
                  '(se ejecuta en el próximo ciclo del sistema).</span>')
     elif result == "error":
         html(st, '<span class="chip neg">Error: la parada no se pudo guardar por completo. Revisa el sistema; como '
-                 'respaldo, el owner puede poner AI_FLOOR_EMERGENCY_STOP=1 en el entorno.</span>')
+                 'respaldo, el owner puede activar la parada de emergencia en la configuración del servidor.</span>')
     if api is None:
         note = "el botón no está disponible (no se pudo cargar el módulo de acciones)"
     elif not enabled:
@@ -324,7 +371,8 @@ def render_history(st):
     for _source, filename, label, stats in history_baselines():
         if stats is None:
             body = (f'<div class="small">{escape(HISTORY_EMPTY)}</div>'
-                    f'<div class="small">Archivo esperado: <code>data/historial/{escape(filename)}</code></div>')
+                    f'<div class="small" title="data/historial/{escape(filename)}">Se cargará cuando se exporte el '
+                    'historial de referencia.</div>')
         else:
             body = "".join(f'<div class="small">{escape(k)}: <b>{escape(v)}</b></div>' for k, v in history_lines(stats))
             if stats.get("notes"):
@@ -344,31 +392,37 @@ def render(st, snapshot=None):
     readable = ("Estado leído del registro de cuentas." if snapshot["readable"]
                 else "No se pudo leer el registro de cuentas: se muestra todo apagado por seguridad.")
     api = operator_api()
+    routing = router_status()
+    from ui.views.dashboard import demo_since
+    since = demo_since()  # OANDA demo: router events before the epoch are not shown as current
+    practice_view = account_view("practice")
+    stale = getattr(practice_view, "stale", False) is True
+    read_ok = getattr(practice_view, "status", None) == "OK" and not stale
     html(st, '<div class="card"><h3>🎛️ Panel de control</h3>'
              '<div class="bubble">Los interruptores de las cuentas son solo de lectura: muestran el estado y no se '
              'cambian desde aquí. El botón de parada de emergencia sí funciona: apaga todas las cuentas y pide cerrar '
              'las posiciones del broker demo. Quitar la parada de emergencia no es posible desde el panel. La cuenta '
-             'de práctica (PAPER) sigue funcionando igual.</div>'
+             'de práctica interna sigue funcionando igual.</div>'
              f'<div class="small">{escape(readable)}</div></div>')
     left, right = st.columns([1.3, 1])
     with left:
         html(st, '<h3 style="margin:4px 0">Cuentas</h3>')
         for key, icon in (("broker_demo", "🧪"), ("real", "🔒")):
             account = accounts[key]
-            text, kind = account_status(account, snapshot)
+            text, kind = account_status(account, snapshot, routing["state"], read_ok, stale)
             st.toggle(f"{icon} {account.get('label') or LABELS[key]}", value=bool(account.get("enabled")),
                       disabled=True, key=f"control-{key}")
             html(st, f'<span class="chip {kind}">{escape(text)}</span>'
                      f'<span class="small" style="margin-left:8px" title="{escape(str(account.get("mode") or "OFF"), quote=True)}">'
                      f'modo: {escape(status_text(account.get("mode") or "OFF"))}</span>')
         paper = accounts["paper"]
-        html(st, f'<div class="small" style="margin-top:12px">{escape(paper.get("label") or LABELS["paper"])}: '
+        html(st, f'<div class="small" style="margin-top:12px">{escape(LABELS["paper"])}: '  # registry label "PAPER" is internal
                  f'{"encendida" if paper.get("enabled") else "sin datos en el registro"} · no se controla desde aquí.</div>')
     with right:
         html(st, '<h3 style="margin:4px 0">Parada de emergencia</h3>')
         render_emergency(st, snapshot, api)
     render_drift(st, api)
     html(st, '<h3 style="margin:12px 0 4px">🔀 Enrutado a broker demo</h3>')
-    render_router(st, router_status())
+    render_router(st, routing, since)
     render_accounts_view(st)
     render_history(st)
