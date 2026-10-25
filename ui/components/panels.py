@@ -12,7 +12,7 @@ def show_value(value):
 
 def header(st, vm):
     st.title(tr("AI TRADING FLOOR"))
-    st.markdown('<div class="safety">MODO PRÁCTICA (PAPER) &nbsp; · &nbsp; EJECUCIÓN REAL DESACTIVADA &nbsp; · &nbsp; '
+    st.markdown('<div class="safety">CUENTA DE PRÁCTICA OANDA DEMO &nbsp; · &nbsp; EJECUCIÓN REAL DESACTIVADA &nbsp; · &nbsp; '
                 'SIN DINERO REAL</div>', unsafe_allow_html=True)
     if vm.sample:
         st.warning(tr("SAMPLE / DEMO — NOT CURRENT PRICES"))

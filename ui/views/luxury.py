@@ -1,4 +1,5 @@
-"""Main observation screens over published PAPER evidence only (light theme, plain Spanish)."""
+"""Main observation screens over published PAPER evidence only (dark + gold Floor theme, plain Spanish)."""
+import base64
 from datetime import datetime, timezone
 from html import escape
 import json
@@ -7,6 +8,7 @@ import os
 from pathlib import Path
 import sqlite3
 from collections import deque
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from runtime.scheduler import session_names
@@ -87,6 +89,11 @@ def kpi(icon, phrase, value_html='', *, tone='', technical='', hint=''):
             f'<div class="foot2"><span class="tech">{escape(technical)}</span>{es.tip(hint) if hint else ""}</div></div>')
 
 
+def kpi_grid(st, tiles):
+    """All KPI tiles in one CSS grid: 3 columns on desktop, 2 on tablets, 1 on phones (theme.css ``.kpis``)."""
+    html(st, f'<div class="kpis">{"".join(tiles)}</div>')
+
+
 def table(st, title, rows, columns=None, render=None):
     """Spanish column headers; ``render`` maps a data key to an HTML cell renderer."""
     render = render or {}
@@ -114,7 +121,7 @@ def apply(st):
     child = len(PAGES) + 1
     css += ('\n[data-testid="stSidebar"] [role="radiogroup"] > div:nth-child(%d){margin-top:40px;position:relative;'
             'overflow:visible}\n[data-testid="stSidebar"] [role="radiogroup"] > div:nth-child(%d)::before{content:"%s";'
-            'position:absolute;top:-26px;left:10px;color:#556070;font-size:12px;font-weight:700;white-space:nowrap}'
+            'position:absolute;top:-26px;left:10px;color:#a9b8b6;font-size:12px;font-weight:700;white-space:nowrap}'
             % (child, child, tr('Legacy / Detail')))
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
@@ -323,11 +330,59 @@ def demo_api():
     return {'epoch': demo_epoch, 'snapshot': demo_snapshot, 'progress': demo_progress}
 
 
+BANNER = Path(__file__).resolve().parents[2] / 'runtime' / 'assets' / 'floor_banner.png'
+VERSION = 'V2.1'
+FIRST_CYCLE_WAIT = 'Esperando el primer ciclo'
+FLOOR_BUTTON = 'Abrir La mesa animada (Floor)'
+
+
+@lru_cache(maxsize=1)
+def banner_uri():
+    """The repo's static Floor banner as a data URI (read-only asset; no request); None if it cannot be read."""
+    try:
+        return 'data:image/png;base64,' + base64.b64encode(BANNER.read_bytes()).decode('ascii')
+    except OSError:
+        return None
+
+
+def hero_subline(demo, day):
+    """"V2.1 · OANDA Demo · Día N de 30" (no counted day yet => "Esperando el primer ciclo")."""
+    if not demo:
+        return f'{VERSION} · práctica interna'
+    known = isinstance(day, int) and not isinstance(day, bool) and day >= 1
+    return f'{VERSION} · OANDA Demo · {es.demo_day_text(day) if known else FIRST_CYCLE_WAIT}'
+
+
+def start_hero(st, now, *, demo, day=None):
+    """Start page header with the Floor look: banner (or the serif gold wordmark), sub line, safety line."""
+    uri = banner_uri()
+    art = (f'<img src="{uri}" alt="AI Trading Floor">' if uri
+           else f'<p class="wordmark">{escape(tr("AI TRADING FLOOR"))}</p>')
+    badge = f'<span class="ex">{escape(tr("SAMPLE / DEMO"))}</span>' if st.session_state.get('sample_mode') else ''
+    html(st, f'<div class="hero">{art}<div class="body"><div class="eyebrow">{escape(es.long_date_et(now))}</div>'
+             f'<h1>{escape(es.PAGE_TITLES["Overview"])}</h1><div class="sub">{escape(hero_subline(demo, day))}</div>'
+             f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>'
+             f'{badge}</div></div>')
+    open_floor_button(st)
+
+
+def open_floor_button(st):
+    """Same navigation as the ``?page=floor`` deep link: select the Floor page, then rerun the whole app."""
+    def select():
+        from ui.views.floor_view import PAGE
+        st.session_state['luxury_navigation'] = PAGE
+    if st.button(FLOOR_BUTTON, key='open-floor', type='primary', on_click=select):
+        st.rerun(scope='app')
+
+
 def overview(st, db, now):
     demo = demo_api()
     if demo is not None:
-        demo_overview(st, db, now, demo['snapshot'](now), day=demo_day(demo, now))
+        day = demo_day(demo, now)
+        start_hero(st, now, demo=True, day=day)
+        demo_overview(st, db, now, demo['snapshot'](now), day=day)
         return
+    start_hero(st, now, demo=False)
     states = {r['key']: r['value'] for r in records(db, 'system_state')}
     accounts = payloads(db, 'paper_accounts')
     stats, curve = ledger_statistics(db, now)
@@ -336,25 +391,22 @@ def overview(st, db, now):
     total = stats['total_pnl'] if stats['trades'] else account.get('realized_pnl')
     rate = f"{100*stats['wins']/stats['trades']:.0f}%" if stats['trades'] else ''
     tiles = [
-        kpi('💰', 'Equity · PAPER', escape(es.money(equity)), technical='Balance + unrealized PnL',
+        kpi('💰', 'Equity · práctica interna', escape(es.money(equity)), technical='Balance + P&L de posiciones abiertas',
             hint=es.TOOLTIPS['equity']),
         kpi('📈' if not number(total) or total >= 0 else '📉', es.pnl_since_start(total),
-            escape(es.money(total, signed=True)), tone=es.tone(total), technical='Net PnL · closed trades',
+            escape(es.money(total, signed=True)), tone=es.tone(total), technical='P&L neto · operaciones cerradas',
             hint=es.TOOLTIPS['pnl']),
         kpi('🎯', es.wins_phrase(stats['wins'], stats['trades']), escape(rate), tone='teal',
-            technical='Wins / closed trades', hint=es.TOOLTIPS['win_rate']),
-        kpi('🛡️', es.drawdown_phrase(stats['max_drawdown']), tone='orange', technical='Max drawdown · peak-to-trough',
+            technical='Ganadoras / operaciones cerradas', hint=es.TOOLTIPS['win_rate']),
+        kpi('🛡️', es.drawdown_phrase(stats['max_drawdown']), tone='orange', technical='Mayor caída desde un máximo',
             hint=es.TOOLTIPS['drawdown']),
         kpi('📅', es.today_phrase(stats['today_pnl']), escape(es.money(stats['today_pnl'], signed=True)),
-            tone=es.tone(stats['today_pnl']), technical='Realized PnL · fecha NY', hint=es.TOOLTIPS['today']),
+            tone=es.tone(stats['today_pnl']), technical='P&L realizado · día de Nueva York', hint=es.TOOLTIPS['today']),
         kpi('⚖️', es.avg_r_phrase(stats['avg_r'], stats['avg_r_reason']),
             escape(f"{stats['avg_r']:+.2f} R") if number(stats['avg_r']) else '', tone=es.tone(stats['avg_r']),
-            technical='Expectancy por trade (R)', hint=es.TOOLTIPS['avg_r']),
+            technical='Expectativa por operación (R)', hint=es.TOOLTIPS['avg_r']),
     ]
-    for start in (0, 3):
-        for col, tile in zip(st.columns(3), tiles[start:start+3]):
-            with col:
-                html(st, tile)
+    kpi_grid(st, tiles)
     left, right = st.columns([1.7, 1])
     with left:
         if curve:
@@ -373,16 +425,18 @@ def curve_chart(st, curve, title, caption):
     import plotly.graph_objects as go
     fig = go.Figure(go.Scatter(x=[r['Closed at'].astimezone(es.ET) for r in curve],
                                y=[r['Cumulative realized PnL'] for r in curve], mode='lines+markers',
-                               line=dict(color='#2459d6', width=2.5, shape='hv'),
-                               marker=dict(size=7, color='#2459d6'), fill='tozeroy',
-                               fillcolor='rgba(36,89,214,0.08)',
+                               line=dict(color='#d9b45a', width=2.5, shape='hv'),
+                               marker=dict(size=7, color='#19e3d3'), fill='tozeroy',
+                               fillcolor='rgba(217,180,90,0.10)',
                                hovertemplate='%{x|%d %b %H:%M} ET<br>$%{y:,.2f}<extra></extra>'))
-    fig.add_hline(y=0, line_color='#98a2b3', line_width=1)
-    fig.update_layout(height=260, margin=dict(l=65, r=15, t=10, b=40), paper_bgcolor='#ffffff',
-                      plot_bgcolor='#ffffff', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
-                                                        color='#556070', size=12),
-                      xaxis=dict(gridcolor='#eef2f6', tickformat='%d/%m %H:%M'),
-                      yaxis=dict(gridcolor='#eef2f6', automargin=True, tickprefix='$', title='Cumulative realized PnL'))
+    fig.add_hline(y=0, line_color='#7f9593', line_width=1)
+    fig.update_layout(height=260, margin=dict(l=65, r=15, t=10, b=40), paper_bgcolor='#0d1416',
+                      plot_bgcolor='#0d1416', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
+                                                        color='#c9d4d2', size=13),
+                      hoverlabel=dict(bgcolor='#0d0d0e', bordercolor='#d9b45a', font=dict(color='#e8eceb')),
+                      xaxis=dict(gridcolor='#1f2c2e', linecolor='#25322f', tickformat='%d/%m %H:%M'),
+                      yaxis=dict(gridcolor='#1f2c2e', linecolor='#25322f', zerolinecolor='#25322f', automargin=True,
+                                 tickprefix='$', title='Cumulative realized PnL'))
     with st.container(key='curve-card'):
         html(st, f'<h3 style="margin:0">{escape(title)}</h3><div class="small">{escape(caption)} · hora ET'
                  '</div>')
@@ -408,7 +462,7 @@ def side_panel(st, now, states):
 
 
 DEMO_NO_DATA = 'sin datos'
-DEMO_ARCHIVE_NOTE = ('Los datos PAPER anteriores al demo están archivados y no cuentan aquí '
+DEMO_ARCHIVE_NOTE = ('Los datos de la práctica interna anteriores al demo están archivados y no cuentan aquí '
                      '(ver Historial en Control).')
 
 
@@ -459,26 +513,23 @@ def demo_overview(st, db, now, demo, day=None):
              f'<div class="small"><b>{escape(es.demo_day_text(day))}</b> · {escape(DEMO_ARCHIVE_NOTE)}</div></div>')
     tiles = [
         kpi('💰', 'Equity (NAV) · OANDA demo', escape(demo_money(demo['nav'])),
-            technical=f'Start equity {demo_money(start)}{stale}', hint=es.TOOLTIPS['equity']),
+            technical=f'Capital inicial {demo_money(start)}{stale}', hint=es.TOOLTIPS['equity']),
         kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total),
-            escape(demo_money(total, signed=True)), tone=es.tone(total), technical='Net PnL · closed trades',
+            escape(demo_money(total, signed=True)), tone=es.tone(total), technical='P&L neto · operaciones cerradas',
             hint=es.TOOLTIPS['pnl']),
         kpi('🎯', es.wins_phrase(stats['wins'], trades_count) if known else f'Win rate: {DEMO_NO_DATA}',
-            escape(rate), tone='teal', technical='Wins / closed trades', hint=es.TOOLTIPS['win_rate']),
+            escape(rate), tone='teal', technical='Ganadoras / operaciones cerradas', hint=es.TOOLTIPS['win_rate']),
         kpi('🛡️', f'Max drawdown (realized PnL): {demo_money(stats and stats["max_drawdown"])}',
-            tone='orange', technical='Max drawdown · peak-to-trough', hint=es.TOOLTIPS['drawdown']),
+            tone='orange', technical='Mayor caída desde un máximo', hint=es.TOOLTIPS['drawdown']),
         kpi('📅', es.today_phrase(stats['today_pnl']) if known else f'Today PnL (ET): {DEMO_NO_DATA}',
             escape(demo_money(stats and stats['today_pnl'], signed=True)), tone=es.tone(stats and stats['today_pnl']),
-            technical='Realized PnL · fecha NY', hint=es.TOOLTIPS['today']),
+            technical='P&L realizado · día de Nueva York', hint=es.TOOLTIPS['today']),
         kpi('⚖️', es.avg_r_phrase(stats['avg_r'], stats['avg_r_reason']) if known
             else f'Avg R (expectancy): {DEMO_NO_DATA}',
             escape(f"{stats['avg_r']:+.2f} R") if known and number(stats['avg_r']) else '',
-            tone=es.tone(stats and stats['avg_r']), technical='Expectancy por trade (R)', hint=es.TOOLTIPS['avg_r']),
+            tone=es.tone(stats and stats['avg_r']), technical='Expectativa por operación (R)', hint=es.TOOLTIPS['avg_r']),
     ]
-    for begin in (0, 3):
-        for col, tile in zip(st.columns(3), tiles[begin:begin+3]):
-            with col:
-                html(st, tile)
+    kpi_grid(st, tiles)
     left, right = st.columns([1.7, 1])
     with left:
         title = 'Closed-trade curve · OANDA demo'
@@ -753,9 +804,10 @@ def decisions(st, db):
 def render(st, page, symbols):
     now = datetime.now(timezone.utc)
     badge = f'<span class="ex">{escape(tr("SAMPLE / DEMO"))}</span>' if st.session_state.get('sample_mode') else ''
-    html(st, f'<div class="top"><div><div class="eyebrow">{escape(es.long_date_et(now))}</div>'
-             f'<h1>{escape(es.PAGE_TITLES.get(page, page))}</h1></div>{badge}</div>'
-             f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>')
+    if page != 'Overview':  # the start page draws its own Floor-style hero (start_hero)
+        html(st, f'<div class="top"><div><div class="eyebrow">{escape(es.long_date_et(now))}</div>'
+                 f'<h1>{escape(es.PAGE_TITLES.get(page, page))}</h1></div>{badge}</div>'
+                 f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>')
     try:
         if page == 'Analysts · soon':
             card(st, tr('Post-trade analysis department · soon'), summary=tr(

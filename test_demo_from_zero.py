@@ -415,7 +415,7 @@ class DashboardTests(unittest.TestCase):
         os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
         with patch("execution.demo_dashboard.demo_snapshot", side_effect=AssertionError("demo read")):
             _app, content = self.page("Overview")
-        self.assertIn("Equity · PAPER", content)
+        self.assertIn("Equity · práctica interna", content)
         self.assertIn("+$3.00", content)  # the PAPER fixture trade
         self.assertNotIn("Demo OANDA", content)
 
@@ -426,10 +426,10 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Demo OANDA (práctica) · desde 18 oct 2026 18:25 ET", content)
         self.assertIn("Equity (NAV) · OANDA demo", content)
         self.assertIn("$100,012.25", content)
-        self.assertIn("Start equity $100,000.00", content)
+        self.assertIn("Capital inicial $100,000.00", content)
         self.assertIn("+$9.50", content)
         self.assertIn("archivados y no cuentan", content)
-        self.assertNotIn("Equity · PAPER", content)
+        self.assertNotIn("Equity · práctica interna", content)
         self.assertNotIn("+$3.00", content)
         self.assertEqual(self.case.digest(), before)
         self.assertFalse(self.state.exists())  # read-only: the broker state DB is never created
@@ -440,7 +440,7 @@ class DashboardTests(unittest.TestCase):
             _app, content = self.page("Overview")
         self.assertIn("sin datos", content)
         self.assertNotIn("+$3.00", content)
-        self.assertNotIn("Equity · PAPER", content)
+        self.assertNotIn("Equity · práctica interna", content)
 
     def test_routing_on_incomplete_or_slow_read_shows_sin_datos_for_totals(self):
         for code, reason in (("incomplete", "totales incompletos"), ("deadline", "OANDA tardó demasiado")):
@@ -467,7 +467,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("sin datos", content)
             self.assertIn("Demo OANDA (práctica)", content)
             self.assertNotIn("+$3.00", content)
-            self.assertNotIn("Equity · PAPER", content)
+            self.assertNotIn("Equity · práctica interna", content)
             _app, content = self.page("Trades")
             self.assertIn("sin datos (la vista del demo no está disponible)", content)
             self.assertNotIn("+$3.00", content)

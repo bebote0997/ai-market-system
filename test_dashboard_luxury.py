@@ -137,7 +137,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             self.assertEqual(luxury.policy_value({'V2_PLANNER_POLICY': 'V1'}, 'V2_PLANNER_POLICY'),
                              ('V1', 'system_state'))
 
-    def test_styles_scoped_light_and_injected_once(self):
+    def test_styles_scoped_dark_gold_and_injected_once(self):
         app = self.app()
         styles = [m.value for m in app.markdown if '<style>' in m.value and '.tf table' in m.value]
         self.assertEqual(len(styles), 1)
@@ -147,7 +147,11 @@ class LuxuryDashboardTests(unittest.TestCase):
         for dark in ('#0b0b0c', '#c8a96a', 'Cormorant'):
             self.assertNotIn(dark, styles[0])
         config = Path('.streamlit/config.toml').read_text()
-        self.assertIn('base = "light"', config)
+        self.assertIn('base = "dark"', config)
+        self.assertIn('backgroundColor = "#0a0a0b"', config)
+        self.assertIn('showSidebarNavigation = false', config)
+        self.assertIn('#d9b45a', styles[0])  # brand gold
+        self.assertIn('Didot', styles[0])  # serif brand headings (system fonts, no download)
 
     def test_empty_database_screens_are_read_only(self):
         path = Path(self.tmp.name)/'empty.db'

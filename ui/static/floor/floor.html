@@ -2,60 +2,68 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Trading Floor — Floor</title>
 <!-- Read-only Floor view (port of the approved mockup v4). Every figure comes from the payload injected by
-     ui/views/floor_view.py (ui/floor_payload.py); this file holds no data and fetches nothing. -->
+     ui/views/floor_view.py (ui/floor_payload.py); this file holds no data and fetches nothing.
+     Idle (no cycle running) = ONE static drawing, redrawn only on demand (load, resize, zoom/pan, drawer); the
+     time ticker runs ONLY while payload.running.active (a real RUNNING cycle) and animates only the step it reached. -->
 <style>
-:root{--gold:#19e3d3;--gold2:#9ff5ee;--ink:#0a0a0b;--line:#1a2325;--mute:#7f9593}
+:root{--gold:#19e3d3;--gold2:#9ff5ee;--ink:#0a0a0b;--line:#1a2325;--mute:#7f9593;--dim:#6f8583}
 *{box-sizing:border-box}html,body{margin:0;height:100%;display:flex;flex-direction:column;background:var(--ink);color:#e6eef0;font-family:"Helvetica Neue",Inter,Arial,sans-serif;overflow:hidden}
 .serif{font-family:Didot,"Bodoni 72","Playfair Display",Georgia,serif}
-header{height:78px;display:flex;align-items:center;justify-content:space-between;padding:0 36px;border-bottom:1px solid var(--line)}
-.brand{display:flex;flex-direction:column;gap:4px}
+header{height:78px;display:flex;align-items:center;justify-content:space-between;padding:0 36px;border-bottom:1px solid var(--line);gap:24px}
+.brand{display:flex;flex-direction:column;gap:4px;flex:none}
 .brand h1{margin:0;font-weight:400;font-size:24px;letter-spacing:.32em;text-transform:uppercase;color:var(--gold2)}
 .brand div{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute)}
 .brand b{color:var(--gold);font-weight:600}
-.ex{border:1px solid var(--gold);color:var(--gold);padding:2px 7px;margin-left:8px;font-size:9px;letter-spacing:.2em;font-weight:400;vertical-align:middle}
-.kpis{display:flex;gap:34px}.kpi{text-align:right}.kpi .ex{margin-left:5px;padding:1px 4px;font-size:7px;letter-spacing:.12em}
-.kpi b{display:block;font-size:17px;font-weight:300;letter-spacing:.02em}.kpi small{font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--mute)}
+.ex{border:1px solid var(--gold);color:var(--gold);padding:2px 7px;margin-left:8px;font-size:10px;letter-spacing:.2em;font-weight:400;vertical-align:middle}
+.kpis{display:flex;gap:26px}.kpi{text-align:right;min-width:0}.kpi .ex{margin-left:5px;padding:1px 4px;font-size:10px;letter-spacing:.12em}
+.kpi b{display:block;font-size:17px;font-weight:300;letter-spacing:.02em;white-space:nowrap}.kpi b.txt{font-size:12px;padding:3px 0 2px;letter-spacing:.04em}
+.kpi small{display:block;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}.kpi small.b2{letter-spacing:.06em;text-transform:none}
 .pos{color:#3ddc84}.neg{color:#ff4d6d}.na{color:var(--mute)}
 main{position:relative;flex:1;min-height:0;overflow:hidden}header,footer{flex:none}
 #stage{position:absolute;left:0;top:0;bottom:0;right:0;transition:right .5s cubic-bezier(.2,.8,.2,1),bottom .5s}
 canvas{width:100%;height:100%;display:block;cursor:default}
 body.open #stage{right:440px}
-footer{height:78px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 36px;gap:0}
-.step{flex:1;position:relative;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#4f6462;padding-top:16px;white-space:nowrap}
+footer{height:78px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 36px;gap:0;position:relative}
+.step{flex:1;position:relative;font-size:10px;line-height:1.25;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:16px 8px 0 0}
 .step:before{content:"";position:absolute;top:4px;left:0;right:8px;height:1px;background:#1a2325}
-.step:after{content:"";position:absolute;top:0;left:0;width:9px;height:9px;border-radius:50%;border:1px solid #1f4645;background:var(--ink)}
-.step.done{color:#7fa9a6}.step.done:before{background:#0b7f7c}.step.done:after{background:#0b7f7c;border-color:#0b7f7c}
+.step:after{content:"";position:absolute;top:0;left:0;width:9px;height:9px;border-radius:50%;border:1px solid #2a5553;background:var(--ink)}
+.step.done{color:#9fc9c6}.step.done:before{background:#0b7f7c}.step.done:after{background:#0b7f7c;border-color:#0b7f7c}
 .step.on{color:var(--gold2)}.step.on:after{background:var(--gold);border-color:var(--gold);box-shadow:0 0 12px var(--gold)}
-.step em{display:block;font-style:normal;color:#3ddc84;font-size:9px;margin-top:3px;letter-spacing:.06em}.step.real{font-weight:600}
-.note{position:absolute;left:36px;bottom:14px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}
-.hint{color:#4f6462}.note i{color:var(--gold);font-style:normal}
+.step em{display:block;font-style:normal;color:#3ddc84;font-size:10px;margin-top:3px;letter-spacing:.06em}.step.real{font-weight:600}
+.snote{display:none}
+.note{position:absolute;left:36px;bottom:14px;right:36px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+.hint{color:var(--dim)}.note i{color:var(--gold);font-style:normal}
 #drawer{position:absolute;top:0;right:0;bottom:0;width:440px;border-left:1px solid var(--line);background:#0d0d0e;padding:34px 34px;transform:translateX(100%);transition:transform .5s cubic-bezier(.2,.8,.2,1);overflow:auto}
 body.open #drawer{transform:none}
 #drawer h2{margin:0;font-weight:400;font-size:26px;color:var(--gold2);letter-spacing:.04em}
-.sub{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute);margin:8px 0 26px}
+.sub{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);margin:8px 0 26px;line-height:1.5}
 .x{position:absolute;top:26px;right:28px;color:var(--mute);cursor:pointer;font-size:22px;font-weight:200}
 table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
-th{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute);font-weight:400;text-align:right;padding:0 0 10px}
+th{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);font-weight:400;text-align:right;padding:0 0 10px}
 td{padding:11px 0;border-top:1px solid #162022;text-align:right;font-weight:300}
 td:first-child,th:first-child{text-align:left;color:#a9bfbd}
 tr.pick{cursor:pointer}tr.pick:hover td{color:var(--gold2)}
-.lab{font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--mute);margin:30px 0 10px}
-.big{display:flex;gap:30px}.big div b{display:block;white-space:nowrap;font-size:26px;font-weight:300}.big small{font-size:9px;letter-spacing:.2em;color:var(--mute);text-transform:uppercase}
+.lab{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute);margin:30px 0 10px}
+.big{display:flex;gap:30px}.big div b{display:block;white-space:nowrap;font-size:26px;font-weight:300}.big small{font-size:10px;letter-spacing:.16em;color:var(--mute);text-transform:uppercase}
 .rr{position:relative;height:46px;margin-top:6px}
-.rr .seg{position:absolute;top:18px;height:4px}.rr .t{position:absolute;top:0;font-size:9px;letter-spacing:.1em;color:var(--mute);transform:translateX(-50%);white-space:nowrap}
+.rr .seg{position:absolute;top:18px;height:4px}.rr .t{position:absolute;top:0;font-size:10px;letter-spacing:.06em;color:var(--mute);transform:translateX(-50%);white-space:nowrap}
 .rr .t.l{left:0;transform:none}.rr .t.r{right:0;transform:none}.rr .t2{top:28px}.rr .dot{position:absolute;top:14px;width:12px;height:12px;border-radius:50%;background:var(--gold);transform:translateX(-50%);box-shadow:0 0 10px var(--gold)}
 .chain{font-size:12px;line-height:2;color:#a9bfbd;font-weight:300}.chain span{color:var(--gold)}
 .empty{font-size:12px;color:var(--mute);letter-spacing:.08em}
+@media (max-width:1100px){.kpis{gap:16px}.kpi b{font-size:15px}.kpi small{letter-spacing:.1em}}
 @media (max-width:820px){
- header{height:auto;flex-direction:column;align-items:flex-start;padding:16px 18px;gap:12px}
- .brand h1{font-size:17px}.kpis{gap:0;width:100%;display:grid;grid-template-columns:repeat(3,1fr);row-gap:8px}.kpi{text-align:left}.kpi b{font-size:14px}
- footer{height:64px;padding:0 14px;overflow:hidden}.step{font-size:0}.step.on{font-size:9px;flex:3}.step em{font-size:0}.step.on em{font-size:9px}
- .note{left:14px;bottom:auto;top:6px;font-size:8px}.hint{display:none}
+ header{height:auto;flex-direction:column;align-items:flex-start;padding:14px 16px;gap:10px}
+ .brand h1{font-size:17px}.kpis{gap:0;width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));row-gap:8px;column-gap:8px}.kpi{text-align:left}.kpi b{font-size:14px}.kpi b.txt{font-size:11px}
+ .kpi small{letter-spacing:.06em}
+ footer{height:64px;padding:0 14px;overflow:hidden}.step{font-size:0;padding-right:0}.step.on{font-size:10px;flex:3}.step em{font-size:0}.step.on em{font-size:10px}
+ body.idle .snote{display:block;position:absolute;left:14px;right:14px;bottom:8px;font-size:11px;letter-spacing:.06em;color:#9fc9c6}
+ body.idle .step{padding-top:0;align-self:flex-start;margin-top:14px}
+ .note{left:14px;right:14px;bottom:auto;top:6px;font-size:10px;letter-spacing:.06em}.hint{display:none}
  body.open #stage{right:0;bottom:58%}
  #drawer{width:100%;top:auto;height:58%;border-left:0;border-top:1px solid var(--gold);transform:translateY(100%);padding:22px}
  #drawer h2{font-size:20px}.big div b{font-size:22px}
  .big{flex-wrap:wrap;gap:12px 20px}.big div{flex:1 1 84px;min-width:0}.big div b{white-space:normal;overflow-wrap:anywhere}
- table{table-layout:fixed}td,th{overflow-wrap:anywhere;padding-left:4px}th{letter-spacing:.08em}
+ table{table-layout:fixed}td,th{overflow-wrap:anywhere;padding-left:4px}th{letter-spacing:.06em}
 }
 @media (max-width:360px){#drawer{padding:16px 14px}.big div{flex-basis:100%}.big div b{font-size:19px}td{font-size:12px}}
 </style></head><body>
@@ -77,12 +85,16 @@ const FEED=DATA.feed||[],ML=(DATA.market&&DATA.market.lines)||[],CURVE=DATA.curv
 const EXF=new Set(DATA.sample_mode?(DATA.example_fields||[]):[]);
 const isEx=k=>EXF.has(k)||[...EXF].some(f=>f.startsWith(k+'.'));
 const BADGE='<span class="ex">EJEMPLO</span>',badge=k=>isEx(k)?BADGE:'';
+// a cycle is "running" ONLY when the DB has a fresh RUNNING run (payload.running, built in ui/floor_payload.py)
+const RUN=DATA.running||{},ACTIVE=RUN.active===true;
+const WAITING=DATA.waiting===true,WTXT=DATA.waiting_text||'Esperando el primer ciclo';
 // a stale (last good / old) demo NAV is never shown as current: value + "(dato antiguo · HH:MM ET)"
 const STALE=HD.equity_stale===true&&HD.equity_as_of?`(dato antiguo · ${HD.equity_as_of} ET)`:'';
 // same for every section derived from the cached demo trades read (PnL, R, win rate, drawdown, curve, trades, hit rate)
 const TSTALE=HD.trades_stale===true?`(dato antiguo${HD.trades_as_of?` · ${HD.trades_as_of} ET`:''})`:'';
-const TKP=new Set(['pnl','r_total','win_rate','drawdown']);
-const NA='—',EMPTY='sin datos aún';
+const TKP=new Set(['pnl','today_pnl','r_total','win_rate','drawdown']);
+const NA='—',EMPTY='sin datos aún',NOOP='sin operaciones aún';
+const NOTR=HD.trades===0;  // stats known and no closed trade yet
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ok=v=>typeof v==='number'&&isFinite(v);
 const money=(v,signed)=>ok(v)?(v<0?'−':signed&&v>0?'+':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):NA;
@@ -90,37 +102,57 @@ const fR=v=>ok(v)?(v<0?'−':v>0?'+':'')+Math.abs(v).toFixed(2)+' R':NA;
 const px=v=>ok(v)?v.toFixed(5):NA;
 const pct=(v,d=1)=>ok(v)?v.toFixed(d)+'%':NA;
 const tone=v=>ok(v)?(v>0?'pos':v<0?'neg':''):'na';
-const SRC={OANDA_DEMO:'OANDA Demo',PAPER:'PAPER'}[DATA.source]||null;
+const SRC={OANDA_DEMO:'OANDA Demo',PAPER:'Práctica interna'}[DATA.source]||null;
 const SIDE={LONG:'Long',SHORT:'Short'};
+const UNITS=v=>ok(v)?v.toLocaleString('en-US',{maximumFractionDigits:0})+' unidades':NA+' unidades';
 let TR=TRADES.find(t=>t.status==='OPEN')||TRADES[0]||null;
+const OPEN=TRADES.find(t=>t.status==='OPEN')||null;  // the routed trade open right now (only Echo reflects it)
 
 // ---- header ----
 document.getElementById('brandSub').innerHTML=`V2.1 · ${esc(SRC||EMPTY)} · <b>${esc(HD.day_text||NA)}</b>${badge('header.day_text')}`;
 const dl=(ok(HD.daily_loss_used_pct)||ok(HD.daily_loss_limit_pct))?`${ok(HD.daily_loss_used_pct)?HD.daily_loss_used_pct.toFixed(1):NA} / ${pct(HD.daily_loss_limit_pct)}`:NA;
+const DLT=HD.daily_loss_text||'';
 const dd=ok(HD.drawdown_pct)?(HD.drawdown_pct>0?'−':'')+HD.drawdown_pct.toFixed(2)+'%':ok(HD.drawdown)?money(-HD.drawdown):NA;
-const KP=[[money(HD.equity),'Equity',ok(HD.equity)?'':'na',['equity']],[money(HD.pnl,1),'PnL',tone(HD.pnl),['pnl']],[fR(HD.r_total),'R total',tone(HD.r_total),['r_total']],
- [ok(HD.win_rate)?HD.win_rate.toFixed(0)+'%':NA,'Win rate',ok(HD.win_rate)?'':'na',['win_rate']],[dd,'Drawdown',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],[dl,'Daily loss',dl==NA?'na':'',['daily_loss_used_pct','daily_loss_limit_pct']]];
+const wr=NOTR?NOOP:ok(HD.win_rate)?HD.win_rate.toFixed(0)+'%':NA;
+const rt=NOTR?NOOP:fR(HD.r_total);
+// [value, label, class, payload keys, extra small line, tooltip]
+const KP=[[money(HD.equity),'NAV',ok(HD.equity)?'':'na',['equity','balance'],ok(HD.balance)?'Balance '+money(HD.balance):''],
+ [money(HD.pnl,1),'P&L realizado',tone(HD.pnl),['pnl']],[money(HD.today_pnl,1),'P&L hoy',tone(HD.today_pnl),['today_pnl']],
+ [rt,'R total',NOTR?'na txt':tone(HD.r_total),['r_total']],[wr,'Tasa de acierto',NOTR?'na txt':ok(HD.win_rate)?'':'na',['win_rate']],
+ [dd,'Caída máx.',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],
+ [dl,'Pérdida diaria',dl==NA?'na':HD.daily_loss_status==='TRIGGERED'?'neg':'',['daily_loss_used_pct','daily_loss_limit_pct','daily_loss_text'],DLT]];
 // EJEMPLO next to each KPI that fell back to example data (sample mode only)
-document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3][0]==='equity'&&STALE?' '+esc(STALE):''}${TKP.has(k[3][0])&&TSTALE?' '+esc(TSTALE):''}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small></div>`).join('');
-const real=(DATA.real_fields||[]).length>0;
-document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura · `+
- (EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:`<i>${EMPTY}</i>`)+
- (CY&&CY.as_of?` · último ciclo ${esc(CY.as_of)}${CY.status?' · '+esc(CY.status):''}`:'');
+document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi" title="${esc(k[1]+(k[4]?' · '+k[4]:''))}"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3][0]==='equity'&&STALE?' '+esc(STALE):''}${TKP.has(k[3][0])&&TSTALE?' '+esc(TSTALE):''}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small>${k[4]?`<small class="b2">${esc(k[4])}</small>`:''}</div>`).join('');
+// "datos reales" ONLY when the newest data point is fresh (payload.note_real); never on old / pre-epoch data
+const noteMain=EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:DATA.note_real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:
+ WAITING?`<i>${esc(WTXT)}</i>${DATA.epoch_text?' · demo desde '+esc(DATA.epoch_text):''}`:DATA.cycle_text?'':`<i>${EMPTY}</i>`;
+document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura`+
+ (noteMain?' · '+noteMain:'')+(DATA.cycle_text?` · ${esc(DATA.cycle_text)}`:'')+(ACTIVE?` · <i>ciclo en marcha</i>${RUN.started_at_text?' desde '+esc(RUN.started_at_text):''}`:'');
 
-const STEPS=["Datos","Análisis","Reviewer","Conflict Engine","Risk Engine","Plan R:R","Entry / Exit","Resultado"];
+const STEPS=["Datos","Análisis","Revisor","Motor de conflictos","Motor de riesgo","Plan R:R","Entrada / Salida","Resultado"];
 const CSTEPS=(CY&&CY.steps)||[];
 const COL={Structure:'#a77bff',Liquidity:'#4a7dff',Macro:'#ffb020',Risk:'#ff3d9a',Reviewer:'#2ee59d',Conflict:'#ff7a1a',RiskEng:'#ff2e4d',Exec:'#39ff88'};
 const RCOL={'Structure':COL.Structure,'Liquidity':COL.Liquidity,'Macro':COL.Macro,'Risk':COL.Risk,'Reviewer':COL.Reviewer,'Conflict Engine':COL.Conflict,'Risk Engine':COL.RiskEng};
+const RLAB={'Structure':'Estructura','Liquidity':'Liquidez','Macro':'Macro','Risk':'Riesgo','Reviewer':'Revisor','Conflict Engine':'Conflictos','Risk Engine':'Motor de riesgo'};
 const rgba=(h,a)=>{const n=parseInt(h.slice(1),16);return `rgba(${n>>16},${n>>8&255},${n&255},${a})`};
-const W=18,D=14,H=3.9,STEP_MS=4200;
+const W=18,D=14,H=3.9,STEP_MS=4200,MINPX=10;
 const q=new URLSearchParams(location.search);const FIX=q.has('step')?+q.get('step'):null;
+// the step shown: ?step=N (screenshots / tests) > the step a really running cycle reached > none (idle: static)
+const STEP=FIX!=null&&FIX>=0&&FIX<8?Math.floor(FIX):ACTIVE&&Number.isInteger(RUN.step)&&RUN.step>=0&&RUN.step<8?RUN.step:null;
+const ANIM=ACTIVE&&FIX==null&&STEP!=null;  // time-based animation ONLY while a real cycle runs
+if(STEP==null)document.body.classList.add('idle');
 const cv=document.getElementById('c'),cx=cv.getContext('2d');let U=30,ox=0,oy=0,Z=1,PX=0,PY=0,dpr=1,vw=0,vh=0;
 const P=(x,y,z=0)=>[ox+(x-y)*U,oy+(x+y)*U/2-z*U];
-function fit(){const r=cv.getBoundingClientRect();dpr=devicePixelRatio||1;vw=r.width;vh=r.height;cv.width=vw*dpr;cv.height=vh*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
- const padT=vh*.12,pad=16;U=Math.min((vw-pad*2)/(W+D),(vh-padT-pad)/((W+D)/2+H));ox=pad+D*U+((vw-pad*2)-(W+D)*U)/2;oy=padT+H*U+((vh-padT-pad)-((W+D)/2+H)*U)/2;
- if(Z0==null)Z0=vw<600?1.45:1; const Zt=Z0*Z; const cxm=vw/2,cym=vh/2; ox=cxm+(ox-cxm)*Zt+PX; oy=cym+(oy-cym)*Zt+PY-(vw<600?vh*.1:0); U*=Zt;}
 let Z0=null;
+// the whole scene fits the canvas (also 390×844 portrait); pinch / wheel zoom and drag move it on demand
+function fit(){const r=cv.getBoundingClientRect();dpr=devicePixelRatio||1;vw=r.width;vh=r.height;cv.width=vw*dpr;cv.height=vh*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
+ const padT=vh*.12,pad=12;U=Math.min((vw-pad*2)/(W+D),(vh-padT-pad)/((W+D)/2+H));ox=pad+D*U+((vw-pad*2)-(W+D)*U)/2;oy=padT+H*U+((vh-padT-pad)-((W+D)/2+H)*U)/2;
+ if(Z0==null)Z0=1; const Zt=Z0*Z; const cxm=vw/2,cym=vh/2; ox=cxm+(ox-cxm)*Zt+PX; oy=cym+(oy-cym)*Zt+PY; U*=Zt;redraw()}
+// draw on demand: one coalesced redraw per frame at most (idle never loops)
+let queued=0;function redraw(){if(queued)return;queued=1;requestAnimationFrame(n=>{queued=0;draw(ANIM?n-t0:0)})}
 addEventListener('resize',fit);
+const fpx=sz=>Math.max(MINPX,sz*U/30);
+function fitText(t,w){t=String(t);if(cx.measureText(t).width<=w)return t;while(t.length>1&&cx.measureText(t+'…').width>w)t=t.slice(0,-1);return t+'…'}
 function poly(pts,fill,stroke,lw=1){cx.beginPath();pts.forEach((p,i)=>i?cx.lineTo(p[0],p[1]):cx.moveTo(p[0],p[1]));cx.closePath();if(fill){cx.fillStyle=fill;cx.fill()}if(stroke){cx.strokeStyle=stroke;cx.lineWidth=lw;cx.stroke()}}
 function box(x,y,z,w,d,h,c,a=1,edge){cx.globalAlpha=a;
  poly([P(x,y+d,z),P(x+w,y+d,z),P(x+w,y+d,z+h),P(x,y+d,z+h)],c[1],edge);
@@ -146,8 +178,11 @@ function room(r,hot){const C=RCOL[r.n];const g=rgba(C,hot?.95:.42);cx.shadowColo
   if(r.door=='f'){poly([P(r.x,fy),P(r.dx-.5,fy),P(r.dx-.5,fy,z),P(r.x,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(r.dx+.5,fy),P(fx,fy),P(fx,fy,z),P(r.dx+.5,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.y),P(fx,fy),P(fx,fy,z),P(fx,r.y,z)],rgba(C,hot?.08:.025),g,.8)}
   else{poly([P(r.x,fy),P(fx,fy),P(fx,fy,z),P(r.x,fy,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.y),P(fx,r.dy-.5),P(fx,r.dy-.5,z),P(fx,r.y,z)],rgba(C,hot?.08:.025),g,.8);poly([P(fx,r.dy+.5),P(fx,fy),P(fx,fy,z),P(fx,r.dy+.5,z)],rgba(C,hot?.08:.025),g,.8)}
   cx.shadowBlur=0;
+  // room name: shrunk to fit the front wall, never below 9px (skipped when it cannot fit: the name plates remain)
+  const label=RLAB[r.n].toUpperCase(),room=(r.w-.4)*U;let fs=Math.max(MINPX,U*.30);cx.font=`${fs}px Didot,Georgia,serif`;const lw=cx.measureText(label).width;
+  if(lw>room)fs=fs*room/lw;if(fs<9)return;
   const [lx,ly]=P(r.x+.25,fy-.1);cx.save();cx.translate(lx,ly);cx.transform(1,-.5,0,1,0,0);
-  cx.font=`${Math.max(8,U*.30)}px Didot,Georgia,serif`;cx.fillStyle=hot?C:rgba(C,.75);cx.textBaseline='bottom';cx.fillText(r.n.toUpperCase(),0,0);cx.restore();}
+  cx.font=`${fs}px Didot,Georgia,serif`;cx.fillStyle=hot?C:rgba(C,.85);cx.textBaseline='bottom';cx.fillText(label,0,0);cx.restore();}
 }
 // characters
 const A={};function agent(id,room,col){const r=ROOMS.find(o=>o.n==room);A[id]={id,room:r,hx:r.x+r.w/2,hy:r.y+1.55,x:0,y:0,col,walk:0,carry:0};}
@@ -157,13 +192,14 @@ A.Exec={id:'Exec',hx:9.2,hy:8.6,x:0,y:0,walk:0,carry:0};
 const live=SYM.EURUSD==='ACTIVE';
 const DESKS=[{s:'EURUSD',x:8.5,y:7.2,live:live?1:0},{s:'XAUUSD',x:12.6,y:7.2,live:SYM.XAUUSD==='ACTIVE'?1:0}];
 const SPARE=[[8.5,10.6],[12.6,10.6]];
-function deskSub(d){const st=SYM[d.s];if(st==='PAUSED')return 'PAUSADO';if(st==='DISABLED')return 'APAGADO';
- if(d.s==='EURUSD'){if(TR&&TR.status==='OPEN')return `${(TR.side||NA)} · ${fR(TR.r_realized)}`;return st==='ACTIVE'?'ACTIVO · sin posición':EMPTY}
+function deskSub(d){const st=SYM[d.s];if(st==='PAUSED')return 'PAUSADO por el planificador';if(st==='DISABLED')return 'APAGADO';
+ if(d.s==='EURUSD'){if(OPEN)return `${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)} · ${money(OPEN.pnl,1)}`;return st==='ACTIVE'?'ACTIVO · sin posición':EMPTY}
  return st==='ACTIVE'?'ACTIVO':EMPTY}
-function person(a,t,hot){const C=COL[a.id];const [x,y]=P(a.x,a.y,0);const s=U/30;const bob=a.walk?Math.abs(Math.sin(t/120))*2*s:Math.sin(t/700+a.hx)*0.8*s;
+function person(a,t,hot){const C=COL[a.id];const [x,y]=P(a.x,a.y,0);const s=U/30;const moving=ANIM&&a.walk;
+ const bob=moving?Math.abs(Math.sin(t/120))*2*s:0;  // idle: standing still, no bob
  cx.fillStyle='rgba(0,0,0,.55)';cx.beginPath();cx.ellipse(x,y,7*s,3.5*s,0,0,7);cx.fill();
  if(hot){cx.strokeStyle=C;cx.shadowColor=C;cx.shadowBlur=10;cx.lineWidth=1.5;cx.beginPath();cx.ellipse(x,y,12*s,6*s,0,0,7);cx.stroke();cx.shadowBlur=0}
- const lg=a.walk?Math.sin(t/120)*3*s:0;cx.strokeStyle='#151a1d';cx.lineWidth=3*s;cx.lineCap='round';
+ const lg=moving?Math.sin(t/120)*3*s:0;cx.strokeStyle='#151a1d';cx.lineWidth=3*s;cx.lineCap='round';
  cx.beginPath();cx.moveTo(x-2*s,y-9*s-bob);cx.lineTo(x-2*s+lg,y-1*s);cx.moveTo(x+2*s,y-9*s-bob);cx.lineTo(x+2*s-lg,y-1*s);cx.stroke();
  const by=y-bob;cx.fillStyle='#1a2024';cx.strokeStyle=hot?C:rgba(C,.6);cx.lineWidth=1;
  cx.beginPath();cx.roundRect(x-6*s,by-22*s,12*s,14*s,4*s);cx.fill();cx.stroke();
@@ -173,19 +209,23 @@ function person(a,t,hot){const C=COL[a.id];const [x,y]=P(a.x,a.y,0);const s=U/30
  if(a.carry){cx.save();cx.translate(x+8*s,by-16*s);cx.rotate(.785);cx.fillStyle='#19e3d3';cx.shadowColor='#19e3d3';cx.shadowBlur=10;cx.fillRect(-3.5*s,-3.5*s,7*s,7*s);cx.restore()}
  a.head=[x,by-34*s];}
 function bubble(a,txt,hot,sub){if(!a.head)return;const C=COL[a.id]||'#19e3d3';const [hx,hy]=a.head;const s=Math.max(.75,Math.min(1.15,U/34));
- cx.font=`${(hot?12:10.5)*s}px "Helvetica Neue",Arial,sans-serif`;const w1=cx.measureText(txt).width;let w2=0;
- if(sub){cx.font=`${9*s}px "Helvetica Neue",Arial`;w2=cx.measureText(sub).width}
- const pw=Math.max(w1,w2)+18*s,ph=(sub?36:22)*s,bx=Math.max(4,Math.min(vw-pw-4,a.al?hx-16*s:hx-pw/2));let by=Math.max(4,hy-ph-9*s);
- for(let k=0;k<6;k++){const o=PLACED.find(r=>bx<r[0]+r[2]+4&&bx+pw+4>r[0]&&by<r[1]+r[3]+4&&by+ph+4>r[1]);if(!o)break;by=o[1]-ph-6}PLACED.push([bx,by,pw,ph]);
- cx.globalAlpha=hot?1:.9;cx.fillStyle=hot?'#101016':'#0c0c10';cx.strokeStyle=hot?C:rgba(C,.55);cx.lineWidth=hot?1.4:1;if(hot){cx.shadowColor=C;cx.shadowBlur=14}
- cx.beginPath();cx.roundRect(bx,by,pw,ph,3*s);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.fillRect(bx+1,by+3*s,2.2*s,ph-6*s);cx.fillStyle=hot?C:rgba(C,.55);
- if(hy-(by+ph)>12*s){cx.beginPath();cx.moveTo(hx,by+ph);cx.lineTo(hx,hy-1);cx.stroke()}else{cx.beginPath();cx.moveTo(hx-5*s,by+ph-.5);cx.lineTo(hx,hy-1);cx.lineTo(hx+5*s,by+ph-.5);cx.closePath();cx.fill()}
- cx.fillStyle=hot?'#ffffff':'#cfcfd8';cx.textBaseline='middle';cx.font=`${(hot?12:10.5)*s}px "Helvetica Neue",Arial`;cx.fillText(txt,bx+9*s,by+11*s);
- if(sub){cx.fillStyle=hot?C:rgba(C,.8);cx.font=`${9*s}px "Helvetica Neue",Arial`;cx.fillText(sub,bx+9*s,by+25*s)}cx.globalAlpha=1}
-function tag(x,y,z,t1,t2,live){const [px,py]=P(x,y,z);const s=Math.max(.8,Math.min(1.2,U/34));cx.font=`600 ${11*s}px "Helvetica Neue",Arial`;const w=Math.max(cx.measureText(t1).width,cx.measureText(t2).width*.85,60)+22*s;
- cx.strokeStyle=live?'#19e3d3':'#1f4645';cx.lineWidth=1;cx.beginPath();cx.moveTo(px,py);cx.lineTo(px,py-14*s);cx.stroke();
- cx.fillStyle=live?'rgba(10,10,11,.92)':'rgba(10,10,11,.8)';cx.beginPath();cx.roundRect(px-w/2,py-46*s,w,32*s,2);cx.fill();cx.stroke();
- cx.textAlign='center';cx.fillStyle=live?'#9ff5ee':'#5f7c7b';cx.textBaseline='middle';cx.fillText(t1,px,py-36*s);cx.font=`${9*s}px "Helvetica Neue",Arial`;cx.fillStyle=live?'#3ddc84':'#4f6462';cx.fillText(t2,px,py-23*s);cx.textAlign='left';return [px-w/2,py-46*s,w,32*s]}
+ const f1=Math.max(MINPX,(hot?12:10.5)*s),f2=Math.max(MINPX,9*s),pad=5*s,maxw=Math.max(120,vw*.46);
+ cx.font=`${f1}px "Helvetica Neue",Arial,sans-serif`;txt=fitText(txt,maxw);const w1=cx.measureText(txt).width;let w2=0;
+ if(sub){cx.font=`${f2}px "Helvetica Neue",Arial`;sub=fitText(sub,maxw);w2=cx.measureText(sub).width}
+ const y1=pad+f1*.6,y2=y1+f1*.55+3*s+f2*.5,ph=sub?y2+f2*.6+pad:f1*1.2+2*pad;
+ const pw=Math.max(w1,w2)+18*s,bx=Math.max(4,Math.min(vw-pw-4,a.al?hx-16*s:hx-pw/2));let by=Math.max(4,hy-ph-9*s);
+ for(let k=0;k<8;k++){const o=PLACED.find(r=>bx<r[0]+r[2]+4&&bx+pw+4>r[0]&&by<r[1]+r[3]+4&&by+ph+4>r[1]);if(!o)break;by=o[1]-ph-6;if(by<4){by=o[1]+o[3]+6}}PLACED.push([bx,by,pw,ph]);
+ cx.globalAlpha=hot?1:.92;cx.fillStyle=hot?'#101016':'#0c0c10';cx.strokeStyle=hot?C:rgba(C,.6);cx.lineWidth=hot?1.4:1;if(hot){cx.shadowColor=C;cx.shadowBlur=14}
+ cx.beginPath();cx.roundRect(bx,by,pw,ph,3*s);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.fillRect(bx+1,by+3*s,2.2*s,ph-6*s);cx.fillStyle=hot?C:rgba(C,.6);
+ if(hy-(by+ph)>12*s){cx.beginPath();cx.moveTo(hx,by+ph);cx.lineTo(hx,hy-1);cx.stroke()}else if(hy>by+ph){cx.beginPath();cx.moveTo(hx-5*s,by+ph-.5);cx.lineTo(hx,hy-1);cx.lineTo(hx+5*s,by+ph-.5);cx.closePath();cx.fill()}
+ cx.fillStyle=hot?'#ffffff':'#d6dbe0';cx.textBaseline='middle';cx.font=`${f1}px "Helvetica Neue",Arial`;cx.fillText(txt,bx+9*s,by+y1);
+ if(sub){cx.fillStyle=hot?C:rgba(C,.9);cx.font=`${f2}px "Helvetica Neue",Arial`;cx.fillText(sub,bx+9*s,by+y2)}cx.globalAlpha=1}
+function tag(x,y,z,t1,t2,live){const [px,py]=P(x,y,z);const s=Math.max(.8,Math.min(1.2,U/34));const f1=Math.max(MINPX,11*s),f2=Math.max(MINPX,9*s);
+ cx.font=`600 ${f1}px "Helvetica Neue",Arial`;const a=cx.measureText(t1).width;cx.font=`${f2}px "Helvetica Neue",Arial`;const w=Math.max(a,cx.measureText(t2).width,60)+16*s,h=f1+f2+12*s;
+ cx.strokeStyle=live?'#19e3d3':'#2a5553';cx.lineWidth=1;cx.beginPath();cx.moveTo(px,py);cx.lineTo(px,py-14*s);cx.stroke();
+ cx.fillStyle=live?'rgba(10,10,11,.92)':'rgba(10,10,11,.86)';cx.beginPath();cx.roundRect(px-w/2,py-14*s-h,w,h,2);cx.fill();cx.stroke();
+ cx.textAlign='center';cx.textBaseline='middle';cx.font=`600 ${f1}px "Helvetica Neue",Arial`;cx.fillStyle=live?'#9ff5ee':'#8aa3a1';cx.fillText(t1,px,py-14*s-h+4*s+f1*.55);
+ cx.font=`${f2}px "Helvetica Neue",Arial`;cx.fillStyle=live?'#3ddc84':SYM[t1]==='PAUSED'?'#ffb020':'#7f9593';cx.fillText(t2,px,py-14*s-6*s-f2*.5);cx.textAlign='left';return [px-w/2,py-14*s-h,w,h]}
 // paths
 function route(a,b){const pts=[[a.dx,a.dy]];const cy=4.0,cxl=4.25;
  if(a.door=='f'){pts.push([a.dx,cy]);} else pts.push([cxl,a.dy]);
@@ -195,31 +235,37 @@ function along(pts,f){let L=[],T=0;for(let i=1;i<pts.length;i++){const l=Math.hy
  let d=f*T;for(let i=0;i<L.length;i++){if(d<=L[i]){const k=L[i]?d/L[i]:0;return[pts[i][0]+(pts[i+1][0]-pts[i][0])*k,pts[i][1]+(pts[i+1][1]-pts[i][1])*k]}d-=L[i]}return pts[pts.length-1]}
 const RV=ROOMS[4],CE=ROOMS[5],RE=ROOMS[6],DK={door:'x',x:9.5,y:8.9,dx:9.6,dy:9.3};
 const WALK={2:['Liquidity',ROOMS[1],RV],3:['Reviewer',RV,CE],4:['Conflict',CE,RE],5:['RiskEng',RE,DK]};
-// speech bubbles from the payload ("sin datos aún" / "—" when unknown)
+// speech bubbles from the payload ("sin datos aún" / "—" when unknown); the step texts only for the step shown
 const ag=id=>AG[id]||{};const st=id=>ag(id).status||EMPTY;
 const conf=id=>ok(ag(id).confidence)?'confianza '+ag(id).confidence.toFixed(2):'confianza '+NA;
 const T0=TR||{};const nA=['Structure','Liquidity','Macro','Risk'].filter(k=>AG[k]).length;
-const units=ok(T0.units)?T0.units.toLocaleString('en-US',{maximumFractionDigits:0})+' units':NA+' units';
 const SAY={
  0:{wall:[ML[0]||EMPTY,ML[1]||NA]},
  1:{Structure:[st('Structure'),conf('Structure')],Liquidity:[st('Liquidity'),conf('Liquidity')],Macro:[st('Macro'),conf('Macro')],Risk:[st('Risk'),conf('Risk')]},
  2:{Liquidity:['Entregando análisis',`${nA} de 4 agentes`],Reviewer:['Recibido','validando consistencia']},
  3:{Reviewer:[st('Reviewer'),conf('Reviewer')],Conflict:['Revisando conflictos','sesgos vs macro']},
- 4:{Conflict:[st('Conflict'),conf('Conflict')],RiskEng:['Evaluando gates',`daily loss ${dl}`]},
- 5:{RiskEng:[st('RiskEng'),`SL ${px(T0.sl_expected)} · TP ${px(T0.tp_expected)}`],Exec:['Plan recibido',units]},
- 6:{Exec:[`Entry ${px(T0.entry_actual)}`,SRC?'orden · '+SRC:EMPTY]},
- 7:{Exec:[`${fR(T0.r_realized)}${T0.status==='OPEN'?' abierto':''}`,`PnL ${money(T0.pnl,1)}`]}};
-const NAMES={Structure:['Atlas','Analista de estructura','Structure'],Liquidity:['Nova','Analista de liquidez','Liquidity'],Macro:['Orion','Analista macro','Macro'],Risk:['Vega','Revisor de la operación (riesgo)','Risk'],Reviewer:['Sage','Revisor de consenso','Reviewer'],Conflict:['Arbiter','Motor de conflictos','Conflict Engine'],RiskEng:['Sentinel','Motor de riesgo (gates)','Risk Engine'],Exec:['Echo','Ejecución','Mesa EURUSD']};
+ 4:{Conflict:[st('Conflict'),conf('Conflict')],RiskEng:['Evaluando límites',`pérdida diaria ${dl}`]},
+ 5:{RiskEng:[st('RiskEng'),`SL ${px(T0.sl_expected)} · TP ${px(T0.tp_expected)}`],Exec:['Plan recibido',UNITS(T0.units)]},
+ 6:{Exec:[`Entrada ${px(T0.entry_actual)}`,SRC?'orden · '+SRC:EMPTY]},
+ 7:{Exec:[`${fR(T0.r_realized)}${T0.status==='OPEN'?' abierta':''}`,`P&L ${money(T0.pnl,1)}`]}};
+const NAMES={Structure:['Atlas','Analista de estructura','Estructura'],Liquidity:['Nova','Analista de liquidez','Liquidez'],Macro:['Orion','Analista macro','Macro'],Risk:['Vega','Revisor de la operación (riesgo)','Riesgo'],Reviewer:['Sage','Revisor de consenso','Revisor'],Conflict:['Arbiter','Motor de conflictos','Motor de conflictos'],RiskEng:['Sentinel','Motor de riesgo (límites)','Motor de riesgo'],Exec:['Echo','Ejecución','Mesa EURUSD']};
 let NHITS=[];
-function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));cx.font=`${9.5*s}px Didot,Georgia,serif`;const t=NAMES[a.id][0].toUpperCase().split('').join(String.fromCharCode(8202));const w=cx.measureText(t).width+14*s,h=14*s,bx=x-w/2,by=y+5*s;
+function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));const f=Math.max(MINPX,9.5*s);cx.font=`${f}px Didot,Georgia,serif`;const t=NAMES[a.id][0].toUpperCase().split('').join(String.fromCharCode(8202));const w=cx.measureText(t).width+14*s,h=f+5*s,bx=x-w/2,by=y+5*s;
  cx.fillStyle='rgba(10,10,11,.88)';const C=COL[a.id];cx.strokeStyle=C;cx.shadowColor=C;cx.shadowBlur=6;cx.lineWidth=.9;cx.beginPath();cx.roundRect(bx,by,w,h,h/2);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.textAlign='center';cx.textBaseline='middle';cx.fillText(t,x,by+h/2+.5);cx.textAlign='left';
  const pad=MOB()?8:3;NHITS.push([bx-pad,by-pad-34*s,w+pad*2,h+pad*2+34*s,a.id]);}
+// idle label: the real saved status, else "sin datos aún" (never a leftover of an older cycle: the payload is epoch-only)
 const IDLE=id=>AG[id]?(AG[id].status||NA):EMPTY;
-document.getElementById('steps').innerHTML=STEPS.map((s,i)=>{const c=CSTEPS[i]||{};return `<div class="step${c.done?' real':''}" id="s${i}" title="${c.done?'completado en el último ciclo':EMPTY}">${s}${c.done?`<em>✓ ${esc(c.at||'')}</em>`:''}</div>`}).join('')+(isEx('cycle')?BADGE:'');
+// footer: idle => every step grey; ✓ + time only for steps of the real saved cycle (payload.cycle, >= epoch)
+document.getElementById('steps').innerHTML=STEPS.map((s,i)=>{const c=CSTEPS[i]||{};return `<div class="step${STEP==null?'':i<STEP?' done':i==STEP?' on':''}${c.done?' real':''}" id="s${i}" title="${c.done?'completado en el último ciclo':EMPTY}">${s}${c.done?`<em>✓ ${esc(c.at||'')}</em>`:''}</div>`}).join('')+(isEx('cycle')?BADGE:'')+
+ `<div class="snote">${esc(WAITING&&!CSTEPS.length?WTXT:CSTEPS.length?`Último ciclo: ${CSTEPS.filter(c=>c.done).length} de 8 pasos ✓`:EMPTY)}</div>`;
 let hits=[],PLACED=[];const MOB=()=>vw<600;const t0=performance.now();
-const wt=(x,y,z,txt,sz,col,font)=>{const [a,b]=P(x,y,z);cx.save();cx.translate(a,b);if(y==0)cx.transform(1,.5,0,1,0,0);else cx.transform(1,-.5,0,1,0,0);cx.font=`${sz*U/30}px ${font||'"Helvetica Neue",Arial'}`;cx.fillStyle=col;cx.textBaseline='alphabetic';cx.fillText(txt,0,0);cx.restore()};
-function frame(now){const t=now-t0;const step=FIX!=null?FIX:Math.floor(t/STEP_MS)%8;const f=FIX!=null?.5:(t%STEP_MS)/STEP_MS;
- STEPS.forEach((_,i)=>{const el=document.getElementById('s'+i);const r=(CSTEPS[i]||{}).done?' real':'';el.className='step'+(i<step?' done':i==step?' on':'')+r});
+const wt=(x,y,z,txt,sz,col,font,maxU)=>{const [a,b]=P(x,y,z);cx.save();cx.translate(a,b);if(y==0)cx.transform(1,.5,0,1,0,0);else cx.transform(1,-.5,0,1,0,0);cx.font=`${fpx(sz)}px ${font||'"Helvetica Neue",Arial'}`;cx.fillStyle=col;cx.textBaseline='alphabetic';cx.fillText(maxU?fitText(txt,maxU*U):txt,0,0);cx.restore()};
+const fits=(txt,sz,font,maxU)=>{cx.font=`${fpx(sz)}px ${font||'"Helvetica Neue",Arial'}`;return cx.measureText(String(txt)).width<=maxU*U};
+// wall screen text: lines stacked from the top, every line >= 10px; a line that no longer fits in height is dropped
+// (never clipped); ``strict`` (phone): a line too wide is skipped instead of shortened with "…"
+function stack(x,y,zTop,zBot,lines,maxU,strict){let z=zTop;for(const l of lines){const h=fpx(l[1])/U;if(z-h<zBot)break;if(strict&&!fits(l[0],l[1],l[3],maxU))continue;z-=h;wt(x,y,z,l[0],l[1],l[2],l[3],maxU);z-=h*.22}return z}
+const NAVSTALE=STALE?'  '+STALE.toUpperCase():'';
+function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compact=U<22;
  cx.clearRect(0,0,vw,vh);
  const g=cx.createRadialGradient(vw/2,vh*.55,10,vw/2,vh*.55,vw*.7);g.addColorStop(0,'#0d1416');g.addColorStop(1,'#0a0a0b');cx.fillStyle=g;cx.fillRect(0,0,vw,vh);
  poly([P(0,0),P(0,D),P(0,D,H),P(0,0,H)],'#121110',null);poly([P(0,0),P(W,0),P(W,0,H),P(0,0,H)],'#151412',null);
@@ -227,46 +273,69 @@ function frame(now){const t=now-t0;const step=FIX!=null?FIX:Math.floor(t/STEP_MS
  poly([P(0,0),P(W,0),P(W,D),P(0,D)],'#0f0e0c','#173c3b');
  cx.strokeStyle='rgba(25,227,211,.06)';for(let i=1;i<W;i++){cx.beginPath();cx.moveTo(...P(i,0));cx.lineTo(...P(i,D));cx.stroke()}for(let j=1;j<D;j++){cx.beginPath();cx.moveTo(...P(0,j));cx.lineTo(...P(W,j));cx.stroke()}
  const scr=(pts,hot)=>poly(pts,'#0c0b09',hot?'#9ff5ee':'#0b7f7c',hot?1.4:1);
+ // equity wall: NAV large, balance smaller, then the real realised-P&L curve (when there is room)
  const E=[P(3,0,1.9),P(9,0,1.9),P(9,0,3.7),P(3,0,3.7)];scr(E,step==7);
- // equity wall: real cumulative realised PnL curve (payload.curve); none => no line
- if(CURVE.length>1){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=8;cx.lineWidth=1.6;cx.beginPath();
-  CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,2.15+.8*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0;
-  if(isEx('curve'))wt(3.3,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4');else if(TSTALE)wt(3.3,0,2.05,'CURVA '+TSTALE.toUpperCase(),7,'#ffb020')}
- else wt(3.3,0,2.4,EMPTY,8,'#4f6462');
- wt(3.3,0,3.4,'EQUITY · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':'')+(STALE?'  '+STALE.toUpperCase():''),8,STALE?'#ffb020':'#3fa9a4');wt(3.3,0,3.0,money(HD.equity),17,'#9ff5ee','Didot,Georgia,serif');
+ const navLab='NAV · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':'')+NAVSTALE;
+ const eq=[[navLab,8,STALE?'#ffb020':'#3fa9a4'],[money(HD.equity),14,'#9ff5ee','Didot,Georgia,serif'],
+  [`Balance ${money(HD.balance)}`,7,'#aebfc0']];
+ const zc=stack(3.3,0,3.66,1.93,compact?eq.slice(1,3):eq,5.4,compact);
+ if(CURVE.length>1&&zc-1.98>.3){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1,top=zc-.06,bot=2.02;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=ANIM?8:4;cx.lineWidth=1.6;cx.beginPath();
+  CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,bot+(top-bot)*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0;
+  if(isEx('curve'))wt(6.6,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4');else if(TSTALE)wt(6.0,0,2.05,'CURVA '+TSTALE.toUpperCase(),7,'#ffb020',null,3)}
+ else if(!compact&&zc-1.98>.3)wt(3.3,0,Math.max(2.05,zc-fpx(7)/U),NOTR?NOOP:EMPTY,7,'#7f9593',null,5.4);
  const F=[P(9.8,0,1.9),P(16.6,0,1.9),P(16.6,0,3.7),P(9.8,0,3.7)];scr(F,false);
- wt(10.1,0,3.4,'FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4');
- (FEED.length?FEED:[EMPTY]).slice(0,5).forEach((l,i)=>wt(10.1,0,3.05-i*.24,l,7.2,i==0&&FEED.length?'#39ff88':'#aebfc0'));
+ const feed=(FEED.length?FEED:[WAITING?WTXT:EMPTY]).slice(0,5).map((l,i)=>[l,7.2,i==0&&FEED.length?'#39ff88':'#aebfc0']);
+ stack(10.1,0,3.66,1.93,compact?feed:[['FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(feed),6.2,compact);
  const M=[P(0,6.4,1.9),P(0,12.8,1.9),P(0,12.8,3.7),P(0,6.4,3.7)];scr(M,step==0);
- wt(0,12.5,3.4,'MARKET & MACRO DATA'+(isEx('market')?'  · EJEMPLO':''),8,'#3fa9a4');
- wt(0,12.5,3.05,ML[0]||EMPTY,10,'#9ff5ee');if(ML[1])wt(0,12.5,2.75,ML[1],8,'#7f9593');if(ML[2])wt(0,12.5,2.5,ML[2],8,'#7f9593');
- cx.strokeStyle='#0b7f7c';cx.beginPath();for(let i=0;i<=30;i++){const p=P(0,7.0+i*.1,1.98+.2*Math.abs(Math.sin(i*.5+t/2000)));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke();
- if(step==0){for(let k=0;k<4;k++){const r=ROOMS[k];for(let j=0;j<3;j++){const ff=((f*1.6+j/3)%1);const a=P(0,8.5,2.3),b=P(r.x+r.w/2,r.y+1,1);const px=a[0]+(b[0]-a[0])*ff,py=a[1]+(b[1]-a[1])*ff-Math.sin(ff*Math.PI)*40;const C=RCOL[r.n];cx.fillStyle=rgba(C,1-ff*.7);cx.shadowColor=C;cx.shadowBlur=10;cx.beginPath();cx.arc(px,py,2.6,0,7);cx.fill();cx.shadowBlur=0}}}
- const hotRooms={0:[],1:['Structure','Liquidity','Macro','Risk'],2:['Reviewer'],3:['Conflict Engine'],4:['Risk Engine'],5:['Risk Engine'],6:[],7:[]}[step];
+ const mk=[[ML[0]||(WAITING?WTXT:EMPTY),10,'#9ff5ee']].concat(ML.slice(1,3).map(l=>[l,8,'#8aa3a1']));
+ const zm=stack(0,12.5,3.66,2.1,compact?mk:[['DATOS DE MERCADO Y MACRO'+(isEx('market')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(mk),5.9,compact);
+ // demo status wall: "Día N de 30", realised / today P&L, daily-loss state, trade counts (all from the payload header)
+ const S=[P(0,.5,1.9),P(0,6.0,1.9),P(0,6.0,3.7),P(0,.5,3.7)];scr(S,false);
+ const cnt=Number.isInteger(HD.closed_trades)?`${HD.closed_trades} cerradas · ${Number.isInteger(HD.open_positions)?HD.open_positions:NA} abiertas`:null;
+ const sl=[[(DATA.source==='OANDA_DEMO'?'ESTADO DEL DEMO':'ESTADO')+(isEx('header.day_text')?'  · EJEMPLO':''),8,'#3fa9a4'],
+  [HD.day_text||(WAITING?WTXT:NA),10,'#e8c873'],[`P&L ${money(HD.pnl,1)} · hoy ${money(HD.today_pnl,1)}${TSTALE?' '+TSTALE:''}`,7,'#aebfc0'],
+  [`Pérdida diaria ${dl.replace(' / ','/')}${HD.daily_loss_status==='TRIGGERED'?' · límite alcanzado':DLT?' · '+DLT:''}`,7,HD.daily_loss_status==='TRIGGERED'?'#ff4d6d':'#aebfc0'],
+  cnt?[NOTR?NOOP:cnt,7,'#8aa3a1']:null].filter(Boolean);
+ stack(0,5.8,3.66,1.93,compact?sl.slice(1,3):sl,5.2,compact);
+ // market wall baseline: a flat rule while idle; it waves only while a real cycle runs
+ if(zm>2.05){cx.strokeStyle='#0b7f7c';cx.beginPath();for(let i=0;i<=30;i++){const p=P(0,7.0+i*.1,1.98+(ANIM?.2*Math.abs(Math.sin(i*.5+t/2000)):.02));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke()}
+ if(ANIM&&step==0){for(let k=0;k<4;k++){const r=ROOMS[k];for(let j=0;j<3;j++){const ff=((f*1.6+j/3)%1);const a=P(0,8.5,2.3),b=P(r.x+r.w/2,r.y+1,1);const px=a[0]+(b[0]-a[0])*ff,py=a[1]+(b[1]-a[1])*ff-Math.sin(ff*Math.PI)*40;const C=RCOL[r.n];cx.fillStyle=rgba(C,1-ff*.7);cx.shadowColor=C;cx.shadowBlur=10;cx.beginPath();cx.arc(px,py,2.6,0,7);cx.fill();cx.shadowBlur=0}}}
+ const hotRooms=step==null?[]:{0:[],1:['Structure','Liquidity','Macro','Risk'],2:['Reviewer'],3:['Conflict Engine'],4:['Risk Engine'],5:['Risk Engine'],6:[],7:[]}[step];
  ROOMS.forEach(r=>room(r,hotRooms.includes(r.n)));
  hits=[];
  DESKS.concat(SPARE.map(s=>({s:'',x:s[0],y:s[1],spare:1}))).forEach(d=>{const a=d.live?1:d.spare?.35:.4;
   box(d.x,d.y,0,2.4,1,.45,DESK,a,d.live?'rgba(57,255,136,.45)':null);
   for(let m=0;m<2;m++){box(d.x+.3+m*1,d.y+.18,.45,.8,.07,.5,MON,a);cx.globalAlpha=a*.9;const mx=d.x+.32+m*1,my=d.y+.26;
    poly([P(mx,my,.5),P(mx+.76,my,.5),P(mx+.76,my,.9),P(mx,my,.9)],d.live?(step==6&&m==0?'#39ff88':'#0b2416'):'#141310');
-   if(d.live){cx.strokeStyle=step==6&&m==0?'#06240f':'#39ff88';cx.shadowColor='#39ff88';cx.shadowBlur=6;cx.lineWidth=1.2;cx.beginPath();for(let i=0;i<=12;i++){const p=P(mx+.04+i*.056,my,.62+.18*Math.abs(Math.sin(i*.9+t/600+m)));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke();cx.shadowBlur=0}cx.globalAlpha=1}
+   if(d.live){cx.strokeStyle=step==6&&m==0?'#06240f':'#39ff88';cx.shadowColor='#39ff88';cx.shadowBlur=ANIM?6:2;cx.lineWidth=1.2;cx.beginPath();
+    // decorative trace (no data): moves only while a real cycle runs, flat when idle
+    for(let i=0;i<=12;i++){const p=P(mx+.04+i*.056,my,.62+(ANIM?.18*Math.abs(Math.sin(i*.9+t/600+m)):.06));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke();cx.shadowBlur=0;
+    // the open routed trade: a steady indicator (colour = sign of the payload P&L), never an animated tick
+    if(d.s==='EURUSD'&&OPEN&&m==1){const [ix,iy]=P(mx+.66,my,.82);cx.fillStyle=ok(OPEN.pnl)&&OPEN.pnl<0?'#ff4d6d':'#3ddc84';cx.shadowColor=cx.fillStyle;cx.shadowBlur=8;cx.beginPath();cx.arc(ix,iy,Math.max(2,U*.07),0,7);cx.fill();cx.shadowBlur=0}}
+   cx.globalAlpha=1}
   if(!d.spare){const b=tag(d.x+2.0,d.y+.3,1.1,d.s,deskSub(d),d.live);hits.push({b,box:[Math.min(P(d.x,d.y,.45)[0],P(d.x,d.y+1)[0]),P(d.x,d.y,1)[1],(3.4)*U,2.2*U],s:d.s,live:d.s==='EURUSD'})}
  });
  [[17.3,13.3],[4.7,13.3],[17.3,4.3]].forEach(([x,y])=>{box(x-.25,y-.25,0,.5,.5,.4,['#20272a','#141a1c','#192023']);const [px,py]=P(x,y,.4);cx.fillStyle='#163a33';cx.beginPath();cx.ellipse(px,py-U*.35,U*.32,U*.42,0,0,7);cx.fill();cx.strokeStyle='#1f5a4c';cx.stroke()});
+ // everyone stands at the desk; only the step shown may walk / carry (moving only while a real cycle runs)
  Object.values(A).forEach(a=>{a.x=a.hx;a.y=a.hy;a.walk=0;a.carry=0});
- const wk=WALK[step];if(wk){const a=A[wk[0]];const path=[[a.hx,a.hy]].concat(route(wk[1],wk[2]));let ff;
-  if(FIX!=null){ff=.62}else ff=f<.45?f/.45:f<.55?1:1-(f-.55)/.45;
-  const p=along(path,Math.min(1,ff));a.x=p[0];a.y=p[1];a.walk=(f<.45||f>.55)&&FIX==null?1:(FIX!=null?1:0);a.carry=f<.5||FIX!=null}
+ const wk=step!=null?WALK[step]:null;if(wk){const a=A[wk[0]];const path=[[a.hx,a.hy]].concat(route(wk[1],wk[2]));
+  const ff=ANIM?(f<.45?f/.45:f<.55?1:1-(f-.55)/.45):.62;
+  const p=along(path,Math.min(1,ff));a.x=p[0];a.y=p[1];a.walk=ANIM?(f<.45||f>.55)?1:0:1;a.carry=ANIM?f<.5:1}
  if(step==6||step==7)A.Exec.carry=step==6;
- Object.values(A).sort((p,q)=>(p.x+p.y)-(q.x+q.y)).forEach(a=>person(a,t,!!(SAY[step]&&SAY[step][a.id])));
+ const say=Object.assign({},step!=null?SAY[step]||{}:{});
+ // Echo (desk EURUSD) is the only one reflecting the open routed trade: side, R and P&L from the payload
+ if(step==null&&OPEN)say.Exec=[`${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)}`,`P&L ${money(OPEN.pnl,1)}${TSTALE?' '+TSTALE:''}`];
+ Object.values(A).sort((p,q)=>(p.x+p.y)-(q.x+q.y)).forEach(a=>person(a,t,!!say[a.id]));
  ROOMS.forEach(r=>r.after());
  NHITS=[];Object.values(A).forEach(plate);
- const say=SAY[step]||{};PLACED=hits.map(h=>h.b.slice());
+ PLACED=hits.map(h=>h.b.slice());
+ if(step==null&&WAITING){const [hx,hy]=P(9.6,5.6,2.4);bubble({head:[hx,hy]},WTXT,true,DATA.epoch_text?'demo desde '+DATA.epoch_text:null)}
  Object.values(A).forEach(a=>{if(say[a.id])bubble(a,say[a.id][0],true,MOB()?null:say[a.id][1])});
- if(!MOB())Object.values(A).forEach(a=>{if(!say[a.id])bubble(a,IDLE(a.id),false)});
- if(say.wall){const [hx,hy]=P(0,5.0,3.0);bubble({head:[hx,hy],al:1},say.wall[0],true,say.wall[1])}
- requestAnimationFrame(frame)}
-fit();requestAnimationFrame(frame);
+ if(!MOB()&&!WAITING)Object.values(A).forEach(a=>{if(!say[a.id])bubble(a,IDLE(a.id),false)});
+ if(say.wall){const [hx,hy]=P(0,9.6,3.0);bubble({head:[hx,hy],al:1},say.wall[0],true,say.wall[1])}}
+// the only animation loop: a cycle really running (payload.running.active) and not a ?step= screenshot
+if(ANIM){const tick=n=>{draw(n-t0);requestAnimationFrame(tick)};requestAnimationFrame(tick)}
+fit();
 const pts=new Map();let lastD=0,moved=0;cv.style.touchAction='none';
 cv.addEventListener('pointerdown',e=>{pts.set(e.pointerId,[e.clientX,e.clientY]);moved=0});
 cv.addEventListener('pointermove',e=>{if(!pts.has(e.pointerId))return;const o=pts.get(e.pointerId);pts.set(e.pointerId,[e.clientX,e.clientY]);
@@ -284,31 +353,33 @@ function rrBar(t){const sl=t.sl_actual!=null?t.sl_actual:t.sl_expected,tp=t.tp_a
  if(!ok(sl)||!ok(tp)||!ok(en)||sl===tp)return `<div class="empty">${EMPTY}</div>`;
  const pos=v=>Math.max(0,Math.min(100,100*(v-sl)/(tp-sl)));const e=pos(en);const now=ok(t.exit_price)?t.exit_price:t.last_price;
  return `<div class="rr"><div class="seg" style="left:0;width:${e}%;background:#8a2335"></div><div class="seg" style="left:${e}%;width:${100-e}%;background:#1f7a4a"></div>
- <div class="t l">SL ${px(sl)}</div><div class="t" style="left:${e}%">Entry ${px(en)}</div><div class="t r">TP ${px(tp)}</div>`+
+ <div class="t l">SL ${px(sl)}</div><div class="t" style="left:${e}%">Entrada ${px(en)}</div><div class="t r">TP ${px(tp)}</div>`+
  (ok(now)?`<div class="dot" style="left:${pos(now)}%"></div><div class="t t2" style="left:${pos(now)}%;transform:${pos(now)<15?'none':pos(now)>85?'translateX(-100%)':'translateX(-50%)'};color:var(--gold)">${px(now)} · ${esc(fR(t.r_realized))}</div>`:'')+`</div>`}
 const delta=(a,b)=>ok(a)&&ok(b)?(a===b?NA:px(b-a)):NA;
-function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${EMPTY}</div>`;
+// broker trade number only (never a run id / UUID / path)
+const tradeNo=t=>/^\d{1,12}$/.test(String(t.id||''))?` · Operación #${esc(t.id)}`:'';
+function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${esc(WAITING?WTXT:NOOP)}</div>`;
  const open=t.status==='OPEN',ex=badge('trades');
  const slip=ok(t.slippage_pips)?t.slippage_pips.toFixed(1)+' pip':ok(t.slippage_price)?px(t.slippage_price):NA;
- const rows=[['Entry',px(t.entry_expected),px(t.entry_actual),slip,t.slippage_against?'neg':t.slippage_against===false?'pos':''],
+ const rows=[['Entrada',px(t.entry_expected),px(t.entry_actual),slip,t.slippage_against?'neg':t.slippage_against===false?'pos':''],
   ['Stop Loss',px(t.sl_expected),px(t.sl_actual),delta(t.sl_expected,t.sl_actual),''],['Take Profit',px(t.tp_expected),px(t.tp_actual),delta(t.tp_expected,t.tp_actual),''],
   ['Riesgo',money(t.risk_expected),NA,'',''],['R',ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA,fR(t.r_realized),'',''],
-  ['PnL',NA,money(t.pnl,1),open?'abierta':(t.close_reason||''),''],['MAE / MFE',NA,NA,'','']];
+  ['P&L',NA,money(t.pnl,1),open?'abierta':(t.close_reason||''),''],['MAE / MFE',NA,NA,'','']];
  const chain=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng'].map(id=>`<span>◆</span> ${esc(NAMES[id][2])} — ${esc(AG[id]?(AG[id].status||NA):EMPTY)}`).join('<br>');
  const others=TRADES.length>1?`<div class="lab">Operaciones recientes${TSTALE?' '+esc(TSTALE):''}</div><table><tr><th>Fecha (ET)</th><th>Lado</th><th>Estado</th><th>R</th></tr>${TRADES.map((o,i)=>`<tr class="pick" onclick="pickTrade(${i})"><td>${esc(o.opened_at||NA)}</td><td>${esc(SIDE[o.side]||NA)}</td><td>${o.status==='OPEN'?'Abierta':esc(o.close_reason||'Cerrada')}</td><td class="${tone(o.r_realized)}">${esc(fR(o.r_realized))}</td></tr>`).join('')}</table>`:'';
  return `<h2 class="serif">${esc(t.symbol||'EURUSD')} · ${esc(SIDE[t.side]||NA)}</h2>
- <div class="sub">Trade #${esc(t.id||NA)} · ${esc(t.opened_at||NA)} · ${ok(t.units)?esc(t.units.toLocaleString('en-US',{maximumFractionDigits:0})):NA} units · ${open?'Abierta':'Cerrada'}${t.closed_at?' '+esc(t.closed_at):''}${TSTALE?' · '+esc(TSTALE):''}${ex}</div>
- <div class="big"><div><b class="${tone(t.pnl)}">${esc(money(t.pnl,1))}</b><small>PnL</small></div><div><b class="${tone(t.r_realized)}">${esc(fR(t.r_realized))}</b><small>R ${open?'actual':'final'}</small></div><div><b style="color:var(--mute)">${ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA}</b><small>R objetivo</small></div></div>
+ <div class="sub">${esc(t.opened_at||NA)}${tradeNo(t)} · ${esc(UNITS(t.units))} · ${open?'Abierta':'Cerrada'}${t.closed_at?' '+esc(t.closed_at):''}${TSTALE?' · '+esc(TSTALE):''}${ex}</div>
+ <div class="big"><div><b class="${tone(t.pnl)}">${esc(money(t.pnl,1))}</b><small>P&amp;L</small></div><div><b class="${tone(t.r_realized)}">${esc(fR(t.r_realized))}</b><small>R ${open?'actual':'final'}</small></div><div><b style="color:var(--mute)">${ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA}</b><small>R objetivo</small></div></div>
  <div class="lab">Plan R:R</div>${rrBar(t)}
- <div class="lab">Esperado vs real</div><table><tr><th></th><th>Esperado</th><th>Real</th><th>Δ</th></tr>${rows.map(r=>`<tr><td>${r[0]}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="${r[4]}">${esc(r[3])}</td></tr>`).join('')}</table>
+ <div class="lab">Esperado vs real</div><table><tr><th></th><th>Esperado</th><th>Real</th><th>Δ</th></tr>${rows.map(r=>`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="${r[4]}">${esc(r[3])}</td></tr>`).join('')}</table>
  <div class="lab">Cadena de decisión</div><div class="chain">${chain}</div>${others}`}
 function pickTrade(i){TR=TRADES[i]||TR;document.getElementById('tradeV').innerHTML=tradeHTML(TR)}
 document.getElementById('tradeV').innerHTML=tradeHTML(TR);
 function openAgent(id){const n=NAMES[id],d=AG[id]||{};document.getElementById('tradeV').style.display='none';const v=document.getElementById('agentV');v.style.display='';
- const sig=d.signals&&d.signals.length?`<table><tr><th>Fecha (ET)</th><th>Señal</th><th>Resultado</th><th>R</th></tr>${d.signals.map(r=>`<tr><td>${esc(r.at||NA)}</td><td>${esc(r.signal||NA)}</td><td>${esc(r.outcome||NA)}</td><td class="${tone(r.r)}" style="font-weight:500">${esc(fR(r.r))}</td></tr>`).join('')}</table>`:`<div class="empty">${EMPTY}</div>`;
+ const sig=d.signals&&d.signals.length?`<table><tr><th>Fecha (ET)</th><th>Señal</th><th>Resultado</th><th>R</th></tr>${d.signals.map(r=>`<tr><td>${esc(r.at||NA)}</td><td>${esc(r.signal||NA)}</td><td>${esc(r.outcome||NA)}</td><td class="${tone(r.r)}" style="font-weight:500">${esc(fR(r.r))}</td></tr>`).join('')}</table>`:`<div class="empty">${esc(WAITING?WTXT:EMPTY)}</div>`;
  v.innerHTML=`<h2 class="serif" style="color:${COL[id]};text-shadow:0 0 18px ${COL[id]}66">${n[0]}</h2><div style="height:2px;width:46px;background:${COL[id]};margin:10px 0 0;box-shadow:0 0 10px ${COL[id]}"></div><div class="sub">${n[1]} · Sala ${n[2]}${badge('agents.'+id)}</div>
- <div class="big"><div><b>${ok(d.hit_rate)?d.hit_rate.toFixed(0)+'%':NA}</b><small>Hit rate${ok(d.hit_rate)&&TSTALE?' '+esc(TSTALE):''}</small></div><div><b>${ok(d.confidence)?d.confidence.toFixed(2):NA}</b><small>Confianza</small></div><div><b style="font-size:16px;padding-top:12px;color:var(--gold2)">${esc(d.status||EMPTY)}</b><small>Estado</small></div></div>
- <div class="lab">Último análisis · ${esc(d.as_of||NA)}</div><div class="chain" style="line-height:1.7">${esc(d.analysis||EMPTY)}</div>
+ <div class="big"><div><b>${ok(d.hit_rate)?d.hit_rate.toFixed(0)+'%':NA}</b><small>Tasa de acierto${ok(d.hit_rate)&&TSTALE?' '+esc(TSTALE):''}</small></div><div><b>${ok(d.confidence)?d.confidence.toFixed(2):NA}</b><small>Confianza</small></div><div><b style="font-size:16px;padding-top:12px;color:var(--gold2)">${esc(d.status||(WAITING?WTXT:EMPTY))}</b><small>Estado</small></div></div>
+ <div class="lab">Último análisis · ${esc(d.as_of||NA)}</div><div class="chain" style="line-height:1.7">${esc(d.analysis||(WAITING?WTXT:EMPTY))}</div>
  <div class="lab">Últimas 5 señales</div>${sig}
  <div class="lab">Actualizado ${esc(d.as_of||NA)}${isEx('agents.'+id)?' · datos de ejemplo':''}</div>`;
  document.body.classList.add('open');setTimeout(fit,520)}

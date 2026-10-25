@@ -1,19 +1,19 @@
-"""Visual tokens used by the observation console (light theme)."""
+"""Visual tokens used by the observation console (dark + gold Floor theme, same palette as ui/static/theme.css)."""
 TOKENS = {
-    "background": "#f3f6fb", "surface-1": "#ffffff", "surface-2": "#f7f9fc",
-    "surface-3": "#eef2f8", "border": "#e2e8f0", "text-primary": "#172033",
-    "text-secondary": "#556070", "info": "#2459d6", "success": "#16a34a",
-    "caution": "#b54708", "danger": "#dc2626", "inactive": "#98a2b3",
+    "background": "#0a0a0b", "surface-1": "#0d1416", "surface-2": "#0d0d0e",
+    "surface-3": "#121b1d", "border": "#1a2325", "text-primary": "#e8eceb",
+    "text-secondary": "#a9b8b6", "info": "#19e3d3", "success": "#3ddc84",
+    "caution": "#f0b450", "danger": "#ff4d6d", "inactive": "#7f9593", "gold": "#d9b45a",
 }
 
 
 def apply(st):
     st.markdown("""<style>
-    .stApp {background:#f3f6fb;color:#172033}
-    div[data-testid="stMetric"] {background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:12px}
-    .floor-card {background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:12px;margin:8px 0}
-    .safety {background:#e9f0fe;color:#2459d6;padding:9px 13px;border-radius:12px;font-weight:700}
-    .critical {background:#fdecea;color:#b42318;border:1px solid #f5c6c0;padding:12px;border-radius:12px;font-weight:700}
+    .stApp {background:#0a0a0b;color:#e8eceb}
+    div[data-testid="stMetric"] {background:#0d1416;border:1px solid #1a2325;border-radius:14px;padding:12px}
+    .floor-card {background:#0d1416;border:1px solid #1a2325;border-radius:14px;padding:12px;margin:8px 0}
+    .safety {background:#0d1416;color:#d9b45a;border:1px solid #3a3220;padding:9px 13px;border-radius:12px;font-weight:700}
+    .critical {background:#2a0f16;color:#ff8da1;border:1px solid #5c1f2c;padding:12px;border-radius:12px;font-weight:700}
     code,.mono {font-variant-numeric:tabular-nums}
     @media(max-width:1100px){.floor-card{padding:8px}}
     @media(max-width:640px){

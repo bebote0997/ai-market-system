@@ -82,7 +82,7 @@ class DashboardOnlyTests(unittest.TestCase):
         with self.only():
             _app, content = self.page("Overview")
         self.assertIn("Equity (NAV) · OANDA demo", content)
-        self.assertNotIn("Equity · PAPER", content)
+        self.assertNotIn("Equity · práctica interna", content)
         self.assertNotIn("+$3.00", content)  # the PAPER fixture trade
 
     def test_command_center_hides_paper_ledger(self):
@@ -105,7 +105,7 @@ class DashboardOnlyTests(unittest.TestCase):
         os.environ.pop("AI_FLOOR_BROKER_DEMO_ROUTING", None)
         with nullcontext():
             _app, content = self.page("Overview")
-        self.assertIn("Equity · PAPER", content)
+        self.assertIn("Equity · práctica interna", content)
 
 
 class ProcessHistoryOnlyTests(unittest.TestCase):

@@ -9,7 +9,7 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
     rows = [
         {S: "Símbolos soportados", E: "XAUUSD, NAS100, EURUSD"},
         {S: "Símbolos activos", E: "XAUUSD, EURUSD"},
-        {S: "Proveedor de precios", E: "Twelve Data configurado para PAPER"},
+        {S: "Proveedor de precios", E: "Twelve Data configurado para la práctica interna"},
         {S: "Adaptador Massive", E: "Soportado / no activo"},
         {S: "Proveedor de IA", E: "No iniciado"},
         {S: "Programador", E: "No configurado"},

@@ -3,6 +3,9 @@
 The HTML is a static asset; Python injects the JSON payload of ``ui.floor_payload.build_floor_payload`` (escaped so
 it cannot close the ``<script>`` tag). The browser fetches nothing. Rendered as a sandboxed ``srcdoc`` iframe with
 ``st.iframe`` (``streamlit.components.v1.html`` on Streamlit versions without it; that API is deprecated).
+``render`` rebuilds the payload on every run of the page's 60 s auto-refresh fragment (``ui/app.py``), so a cycle that
+starts RUNNING (``payload["running"]``) shows up at the next refresh: the new ``srcdoc`` reloads the iframe. Idle, the
+asset draws one static frame; it animates only while that payload says a cycle is running.
 
 Below the floor, the trade manager / risk desk offers ONE owner action, «Cerrar operación» (``ui.views.floor_actions``;
 this module itself never imports any execution / broker code).

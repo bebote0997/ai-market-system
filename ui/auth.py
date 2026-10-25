@@ -126,7 +126,7 @@ def require_dashboard_access(st, env=None, *, clock=time.monotonic, sleep=time.s
     if expired:
         LOG.info("component=dashboard event=SESSION_EXPIRED")
 
-    st.title("AI Trading Floor · panel privado de práctica (PAPER)")
+    st.title("AI Trading Floor · panel privado · OANDA Demo (práctica)")
     if expired:
         st.info("La sesión expiró; vuelve a entrar.")
     locked_until = max(limiter.locked_until(now), state.get(LOCKED_UNTIL) or 0.0)

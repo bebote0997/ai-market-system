@@ -176,12 +176,14 @@ class SpanishPresentationTests(unittest.TestCase):
         rows = dict(luxury.slippage({'symbol': 'XAUUSD', 'entry_price': 1}, {}))
         self.assertEqual(rows['Slippage'], 'sin planned entry guardada')
 
-    def test_ui_stylesheet_is_light_and_offline(self):
+    def test_ui_stylesheet_is_dark_gold_and_offline(self):
         css = Path('ui/static/theme.css').read_text()
         self.assertFalse(Path('ui/static/luxury.css').exists())
         self.assertNotIn('@import', css)
         self.assertNotIn('http', css)
-        self.assertIn('#f3f6fb', css)
+        self.assertIn('#0a0a0b', css)
+        self.assertIn('#d9b45a', css)
+        self.assertNotIn('#f3f6fb', css)  # no light page background left
 
 
 class ControlViewTests(unittest.TestCase):

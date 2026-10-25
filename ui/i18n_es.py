@@ -16,7 +16,7 @@ STOP_UNKNOWN = "sin datos del stop original"
 
 # Navigation: internal page keys stay as identifiers; only the label is translated.
 PAGES = {
-    "Overview": "📊 Resumen", "The Floor": "🏢 La mesa", "Process": "🔄 Proceso",
+    "Overview": "🏠 Inicio", "The Floor": "🏢 La mesa", "Process": "🔄 Proceso",
     "Setups": "🎯 Setups", "Trades": "💼 Trades", "Decisions": "🧠 Decisiones",
     "Analysts · soon": "🔬 Analistas · pronto", "Control": "🎛️ Control",
 }
@@ -36,19 +36,19 @@ TEXT = {
     "Enabled for experiment: ": "Activos en el experimento: ",
     "SAMPLE / DEMO · FLOOR, MARKETS, JOURNAL, SYSTEM": "Datos de ejemplo en vistas detalladas",
     "Auto-refresh · every 60s": "Actualizar solo · cada 60 s",
-    "PAPER · REAL EXECUTION DISABLED": "Cuenta de práctica (PAPER) · ejecución real desactivada",
+    "PAPER · REAL EXECUTION DISABLED": "OANDA Demo (práctica) · ejecución real desactivada",
     "Observation only · no live orders": "Solo observación · no envía órdenes reales",
     "PAPER · REAL EXECUTION DISABLED · NO REAL MONEY":
-        "Cuenta de práctica (PAPER) · sin dinero real · ejecución real desactivada",
+        "Cuenta de práctica OANDA Demo · sin dinero real · ejecución real desactivada",
     "PAPER MODE · REAL EXECUTION DISABLED · NO REAL MONEY":
-        "Modo práctica (PAPER) · ejecución real desactivada · sin dinero real",
+        "Cuenta de práctica OANDA Demo · sin dinero real · ejecución real desactivada",
     "SAMPLE / DEMO": "DATOS DE EJEMPLO",
-    "Paper trading only · observation only": "Solo práctica (paper trading) · solo observación",
+    "Paper trading only · observation only": "Solo práctica · solo observación",
     "Legacy / Detail": "Vistas detalladas (técnicas)",
     "Trading Floor": "AI Trading Floor",
-    "PAPER · V2": "Práctica · PAPER · V2",
+    "PAPER · V2": "OANDA Demo · V2.1",
     # Overview
-    "Equity · PAPER": "Equity · PAPER",
+    "Equity · PAPER": "Equity · práctica interna",
     "Closed-trade curve": "Closed-trade curve",
     "Closed-trade curve · latest 200 points · cumulative realized PnL over full ledger":
         "Cumulative realized PnL · closed trades (últimos 200 puntos)",
@@ -140,7 +140,7 @@ TEXT = {
     "SETUP": "SETUP",
     "DETERMINISTIC RISK ENGINE": "MOTOR DE RIESGO (REGLAS FIJAS)",
     "PYTHON DETERMINISTIC": "CALCULADO POR PYTHON, SIN IA",
-    "PAPER POSITION": "PAPER POSITION",
+    "PAPER POSITION": "POSICIÓN DE PRÁCTICA",
     "NO REAL MONEY": "SIN DINERO REAL",
     "FLAT": "FLAT",
     "PIPELINE": "PASOS DEL ANÁLISIS",
@@ -157,8 +157,8 @@ TEXT = {
     "MARKETS": "MERCADOS",
     "1H context · 15M structure · 5M timing. Bias is context, not an order.":
         "1 h contexto · 15 min estructura · 5 min momento de entrada. La tendencia es contexto, no una orden.",
-    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS (PAPER + OANDA DEMO)",
-    "30-DAY DEMO IN PROGRESS": "DEMO DE 30 DÍAS EN CURSO: cuenta de práctica PAPER desde el 14 oct 2026; el broker demo OANDA cuenta sus propios 30 días desde su primer trade enrutado",
+    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS (OANDA DEMO)",
+    "30-DAY DEMO IN PROGRESS": "DEMO DE 30 DÍAS EN CURSO: cuenta de práctica interna desde el 14 oct 2026; el broker demo OANDA cuenta sus propios 30 días desde su primer trade enrutado",
     "The demo runs on the cloud scheduler with durable history. Metrics and the OANDA demo evidence report grow with observed trades.":
         "El demo corre en el programador de la nube con historial duradero. Las métricas y el informe de evidencia del demo OANDA crecen con las operaciones observadas.",
     "SYSTEM": "SISTEMA",
@@ -202,7 +202,7 @@ STATUS = {
     "LONG": "LONG", "SHORT": "SHORT", "BULLISH": "Alcista", "BEARISH": "Bajista",
     "NEUTRAL": "Neutral", "UNKNOWN": "Desconocida", "MIXED": "Mixta",
     "NO_SETUP": "No setup", "WATCH": "Watch", "VALID_SETUP": "Valid setup",
-    "PLAN_READY": "Plan listo", "PAPER PLAN READY": "PAPER plan ready", "AI_CAUTION": "La IA pide cautela",
+    "PLAN_READY": "Plan listo", "PAPER PLAN READY": "Plan de práctica listo", "AI_CAUTION": "La IA pide cautela",
     "RISK_REJECTED": "Rechazada por riesgo", "APPROVED": "Aprobada", "REJECTED": "Rechazada",
     "NOT CALLED": "No consultado", "NOT_REQUIRED": "No hacía falta", "MISSING": "Sin respuesta",
     "OK": "Bien", "PARTIAL": "Parcial", "ERROR": "Error", "FAILED": "Falló", "COMPLETED": "Completado",

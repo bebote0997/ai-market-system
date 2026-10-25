@@ -23,7 +23,7 @@ from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.state import current_market, enabled_market_symbols, operational_store
 
-st.set_page_config(page_title="AI Trading Floor · PAPER", layout="wide", page_icon="📊")
+st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊")
 require_dashboard_access(st)
 luxury.apply(st)
 

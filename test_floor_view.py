@@ -289,7 +289,9 @@ class FloorPayloadTests(unittest.TestCase):
         self.assertAlmostEqual(header["drawdown_pct"], 0.03)
         self.assertAlmostEqual(header["daily_loss_used_pct"], 0.5)  # 25 % of a 2 % limit
         self.assertEqual(header["daily_loss_limit_pct"], 2.0)
-        self.assertEqual(header["day_text"], "Día 2 de 30")
+        self.assertEqual(header["day_text"], "Día 3 de 30")  # epoch 18 oct (NY) = day 1; 20 oct = day 3
+        self.assertEqual((header["balance"], header["today_pnl"], header["open_positions"], header["closed_trades"]),
+                         (100100.0, 0.0, 1, 2))
         trade = payload["trades"][0]
         self.assertEqual((trade["id"], trade["entry_actual"], trade["entry_expected"]), ("77", 1.10013, 1.1))
         self.assertAlmostEqual(trade["slippage_pips"], 1.3)
@@ -353,6 +355,201 @@ class FloorPayloadTests(unittest.TestCase):
         self.assertEqual(empty["header"]["day_text"], "Día 3 de 30")
         self.assertEqual(empty["real_fields"], [])
         self.assertEqual(build_floor_payload(sample_mode=False, now=NOW)["example_fields"], [])
+
+
+def demo_since(epoch, **kwargs):
+    """fake_demo whose epoch is ``epoch`` (the OANDA trades of fake_demo stay: they are from OANDA since the epoch)."""
+    demo = fake_demo(**kwargs)
+    return {**demo, "epoch": lambda: epoch}
+
+
+class FloorEpochTests(unittest.TestCase):
+    """OANDA demo mode: only cycles / events at/after the demo epoch; "Esperando el primer ciclo" until then."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "floor.db"
+        seed(self.path)  # a PAPER cycle of 20 oct 12:00 UTC (+ journal, snapshot, agent decision)
+
+    def build(self, now=NOW, **kwargs):
+        with dashboard_database(self.path) as db:
+            return build_floor_payload(now=now, db=db, sample_mode=False, enabled_symbols=("EURUSD",), **kwargs)
+
+    def test_pre_epoch_cycle_is_never_shown_and_floor_waits(self):
+        epoch = datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)  # after the seeded cycle
+        payload = self.build(demo=demo_since(epoch))
+        self.assertEqual((payload["cycle"], payload["feed"], payload["market"]), (None, None, None))
+        for agent_id in ("Structure", "Liquidity", "Macro", "Risk", "Reviewer", "Conflict", "RiskEng"):
+            self.assertIsNone(payload["agents"][agent_id], agent_id)
+        self.assertTrue(payload["waiting"])
+        self.assertEqual(payload["waiting_text"], "Esperando el primer ciclo")
+        self.assertEqual(payload["epoch_text"], "20 oct 09:00 ET")
+        self.assertFalse(payload["note_real"] and payload["cycle_text"])
+        self.assertIsNone(payload["cycle_text"])
+        html = floor_view.render_html(payload)
+        for leaked in ("estructura alcista real", "sin eventos de alto impacto", "dentro de límites", "10055"):
+            self.assertNotIn(leaked, html)
+
+    def test_post_epoch_cycle_is_shown(self):
+        epoch = datetime(2026, 10, 20, 11, 0, tzinfo=timezone.utc)
+        payload = self.build(demo=demo_since(epoch))
+        self.assertFalse(payload["waiting"])
+        self.assertIsNone(payload["waiting_text"])
+        self.assertEqual(payload["agents"]["Structure"]["analysis"], "estructura alcista real")
+        self.assertTrue(payload["cycle"]["steps"][7]["done"])
+        self.assertTrue(payload["feed"])
+        self.assertEqual(payload["cycle_text"], "último ciclo 20 oct 08:00 ET (antiguo)")  # 90 min old cycle
+        self.assertTrue(payload["note_real"])  # the NAV read of fake_demo is from NOW
+
+    def test_unparsable_timestamps_and_unknown_epoch_are_excluded(self):
+        store = Store(self.path)
+        store.db.execute("INSERT INTO journal(timestamp,run_id,symbol,source,event_type,severity,payload) "
+                         "VALUES(?,?,?,?,?,?,?)", ("not-a-time", "run-x", "EURUSD", "x", "ODD_EVENT", "INFO", "{}"))
+        store.close()
+        epoch = datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)
+        self.assertIsNone(self.build(demo=demo_since(epoch))["feed"])
+        broken = {**fake_demo(), "epoch": lambda: 1 / 0}
+        payload = self.build(demo=broken)
+        self.assertTrue(payload["waiting"])
+        self.assertEqual((payload["cycle"], payload["feed"], payload["epoch_text"]), (None, None, None))
+        self.assertIsNone(payload["header"]["day_text"])
+
+    def test_paper_mode_keeps_full_history(self):
+        payload = self.build()
+        self.assertFalse(payload["waiting"])
+        self.assertTrue(payload["cycle"])
+        self.assertEqual(payload["agents"]["Structure"]["analysis"], "estructura alcista real")
+
+    def test_zero_trades_header_is_explicit(self):
+        demo = fake_demo()
+        snapshot = {**demo["snapshot"](NOW), "stats": {"trades": 0, "wins": 0, "total_pnl": 0.0, "today_pnl": 0.0,
+                                                       "max_drawdown": 0.0, "avg_r": None, "avg_r_reason": None},
+                    "open_rows": []}
+        header = self.build(demo={**demo, "snapshot": lambda _now, **_r: snapshot})["header"]
+        self.assertEqual((header["trades"], header["pnl"], header["today_pnl"], header["open_positions"]),
+                         (0, 0.0, 0.0, 0))
+        self.assertIsNone(header["win_rate"])
+        self.assertEqual(header["daily_loss_text"], "Bien")
+        asset = floor_view.ASSET.read_text(encoding="utf-8")
+        self.assertIn("NOOP='sin operaciones aún'", asset)
+        self.assertIn("const NOTR=HD.trades===0", asset)
+
+
+class FloorRunningTests(unittest.TestCase):
+    """payload["running"]: active ONLY for a fresh RUNNING run (>= epoch in demo mode); step = first step not done."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "floor.db"
+        Store(self.path).close()
+
+    def running(self, started, demo=None, **columns):
+        store = Store(self.path)
+        at = started.isoformat()
+        store.db.execute("INSERT INTO runs(slot_key,run_id,symbol,as_of,started_at,status,provider_metadata) "
+                         "VALUES(?,?,?,?,?,?,?)", ("slot-r", "run-r", "EURUSD", at, at, "RUNNING",
+                                                   columns.get("metadata")))
+        if columns.get("agents"):
+            store.db.execute("INSERT INTO agent_decisions(slot_key,agent_name,as_of,status,bias,confidence) "
+                             "VALUES(?,?,?,?,?,?)", ("slot-r", "structure_ai", at, "OK", "BULLISH", 0.6))
+        store.close()
+        with dashboard_database(self.path) as db:
+            return build_floor_payload(now=NOW, db=db, demo=demo)["running"]
+
+    def test_fresh_running_row_is_active(self):
+        state = self.running(NOW - timedelta(minutes=2))
+        self.assertEqual((state["active"], state["symbol"], state["step"]), (True, "EURUSD", 0))
+        self.assertEqual(state["started_at_text"], "20 oct 09:28 ET")
+
+    def test_step_is_the_first_step_not_done(self):
+        state = self.running(NOW - timedelta(minutes=2), metadata=json.dumps({"provider": "x"}), agents=True)
+        self.assertEqual(state["step"], 2)  # data + agent outputs persisted: the reviewer step is running
+
+    def test_stale_running_row_is_not_active(self):
+        state = self.running(NOW - timedelta(minutes=20))  # a crashed process left it RUNNING
+        self.assertEqual(state, {"active": False, "step": None, "symbol": None, "started_at_text": None})
+
+    def test_pre_epoch_running_row_is_not_active(self):
+        state = self.running(NOW - timedelta(minutes=2), demo=demo_since(NOW - timedelta(minutes=1)))
+        self.assertFalse(state["active"])
+        self.assertTrue(self.running_again(demo_since(NOW - timedelta(minutes=5)))["active"])
+
+    def running_again(self, demo):
+        with dashboard_database(self.path) as db:
+            return build_floor_payload(now=NOW, db=db, demo=demo)["running"]
+
+    def test_no_database_is_idle(self):
+        self.assertFalse(build_floor_payload(now=NOW)["running"]["active"])
+
+
+class DemoClockTests(unittest.TestCase):
+    def test_day_counts_new_york_dates_from_the_epoch(self):
+        from ui import i18n_es as es
+        from ui.demo_clock import demo_day_from_epoch
+        epoch = datetime(2026, 10, 25, 15, 30, 20, tzinfo=timezone.utc)  # 25 oct 11:30 ET
+        self.assertEqual(demo_day_from_epoch(epoch, datetime(2026, 10, 26, 3, 59, tzinfo=timezone.utc)), 1)  # 23:59 ET
+        self.assertEqual(demo_day_from_epoch(epoch, datetime(2026, 10, 26, 4, 1, tzinfo=timezone.utc)), 2)
+        self.assertEqual(demo_day_from_epoch(epoch, datetime(2026, 11, 23, 15, tzinfo=timezone.utc)), 30)
+        day31 = demo_day_from_epoch(epoch, datetime(2026, 11, 24, 15, tzinfo=timezone.utc))
+        self.assertEqual(day31, 31)  # uncapped
+        self.assertEqual(es.demo_day_text(day31), "Día 30 de 30 – completo")
+        self.assertIsNone(demo_day_from_epoch(epoch, epoch - timedelta(seconds=1)))
+        self.assertIsNone(demo_day_from_epoch(None, epoch))
+        self.assertIsNone(demo_day_from_epoch(epoch.replace(tzinfo=None), epoch))
+
+
+class FloorTextTests(unittest.TestCase):
+    def test_codes_become_spanish_or_humanised(self):
+        from ui.floor_payload import code_text
+        self.assertEqual(code_text("DEC14_DECISION"), "Decisión de la política de setups opuestos")
+        self.assertEqual(code_text("PLAN_READY"), "Plan listo")
+        self.assertEqual(code_text("CONFIGURED"), "Configurado")
+        self.assertEqual(code_text("SOME_NEW_CODE"), "Some new code")
+        self.assertEqual(code_text("dentro de límites"), "dentro de límites")
+        self.assertIsNone(code_text(None))
+
+    def test_asset_has_spanish_labels(self):
+        asset = floor_view.ASSET.read_text(encoding="utf-8")
+        for label in ("'NAV'", "'P&L realizado'", "'Tasa de acierto'", "'Caída máx.'", "'Pérdida diaria'",
+                      '"Entrada / Salida"', '"Motor de conflictos"', '"Motor de riesgo"', '"Revisor"',
+                      "' unidades'", "'PAUSADO por el planificador'"):
+            self.assertIn(label, asset)
+        for english in ("'Equity'", "'Win rate'", "'Drawdown'", "'Daily loss'", '"Entry / Exit"',
+                        '"Conflict Engine"', '"Risk Engine"', "' units'", "'PnL'", "Hit rate"):
+            self.assertNotIn(english, asset)
+
+
+class FloorStaticTests(unittest.TestCase):
+    """Idle = one static drawing: no auto-stepping, no unconditional animation loop, no generated numbers."""
+
+    def test_no_auto_step_and_animation_gated_on_running(self):
+        asset = floor_view.ASSET.read_text(encoding="utf-8")
+        self.assertNotIn("%8", asset)  # the old endless 8-step loop
+        self.assertNotIn("Math.random", asset)
+        self.assertIn("RUN=DATA.running||{},ACTIVE=RUN.active===true", asset)
+        self.assertIn("const ANIM=ACTIVE&&FIX==null&&STEP!=null;", asset)
+        # exactly two requestAnimationFrame uses: the coalesced on-demand redraw, and the tick gated on ANIM
+        self.assertEqual(asset.count("requestAnimationFrame("), 3)
+        self.assertIn("function redraw(){if(queued)return;queued=1;requestAnimationFrame(", asset)
+        self.assertIn("if(ANIM){const tick=n=>{draw(n-t0);requestAnimationFrame(tick)};requestAnimationFrame(tick)}",
+                      asset)
+        self.assertIn("q.has('step')", asset)  # ?step=N screenshots keep working
+        self.assertIn("q.has('agent')", asset)
+        self.assertIn("q.has('detail')", asset)
+
+    def test_no_env_names_or_raw_codes_in_rendered_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "floor.db"
+            seed(path)
+            with dashboard_database(path) as db:
+                for demo in (None, fake_demo(), demo_since(NOW)):
+                    html = floor_view.render_html(build_floor_payload(now=NOW, db=db, demo=demo,
+                                                                      enabled_symbols=("EURUSD",)))
+                    self.assertNotIn("AI_FLOOR_", html)
+                    self.assertNotIn("PLAN_READY", html.split("</script>", 1)[0].split('application/json">')[1])
+                    self.assertNotIn("run-e1", html)
 
 
 class FloorHtmlTests(unittest.TestCase):

@@ -26,7 +26,7 @@ VIEW_STATUS = {"SIN_TOKEN": "sin token", "SIN_CUENTA": "sin cuenta", "ERROR": "e
 ROUTING_CHIPS = {"off": ("Enrutado a broker demo: apagado", ""), "dry_run": ("Enrutado a broker demo: dry-run", "warn"),
                  "on": ("Enrutado a broker demo: activo (cuenta practice)", "pos")}
 DASH = "—"
-LABELS = {"paper": "Cuenta de práctica interna (PAPER)", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
+LABELS = {"paper": "Cuenta de práctica interna", "broker_demo": "Broker demo (OANDA)", "real": "Cuenta real"}
 # Mirrors execution.historial.SOURCES (kept here so a failed lazy import still names the expected files).
 HISTORY_SOURCES = (("v1_replay", "v1_replay_eurusd.json", "Replay estrategia V1 (velas Twelve Data)"),
                    ("paper", "paper_closed_trades_eurusd.json", "Trades cerrados PAPER (agregado)"))
@@ -348,7 +348,7 @@ def render(st, snapshot=None):
              '<div class="bubble">Los interruptores de las cuentas son solo de lectura: muestran el estado y no se '
              'cambian desde aquí. El botón de parada de emergencia sí funciona: apaga todas las cuentas y pide cerrar '
              'las posiciones del broker demo. Quitar la parada de emergencia no es posible desde el panel. La cuenta '
-             'de práctica (PAPER) sigue funcionando igual.</div>'
+             'de práctica interna sigue funcionando igual.</div>'
              f'<div class="small">{escape(readable)}</div></div>')
     left, right = st.columns([1.3, 1])
     with left:
@@ -362,7 +362,7 @@ def render(st, snapshot=None):
                      f'<span class="small" style="margin-left:8px" title="{escape(str(account.get("mode") or "OFF"), quote=True)}">'
                      f'modo: {escape(status_text(account.get("mode") or "OFF"))}</span>')
         paper = accounts["paper"]
-        html(st, f'<div class="small" style="margin-top:12px">{escape(paper.get("label") or LABELS["paper"])}: '
+        html(st, f'<div class="small" style="margin-top:12px">{escape(LABELS["paper"])}: '  # registry label "PAPER" is internal
                  f'{"encendida" if paper.get("enabled") else "sin datos en el registro"} · no se controla desde aquí.</div>')
     with right:
         html(st, '<h3 style="margin:4px 0">Parada de emergencia</h3>')
