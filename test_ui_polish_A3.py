@@ -3,16 +3,49 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from ui import i18n_es as es
 from ui.adapters import MARKETS, empty_market
 from ui.components import panels
 from ui.components.charts import price_action_figure
-from ui.state import default_market_index
+from ui.state import current_market, default_market_index
 
 
 class DetailPolishTests(unittest.TestCase):
+    def snapshot_store(self, payload):
+        store = MagicMock()
+        store.load_snapshot.return_value = payload
+        store.db.execute.return_value.fetchone.return_value = None
+        store.db.execute.return_value.__iter__.return_value = iter(())
+        return store
+
+    def test_incompatible_snapshot_returns_empty_market(self):
+        store = self.snapshot_store({'symbol': 'EURUSD', 'run_id': 'x', 'state': 'NO_SETUP'})
+        st = SimpleNamespace(session_state={'sample_mode': False})
+        with patch('ui.state.operational_store', return_value=store):
+            self.assertEqual(current_market(st, 'EURUSD', Mock()), empty_market('EURUSD'))
+        store.close.assert_called_once_with()
+
+    def test_other_snapshot_errors_propagate_and_close_store(self):
+        st = SimpleNamespace(session_state={'sample_mode': False})
+        for error in (ValueError('invalid timestamp'), KeyError('state'), RuntimeError('decode failed')):
+            with self.subTest(error=error):
+                store = self.snapshot_store({'schema_version': '1.0', 'symbol': 'EURUSD'})
+                with patch('ui.state.operational_store', return_value=store), \
+                        patch('ui.state.from_persisted_snapshot', side_effect=error):
+                    with self.assertRaisesRegex(type(error), str(error)):
+                        current_market(st, 'EURUSD', Mock())
+                store.close.assert_called_once_with()
+
+    def test_snapshot_load_errors_are_not_swallowed(self):
+        store = self.snapshot_store(None)
+        store.load_snapshot.side_effect = ValueError('incompatible UI snapshot')
+        with patch('ui.state.operational_store', return_value=store):
+            with self.assertRaisesRegex(ValueError, 'incompatible UI snapshot'):
+                current_market(SimpleNamespace(session_state={'sample_mode': False}), 'EURUSD', Mock())
+        store.close.assert_called_once_with()
+
     def test_first_enabled_unpaused_symbol_and_fallback(self):
         self.assertEqual(MARKETS[default_market_index(('XAUUSD', 'EURUSD'))], 'EURUSD')
         self.assertEqual(default_market_index(('NAS100', 'unknown', 'XAUUSD')), 0)

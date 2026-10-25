@@ -68,7 +68,12 @@ def current_market(st, symbol, sample_factory):
         return empty_market(symbol)
     try:
         payload = store.load_snapshot(symbol)
-        vm = from_persisted_snapshot(payload) if payload else empty_market(symbol)
+        try:
+            vm = from_persisted_snapshot(payload) if payload else empty_market(symbol)
+        except ValueError as exc:
+            if str(exc) != "incompatible UI snapshot":
+                raise
+            vm = empty_market(symbol)
         # Runtime load_paper also reconstructs every historical fill/trade. Display
         # only needs account totals, open positions and a bounded order history.
         from storage.codec import paper_decode

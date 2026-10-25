@@ -2185,3 +2185,4 @@ Tests: `test_reversal.py` (+3), `test_floor_view.py` (+3). Baseline 2435 tests O
 
 - polish_fix1: conserva evidencia cruda en tablas ocultas, restaura marcas y textos, mantiene fallos operativos actuales y muestra horas NAV/operaciones; regresiones UI verificadas.
 - polish_fix2 (2026-10-25): alertas oscuras en stAlertContainer, KPI vacíos compactos y pérdida diaria en fila móvil propia, salud recuperada tras último éxito sin borrar errores históricos y etiquetas españolas de ejecución/riesgo/notificaciones; 203 tests dirigidos PASS, Ruff y diff-check PASS; sin commit/push.
+- polish_fix3 (2026-10-25): Detalle usa empty_market ante snapshots UI incompatibles sin ocultar otros errores; ui/state.py y test_ui_polish_A3.py, baseline 14 y validación 17 tests OK, Ruff OK; sin commit/push.
