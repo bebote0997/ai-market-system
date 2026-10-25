@@ -34,7 +34,7 @@ def health_rows(operational_health, since=None):
 
 def demo_health(health, store, notifications, since):
     """Read-only demo projection: historical PAPER freshness cannot degrade demo health."""
-    from ui.views.dashboard import FIRST_CYCLE_WAIT, is_current, records, since_epoch
+    from ui.views.dashboard import FIRST_CYCLE_WAIT, is_current, parse_time, records, row_time, since_epoch
     if since is None:
         return health
     result = dict(health)
@@ -43,9 +43,15 @@ def demo_health(health, store, notifications, since):
     if store is not None:
         errors += since_epoch(records(store.db, "journal", statuses=("ERROR", "CRITICAL")), since)
         errors += since_epoch(records(store.db, "runs", failed=True), since)
+    last_success = parse_time(result.get("last_success"))
+    # Recovery clears the current incident, not its persisted audit evidence.
+    errors = [error for error in errors
+              if last_success is None or (row_time(error) is not None and row_time(error) > last_success)]
     current = is_current(result.get("last_run"), since)
     failed = current and result.get("last_cycle_status") in {"ERROR", "CRITICAL", "FAILED"}
     operational_status = health.get("status", "OK")
+    if result.get("scheduler") in {"STOPPED", "DISABLED", "NOT STARTED"}:
+        operational_status = "STOPPED"
     if not current:
         from datetime import datetime, timezone
         from storage.codec import parse_utc

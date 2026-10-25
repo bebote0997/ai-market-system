@@ -36,7 +36,7 @@ class PolishBTests(unittest.TestCase):
         self.assertIn('grid-template-columns:repeat(2,minmax(0,1fr))', html)
         self.assertIn('flex:0 0 25%', html)
         self.assertIn('.kpi small:first-of-type{white-space:nowrap}', html)
-        self.assertNotIn('text-overflow:ellipsis', html)
+        self.assertIn('white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis', html)
         self.assertIn('cx.scale(maxU*U/width,1)', html)
         self.assertNotIn('cx.fillText(maxU?fitText', html)
         kpis = html.split("document.getElementById('kpis').innerHTML=", 1)[1].split('// "datos reales"', 1)[0]

@@ -161,3 +161,10 @@ header[data-testid="stHeader"]{background:transparent}
  .tf .scroll{max-width:100%}
  .block-container{padding:20px 14px}
 }
+
+/* Streamlit 1.65 paints the inner container, including its text and icon. */
+[data-testid="stAlertContainer"]{background:#0d1416!important;color:#e8eceb!important;border:1px solid #1a2325!important;border-left:3px solid #d9b45a!important;border-radius:12px}
+[data-testid="stAlertContainer"] :is(p,a,[data-testid^="stAlertContent"]){background:transparent!important;color:inherit!important}
+[data-testid="stAlertContainer"] :is(svg,[data-testid="stIconMaterial"]){color:#d9b45a!important}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]){background:#2a0f16!important;color:#ffc2cd!important;border:1px solid #5c1f2c!important;border-left:3px solid #e05b70!important}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) :is(svg,[data-testid="stIconMaterial"]){color:#e05b70!important}
