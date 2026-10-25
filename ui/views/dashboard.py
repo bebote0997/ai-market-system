@@ -293,7 +293,7 @@ def table(st, rows, empty=None):
     if not rows:
         st.info(empty or es.NO_DATA)
         return
-    dataframe(st, rows, hide_index=True, width="stretch")
+    dataframe(st, rows, preserve_raw=True, hide_index=True, width="stretch")
 
 
 def render(st, page):

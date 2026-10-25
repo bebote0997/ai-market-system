@@ -56,7 +56,7 @@ class DetailPolishTests(unittest.TestCase):
     def test_detail_page_titles_match_navigation(self):
         for key in ('MARKETS', 'JOURNAL', 'SYSTEM'):
             self.assertEqual(es.tr(key), es.LEGACY_PAGES[key])
-        self.assertEqual(es.tr('30-DAY AUTONOMOUS DEMO TEST'), es.LEGACY_PAGES['EXPERIMENT'])
+        self.assertEqual(es.tr('EXPERIMENT'), es.LEGACY_PAGES['EXPERIMENT'])
         self.assertEqual(es.page_label('SETUPS'), 'Detalle · Setups')
 
     def test_alert_theme_keeps_error_severity_and_styles_other_alerts(self):

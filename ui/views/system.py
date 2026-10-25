@@ -45,7 +45,24 @@ def demo_health(health, store, notifications, since):
         errors += since_epoch(records(store.db, "runs", failed=True), since)
     current = is_current(result.get("last_run"), since)
     failed = current and result.get("last_cycle_status") in {"ERROR", "CRITICAL", "FAILED"}
-    result["status"] = "DEGRADED" if errors or failed else (health.get("status", "OK") if current else "OK")
+    operational_status = health.get("status", "OK")
+    if not current:
+        from datetime import datetime, timezone
+        from storage.codec import parse_utc
+        stopped = result.get("scheduler") in {"STOPPED", "DISABLED", "NOT STARTED"}
+        heartbeat = result.get("runtime_heartbeat")
+        heartbeat_bad = False
+        if "runtime_heartbeat" in result:
+            try:
+                age = (datetime.now(timezone.utc) - parse_utc(heartbeat)).total_seconds()
+                heartbeat_bad = not 0 <= age <= 60
+            except (ValueError, TypeError, AttributeError):
+                heartbeat_bad = True
+        provider_bad = result.get("market_data") == "NOT CONFIGURED"
+        operational_status = ("STOPPED" if stopped or operational_status == "STOPPED" else
+                              "DEGRADED" if heartbeat_bad or provider_bad else "OK")
+    result["status"] = ("DEGRADED" if (errors or failed) and operational_status != "STOPPED"
+                        else operational_status)
     if not current:
         for key in (*CYCLE_KEYS, "freshness", "phase7_readiness", "last_review_agents"):
             if key in result:

@@ -2182,3 +2182,5 @@ Tests: `test_reversal.py` (+3), `test_floor_view.py` (+3). Baseline 2435 tests O
 
 - A2 (2026-10-25): Detalle/Control/Mesa con estados en español, horas ET y resúmenes sin UUIDs/JSON vacío; evidencia y descargas intactas; 144 tests relevantes OK (1 omitido), A2 4 OK, Ruff y diff-check OK.
 - A3 (2026-10-25): Detalle elige el primer símbolo habilitado no pausado (EURUSD), muestra reloj/gráficos y etiquetas en ET, unifica títulos y avisos oscuros con borde dorado; baseline 37 OK, validación enfocada 70 OK, Ruff y diff-check OK; sin commit/push.
+
+- polish_fix1: conserva evidencia cruda en tablas ocultas, restaura marcas y textos, mantiene fallos operativos actuales y muestra horas NAV/operaciones; regresiones UI verificadas.

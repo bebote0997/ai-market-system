@@ -43,6 +43,12 @@ class PolishBTests(unittest.TestCase):
         self.assertNotIn('esc(STALE)', kpis)
         self.assertIn('class="data-age"', kpis)
 
+    def test_stale_notice_includes_both_source_times(self):
+        html = render_html({})
+        self.assertIn('NAV ${HD.equity_as_of} ET', html)
+        self.assertIn("operaciones ${HD.trades_as_of?HD.trades_as_of+' ET'", html)
+        self.assertIn("ageTimes.join(' · ')", html)
+
     def test_refresh_is_automatic_and_faster_than_snapshot(self):
         app = Path('ui/app.py').read_text()
         floor = app.split('if page == floor_view.PAGE:', 1)[1].split('if page in dashboard.PAGES:', 1)[0]

@@ -19,6 +19,19 @@ class PolishA1Tests(unittest.TestCase):
         self.assertEqual(dict(system.health_rows(result, EPOCH))['Estado'], 'Bien')
         self.assertEqual(system.demo_health(health, None, [], None), health)
 
+    def test_pre_epoch_health_preserves_operational_failures(self):
+        from datetime import datetime, timezone
+        base = {'status': 'DEGRADED', 'last_run': BEFORE, 'last_success': BEFORE,
+                'freshness': 'STALE_DATA', 'scheduler': 'RUNNING',
+                'runtime_heartbeat': datetime.now(timezone.utc).isoformat(),
+                'market_data': 'Twelve Data'}
+        self.assertEqual(system.demo_health(base, None, [], EPOCH)['status'], 'OK')
+        for changes, expected in (({'scheduler': 'STOPPED'}, 'STOPPED'),
+                                  ({'runtime_heartbeat': BEFORE}, 'DEGRADED'),
+                                  ({'market_data': 'NOT CONFIGURED'}, 'DEGRADED')):
+            with self.subTest(changes=changes):
+                self.assertEqual(system.demo_health({**base, **changes}, None, [], EPOCH)['status'], expected)
+
     def test_current_errors_survive_without_a_current_cycle(self):
         for severity in ('ERROR', 'CRITICAL'):
             for stamp, status in ((BEFORE, 'OK'), (AFTER, 'DEGRADED')):

@@ -132,7 +132,8 @@ const KP=[[money(HD.equity),'NAV',ok(HD.equity)?'':'na',['equity','balance'],BAL
 // EJEMPLO next to each KPI that fell back to example data (sample mode only)
 document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi" title="${esc(k[1]+(k[4]?' · '+k[4]:''))}"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small>${k[4]?`<small class="b2">${esc(k[4])}</small>`:''}</div>`).join('');
 const oldMarker=STALE||TSTALE;
-if(oldMarker)document.getElementById('brandSub').innerHTML+=`<small class="data-age"> · ${esc(HD.equity_stale&&HD.equity_as_of?'dato de '+HD.equity_as_of+' ET':HD.trades_as_of?'operaciones de '+HD.trades_as_of+' ET':'operaciones sin hora')}</small>`;
+const ageTimes=[HD.equity_as_of?`NAV ${HD.equity_as_of} ET`:'',(HD.trades_as_of||HD.trades_stale)?`operaciones ${HD.trades_as_of?HD.trades_as_of+' ET':'sin hora'}`:''].filter(Boolean);
+if(oldMarker)document.getElementById('brandSub').innerHTML+=`<small class="data-age"> · ${esc('dato antiguo · '+ageTimes.join(' · '))}</small>`;
 // "datos reales" ONLY when the newest data point is fresh (payload.note_real); never on old / pre-epoch data
 const noteMain=EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:DATA.note_real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:
  WAITING?`<i>${esc(WTXT)}</i>${DATA.epoch_text?' · demo desde '+esc(DATA.epoch_text):''}`:DATA.cycle_text?'':`<i>${EMPTY}</i>`;

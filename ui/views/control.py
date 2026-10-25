@@ -380,7 +380,7 @@ def render_history(st):
         cards.append(f'<div class="card"><h4>{escape(label)} · EURUSD</h4>'
                      f'<span class="chip">{escape(HISTORY_CHIP)}</span>{body}</div>')
     html(st, f'<div class="card"><h3>{escape(HISTORY_TITLE)}</h3>'
-             '<div class="bubble">Estadísticas de referencia (referencia) de sistemas anteriores, solo en R y conteos. '
+             '<div class="bubble">Estadísticas de referencia de sistemas anteriores, solo en R y conteos. '
              'Están separadas de las estadísticas de la demo en vivo de OANDA y nunca se mezclan con ellas.</div>'
              f'{"".join(cards)}</div>')
 

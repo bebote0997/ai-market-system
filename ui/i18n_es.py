@@ -125,7 +125,8 @@ TEXT = {
         "IDs exactos; si llenas ambos se combinan. Hasta 200 filas por tabla y página, lo más reciente primero.",
     "Failed runs": "Ciclos fallidos",
     "Error journal": "Bitácora de errores",
-    "AI TRADING FLOOR": "AI Trading Floor",
+    "AI TRADING FLOOR": "AI TRADING FLOOR",
+    "EXPERIMENT": "Experimento",
     "SAMPLE / DEMO — NOT CURRENT PRICES": "DATOS DE EJEMPLO — NO SON PRECIOS ACTUALES",
     "CRITICAL — STALE DATA": "CRÍTICO — DATOS VIEJOS",
     "NEXT ANALYSIS: NOT SCHEDULED · AI INTERPRETS. PYTHON VALIDATES. RISK ENGINE AUTHORIZES. PAPER BROKER EXECUTES.":
@@ -158,7 +159,7 @@ TEXT = {
     "MARKETS": "Mercados",
     "1H context · 15M structure · 5M timing. Bias is context, not an order.":
         "1 h contexto · 15 min estructura · 5 min momento de entrada. La tendencia es contexto, no una orden.",
-    "30-DAY AUTONOMOUS DEMO TEST": "Experimento",
+    "30-DAY AUTONOMOUS DEMO TEST": "PRUEBA DEMO AUTÓNOMA DE 30 DÍAS",
     "30-DAY DEMO IN PROGRESS": "Demo de 30 días en curso en la cuenta de práctica OANDA Demo",
     "The demo runs on the cloud scheduler with durable history. Metrics and the OANDA demo evidence report grow with observed trades.":
         "El demo corre en el programador de la nube con historial duradero. Las métricas y el informe de evidencia del demo OANDA crecen con las operaciones observadas.",
@@ -531,7 +532,7 @@ STATUS.update({"None reported": "sin novedades",
                "broker_demo": "broker demo", "real": "real (bloqueado)",
                "Transfer recorded": "transferencia registrada", "TRANSFER_RECORDED": "transferencia registrada"})
 TEXT.update({"None reported": "sin novedades"})
-COLUMNS.update({"details": "Detalles", "payload": "Detalles", "provider_metadata": "Proveedores",
+COLUMNS.update({"event_type": "Tipo de evento", "detail": "Detalle", "details": "Detalles", "payload": "Detalles", "provider_metadata": "Proveedores",
                 "last_checked_at": "Última comprobación", "observed_at": "Observado",
                 "component": "Componente", "message": "Mensaje", "kind": "Evento",
                 "agents": "Agentes", "execution": "Ejecución", "risk_decision": "Decisión de riesgo",
