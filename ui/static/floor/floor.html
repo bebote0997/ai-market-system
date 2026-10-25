@@ -361,6 +361,7 @@ function expireRunning(){
  if(ACTIVE&&Date.now()>=DEADLINE){
   ACTIVE=false;ANIM=false;
   if(FIX==null){STEP=null;document.body.classList.add('idle')}
+  document.querySelectorAll('#steps .step').forEach(step=>step.classList.remove('on','done'));
   document.getElementById('running-note')?.remove();return true}return false}
 if(ANIM){const tick=n=>{if(expireRunning()){draw(0);return}draw(n-t0);requestAnimationFrame(tick)};requestAnimationFrame(tick)}
 fit();

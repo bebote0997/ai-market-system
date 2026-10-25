@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from ui.views import control, floor_view, system
 
@@ -39,6 +39,37 @@ class ControlStatusTests(unittest.TestCase):
                                         self.assertIn('dry-run', text)
                                     elif routing == 'off':
                                         self.assertIn('enrutado apagado', text)
+
+    def test_render_requires_a_fresh_successful_practice_summary(self):
+        snapshot = control.default_snapshot()
+        snapshot['accounts'][1].update(enabled=True, mode='DEMO')
+        for status, stale, active in (('OK', False, True), ('OK', True, False), ('ERROR', False, False)):
+            with self.subTest(status=status, stale=stale):
+                st = MagicMock()
+                st.columns.return_value = [MagicMock(), MagicMock()]
+                with patch('ui.views.control.account_view', return_value=SimpleNamespace(status=status, stale=stale)), \
+                        patch('ui.views.control.router_status', return_value={'state': 'on'}), \
+                        patch('ui.views.control.operator_api'), patch('ui.views.control.render_emergency'), \
+                        patch('ui.views.control.render_drift'), patch('ui.views.control.render_router'), \
+                        patch('ui.views.control.render_accounts_view'), patch('ui.views.control.render_history'), \
+                        patch('ui.views.luxury.html') as html:
+                    control.render(st, snapshot)
+                content = '\n'.join(call.args[1] for call in html.call_args_list)
+                self.assertEqual('Conectado · activo' in content, active)
+                if stale:
+                    self.assertIn('chip warn', content)
+                    self.assertIn('datos de saldo desactualizados', content)
+
+    def test_stale_balance_keeps_warning_and_safety_priority(self):
+        account = {'key': 'broker_demo', 'enabled': True, 'mode': 'DEMO'}
+        for routing in ('on', 'off', 'dry_run'):
+            text, tone = control.account_status(account, {}, routing, True, stale=True)
+            self.assertIn('datos de saldo desactualizados', text)
+            self.assertNotIn('Conectado · activo', text)
+            self.assertEqual(tone, 'warn')
+        self.assertEqual(control.account_status(account, {'emergency_stop': True}, 'on', True, True)[1], 'neg')
+        account['enabled'] = False
+        self.assertIn('Cuenta apagada', control.account_status(account, {}, 'on', True, True)[0])
 
     def test_history_reader_labels_are_normalized_and_fallback_is_clean(self):
         record = SimpleNamespace(source='paper', filename='x.json', label='Trades cerrados PAPER (agregado)',
@@ -103,12 +134,15 @@ class FloorExpiryTests(unittest.TestCase):
         script = '''const assert=require('node:assert/strict');
 let ACTIVE=true,ANIM=true,STEP=2;const FIX=null,DEADLINE=1000,t0=0;
 let now=999,pending=[],draws=[],idle=false,removed=false;Date.now=()=>now;
-const document={body:{classList:{add:c=>{idle=c==='idle'}}},getElementById:()=>({remove:()=>removed=true})};
+const classes=new Set(['step','done','real']),activeClasses=new Set(['step','on']);
+const steps=[classes,activeClasses].map(c=>({classList:{remove:(...names)=>names.forEach(n=>c.delete(n))}}));
+const document={querySelectorAll:selector=>{assert.equal(selector,'#steps .step');return steps},body:{classList:{add:c=>{idle=c==='idle'}}},getElementById:()=>({remove:()=>removed=true})};
 const requestAnimationFrame=fn=>pending.push(fn),draw=t=>draws.push([t,STEP,ANIM]);
 ''' + loop + '''
 assert.equal(pending.length,1);pending.shift()(10);
 assert.equal(pending.length,1);now=1000;pending.shift()(20);
 assert.equal(pending.length,0);assert.equal(ACTIVE,false);
 assert.deepEqual(draws.at(-1),[0,null,false]);assert.equal(idle,true);assert.equal(removed,true);
+assert.deepEqual([...classes],['step','real']);assert.deepEqual([...activeClasses],['step']);
 '''
         subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)

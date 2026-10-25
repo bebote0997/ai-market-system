@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-25 — UI chunk 6: tres correcciones de revisión
+
+- Control exige resumen practice `OK` y `stale is not True` para mostrar «Conectado · activo»; el saldo antiguo muestra «datos de saldo desactualizados» con tono de advertencia, conservando la prioridad de parada de emergencia/cuenta apagada.
+- La mesa, Proceso, Setups y Decisiones filtran con `dashboard.demo_since()`; el epoch fijo del fallback de `demo_unavailable_api()` ya no permite mostrar ciclos anteriores al epoch configurado. Epoch ilegible ⇒ nada pasa.
+- El Floor limpia las clases temporales `on`/`done` del pie al vencer el plazo; conserva la evidencia persistida `real` y sus marcas de finalización. Regresión JavaScript con Node extendida.
+- Validación: baseline 2567 tests OK; suite completa `/workspace/venv-ui/bin/python -m unittest discover -p "test_*.py"`: 2571 tests OK (41 skipped, 1 expected failure). `ruff check .` y `git diff --check` PASS. Solo UI/tests; sin cambios de fase, ejecución, runtime, agentes, riesgo, broker, flags o deploy; sin staging, commit ni push.
+
 ## 2026-10-25 — UI chunk 2: páginas Streamlit solo con datos desde el epoch, números reales del demo, español legible (branch `feat/floor-ui-fixes`)
 
 - **Solo desde el epoch** (un único filtro, `ui.views.dashboard.since_epoch` + `demo_since` / `epoch_or_far` / `is_current`; epoch ilegible en modo demo ⇒ nada pasa): La mesa (tarjetas por símbolo y salas de agentes / motor de riesgo solo con snapshot ≥ epoch; si no, «Esperando el primer ciclo»), Proceso (ciclos ≥ epoch; un `process_run_id` anterior se ignora; sin ciclos ⇒ una sola tarjeta de espera en vez de 9 pasos vacíos), Setups, Decisiones (vacío ⇒ espera), «Último ciclo» / «Último ciclo exitoso» con la misma regla (`luxury.cycle_time`; la señal de vida sigue en vivo), eventos del enrutado en Control, y las vistas detalladas (Resumen, Setups, Decisiones, Salud, Alertas, Historial — `history(since=)` —, Errores, Mercados, Bitácora, Sistema). Los datos PAPER no se borran: solo se ocultan. En modo demo no se muestran el capital al decidir / dinero en riesgo de la cuenta PAPER ni sus totales en Sistema. Nota de archivo: «Los datos de la práctica anterior están archivados y no cuentan aquí.»

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import sqlite3
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -36,6 +37,13 @@ class EpochFilterTests(unittest.TestCase):
             self.assertIsNone(dashboard.demo_since())
         self.assertEqual(dashboard.epoch_or_far(lambda: 1 / 0), dashboard.FAR_FUTURE)
         self.assertEqual(dashboard.epoch_or_far(lambda: datetime(2026, 10, 25)), dashboard.FAR_FUTURE)  # naive
+
+    def test_unavailable_demo_epoch_filter_fails_closed(self):
+        with patch.dict(os.environ, {"AI_FLOOR_RESULTS_SOURCE": "OANDA_DEMO"}), \
+                patch('execution.demo_epoch.demo_epoch', side_effect=RuntimeError):
+            since = luxury.demo_since(luxury.demo_unavailable_api())
+            self.assertEqual(since, dashboard.FAR_FUTURE)
+            self.assertEqual(dashboard.since_epoch([{"as_of": AFTER}], since), [])
         self.assertFalse(dashboard.is_current(AFTER, dashboard.FAR_FUTURE))
 
     def test_history_hides_pre_epoch_runs_and_events(self):
@@ -229,6 +237,21 @@ class DemoPagesTests(unittest.TestCase):
         self.assertIn("Esperando el primer ciclo", content)
         self.assertIn("Día 1 de 30", content)
         self.assertEqual(content.count("sin operaciones aún"), 3)
+
+    def test_unavailable_demo_module_uses_configured_epoch_for_all_cycle_pages(self):
+        self.assertGreater(datetime.fromisoformat(self.epoch), luxury.DEMO_DEFAULT_EPOCH)
+        with patch.dict(sys.modules, {'execution.demo_dashboard': None}):
+            with self.case.env(AI_FLOOR_DEMO_EPOCH=self.epoch):
+                demo = luxury.demo_api()
+                self.assertEqual(demo['epoch'](), luxury.DEMO_DEFAULT_EPOCH)
+                self.assertEqual(luxury.demo_since(demo), datetime.fromisoformat(self.epoch))
+            for page in ('The Floor', 'Process', 'Setups', 'Decisions'):
+                with self.subTest(page=page):
+                    app, content = self.page(page, process_run_id='run-1')
+                    self.assertIn('Esperando el primer ciclo', content)
+                    self.assertNotIn('Setup válido', content)
+                    self.assertNotIn('En observación', content)
+                    self.assertFalse([s for s in app.selectbox if s.label == 'Ciclo · el más reciente primero'])
 
     def test_legacy_pages_hide_pre_epoch_rows(self):
         for page in ("HISTORY", "ERRORS", "DECISIONS"):

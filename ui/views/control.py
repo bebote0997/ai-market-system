@@ -79,14 +79,15 @@ def checked_account(base, account):
             "locked": True if real else account.get("locked") is True}
 
 
-def account_status(account, snapshot, routing=None, read_ok=False):
+def account_status(account, snapshot, routing=None, read_ok=False, stale=False):
     """Chip text of one account row. For the OANDA demo row the same facts as the routing chip and the balance panel:
     Emergency stop and account OFF take priority. Routing and the read-only balance determine the remaining
     connectivity text; the registry's ``connected`` flag may lag behind (presentation only)."""
     if account["key"] == "real" and (account.get("locked") or not account.get("enabled")):
         return "Real: bloqueado por seguridad", "neg"
     if account["key"] == "broker_demo":
-        connection = "Conectado (saldo leído)" if read_ok else "Saldo no disponible"
+        connection = ("Conectado · datos de saldo desactualizados" if stale else
+                      "Conectado (saldo leído)" if read_ok else "Saldo no disponible")
         if snapshot.get("emergency_stop") is True:
             return f"Parada de emergencia activada · {connection}", "neg"
         if account.get("enabled") is not True or account.get("mode") == "OFF":
@@ -94,7 +95,9 @@ def account_status(account, snapshot, routing=None, read_ok=False):
         if routing == "dry_run":
             return f"{connection} · enrutado en prueba (dry-run)", "warn"
         if routing != "on":
-            return f"{connection} · enrutado apagado", ""
+            return f"{connection} · enrutado apagado", "warn" if stale else ""
+        if stale:
+            return connection, "warn"
         if read_ok:
             return "Conectado · activo (enrutado encendido, saldo leído)", "pos"
         return "Enrutado encendido · no se pudo leer el saldo de OANDA", "warn"
@@ -392,7 +395,9 @@ def render(st, snapshot=None):
     routing = router_status()
     from ui.views.dashboard import demo_since
     since = demo_since()  # OANDA demo: router events before the epoch are not shown as current
-    read_ok = getattr(account_view("practice"), "status", None) == "OK"
+    practice_view = account_view("practice")
+    stale = getattr(practice_view, "stale", False) is True
+    read_ok = getattr(practice_view, "status", None) == "OK" and not stale
     html(st, '<div class="card"><h3>🎛️ Panel de control</h3>'
              '<div class="bubble">Los interruptores de las cuentas son solo de lectura: muestran el estado y no se '
              'cambian desde aquí. El botón de parada de emergencia sí funciona: apaga todas las cuentas y pide cerrar '
@@ -404,7 +409,7 @@ def render(st, snapshot=None):
         html(st, '<h3 style="margin:4px 0">Cuentas</h3>')
         for key, icon in (("broker_demo", "🧪"), ("real", "🔒")):
             account = accounts[key]
-            text, kind = account_status(account, snapshot, routing["state"], read_ok)
+            text, kind = account_status(account, snapshot, routing["state"], read_ok, stale)
             st.toggle(f"{icon} {account.get('label') or LABELS[key]}", value=bool(account.get("enabled")),
                       disabled=True, key=f"control-{key}")
             html(st, f'<span class="chip {kind}">{escape(text)}</span>'

@@ -489,7 +489,8 @@ def demo_no_data(demo):
 
 def demo_since(demo):
     """Epoch filter of the demo screens: None in PAPER mode (``demo`` None); an unreadable epoch => nothing passes."""
-    return None if demo is None else epoch_or_far(demo['epoch'])
+    from ui.views.dashboard import demo_since as dashboard_demo_since
+    return None if demo is None else dashboard_demo_since()
 
 
 def demo_day(demo, now):
