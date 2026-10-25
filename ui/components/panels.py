@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from ui.adapters import assistant_lines, state_label
 from ui.components.charts import price_action_figure
-from ui.i18n_es import readable, AGENTS, NO_DATA, column, datetime_et, short_id, status_text, tr
+from ui.i18n_es import readable, AGENTS, NO_DATA, column, datetime_et, ET, short_id, status_text, tr
 
 
 def show_value(value):
@@ -19,9 +19,9 @@ def header(st, vm):
     if vm.freshness == "STALE_DATA":
         st.markdown(f'<div class="critical">{tr("CRITICAL — STALE DATA")}</div>', unsafe_allow_html=True)
     c = st.columns(6)
-    for col, label, value in zip(c, ("SÍMBOLO", "ESTADO", "ACTUALIDAD", "SESIÓN", "HORA UTC", "ÚLTIMO ANÁLISIS"),
+    for col, label, value in zip(c, ("SÍMBOLO", "ESTADO", "ACTUALIDAD", "SESIÓN", "HORA ET", "ÚLTIMO ANÁLISIS"),
             (vm.symbol, tr("CRITICAL — STALE DATA") if vm.freshness == "STALE_DATA" else status_text(state_label(vm.state)),
-             status_text(vm.freshness), "—", datetime.now(timezone.utc).strftime("%H:%M"),
+             status_text(vm.freshness), "—", datetime.now(timezone.utc).astimezone(ET).strftime("%H:%M ET"),
              datetime_et(vm.as_of) if vm.as_of else "—")):
         col.metric(label, value)
     st.caption(tr("NEXT ANALYSIS: NOT SCHEDULED · AI INTERPRETS. PYTHON VALIDATES. RISK ENGINE AUTHORIZES. PAPER BROKER EXECUTES."))
