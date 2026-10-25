@@ -2,7 +2,7 @@ import json
 
 from ui.i18n_es import COLUMNS, NO_DATA, column, enabled_caption, status_text, tr
 from ui.tables import dataframe
-from ui.json_views import ordered
+from ui.i18n_es import readable, IDENTITY_KEYS
 
 # OANDA demo mode: the PAPER account's numbers are not shown; cycle values before the epoch are not "current".
 PAPER_HEALTH_KEYS = frozenset({"equity", "realized_pnl", "unrealized_pnl", "open_positions", "paper_broker"})
@@ -22,6 +22,8 @@ def health_rows(operational_health, since=None):
             health["last_success"] = FIRST_CYCLE_WAIT
     rows = []
     for key, value in health.items():
+        if key in IDENTITY_KEYS:
+            continue
         if isinstance(value, (tuple, list)):
             value = ", ".join(map(str, value))
         elif isinstance(value, str):
@@ -103,17 +105,17 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
     if operational_health and not vm.sample:
         rows = [{S: label, E: value} for label, value in health_rows(operational_health, since)]
     dataframe(st, rows, hide_index=True, width="stretch")
-    st.write("Avisos:", vm.warnings or "—")
-    st.write("Versiones de prompts:", dict(vm.prompt_versions) if vm.prompt_versions else NO_DATA)
+    st.write("Avisos:", readable(vm.warnings))
+    st.write("Versiones de prompts:", readable(dict(vm.prompt_versions)))
     st.write("Versión del esquema:", vm.schema_version or NO_DATA)
     if operational_health and not vm.sample:
         st.subheader(tr("Latest review"))
         if review:
-            st.json(ordered({"run_id": review["run_id"], "final_status": review["final_status"],
+            st.write(readable({"run_id": review["run_id"], "final_status": review["final_status"],
                      "setup_status": review["setup_status"], "agents": review["agents"],
                      "risk_decision": review["risk_decision"], "execution": review.get("execution"),
                      **({} if since is not None else {"paper": review["paper"]}),
-                     "error": review["error"]}), expanded=False)
+                     "error": review["error"]}))
         else:
             from ui.views.dashboard import FIRST_CYCLE_WAIT
             st.write(FIRST_CYCLE_WAIT if since is not None else NO_DATA)
@@ -128,9 +130,9 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
                 elif not is_current(record.get("as_of"), since):
                     st.info("ese ciclo es anterior al inicio del demo y no se muestra")
                 else:
-                    st.json(ordered({key: record.get(key) for key in ("run_id", "symbol", "as_of",
+                    st.write(readable({key: record.get(key) for key in ("run_id", "symbol", "as_of",
                             "final_status", "setup_status", "risk_decision", "execution",
-                            "paper", "error")}), expanded=False)
+                            "paper", "error")}))
                     dataframe(st, since_epoch(store.journal(run_id=run_id, limit=500), since),
                                  hide_index=True, width="stretch")
                     st.download_button(tr("Download run evidence (JSON)"),

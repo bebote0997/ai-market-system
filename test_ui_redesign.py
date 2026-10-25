@@ -303,11 +303,11 @@ class ControlBrokerViewTests(unittest.TestCase):
     def test_history_section_is_separate_and_empty_without_data(self):
         with patch.dict('os.environ', {'AI_FLOOR_HISTORIAL_DIR': '/nonexistent-historial-dir'}):
             content = self.content(self.app())
-        start = content.index('📚 Historial (referencia) · no son trades de OANDA')
+        start = content.index('📚 Historial (referencia) · no son operaciones de OANDA')
         section = content[start:]
         self.assertIn('separadas de las estadísticas de la demo en vivo de OANDA', section)
         self.assertIn('sin datos todavía', section)
-        self.assertIn('Referencia · no son trades de OANDA', section)
+        self.assertIn('Referencia · no son operaciones de OANDA', section)
         self.assertNotIn('<table', section)
 
     def test_routing_chip_defaults_to_off(self):
@@ -326,7 +326,7 @@ class ControlBrokerViewTests(unittest.TestCase):
     def test_demo_is_default_and_real_is_display_only(self):
         app = self.app()
         content = self.content(app)
-        self.assertIn('Demo · cuenta practice OANDA', content)
+        self.assertIn('Demo · cuenta de práctica OANDA', content)
         self.assertIn('sin token', content)
         self.assertNotIn('Real · solo lectura', content)
         view = next(t for t in app.toggle if t.key == 'account-view-real')

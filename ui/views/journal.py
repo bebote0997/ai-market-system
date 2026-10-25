@@ -20,7 +20,7 @@ def render(st, vm, durable_rows=()):
     rows = []
     for item in (vm.journal if vm.sample else durable_rows):
         row = {"timestamp": str(item.timestamp), "run_id": item.run_id, "symbol": item.symbol,
-               "source": item.entity_id, "event": item.event_type, "details": str(item.details)} if vm.sample else {
+               "source": item.entity_id, "event": item.event_type, "details": item.details} if vm.sample else {
                "timestamp": item["timestamp"], "run_id": item["run_id"], "symbol": item["symbol"],
                "source": item["source"], "event": item["event_type"], "details": item["payload"]}
         if symbol != "ALL" and row["symbol"] != symbol:

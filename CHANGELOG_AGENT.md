@@ -2179,3 +2179,5 @@ Tests: `test_reversal.py` (+3), `test_floor_view.py` (+3). Baseline 2435 tests O
 - Chunk B (2026-10-25): Floor con antigüedad contextual, aviso único, panel NAV ajustado y layout móvil; baseline 38 PASS, regresiones y análisis de rendimiento locales.
 
 - A1 (2026-10-25): Salud/Sistema/Alertas/Bitácora filtran evidencia anterior a la época demo; estado Bien antes del primer ciclo, ERROR/CRITICAL actuales conservados; baseline 44 y validación enfocada 51 tests OK, Ruff OK.
+
+- A2 (2026-10-25): Detalle/Control/Mesa con estados en español, horas ET y resúmenes sin UUIDs/JSON vacío; evidencia y descargas intactas; 144 tests relevantes OK (1 omitido), A2 4 OK, Ruff y diff-check OK.

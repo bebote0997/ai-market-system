@@ -3,11 +3,11 @@ from datetime import datetime, timezone
 
 from ui.adapters import assistant_lines, state_label
 from ui.components.charts import price_action_figure
-from ui.i18n_es import AGENTS, NO_DATA, column, datetime_et, short_id, status_text, tr
+from ui.i18n_es import readable, AGENTS, NO_DATA, column, datetime_et, short_id, status_text, tr
 
 
 def show_value(value):
-    return "—" if value is None else str(value)
+    return readable(value)
 
 
 def header(st, vm):
@@ -54,7 +54,7 @@ def assistant(st, vm):
     for title, lines in assistant_lines(vm).items():
         st.caption(ASSISTANT_TITLES.get(title, title))
         for line in lines:
-            st.write(tr(line) if line in ("NO REAL MONEY", "None reported") else status_text(line))
+            st.write(readable(tr(line)).replace("Risk Engine:", "Motor de riesgo:"))
     st.caption(tr("Observation only. No authorization or execution controls."))
 
 

@@ -520,3 +520,66 @@ def tip(text):
     """Small '¿Qué significa?' hint using a native tooltip (no JavaScript)."""
     return (f'<span class="tip" title="{escape(text, quote=True)}" tabindex="0">'
             f'ⓘ {escape(TEXT["What does it mean?"])}</span>')
+
+
+# Readable projections only: stored contracts and downloadable evidence stay untouched.
+IDENTITY_KEYS = frozenset({"id", "run_id", "last_run_id", "setup_id", "slot_key", "account_id",
+                           "position_id", "order_id", "event_id", "delivery_id"})
+UUID_PATTERN = re.compile(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b")
+ISO_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?")
+STATUS.update({"None reported": "sin novedades",
+               "broker_demo": "broker demo", "real": "real (bloqueado)",
+               "Transfer recorded": "transferencia registrada", "TRANSFER_RECORDED": "transferencia registrada"})
+TEXT.update({"None reported": "sin novedades"})
+COLUMNS.update({"details": "Detalles", "payload": "Detalles", "provider_metadata": "Proveedores",
+                "last_checked_at": "Última comprobación", "observed_at": "Observado",
+                "component": "Componente", "message": "Mensaje", "kind": "Evento",
+                "agents": "Agentes", "execution": "Ejecución", "risk_decision": "Decisión de riesgo",
+                "final_status": "Estado final", "error": "Error"})
+
+
+def readable(value):
+    """Compact Spanish display text, with no technical identities or empty JSON."""
+    from ui.json_views import structured
+    value = structured(value)
+    if value is None:
+        return MISSING
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            if key in IDENTITY_KEYS:
+                continue
+            text = readable(item)
+            if text != MISSING:
+                parts.append(f"{column(key)}: {text}")
+        return " · ".join(parts) or MISSING
+    if isinstance(value, (list, tuple)):
+        return "; ".join(text for item in value if (text := readable(item)) != MISSING) or MISSING
+    if isinstance(value, datetime):
+        return short_datetime_et(value)
+    text = str(value).strip()
+    if text in ("", "None", "null", "[]", "{}"):
+        return MISSING
+    text = UUID_PATTERN.sub("", text)
+
+    def local_time(match):
+        try:
+            parsed = datetime.fromisoformat(match.group().replace("Z", "+00:00"))
+        except ValueError:
+            return "hora inválida"
+        return short_datetime_et(parsed) if parsed.tzinfo else "hora sin zona horaria"
+
+    text = ISO_PATTERN.sub(local_time, text)
+    text = status_text(text)
+    for code, label in (("NO_DATA", "sin datos"), ("NOT CALLED", "no consultado"),
+                        ("None reported", "sin novedades"), ("Transfer recorded", "transferencia registrada")):
+        text = text.replace(code, label)
+    text = re.sub(r"\bpractice\b", "práctica", text)
+    text = re.sub(r"\bNone\b", MISSING, text)
+    return text.strip(" ·:;") or MISSING
+
+
+def display_rows(rows):
+    """Copy rows for a table without changing the source evidence."""
+    hidden = IDENTITY_KEYS | {column(key) for key in IDENTITY_KEYS}
+    return [{column(key): readable(value) for key, value in row.items() if key not in hidden} for row in rows]

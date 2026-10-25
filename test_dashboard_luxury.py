@@ -138,7 +138,7 @@ class LuxuryDashboardTests(unittest.TestCase):
             app = self.app()
             content = '\n'.join(m.value for m in app.markdown)
             self.assertIn('&lt;b&gt;V2_F3&lt;/b&gt;', content)
-            self.assertIn('origen: env', content)
+            self.assertIn('origen: configuración del servidor', content)
             self.assertNotIn('never-display-this', content)
             self.assertEqual(luxury.policy_value({'V2_PLANNER_POLICY': 'V1'}, 'V2_PLANNER_POLICY'),
                              ('V1', 'system_state'))
@@ -188,7 +188,7 @@ class LuxuryDashboardTests(unittest.TestCase):
         from ui.i18n_es import STEPS as LABELS
         for step in STEPS:
             self.assertIn(LABELS[step], content)
-        for value in ('IA de estructura', 'fixture only', 'setup-1', 'closed-1', 'twelve_data', 'OPPOSITE_POSITION_CONFLICT', 'aún no guardado', 'Datos que faltan'):
+        for value in ('IA de estructura', 'fixture only', 'closed-1', 'twelve_data', 'Opposite position conflict', 'aún no guardado', 'Datos que faltan'):
             self.assertIn(value, content)
         self.assertEqual(self.digest(), before)
         next(t for t in app.toggle if t.label == 'Actualizar solo · cada 60 s').set_value(False).run()

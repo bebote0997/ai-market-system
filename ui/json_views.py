@@ -27,13 +27,5 @@ def ordered(value):
 
 
 def details(value):
-    value = ordered(value)
-    if not isinstance(value, (list, dict)):
-        return escape(str(value), quote=True)
-    fields = value if isinstance(value, dict) else (value[0] if value and isinstance(value[0], dict) else {})
-    first = ' · '.join(f'{key}: {fields[key]}' for key in KEY_FIELDS if key in fields
-                       and not isinstance(fields[key], (dict, list)))
-    pretty = json.dumps(value, indent=2, ensure_ascii=False, default=str)
-    return (f'<div class="json-key-fields">{escape(first, quote=True)}</div>'
-            '<details class="json-details"><summary>Ver datos técnicos (JSON)</summary>'
-            f'<pre>{escape(pretty, quote=True)}</pre></details>')
+    from ui.i18n_es import readable
+    return escape(readable(value), quote=True)
