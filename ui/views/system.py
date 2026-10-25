@@ -1,6 +1,6 @@
 import json
 
-from ui.i18n_es import COLUMNS, NO_DATA, column, enabled_caption, status_text, tr
+from ui.i18n_es import NO_DATA, column, enabled_caption, service_label, status_text, tr
 from ui.tables import dataframe
 from ui.i18n_es import readable, IDENTITY_KEYS
 
@@ -28,7 +28,7 @@ def health_rows(operational_health, since=None):
             value = ", ".join(map(str, value))
         elif isinstance(value, str):
             value = display(value) if value[:2] == "20" else status_text(value)
-        rows.append((column(key) if key in COLUMNS else key.replace("_", " ").capitalize(), value))
+        rows.append((service_label(key), value))
     return rows
 
 
@@ -123,7 +123,7 @@ def render(st, vm, operational_health=None, review=None, notifications=(), evide
         {S: "Símbolos soportados", E: "XAUUSD, NAS100, EURUSD"},
         {S: "Símbolos activos", E: enabled_caption(("XAUUSD", "EURUSD"))},
         {S: "Proveedor de precios", E: "Twelve Data configurado para la práctica interna"},
-        {S: "Adaptador Massive", E: "Soportado / no activo"},
+        {S: "Adaptador Massive", E: "Compatible · no activo"},
         {S: "Proveedor de IA", E: "No iniciado"},
         {S: "Programador", E: "No configurado"},
         {S: "Broker de práctica", E: "No iniciado"},

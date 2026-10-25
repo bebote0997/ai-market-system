@@ -64,6 +64,16 @@ class SpanishDetailTests(unittest.TestCase):
                 shown = '\n'.join(str(item.value) for kind in ('markdown', 'caption', 'info', 'warning',
                                    'error', 'success', 'text', 'json', 'dataframe') for item in getattr(app, kind))
                 self.assertIsNone(FORBIDDEN.search(shown), shown)
+                if page in ('SYSTEM', 'HEALTH'):
+                    self.assertNotRegex(shown, r'Supported symbols|Enabled symbols|Runtime heartbeat|Market provider mode|Not started|SUPPORTED / NOT ACTIVE|scheduler_slot|market_data_provider')
+                    for label in ('Programador', 'Latido del programador', 'Modo del proveedor de precios',
+                                  'Proveedor de IA', 'Proveedor macroeconómico', 'Último ciclo exitoso'):
+                        self.assertIn(label, shown)
+                if page == 'SYSTEM':
+                    for label in ('Símbolos soportados', 'Símbolos activos', 'Base de datos', 'Datos de mercado',
+                                  'Adaptador Massive', 'Versión del esquema'):
+                        self.assertIn(label, shown)
+
 
     def test_process_leak_scan(self):
         from test_dashboard_luxury import LuxuryDashboardTests

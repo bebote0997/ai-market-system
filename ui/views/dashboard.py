@@ -356,7 +356,7 @@ def render(st, page):
                                            ("last_checked_at", "observed_at")), wait)
                 st.caption(tr("Persisted component observations; no probes or health policy changes are performed."))
                 states = current_states({row["key"]: row["value"] for row in records(db, "system_state")}, since)
-                table(st, [{es.column("service"): key, es.column("status"): states.get(key, es.NO_DATA)} for key in
+                table(st, [{es.column("service"): es.service_label(key), es.column("status"): states.get(key, es.NO_DATA)} for key in
                            ("scheduler", "heartbeat", "scheduler_slot", "market_data_provider",
                             "market_provider_mode", "ai_provider", "macro_provider", "api_status",
                             "last_run", "last_success", "phase7_readiness")])

@@ -2189,3 +2189,5 @@ Tests: `test_reversal.py` (+3), `test_floor_view.py` (+3). Baseline 2435 tests O
 - Fix4: etiquetas españolas en Proceso y detalles, recuperación de Estado por componente y tablas con números ordenables; regresiones de presentación añadidas, sin cambios de ejecución ni commit/push.
 
 - Polish fix5: demo_health solo resuelve fallos de runs/RUN_FAILED con un éxito estrictamente posterior; otros errores de época y salud operativa se conservan; 73 tests relevantes OK, ruff OK.
+
+- Fix6: etiquetas y estados de Sistema/Salud en español; métricas de detalle sin elipsis; regresiones de traducción y CSS.

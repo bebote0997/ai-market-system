@@ -168,3 +168,19 @@ header[data-testid="stHeader"]{background:transparent}
 [data-testid="stAlertContainer"] :is(svg,[data-testid="stIconMaterial"]){color:#d9b45a!important}
 [data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]){background:#2a0f16!important;color:#ffc2cd!important;border:1px solid #5c1f2c!important;border-left:3px solid #e05b70!important}
 [data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) :is(svg,[data-testid="stIconMaterial"]){color:#e05b70!important}
+
+/* Detail KPIs must remain readable in six-column desktop and mobile layouts. */
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] > div,
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] p {
+  white-space:normal!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] > div {
+  font-size:20px!important;
+  line-height:1.35;
+}

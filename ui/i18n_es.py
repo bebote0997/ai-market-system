@@ -831,3 +831,38 @@ def display_rows(rows):
         labels[key] = f"{label} ({count + 1})" if count else label
     return [{labels[key]: value if key in numeric_keys and (value is None or number(value)) else readable(value)
              for key, value in row.items() if key not in hidden} for row in rows]
+
+
+# Shared presentation labels for operational inventory and persisted health services.
+COLUMNS.update({
+    "supported_symbols": "Símbolos soportados", "enabled_symbols": "Símbolos activos",
+    "database": "Base de datos", "schema_version": "Versión del esquema",
+    "runtime_heartbeat": "Latido del programador", "heartbeat": "Latido del programador",
+    "scheduler_slot": "Turno del programador", "market_data": "Datos de mercado",
+    "market_provider_mode": "Modo del proveedor de precios", "massive_adapter": "Adaptador Massive",
+    "macro_provider": "Proveedor macroeconómico", "api_status": "Estado de la API",
+    "macro_provider_certification": "Certificación del proveedor macroeconómico",
+    "experiment_ready": "Demo preparado", "finnhub_adapter": "Adaptador Finnhub",
+    "phase7_readiness": "Preparación de los agentes", "real_execution": "Ejecución real",
+    "last_cycle_status": "Estado del último ciclo", "last_review_agents": "Agentes de la última revisión",
+    "notification_events": "Eventos de notificación", "slack_delivery_attempts": "Intentos de envío a Slack",
+    "paper_broker": "Broker de práctica", "freshness": "Actualidad de datos",
+})
+STATUS.update({
+    "NOT STARTED": "No iniciado", "Not started": "No iniciado", "none": "ninguno",
+    "SUPPORTED / NOT ACTIVE": "Compatible · no activo", "ACTIVE": "Activo",
+})
+
+
+def service_label(key):
+    """Spanish health label; unknown contract fields never leak raw identifiers."""
+    if key in COLUMNS or key in COLUMNS.values():
+        return column(key)
+    words = {"last": "último", "success": "éxito", "run": "ciclo", "status": "estado",
+             "provider": "proveedor", "market": "mercado", "data": "datos",
+             "scheduler": "programador", "heartbeat": "latido", "mode": "modo",
+             "adapter": "adaptador", "enabled": "activo", "symbols": "símbolos"}
+    tokens = str(key).lower().replace("_", " ").split()
+    if tokens and all(token in words for token in tokens):
+        return " ".join(words[token] for token in tokens).capitalize()
+    return "Dato adicional"
