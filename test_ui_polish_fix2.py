@@ -21,8 +21,9 @@ class HealthRecoveryTests(unittest.TestCase):
         self.assertEqual(events, original)
         return result["status"]
 
-    def test_recovered_error(self):
-        self.assertEqual(self.project("2026-10-25T11:00:00Z"), "ONLINE")
+    def test_unclassified_older_error_stays_degraded(self):
+        # No component-level recovery evidence: only run failures are resolved by a later success.
+        self.assertEqual(self.project("2026-10-25T11:00:00Z"), "DEGRADED")
 
     def test_new_error(self):
         self.assertEqual(self.project("2026-10-25T13:00:00Z"), "DEGRADED")
@@ -35,7 +36,7 @@ class HealthRecoveryTests(unittest.TestCase):
         self.assertEqual(self.project("2026-10-25T11:00:00Z", status="DEGRADED"), "DEGRADED")
 
     def test_journal_and_failed_run_recover_without_removing_records(self):
-        old = [{"as_of": "2026-10-25T11:00:00Z", "status": "FAILED"}]
+        old = [{"as_of": "2026-10-25T11:00:00Z", "timestamp": "2026-10-25T11:00:00Z", "status": "FAILED", "event_type": "RUN_FAILED"}]
         with patch("ui.views.dashboard.records", return_value=old), \
              patch("ui.views.dashboard.payloads", return_value=[]), \
              patch("ui.views.dashboard.notification_rows", return_value=[]):
@@ -72,3 +73,9 @@ class PresentationTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertIn(code, STATUS)
                 self.assertNotEqual(status_text(code), code.replace('_', ' ').capitalize())
+
+
+class StatusLabelTests(unittest.TestCase):
+    def test_stopped_stays_operational_label(self):
+        from ui.i18n_es import STATUS, close_reason_text
+        self.assertEqual(STATUS["STOPPED"], "Detenido")

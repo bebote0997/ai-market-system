@@ -480,7 +480,8 @@ CLOSE_REASONS = {
     "SYMBOL_PAUSED": "Salida · símbolo pausado (decisión del owner)",
 }
 
-STATUS.update(CLOSE_REASONS)
+for _code, _label in CLOSE_REASONS.items():
+    STATUS.setdefault(_code, _label)  # never override operational labels such as STOPPED = Detenido
 
 COMPONENTS = {
     "market_data": "Datos de mercado", "ai": "Inteligencia artificial", "scheduler": "Programador",
