@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-25 — UI chunk 8: inicio del fallback demo sin fecha inventada
+
+- `luxury.demo_unavailable_api()` toma el inicio de `dashboard.demo_since()` (fail-closed) para epoch, snapshot y progreso; Inicio/Operaciones y el panel lateral usan ese valor. Inicio ilegible ⇒ «inicio desconocido» y ningún ciclo pasa el filtro.
+- Regresiones del módulo demo ausente con inicio configurado/ilegible, títulos, últimos ciclos y señal de vida; solo UI/tests, sin cambios de fase ni ejecución/runtime/agentes/riesgo/broker, sin staging/commit/push.
+- Validación: baseline 2573 tests OK (41 skipped, 1 expected failure); 101 tests enfocados OK; suite completa final 2576 tests OK (41 skipped, 1 expected failure). `ruff check .` y `git diff --check` PASS.
+
 ## 2026-10-25 — UI chunk 7: epoch autoritativo en Floor y contador de días
 
 - Floor obtiene `since` de `ui.views.dashboard.demo_since()` (fail-closed), nunca del epoch de respaldo de `demo_unavailable_api()`. El mismo filtro cubre snapshots, ciclos, agentes, feed, mercado y ciclos en curso; el día del encabezado usa ese epoch.

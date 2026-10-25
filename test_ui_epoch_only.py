@@ -46,6 +46,15 @@ class EpochFilterTests(unittest.TestCase):
             self.assertEqual(dashboard.since_epoch([{"as_of": AFTER}], since), [])
         self.assertFalse(dashboard.is_current(AFTER, dashboard.FAR_FUTURE))
 
+    def test_fallback_snapshot_and_progress_share_fail_closed_epoch(self):
+        for value in (EPOCH, dashboard.FAR_FUTURE, None):
+            with self.subTest(epoch=value), patch("ui.views.dashboard.demo_since", return_value=value):
+                demo = luxury.demo_unavailable_api()
+                expected = EPOCH if value == EPOCH else dashboard.FAR_FUTURE
+                self.assertEqual(demo["epoch"](), expected)
+                self.assertEqual(demo["snapshot"](EPOCH)["epoch"], expected)
+                self.assertEqual(demo["progress"](EPOCH), (expected, None, None))
+
     def test_history_hides_pre_epoch_runs_and_events(self):
         db = sqlite3.connect(":memory:")
         db.row_factory = sqlite3.Row
@@ -90,7 +99,7 @@ class DayAndNumbersTests(unittest.TestCase):
                                      "AI_FLOOR_DEMO_EPOCH": EPOCH.isoformat()}), \
                 patch.dict(sys.modules, {"execution.demo_dashboard": None}):
             demo = luxury.demo_api()
-            self.assertNotEqual(demo["epoch"](), EPOCH)
+            self.assertEqual(demo["epoch"](), EPOCH)
             day = luxury.demo_day(demo, now)
             self.assertEqual(day, 2)
             self.assertIn("Día 2 de 30", luxury.hero_subline(demo, day))
@@ -257,11 +266,10 @@ class DemoPagesTests(unittest.TestCase):
         self.assertEqual(content.count("sin operaciones aún"), 3)
 
     def test_unavailable_demo_module_uses_configured_epoch_for_all_cycle_pages(self):
-        self.assertGreater(datetime.fromisoformat(self.epoch), luxury.DEMO_DEFAULT_EPOCH)
         with patch.dict(sys.modules, {'execution.demo_dashboard': None}):
             with self.case.env(AI_FLOOR_DEMO_EPOCH=self.epoch):
                 demo = luxury.demo_api()
-                self.assertEqual(demo['epoch'](), luxury.DEMO_DEFAULT_EPOCH)
+                self.assertEqual(demo['epoch'](), datetime.fromisoformat(self.epoch))
                 self.assertEqual(luxury.demo_since(demo), datetime.fromisoformat(self.epoch))
             for page in ('The Floor', 'Process', 'Setups', 'Decisions'):
                 with self.subTest(page=page):
@@ -270,6 +278,44 @@ class DemoPagesTests(unittest.TestCase):
                     self.assertNotIn('Setup válido', content)
                     self.assertNotIn('En observación', content)
                     self.assertFalse([s for s in app.selectbox if s.label == 'Ciclo · el más reciente primero'])
+
+    def test_unavailable_demo_titles_and_side_panel_use_configured_epoch(self):
+        store = Store(self.db)
+        store.set_state("last_run", BEFORE)
+        store.set_state("last_success", BEFORE)
+        store.set_state("heartbeat", AFTER)
+        store.close()
+        with patch.dict(sys.modules, {"execution.demo_dashboard": None}):
+            for page in ("Overview", "Trades"):
+                with self.subTest(page=page):
+                    _app, content = self.page(page)
+                    title = "Demo OANDA (práctica) · desde " + es.datetime_et(datetime.fromisoformat(self.epoch))
+                    self.assertIn(title, content)
+                    self.assertNotIn("18 oct 2026", content)
+                    if page == "Overview":
+                        self.assertIn("Último ciclo", content)
+                        self.assertIn("Último ciclo exitoso", content)
+                        self.assertNotIn(es.datetime_et(datetime.fromisoformat(BEFORE)), content)
+                        self.assertIn(es.datetime_et(datetime.fromisoformat(AFTER)), content)  # live heartbeat
+                        self.assertGreaterEqual(content.count(dashboard.FIRST_CYCLE_WAIT), 2)
+
+    def test_unavailable_demo_unknown_epoch_has_no_date_and_hides_cycle_times(self):
+        store = Store(self.db)
+        store.set_state("last_run", AFTER)
+        store.set_state("last_success", AFTER)
+        store.close()
+        with patch.dict(sys.modules, {"execution.demo_dashboard": None}), \
+                patch("execution.demo_epoch.demo_epoch", side_effect=RuntimeError):
+            for page in ("Overview", "Trades"):
+                with self.subTest(page=page):
+                    _app, content = self.page(page)
+                    self.assertIn("Demo OANDA (práctica) · inicio desconocido", content)
+                    self.assertNotIn("Demo OANDA (práctica) · desde", content)
+                    self.assertNotIn("9999", content)
+                    self.assertNotIn("18 oct 2026", content)
+                    if page == "Overview":
+                        self.assertNotIn(es.datetime_et(datetime.fromisoformat(AFTER)), content)
+                        self.assertGreaterEqual(content.count(dashboard.FIRST_CYCLE_WAIT), 2)
 
     def test_legacy_pages_hide_pre_epoch_rows(self):
         for page in ("HISTORY", "ERRORS", "DECISIONS"):

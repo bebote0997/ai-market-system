@@ -401,7 +401,7 @@ class FloorEpochTests(unittest.TestCase):
                 patch.dict(sys.modules, {"execution.demo_dashboard": None}), \
                 dashboard_database(self.path) as db:
             demo = luxury.demo_api()
-            self.assertLess(demo["epoch"](), datetime.fromisoformat(T_RUN))
+            self.assertEqual(demo["epoch"](), epoch)
             for unreadable in (False, True):
                 with self.subTest(unreadable=unreadable), \
                         patch.dict(sys.modules, {"execution.demo_epoch": None} if unreadable else {}):

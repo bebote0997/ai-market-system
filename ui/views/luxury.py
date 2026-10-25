@@ -16,7 +16,7 @@ from runtime.scheduler import session_names
 from storage.codec import parse_utc
 from ui import i18n_es as es
 from ui.adapters import from_persisted_snapshot
-from ui.views.dashboard import (FIRST_CYCLE_WAIT, PAPER_SIZING_KEYS, ROW_LIMIT, epoch_or_far, is_current, payloads,
+from ui.views.dashboard import (FAR_FUTURE, FIRST_CYCLE_WAIT, PAPER_SIZING_KEYS, ROW_LIMIT, epoch_or_far, is_current, payloads,
                                 records, since_epoch)
 from ui.state import dashboard_database
 from ui.json_views import details, structured
@@ -287,17 +287,20 @@ def health_dot(status):
 
 
 DEMO_ROUTING_ENV = 'AI_FLOOR_BROKER_DEMO_ROUTING'
-DEMO_DEFAULT_EPOCH = datetime(2026, 10, 18, 22, 25, tzinfo=timezone.utc)  # == demo_epoch.DEFAULT_DEMO_EPOCH_UTC
 
 
 def demo_unavailable_api():
     """Routing is ON but the demo module is unavailable: the demo screens with "sin datos", never PAPER numbers."""
+    def epoch():
+        from ui.views.dashboard import demo_since as dashboard_demo_since
+        return epoch_or_far(dashboard_demo_since)
+
     def snapshot(_now):
-        return {'epoch': DEMO_DEFAULT_EPOCH, 'stats': None, 'curve': [], 'open_rows': [], 'closed_rows': [],
+        return {'epoch': epoch(), 'stats': None, 'curve': [], 'open_rows': [], 'closed_rows': [],
                 'nav': None, 'balance': None, 'currency': None, 'capital': {'start': None, 'change': None},
                 'stale': False, 'trades_error': 'unavailable'}
-    return {'epoch': lambda: DEMO_DEFAULT_EPOCH, 'snapshot': snapshot,
-            'progress': lambda _now: (DEMO_DEFAULT_EPOCH, None, None)}
+    return {'epoch': epoch, 'snapshot': snapshot,
+            'progress': lambda _now: (epoch(), None, None)}
 
 
 def demo_results_on():
@@ -503,6 +506,9 @@ def demo_day(demo, now):
 
 
 def demo_title(epoch):
+    epoch = epoch_or_far(lambda: epoch)
+    if epoch == FAR_FUTURE:
+        return 'Demo OANDA (práctica) · inicio desconocido'
     return f'Demo OANDA (práctica) · desde {es.datetime_et(epoch)}'
 
 

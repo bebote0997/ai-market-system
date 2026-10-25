@@ -462,7 +462,6 @@ class DashboardTests(unittest.TestCase):
     def test_routing_on_demo_module_unavailable_never_shows_paper(self):
         import sys
         from ui.views import luxury
-        self.assertEqual(luxury.DEMO_DEFAULT_EPOCH, EPOCH)
         with self.env(), patch.dict(sys.modules, {"execution.demo_dashboard": None}):
             api = luxury.demo_api()
             self.assertIsNotNone(api)
