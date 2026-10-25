@@ -44,26 +44,13 @@ def demo_health(health, store, notifications, since):
         errors += since_epoch(records(store.db, "journal", statuses=("ERROR", "CRITICAL")), since)
         errors += [{**row, "record": "runs"} for row in since_epoch(records(store.db, "runs", failed=True), since)]
     last_success = parse_time(result.get("last_success"))
-    # A cycle only recovers cycle failures; other incidents need live component health.
-    healthy = {"OK", "ONLINE", "HEALTHY", "RUNNING", "ACTIVE"}
-
+    # A later successful cycle recovers run failures only. Other errors have
+    # no component-level recovery evidence and remain visible as degraded health.
     def unresolved(error):
+        cycle_failure = error.get("record") == "runs" or error.get("event_type") == "RUN_FAILED"
         stamp = row_time(error)
-        if last_success is None or stamp is None or stamp > last_success:
-            return True
-        if error.get("record") == "runs" or error.get("event_type") == "RUN_FAILED":
-            return False
-        payload = error.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        component = error.get("component") or payload.get("component") or error.get("source")
-        aliases = {"provider": "market_data", "market_data_provider": "market_data",
-                   "twelve_data": "market_data", "market": "market_data",
-                   "notification": "notifications", "notification_worker": "notifications"}
-        component = aliases.get(component, component)
-        if component in result:
-            return result[component] not in healthy
-        # Unknown components cannot be declared recovered while live health is degraded.
-        return result.get("status") not in healthy
+        return not (cycle_failure and last_success is not None and stamp is not None
+                    and last_success > stamp)
 
     errors = [error for error in errors if unresolved(error)]
     current = is_current(result.get("last_run"), since)

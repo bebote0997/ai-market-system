@@ -2187,3 +2187,5 @@ Tests: `test_reversal.py` (+3), `test_floor_view.py` (+3). Baseline 2435 tests O
 - polish_fix2 (2026-10-25): alertas oscuras en stAlertContainer, KPI vacíos compactos y pérdida diaria en fila móvil propia, salud recuperada tras último éxito sin borrar errores históricos y etiquetas españolas de ejecución/riesgo/notificaciones; 203 tests dirigidos PASS, Ruff y diff-check PASS; sin commit/push.
 - polish_fix3 (2026-10-25): Detalle usa empty_market ante snapshots UI incompatibles sin ocultar otros errores; ui/state.py y test_ui_polish_A3.py, baseline 14 y validación 17 tests OK, Ruff OK; sin commit/push.
 - Fix4: etiquetas españolas en Proceso y detalles, recuperación de Estado por componente y tablas con números ordenables; regresiones de presentación añadidas, sin cambios de ejecución ni commit/push.
+
+- Polish fix5: demo_health solo resuelve fallos de runs/RUN_FAILED con un éxito estrictamente posterior; otros errores de época y salud operativa se conservan; 73 tests relevantes OK, ruff OK.

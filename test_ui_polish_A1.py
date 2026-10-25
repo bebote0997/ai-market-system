@@ -104,21 +104,57 @@ class TechnicalPagesTests(unittest.TestCase):
                     self.assertNotIn('Con problemas', shown)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class ComponentRecoveryTests(unittest.TestCase):
-    def test_recovery_matches_component(self):
+    def test_only_run_failures_recover_after_a_later_success(self):
+        health = {'status': 'OK', 'last_run': AFTER, 'last_success': AFTER,
+                  'last_cycle_status': 'COMPLETED', 'market_data': 'Twelve Data'}
+        cases = (
+            ({'event_type': 'RUN_FAILED'}, 'OK'),
+            ({'component': 'provider'}, 'DEGRADED'),
+            ({'component': 'notifications'}, 'DEGRADED'),
+            ({'event_type': 'PROVIDER_ERROR'}, 'DEGRADED'),
+            ({}, 'DEGRADED'),
+        )
+        for severity in ('ERROR', 'CRITICAL'):
+            for event, expected in cases:
+                with self.subTest(event=event, severity=severity):
+                    error = {'timestamp_utc': EPOCH, 'severity': severity, **event}
+                    self.assertEqual(system.demo_health(health, None, [error], EPOCH)['status'], expected)
+
+    def test_persisted_run_and_journal_failures_require_a_strictly_later_success(self):
+        store = Mock()
+        for source in ('runs', 'journal'):
+            error = {'timestamp': EPOCH, 'event_type': 'RUN_FAILED', 'severity': 'ERROR'}
+            for success, expected in ((BEFORE, 'DEGRADED'), (EPOCH, 'DEGRADED'),
+                                      (AFTER, 'OK'), (None, 'DEGRADED')):
+                with self.subTest(source=source, success=success):
+                    health = {'status': 'OK', 'last_run': AFTER, 'last_success': success,
+                              'last_cycle_status': 'COMPLETED'}
+                    with patch.object(dashboard, 'records',
+                                      side_effect=lambda db, table, **kw: [error] if table == source else []), \
+                            patch.object(dashboard, 'payloads', return_value=[]), \
+                            patch.object(dashboard, 'notification_rows', return_value=[]):
+                        self.assertEqual(system.demo_health(health, store, [], EPOCH)['status'], expected)
+
+    def test_other_journal_errors_do_not_recover_after_success(self):
+        store = Mock()
         health = {'status': 'OK', 'last_run': AFTER, 'last_success': AFTER,
                   'last_cycle_status': 'COMPLETED'}
-        stamp = EPOCH
-        for event, changes, expected in (
-            ({'event_type': 'RUN_FAILED'}, {}, 'OK'),
-            ({'component': 'provider'}, {'market_data': 'DEGRADED'}, 'DEGRADED'),
-            ({'component': 'provider'}, {'market_data': 'OK'}, 'OK'),
-            ({'component': 'notifications'}, {'status': 'DEGRADED'}, 'DEGRADED'),
-        ):
-            with self.subTest(event=event, changes=changes):
-                error = {'timestamp_utc': stamp, 'severity': 'ERROR', **event}
-                self.assertEqual(system.demo_health({**health, **changes}, None, [error], EPOCH)['status'], expected)
+        error = {'timestamp': EPOCH, 'event_type': 'PROVIDER_ERROR', 'severity': 'ERROR'}
+        with patch.object(dashboard, 'records',
+                          side_effect=lambda db, table, **kw: [error] if table == 'journal' else []), \
+                patch.object(dashboard, 'payloads', return_value=[]), \
+                patch.object(dashboard, 'notification_rows', return_value=[]):
+            self.assertEqual(system.demo_health(health, store, [], EPOCH)['status'], 'DEGRADED')
+
+    def test_live_health_applies_after_success(self):
+        health = {'status': 'OK', 'last_run': AFTER, 'last_success': AFTER,
+                  'last_cycle_status': 'COMPLETED', 'scheduler': 'RUNNING'}
+        for changes, expected in (({}, 'OK'), ({'scheduler': 'STOPPED'}, 'STOPPED'),
+                                  ({'status': 'DEGRADED'}, 'DEGRADED')):
+            with self.subTest(changes=changes):
+                self.assertEqual(system.demo_health({**health, **changes}, None, [], EPOCH)['status'], expected)
+
+
+if __name__ == '__main__':
+    unittest.main()
