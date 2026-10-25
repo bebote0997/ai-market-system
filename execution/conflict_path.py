@@ -33,7 +33,7 @@ import json
 
 from agents.setup_validator import setup_identity
 from core.risk_policy import RISK_POLICY_V2_P5, stamps_registered_semantics
-from core.rr_contract import POLICY_V2_F3, to_decimal
+from core.rr_contract import FIXED_RR_POLICIES, to_decimal
 from execution.candidate_identity import (CLAIMED, MISMATCH, SAME, candidate_fields, claim_run, claimed_fingerprint,
                                          fingerprint)
 from execution.conflict_engine import CONFLICT_POLICY_VERSION, classify
@@ -61,7 +61,7 @@ def candidate(floor_report):
     setup = getattr(floor_report, "setup_assessment", None)
     if floor_report is None or floor_report.final_status != "PLAN_READY" or plan is None or setup is None:
         return None, "not_a_plan_ready_report"
-    if getattr(plan, "policy_version", None) != POLICY_V2_F3:
+    if getattr(plan, "policy_version", None) not in FIXED_RR_POLICIES:  # fixed 3R, or the DEC-FX-SL-1 FX plan
         return None, "not_a_fixed_3r_plan"
     if setup.status != "VALID_SETUP" or setup.symbol != plan.symbol or setup.symbol != floor_report.symbol \
             or setup.side != plan.side or plan.run_id != floor_report.run_id:

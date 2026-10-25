@@ -18,13 +18,13 @@ class AIProvider(ABC):
 
 
 def _rr_rejected(rr_policy, risk_reward):
-    """Deterministic AI R:R gate. V1 plans (no policy key): unchanged ``< 3`` rule. A Phase 4 plan is
-    rejected only outside the single-contract 2R..5R policy; the AI never selects or alters levels."""
+    """Deterministic AI R:R gate. V1 plans (no policy key): unchanged ``< 3`` rule. A Phase 4 plan (or a DEC-FX-SL-1
+    FX plan) is rejected only outside its single-contract policy; the AI never selects or alters levels."""
     if rr_policy is None:
         return isinstance(risk_reward, (int, float)) and risk_reward < 3
-    from core.rr_contract import POLICY_V2_D, POLICY_V2_F3, WITHIN_POLICY, classify, to_decimal
+    from core.rr_contract import POLICY_FX, POLICY_V2_D, POLICY_V2_F3, WITHIN_POLICY, classify, to_decimal
     value = to_decimal(risk_reward)
-    return (rr_policy not in (POLICY_V2_D, POLICY_V2_F3) or value is None
+    return (rr_policy not in (POLICY_V2_D, POLICY_V2_F3, POLICY_FX) or value is None
             or classify(value, rr_policy) != WITHIN_POLICY)
 
 

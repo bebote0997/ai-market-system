@@ -1,4 +1,5 @@
-"""Pre-demo trade-duration rule: Day-1 / Day-2 NY close, Day-2 structure exit, Friday close (temporary DBs)."""
+"""Trade-duration rule (temporary DBs): the optional legacy Day-1 NY close check (OFF by default since
+DEC-HOLD-WEEK-1, turned ON here per class) and the Friday 16:45 NY flatten. Week rule: test_hold_week.py."""
 import json
 import tempfile
 import unittest
@@ -32,6 +33,15 @@ THU_OPEN = datetime(2026, 1, 15, 15, 0, tzinfo=UTC)
 WED_CLOSE = datetime(2026, 1, 14, 22, 0, tzinfo=UTC)
 THU_SLOT = datetime(2026, 1, 15, 13, 30, tzinfo=UTC)  # London + New York session
 FRI_CLOSE = datetime(2026, 1, 16, 22, 0, tzinfo=UTC)
+FRI_FLATTEN = datetime(2026, 1, 16, 21, 45, tzinfo=UTC)  # DEC-HOLD-WEEK-1: Friday 16:45 New York
+
+
+class Day1On:
+    """The legacy Day-1 check is OFF by default (DEC-HOLD-WEEK-1); these tests characterize it switched ON."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(patch.object(td, "DAY1_RULE", True))
 
 
 def position(side="LONG", entry=100.0, stop=95.0, target=110.0, opened_at=WED_OPEN, stage=None, initial_stop=None,
@@ -41,7 +51,7 @@ def position(side="LONG", entry=100.0, stop=95.0, target=110.0, opened_at=WED_OP
                          duration_stage=stage)
 
 
-class BoundaryTests(unittest.TestCase):
+class BoundaryTests(Day1On, unittest.TestCase):
     def test_ny_close_is_dst_correct(self):
         self.assertEqual(td.ny_close_after(datetime(2026, 1, 15, 14, tzinfo=UTC)), datetime(2026, 1, 15, 22, tzinfo=UTC))
         self.assertEqual(td.ny_close_after(datetime(2026, 7, 15, 14, tzinfo=UTC)), datetime(2026, 7, 15, 21, tzinfo=UTC))
@@ -56,16 +66,17 @@ class BoundaryTests(unittest.TestCase):
         sunday_open = datetime(2026, 1, 18, 23, tzinfo=UTC)  # Sunday 18:00 New York
         self.assertEqual(td.ny_close_after(sunday_open), datetime(2026, 1, 19, 22, tzinfo=UTC))
 
-    def test_day1_and_day2_closes(self):
+    def test_day1_close_then_the_week_boundary(self):
         p = position(opened_at=TUE_OPEN)
         self.assertEqual(td.day1_close(p), datetime(2026, 1, 13, 22, tzinfo=UTC))
-        self.assertEqual(td.day2_close(p), WED_CLOSE)
         self.assertEqual(td.next_boundary(p), td.day1_close(p))
-        p.duration_stage = td.STAGE_DAY2
-        self.assertEqual(td.next_boundary(p), WED_CLOSE)
+        p.duration_stage = td.STAGE_DAY2  # after a Day-1 keep the week rule decides (no Day-2 close any more)
+        self.assertEqual(td.next_boundary(p), FRI_FLATTEN)
+        with patch.object(td, "DAY1_RULE", False):
+            self.assertEqual(td.next_boundary(position(opened_at=TUE_OPEN)), FRI_FLATTEN)
 
 
-class DecisionTests(unittest.TestCase):
+class DecisionTests(Day1On, unittest.TestCase):
     def test_day1_keeps_at_half_r_and_closes_below(self):
         p = position()
         self.assertEqual(td.boundary_decision(p, WED_CLOSE, 102.5), ("BREAKEVEN", None))
@@ -78,10 +89,12 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(td.boundary_decision(p, WED_CLOSE, 97.5), ("BREAKEVEN", None))
         self.assertEqual(td.boundary_decision(p, WED_CLOSE, 98.0)[1], td.CLOSE_DAY1_BELOW_HALF_R)
 
-    def test_day2_and_friday_always_close(self):
+    def test_week_boundary_always_closes(self):
         self.assertEqual(td.boundary_decision(position(stage=td.STAGE_DAY2, stop=100.0, initial_stop=95.0),
-                                              WED_CLOSE, 109.0), ("CLOSE", td.CLOSE_DAY2_NY_CLOSE))
-        self.assertEqual(td.boundary_decision(position(), FRI_CLOSE, 109.0), ("CLOSE", td.CLOSE_FRIDAY))
+                                              FRI_FLATTEN, 109.0), ("CLOSE", td.CLOSE_FRIDAY))
+        self.assertEqual(td.boundary_decision(position(), FRI_FLATTEN, 109.0), ("CLOSE", td.CLOSE_FRIDAY))
+        with patch.object(td, "DAY1_RULE", False):  # default: no Day-1 decision at all
+            self.assertEqual(td.boundary_decision(position(), WED_CLOSE, 102.5), ("CLOSE", td.CLOSE_FRIDAY))
 
     def test_move_stop_to_entry_keeps_r_on_original_distance(self):
         p = position()
@@ -172,7 +185,7 @@ class RuntimeCase(unittest.TestCase):
         return account.closed_trades[0], journal
 
 
-class Day1RuntimeTests(RuntimeCase):
+class Day1RuntimeTests(Day1On, RuntimeCase):
     def test_below_half_r_closes_at_ny_close_before_later_bars_can_stop_it(self):
         self.seed(position())
 
@@ -223,108 +236,22 @@ class Day1RuntimeTests(RuntimeCase):
         self.assertEqual((trade.reason, trade.exit_price), ("stop", 99.0))  # the bar opens through the moved stop
 
 
-class Day2RuntimeTests(RuntimeCase):
-    def test_day2_ny_close_force_closes(self):
+class KeepThenWeekTests(Day1On, RuntimeCase):
+    def test_day1_keep_lives_until_the_friday_flatten(self):
+        """The former Day-2 NY close is retired: a kept position is closed by the week rule (Friday 16:45 NY)."""
         self.seed(position(opened_at=TUE_OPEN))
         day1 = td.day1_close(position(opened_at=TUE_OPEN))
         runtime = self.runtime(Prices(lambda at: 104.0 if at >= day1 - FIVE else 100.0, TUE_OPEN - 4 * FIVE), THU_SLOT)
         self.assertNotEqual(runtime.run_cycle("XAUUSD", THU_SLOT), "ERROR")
-        trade, journal = self.closed_trade()
-        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_DAY2_NY_CLOSE, 104.0, WED_CLOSE))
+        account, journal = self.paper()
+        self.assertEqual(account.open_positions["XAUUSD"].duration_stage, td.STAGE_DAY2)  # alive after Wed close
         self.assertEqual([event for event, _ in journal].count(td.STOP_MOVED_TO_ENTRY), 1)
-
-    def test_adverse_structure_change_on_day2_closes_early(self):
-        self.seed(position(target=120.0, stop=100.0, initial_stop=95.0, stage=td.STAGE_DAY2))
-        slot = datetime(2026, 1, 15, 13, 15, tzinfo=UTC)
-        stamps = list(pd.date_range(datetime(2026, 1, 15, 11, tzinfo=UTC), periods=9, freq="15min"))
-        lows = [108, 107, 108, 109, 110, 109.5, 110.5, 111, 105.5]
-        closes = [low + .5 for low in lows[:-1]] + [106.0]
-        fifteen = frame(stamps, closes, "XAUUSD", lows=lows, highs=[low + 1 for low in lows])
-        runtime = self.runtime(Prices(lambda at: 106.0 if at >= stamps[0] else 104.0, WED_OPEN - 4 * FIVE, fifteen),
-                               slot)
-        self.assertNotEqual(runtime.run_cycle("XAUUSD", slot), "ERROR")
-        trade, journal = self.closed_trade()
-        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_DAY2_STRUCTURE, 106.0, slot))
-        exit_event = next(payload for event, payload in journal if event == "TRADE_DURATION_EXIT")
-        self.assertEqual(exit_event["bos_direction"], "bearish")
-
-    def test_no_structure_exit_on_day1(self):
-        p = position(opened_at=datetime(2026, 1, 15, 9, tzinfo=UTC))
-        stamps = list(pd.date_range(datetime(2026, 1, 15, 11, tzinfo=UTC), periods=9, freq="15min"))
-        lows = [108, 107, 108, 109, 110, 109.5, 110.5, 111, 105.5]
-        fifteen = frame(stamps, [low + .5 for low in lows], "XAUUSD", lows=lows)
-        self.assertIsNone(td.adverse_structure(p, fifteen, datetime(2026, 1, 15, 13, 15, tzinfo=UTC)))
-
-
-BOS_STAMPS = list(pd.date_range(datetime(2026, 1, 15, 11, tzinfo=UTC), periods=9, freq="15min"))
-BOS_LOWS = [108, 107, 108, 109, 110, 109.5, 110.5, 111, 105.5]
-BOS_AT = BOS_STAMPS[-1] + timedelta(minutes=15)  # the bearish 15m BOS is confirmed at 13:15 UTC Thursday
-
-
-def bos_frame(stamps=BOS_STAMPS, flat_until=None):
-    """The bearish-BOS 15m bars, then flat closed bars (no new swing) through ``flat_until`` (data stays fresh)."""
-    tail = [] if flat_until is None else list(pd.date_range(stamps[-1] + timedelta(minutes=15),
-                                                              flat_until - timedelta(minutes=15), freq="15min"))
-    lows = BOS_LOWS + [105.5] * len(tail)
-    return frame(stamps + tail, [low + .5 for low in BOS_LOWS[:-1]] + [106.0] * (len(tail) + 1), "XAUUSD",
-                 lows=lows, highs=[low + 1 for low in lows])
-
-
-def day2_position():
-    return position(target=120.0, stop=100.0, initial_stop=95.0, stage=td.STAGE_DAY2)
-
-
-class ChronologicalStructureTests(RuntimeCase):
-    """Codex HIGH: the Day-2 structure exit is decided in time order with SL/TP, in and out of sessions."""
-
-    def test_delayed_cycle_structure_exit_before_a_later_stop_wins(self):
-        self.seed(day2_position())
-        slot = datetime(2026, 1, 15, 15, 0, tzinfo=UTC)
-
-        def price(at):
-            if at >= datetime(2026, 1, 15, 14, tzinfo=UTC):
-                return 98.0  # a later stop-out (stop at entry 100) must not replace the earlier structure exit
-            return 106.0 if at >= BOS_STAMPS[0] else 104.0
-        runtime = self.runtime(Prices(price, WED_OPEN - 4 * FIVE, bos_frame(flat_until=slot)), slot)
-        self.assertNotIn(runtime.run_cycle("XAUUSD", slot), ("ERROR", "STALE_DATA", "DATA_UNAVAILABLE"))
+        runtime.manage_trade_duration(FRI_CLOSE)
         trade, _ = self.closed_trade()
-        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_DAY2_STRUCTURE, 106.0, BOS_AT))
-
-    def test_delayed_cycle_earlier_stop_beats_a_later_structure_exit(self):
-        self.seed(day2_position())
-        slot = datetime(2026, 1, 15, 15, 0, tzinfo=UTC)
-
-        def price(at):
-            if datetime(2026, 1, 15, 12, tzinfo=UTC) <= at < datetime(2026, 1, 15, 12, 5, tzinfo=UTC):
-                return 99.0  # the moved stop (entry 100) is hit before the BOS is known
-            return 106.0 if at >= BOS_STAMPS[0] else 104.0
-        runtime = self.runtime(Prices(price, WED_OPEN - 4 * FIVE, bos_frame(flat_until=slot)), slot)
-        self.assertNotIn(runtime.run_cycle("XAUUSD", slot), ("ERROR", "STALE_DATA", "DATA_UNAVAILABLE"))
-        trade, _ = self.closed_trade()
-        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at),
-                         ("stop", 99.0, datetime(2026, 1, 15, 12, tzinfo=UTC)))
-
-    def test_structure_exit_is_checked_overnight_out_of_session(self):
-        self.seed(day2_position())
-        stamps = list(pd.date_range(datetime(2026, 1, 15, 0, tzinfo=UTC), periods=9, freq="15min"))
-        slot = stamps[-1] + timedelta(minutes=15)  # 02:15 UTC Thursday: no London/New York session
-        runtime = self.runtime(Prices(lambda at: 106.0 if at >= stamps[0] else 104.0, WED_OPEN - 4 * FIVE,
-                                      bos_frame(stamps)), slot)
-        self.assertEqual(runtime.manage_trade_duration(slot), {"XAUUSD": "CHECKED"})
-        trade, journal = self.closed_trade()
-        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_DAY2_STRUCTURE, 106.0, slot))
-        self.assertEqual(next(p for e, p in journal if e == "TRADE_DURATION_EXIT")["bos_direction"], "bearish")
-
-    def test_first_adverse_structure_never_looks_ahead_and_never_acts_retroactively(self):
-        p = day2_position()
-        self.assertIsNone(td.first_adverse_structure(p, bos_frame(), WED_CLOSE, BOS_AT - FIVE))
-        self.assertEqual(td.first_adverse_structure(p, bos_frame(), WED_CLOSE, BOS_AT)[0], BOS_AT)
-        late = BOS_AT + timedelta(minutes=10)  # bars through 13:25 were already managed
-        self.assertEqual(td.first_adverse_structure(p, bos_frame(), late, late + FIVE)[0], late)
-        self.assertIsNone(td.first_adverse_structure(position(), bos_frame(), WED_CLOSE, BOS_AT))  # Day 1
+        self.assertEqual((trade.reason, trade.exited_at), (td.CLOSE_FRIDAY, FRI_FLATTEN))
 
 
-class DurationWriteRevalidationTests(RuntimeCase):
+class DurationWriteRevalidationTests(Day1On, RuntimeCase):
     def test_concurrent_runner_already_moved_the_stop_so_day1_boundary_is_not_reused(self):
         """Codex MED: another runner moves the stop at the Day-1 close between our read and our guarded write."""
         self.seed(position())
@@ -355,7 +282,7 @@ class DurationWriteRevalidationTests(RuntimeCase):
         self.assertNotIn("TRADE_DURATION_EXIT", [event for event, _ in journal])
 
 
-class CommittedEvidencePricingTests(RuntimeCase):
+class CommittedEvidencePricingTests(Day1On, RuntimeCase):
     def test_provider_revision_does_not_reprice_the_day1_decision(self):
         """Codex MED: with evidence catch-up ON, the duration rule prices from committed evidence."""
         self.seed(position())
@@ -378,7 +305,7 @@ class CommittedEvidencePricingTests(RuntimeCase):
         self.assertEqual((moved["price"], moved["unrealized_r"]), (103.0, "0.6"))
 
 
-class ClosedAlertStopTests(RuntimeCase):
+class ClosedAlertStopTests(Day1On, RuntimeCase):
     def test_different_run_close_keeps_originating_signal_time(self):
         self.seed(position())
         store = Store(self.db)
@@ -436,7 +363,7 @@ class FridayAndOffSessionTests(RuntimeCase):
                                       THU_OPEN - 4 * FIVE), FRI_CLOSE)
         self.assertEqual(runtime.manage_trade_duration(FRI_CLOSE), {"XAUUSD": "CHECKED"})
         trade, _ = self.closed_trade()
-        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_FRIDAY, 109.0, FRI_CLOSE))
+        self.assertEqual((trade.reason, trade.exit_price, trade.exited_at), (td.CLOSE_FRIDAY, 109.0, FRI_FLATTEN))
 
     def test_friday_open_closes_at_its_first_close_even_in_profit(self):
         opened = datetime(2026, 1, 16, 14, tzinfo=UTC)
@@ -444,7 +371,7 @@ class FridayAndOffSessionTests(RuntimeCase):
         runtime = self.runtime(Prices(lambda at: 109.0, opened - 4 * FIVE), FRI_CLOSE + timedelta(minutes=10))
         runtime.manage_trade_duration(FRI_CLOSE + timedelta(minutes=10))
         trade, _ = self.closed_trade()
-        self.assertEqual((trade.reason, trade.exited_at), (td.CLOSE_FRIDAY, FRI_CLOSE))
+        self.assertEqual((trade.reason, trade.exited_at), (td.CLOSE_FRIDAY, FRI_FLATTEN))
 
     def test_off_session_pass_is_a_noop_before_the_boundary_and_without_positions(self):
         self.seed(position(opened_at=THU_OPEN))

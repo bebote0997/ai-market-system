@@ -24,7 +24,8 @@ DEMO_LENGTH_DAYS = 30
 STAT_KEYS = ("trades", "wins", "total_pnl", "today_pnl", "max_drawdown", "avg_r", "avg_r_reason")
 NO_CLOSED_REASON = "aún sin operaciones cerradas del demo"
 NO_RISK_REASON = "sin datos del stop original"
-RISK_COLUMNS = ("client_id", "units", "entry", "stop", "initial_stop", "fill_price", "opened_at", "status")
+RISK_COLUMNS = ("client_id", "units", "entry", "stop", "initial_stop", "fill_price", "opened_at", "status",
+                "closed_reason")
 _RFC3339 = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|z|[+-]\d{2}:\d{2})?$")
 
 
@@ -106,7 +107,9 @@ def demo_rows(trades, epoch, risk_rows=None):
             closed.append({**base, "side": _side(units), "units": abs(units) if units is not None else None,
                            "quantity": abs(units) if units is not None else None, "exited_at": exited,
                            "exit_price": as_float(trade.get("averageClosePrice")), "net_pnl": pnl,
-                           "realized_r": value, "realized_r_reason": reason})
+                           "realized_r": value, "realized_r_reason": reason,
+                           # the router's own close reason (MANUAL_CLOSE, TIME_EXIT_*, ...); None when unknown
+                           "close_reason": (risk_rows.get(trade.get("client_id")) or {}).get("closed_reason")})
         else:
             current = as_float(trade.get("currentUnits"))
             current = units if current is None else current

@@ -1,4 +1,5 @@
-"""Pre-demo: PENDING orders are cancelled at Friday 17:00 ET and at the Day-2 NY close after submission."""
+"""DEC-HOLD-WEEK-1: PENDING orders are cancelled at the week-rule boundary of their submission (Friday 16:45 ET, or
+MAX_HOLD_TRADING_DAYS trading days, whichever comes first)."""
 import json
 import unittest
 from datetime import datetime, timedelta
@@ -10,7 +11,7 @@ from execution.paper_broker import PaperBroker
 from runtime.notification_extras import order_setup_id
 from test_demo_runner import patched_scouts
 from storage.database import Store
-from test_trade_duration import (ACCOUNT, FIVE, FRI_CLOSE, THU_OPEN, THU_SLOT, TUE_OPEN, UTC, WED_CLOSE, Prices,
+from test_trade_duration import (ACCOUNT, FIVE, FRI_CLOSE, FRI_FLATTEN, THU_OPEN, THU_SLOT, TUE_OPEN, UTC, Prices,
                                  RuntimeCase)
 
 TUE_CLOSE = datetime(2026, 1, 13, 22, 0, tzinfo=UTC)
@@ -23,25 +24,25 @@ def order(as_of, order_id="ord-p", symbol="XAUUSD", status="PENDING"):
 
 
 class CancelBoundaryTests(unittest.TestCase):
-    def test_midweek_order_is_cancelled_at_its_day2_ny_close(self):
-        self.assertEqual(td.order_cancel_boundary(order(TUE_OPEN - timedelta(hours=4))),
-                         (WED_CLOSE, td.CANCEL_DAY2_NY_CLOSE))
-        # Submitted after Tuesday's close: Day 1 is Wednesday, Day 2 is Thursday.
-        self.assertEqual(td.order_cancel_boundary(order(TUE_CLOSE + FIVE)), (THU_CLOSE, td.CANCEL_DAY2_NY_CLOSE))
+    def test_order_is_cancelled_at_the_friday_flatten(self):
+        for as_of in (TUE_OPEN - timedelta(hours=4), TUE_CLOSE + FIVE, THU_OPEN, THU_CLOSE + FIVE,
+                      datetime(2026, 1, 16, 14, tzinfo=UTC)):
+            with self.subTest(as_of=as_of):
+                self.assertEqual(td.order_cancel_boundary(order(as_of)), (FRI_FLATTEN, td.CANCEL_FRIDAY))
 
-    def test_friday_close_comes_first_whenever_it_is_day1_or_day2(self):
-        self.assertEqual(td.order_cancel_boundary(order(THU_OPEN)), (FRI_CLOSE, td.CANCEL_FRIDAY))  # Day 2 = Fri
-        self.assertEqual(td.order_cancel_boundary(order(datetime(2026, 1, 16, 14, tzinfo=UTC))),
-                         (FRI_CLOSE, td.CANCEL_FRIDAY))  # Day 1 = Fri
-        self.assertEqual(td.order_cancel_boundary(order(THU_CLOSE + FIVE)), (FRI_CLOSE, td.CANCEL_FRIDAY))
+    def test_max_hold_comes_first_when_shorter(self):
+        with patch.object(td, "MAX_HOLD_TRADING_DAYS", 1):
+            self.assertEqual(td.order_cancel_boundary(order(TUE_OPEN)), (TUE_OPEN + timedelta(days=1),
+                                                                         td.CANCEL_MAX_HOLD))
+            self.assertEqual(td.order_cancel_boundary(order(THU_CLOSE + FIVE)), (FRI_FLATTEN, td.CANCEL_FRIDAY))
 
     def test_boundary_is_dst_correct(self):
-        # DST starts Sunday 2026-03-08: a Friday 2026-03-06 order is cancelled at 22:00 UTC (EST).
+        # DST starts Sunday 2026-03-08: a Friday 2026-03-06 order is cancelled at 16:45 EST = 21:45 UTC.
         self.assertEqual(td.order_cancel_boundary(order(datetime(2026, 3, 6, 15, tzinfo=UTC)))[0],
-                         datetime(2026, 3, 6, 22, tzinfo=UTC))
-        # July (EDT): Wednesday's order, Day-2 close Thursday 21:00 UTC.
+                         datetime(2026, 3, 6, 21, 45, tzinfo=UTC))
+        # July (EDT): a Wednesday order is cancelled on Friday 16:45 EDT = 20:45 UTC.
         self.assertEqual(td.order_cancel_boundary(order(datetime(2026, 7, 15, 14, tzinfo=UTC))),
-                         (datetime(2026, 7, 16, 21, tzinfo=UTC), td.CANCEL_DAY2_NY_CLOSE))
+                         (datetime(2026, 7, 17, 20, 45, tzinfo=UTC), td.CANCEL_FRIDAY))
 
 
 class RuntimeCancelTests(RuntimeCase):
@@ -74,18 +75,19 @@ class RuntimeCancelTests(RuntimeCase):
                          {"ord-p": "CANCELLED", "ord-e": "CANCELLED", "ord-f": "FILLED"})
         self.assertEqual(sorted(p["reason"] for _, _, p in journal), [td.CANCEL_FRIDAY] * 2)
         self.assertEqual({(stamp, p["boundary_utc"]) for _, stamp, p in journal},
-                         {(FRI_CLOSE.isoformat(), FRI_CLOSE.isoformat())})
+                         {(FRI_FLATTEN.isoformat(), FRI_FLATTEN.isoformat())})
         self.assertEqual(runtime.manage_trade_duration(FRI_CLOSE + timedelta(minutes=15)), {})  # idempotent
         self.assertEqual(len(self.orders()[1]), 2)
 
     def test_pending_order_survives_until_its_boundary(self):
         self.seed_orders(order(THU_OPEN))
-        before = FRI_CLOSE - timedelta(minutes=15)
+        before = FRI_FLATTEN - timedelta(minutes=5)
         self.assertEqual(self.runtime(None, before).manage_trade_duration(before), {})
         self.assertEqual(self.orders()[0]["ord-p"].status, "PENDING")
 
-    def test_cycle_cancels_a_day2_expired_order_before_any_fill(self):
-        """A missed 17:00 pass: the next cycle cancels the order before evaluating it on its own bar."""
+    def test_cycle_cancels_a_max_hold_expired_order_before_any_fill(self):
+        """A missed pass: the next cycle cancels the order before evaluating it on its own bar."""
+        self.enterContext(patch.object(td, "MAX_HOLD_TRADING_DAYS", 1))
         self.seed_orders(order(TUE_OPEN - FIVE))
         runtime = self.runtime(Prices(lambda at: 100.0, TUE_OPEN - 4 * FIVE), THU_SLOT)
         self.assertNotEqual(runtime.run_cycle("XAUUSD", THU_SLOT), "ERROR")
@@ -93,10 +95,10 @@ class RuntimeCancelTests(RuntimeCase):
         self.assertEqual(orders["ord-p"].status, "CANCELLED")
         self.assertEqual(self.paper()[0].open_positions, {})
         self.assertEqual([(stamp, p["reason"]) for _, stamp, p in journal],
-                         [(WED_CLOSE.isoformat(), td.CANCEL_DAY2_NY_CLOSE)])
+                         [((TUE_OPEN - FIVE + timedelta(days=1)).isoformat(), td.CANCEL_MAX_HOLD)])
 
-    def test_day1_order_is_left_pending_by_the_cycle(self):
-        self.seed_orders(order(datetime(2026, 1, 14, 14, tzinfo=UTC)))  # Wednesday: Day-2 close is Thursday 22:00
+    def test_order_before_its_boundary_is_left_pending_by_the_cycle(self):
+        self.seed_orders(order(datetime(2026, 1, 14, 14, tzinfo=UTC)))  # Wednesday: boundary Friday 16:45 ET
         runtime = self.runtime(Prices(lambda at: 100.0, THU_SLOT - timedelta(hours=6)), THU_SLOT)
         self.assertNotEqual(runtime.run_cycle("XAUUSD", THU_SLOT), "ERROR")
         orders, journal = self.orders()
@@ -104,6 +106,7 @@ class RuntimeCancelTests(RuntimeCase):
         self.assertEqual(journal, [])
 
     def test_two_stale_cancellation_writes_remain_blocked_after_successful_catch_up(self):
+        self.enterContext(patch.object(td, "MAX_HOLD_TRADING_DAYS", 1))
         self.seed_orders(order(TUE_OPEN - FIVE))
         runtime = self.runtime(Prices(lambda at: 100.0, TUE_OPEN - 4 * FIVE), THU_SLOT)
         save_paper = runtime.store.save_paper

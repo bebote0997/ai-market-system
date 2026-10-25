@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 from runtime.demo_runner import DemoRunner
-from runtime.notifications import SlackNotificationSink, SlackNotificationError
+from runtime.notifications import SlackNotificationSink, SlackNotificationError, paper_summary_text
 from storage.daily_summary import (MAX_CATCH_UP, NEW_YORK, build_daily_summary, pending_summary_days, summary_day,
                                     summary_window)
 from storage.database import Store
@@ -41,7 +41,7 @@ class DailySummaryTests(unittest.TestCase):
             events = other.notification_events()
             self.assertTrue(events)
             self.assertEqual(other.db.execute('SELECT status FROM notification_deliveries ORDER BY attempted_at LIMIT 1').fetchone()[0], 'CLAIMED')
-            self.assertEqual(json.loads(payload['text'].split('\n', 1)[1]), events[-1]['daily_summary'])
+            self.assertEqual(payload['text'], paper_summary_text(events[-1]['daily_summary']))
         finally:
             other.close()
         self.sent.append(payload)
@@ -59,7 +59,8 @@ class DailySummaryTests(unittest.TestCase):
 
     def test_empty_day_has_zero_counts_and_null_unknown_values(self):
         self.assertTrue(self.runner.daily_summary(T))
-        summary = json.loads(self.sent[0]['text'].split('\n', 1)[1])
+        summary = self.store.notification_events()[-1]['daily_summary']
+        self.assertEqual(self.sent[0]['text'], paper_summary_text(summary))
         self.assertEqual((summary['date_ny'], summary['window_start_utc'], summary['close_at_utc'],
                           summary['trading_day_key']),
                          ('2026-09-18', '2026-09-17T21:00:00+00:00', '2026-09-18T21:00:00+00:00',

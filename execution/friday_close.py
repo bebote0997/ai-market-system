@@ -9,11 +9,12 @@ Pure helpers, DST-correct via zoneinfo; nothing reads a wall clock. The router u
 """
 from datetime import datetime, timedelta
 
-from execution.trade_duration import FRIDAY, NEW_YORK, NY_CLOSE
+from execution.trade_duration import FRIDAY, FRIDAY_FLATTEN_LEAD_MINUTES, NEW_YORK, NY_CLOSE
 
 FLAG_ENV = "AI_FLOOR_FRIDAY_PREFLATTEN"
 MINUTES_ENV = "AI_FLOOR_FRIDAY_PREFLATTEN_MINUTES"
-DEFAULT_MINUTES, MIN_MINUTES, MAX_MINUTES = 30, 5, 240
+# DEC-HOLD-WEEK-1: the default window starts at the trade-duration Friday flatten (16:45 NY -> 15 minutes).
+DEFAULT_MINUTES, MIN_MINUTES, MAX_MINUTES = FRIDAY_FLATTEN_LEAD_MINUTES, 5, 240
 OPEN, PREFLATTEN, CLOSED = "open", "preflatten", "closed"
 ALERT_LEAD = timedelta(minutes=5)  # alert when trades remain from Friday 16:55 NY on
 SUNDAY = 6
@@ -25,7 +26,7 @@ def preflatten_flag(env):
 
 
 def preflatten_minutes(env):
-    """Integer minutes in [5, 240]; anything else -> 30."""
+    """Integer minutes in [5, 240]; anything else -> DEFAULT_MINUTES (aligned to the Friday flatten, 15)."""
     raw = str(env.get(MINUTES_ENV) or "").strip()
     return int(raw) if raw.isdigit() and MIN_MINUTES <= int(raw) <= MAX_MINUTES else DEFAULT_MINUTES
 

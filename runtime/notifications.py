@@ -91,69 +91,127 @@ class SlackNotificationSink:
             raise ValueError("invalid Slack timeout")
 
     def deliver(self, event: NotificationEvent) -> None:
-        if not self.webhook_url:
-            raise SlackNotificationError("NOT_CONFIGURED")
         if event.type == "DAILY_SUMMARY":
             self._deliver_daily_summary(event)
             return
-        details = {
-            "event_id": event.event_id, "run_id": event.run_id,
-            "timestamp_utc": event.timestamp_utc, "severity": event.severity,
-            "type": event.type, "symbol": event.symbol,
-            "agent_summaries": tuple({"agent": item.get("agent"), "status": item.get("status"),
-                                       "summary": str(item.get("reasoning_summary") or "")[:240]}
-                                      for item in event.agent_summaries),
-            "risk_status": event.risk_decision.get("status") if event.risk_decision else None,
-            "paper_order_ids": event.paper_order_ids, "paper_trade_ids": event.paper_trade_ids,
-            "evidence_refs": event.evidence_refs,
-        }
-        payload = {"text": "AI Market System PAPER alert\n" + json.dumps(details, sort_keys=True)}
-        if event.type == "EXECUTION_DECISION":
-            outcome = event.execution or {}
-            payload = {"text": "AI Market System PAPER execution\n" + json.dumps({
-                "run_id": event.run_id, "symbol": event.symbol,
-                "setup_id": outcome.get("setup_id"),
-                "setup_status": outcome.get("setup_status"),
-                "plan_status": outcome.get("plan_status"),
-                "direction": outcome.get("side"),
-                "execution_status": outcome.get("execution_status"),
-                "execution_reason": outcome.get("execution_reason"),
-                "blocking_position_id": outcome.get("blocking_position_id"),
-                "blocking_order_id": outcome.get("blocking_order_id"),
-                "order_id": outcome.get("order_id"),
-                "risk_status": event.risk_decision.get("status") if event.risk_decision else None,
-            }, sort_keys=True)}
-        send_slack(self.transport, self.webhook_url, payload, self.timeout)
-
+        if not self.webhook_url:
+            raise SlackNotificationError("NOT_CONFIGURED")
+        payload = compact_payload(event)
+        if payload is not None:
+            send_slack(self.transport, self.webhook_url, payload, self.timeout)
 
     def _deliver_daily_summary(self, event):
         """DEC-DEMO-GATE-1: OANDA demo figures while routing is ON (never PAPER numbers), else the PAPER summary.
         One log line per attempt: source + NY date of the summary only (never the webhook URL or figures). Both
-        cover the summary's trading day [``window_start_utc``, ``close_at_utc``) = 17:00 -> 17:00 America/New_York."""
+        cover the summary's trading day [``window_start_utc``, ``close_at_utc``) = 17:00 -> 17:00 America/New_York.
+        Slack and the OANDA demo email are attempted independently (each once): the email goes out with a Gmail-only
+        setup and after a Slack failure; the delivery record (raised error) reflects the Slack outcome, the email
+        outcome is logged on its own."""
         source = "OANDA_DEMO" if _routing_on() else "PAPER"
+        if not self.webhook_url and (source == "PAPER" or not _daily_email_configured()):
+            raise SlackNotificationError("NOT_CONFIGURED")  # no channel: no OANDA read
         summary = event.daily_summary or {}
+        alert = None
         if source == "OANDA_DEMO":
-            payload = {"text": oanda_demo_summary_text(summary.get("close_at_utc") or event.timestamp_utc,
-                                                       summary.get("window_start_utc"),
-                                                       self.clock() if self.clock else None)}
+            alert = oanda_demo_daily_alert(summary.get("close_at_utc") or event.timestamp_utc,
+                                           summary.get("window_start_utc"), self.clock() if self.clock else None)
+            from runtime.trade_alerts import daily_slack_payload
+            payload = daily_slack_payload(alert)
         else:
-            payload = {"text": "AI Market System PAPER DAILY_SUMMARY\n" +
-                       json.dumps(event.daily_summary, sort_keys=True, ensure_ascii=False)}
+            payload = {"text": paper_summary_text(summary)}
         date = str(summary.get("date_ny") or "")[:10] or "-"
+        failure = None
         try:
+            if not self.webhook_url:
+                raise SlackNotificationError("NOT_CONFIGURED")
             send_slack(self.transport, self.webhook_url, payload, self.timeout)
+            LOG.info("component=notifications event=DAILY_SUMMARY_SENT source=%s date=%s", source, date)
         except Exception as exc:
             code = exc.args[0] if isinstance(exc, SlackNotificationError) and exc.args else type(exc).__name__
             LOG.warning("component=notifications event=DAILY_SUMMARY_FAILED source=%s date=%s error_type=%s", source,
                         date, code)
-            raise
-        LOG.info("component=notifications event=DAILY_SUMMARY_SENT source=%s date=%s", source, date)
+            failure = exc
+        if alert is not None:
+            _email_daily_summary(alert, event.event_id, date)
+        if failure is not None:
+            raise failure
+
+
+# DEC-ALERTS-REDESIGN-1: what the durable Slack sink sends besides the daily summary. Never a JSON dump.
+FOLDED_TYPES = frozenset({"MACRO_HIGH_IMPORTANCE", "MACRO_HIGH_RELEVANCE", "AI_REVIEW_UNHEALTHY",
+                          "AI_REVIEW_RECOVERED"})  # macro: folded into «Por qué» / the daily summary
+TRADE_TYPES = frozenset({"EXECUTION_DECISION", "POSITION_OPENED", "POSITION_CLOSED", "STRUCTURE_REVERSE_SUBMITTED",
+                         "RISK_REJECTED", "AI_CAUTION"})  # PAPER engine: the OANDA router alerts report demo trades
+PAPER_LABELS = {"EXECUTION_DECISION": "Decisión de ejecución PAPER", "POSITION_OPENED": "Posición PAPER abierta",
+                "POSITION_CLOSED": "Posición PAPER cerrada", "STRUCTURE_REVERSE_SUBMITTED": "Reversión PAPER enviada",
+                "RISK_REJECTED": "Plan rechazado por el Risk Engine", "AI_CAUTION": "Precaución de la IA"}
+
+
+def compact_payload(event):
+    """Compact Floor-style Slack payload for a non-summary event, or None when it is not sent: macro / per-agent
+    events are folded; PAPER trade events are not sent in OANDA-demo results mode (no PAPER numbers ever)."""
+    from runtime.trade_alerts import SYSTEM_LABELS, system_slack_payload
+    if event.type in FOLDED_TYPES:
+        return None
+    execution = event.execution or {}
+    if event.type in TRADE_TYPES:
+        if _routing_on():
+            return None
+        reason = execution.get("execution_reason") or execution.get("execution_status") or (
+            (event.risk_decision or {}).get("status"))
+        side = execution.get("side") or (event.risk_decision or {}).get("side")
+        label = PAPER_LABELS[event.type] + (f" {side}" if side else "")
+        return system_slack_payload(label, event.symbol, reason)
+    reason = execution.get("reason") or (event.type if event.type not in SYSTEM_LABELS else None)
+    return system_slack_payload(event.type, event.symbol, reason)
+
+
+def paper_summary_text(summary):
+    """PAPER daily summary as short «clave: valor» lines (routing OFF and no OANDA-only mode); no JSON dump."""
+    lines = ["AI Market System · Resumen diario PAPER"]
+    for key, value in sorted((summary or {}).items()):
+        if isinstance(value, dict):
+            value = ", ".join(f"{k}={v}" for k, v in sorted(value.items())) or "—"
+        lines.append(f"{key}: {'sin datos' if value is None else value}")
+    return "\n".join(lines)
+
+
+def oanda_demo_daily_alert(timestamp_utc=None, window_start_utc=None, sent_at=None):
+    """``runtime.trade_alerts.DailyAlert`` of the OANDA demo summary (same figures as ``oanda_demo_summary_text``)."""
+    from runtime.trade_alert_source import daily_alert
+    meta = {}
+    try:
+        lines = _demo_lines(timestamp_utc, window_start_utc, sent_at, meta)
+    except Exception:  # noqa: BLE001 - no demo data: never PAPER numbers
+        lines = ["OANDA demo: sin datos"]
+    return daily_alert(lines, os.environ, date_label=meta.get("label"), demo_day=meta.get("day"),
+                       pnl=meta.get("pnl"), window=meta.get("window"))
+
+
+def _daily_email_configured():
+    try:
+        from runtime.alert_daily_email import email_configured
+        return email_configured()
+    except Exception:  # noqa: BLE001 - unreadable config: no email
+        return False
+
+
+def _email_daily_summary(alert, event_id, date="-"):
+    """Best effort, once per claimed delivery, whatever Slack did: OANDA demo summary by email (own outcome log)."""
+    try:
+        from runtime.alert_daily_email import send_daily_email
+        if send_daily_email(alert, event_id):
+            LOG.info("component=notifications event=DAILY_SUMMARY_EMAIL_SENT date=%s", date)
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("component=notifications event=DAILY_SUMMARY_EMAIL_FAILED error_type=%s", type(exc).__name__)
 
 
 def _routing_on():
+    """OANDA demo summary while routing is ON or ``AI_FLOOR_RESULTS_SOURCE=OANDA_DEMO`` (DEC-OANDA-ONLY-1: never the
+    PAPER summary in that mode, even with routing OFF)."""
     try:
-        from execution.demo_dashboard import demo_mode
-        return demo_mode(os.environ)
+        from execution.results_source import demo_results
+        return demo_results(os.environ)
     except Exception:  # noqa: BLE001 - unreadable flag: the unchanged PAPER summary
         return False
 
@@ -177,7 +235,9 @@ def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=N
         return header + "\nOANDA demo: sin datos"
 
 
-def _demo_lines(timestamp_utc, window_start_utc, sent_at=None):
+def _demo_lines(timestamp_utc, window_start_utc, sent_at=None, meta=None):
+    """Summary lines; ``meta`` (dict) receives the trading-day label, demo day and day P&L for the Floor alert."""
+    meta = {} if meta is None else meta
     from datetime import datetime, timezone
     from execution.demo_dashboard import demo_progress, demo_snapshot
     from execution.demo_epoch import parse_aware
@@ -186,14 +246,16 @@ def _demo_lines(timestamp_utc, window_start_utc, sent_at=None):
     from ui.i18n_es import demo_day_text
     close = parse_aware(timestamp_utc) or datetime.now(timezone.utc)
     label, start, end, _ = summary_window(trading_day(close))
+    meta["label"] = label
     start = parse_aware(window_start_utc) or start
+    meta["window"] = (start, end)
     now = sent_at if isinstance(sent_at, datetime) and sent_at.tzinfo else datetime.now(timezone.utc)
     at = f"(a las {now.astimezone(ET):%H:%M} ET)"
     snapshot = demo_snapshot(now)
     stats, currency = snapshot.get("stats"), snapshot.get("currency")
     if stats is None and snapshot.get("nav") is None:
         return ["OANDA demo: sin datos"]
-    day = demo_progress(now)[2]
+    day = meta["day"] = demo_progress(now)[2]
     nav, balance, change = snapshot.get("nav"), snapshot.get("balance"), (snapshot.get("capital") or {}).get("change")
     account_at = at
     if snapshot.get("stale"):  # last good account read: never labelled as current
@@ -210,6 +272,7 @@ def _demo_lines(timestamp_utc, window_start_utc, sent_at=None):
     if stats is None:
         return lines + ["OANDA demo: sin datos de operaciones"]
     window = window_statistics(snapshot.get("closed_rows") or [], start, end)
+    meta["pnl"] = window["pnl"]
     avg_r = window["avg_r"]
     closed = ("sin datos" if window["trades"] is None else
               f"{window['trades']} (ganadoras: {'—' if window['wins'] is None else window['wins']})")
@@ -220,12 +283,38 @@ def _demo_lines(timestamp_utc, window_start_utc, sent_at=None):
                     f"Operaciones abiertas {at}: {len(snapshot.get('open_rows') or ())}"]
 
 
+def _without_images(payload):
+    """Copy of a Block Kit payload without image accessories / image blocks; None when it has none."""
+    found = False
+    attachments = []
+    for attachment in payload.get("attachments") or ():
+        blocks = []
+        for block in attachment.get("blocks") or ():
+            if block.get("type") == "image":
+                found = True
+                continue
+            if (block.get("accessory") or {}).get("type") == "image":
+                found = True
+                block = {key: value for key, value in block.items() if key != "accessory"}
+            blocks.append(block)
+        attachments.append({**attachment, "blocks": blocks})
+    return {**payload, "attachments": attachments} if found else None
+
+
 def send_slack(transport, url, payload, timeout):
     """Post one Slack payload; failures surface only as typed SlackNotificationError codes."""
     if isinstance(payload.get("text"), str):
         payload = {**payload, "text": slack_escape(payload["text"])}
     try:
-        transport(url, payload, timeout)
+        try:
+            transport(url, payload, timeout)
+        except HTTPError as exc:
+            # 400 = Slack rejected the message (nothing was posted), e.g. it could not download the optional Floor
+            # thumbnail: retry once without images. Any other failure is never retried (no duplicate posts).
+            stripped = _without_images(payload) if exc.code == 400 else None
+            if stripped is None:
+                raise
+            transport(url, stripped, timeout)
     except HTTPError as exc:
         raise SlackNotificationError("RATE_LIMITED" if exc.code == 429 else "PROVIDER_FAILURE") from None
     except (URLError, TimeoutError, ConnectionError):

@@ -7,13 +7,15 @@ from agents.structure_agent import analizar_estructura
 from agents.trade_planner import crear_trade_plan
 from core.contracts import FloorRunReport
 from riesgo import evaluar_trade_plan
+from core import fx_policy
 from core.rr_contract import POLICY_V1, POLICY_V2_D, POLICY_V2_F3
 
 
 def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, equity=None, run_id=None,
         planner_policy=POLICY_V1):
     """``planner_policy`` POLICY_V1 (default, frozen V1), POLICY_V2_F3 (DEC-4.6 fixed 3R) or POLICY_V2_D (research);
-    Phase 4 policies are tests/replay only (no runtime path)."""
+    Phase 4 policies are tests/replay only (no runtime path). DEC-FX-SL-1: for an FX symbol, V1 and V2_F3 both plan
+    with ``plan_fx_fixed_rr`` (SL clamped to 45-60 pips, TP fixed at 2R); Policy D (research) is unchanged."""
     if planner_policy not in (POLICY_V1, POLICY_V2_D, POLICY_V2_F3):
         raise ValueError("unknown planner policy")
     run_id = run_id or str(uuid.uuid4())
@@ -28,7 +30,10 @@ def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, eq
     if setup.status in {"NO_SETUP", "WATCH"}:
         return FloorRunReport("1.0", run_id, as_of, symbol, structure, liquidity, macro, setup, None, None, setup.status, setup.warnings)
     target_decision = {}
-    if planner_policy == POLICY_V2_D:
+    if planner_policy != POLICY_V2_D and fx_policy.is_fx(symbol):
+        from agents.target_planner import plan_fx_fixed_rr
+        plan, target_decision = plan_fx_fixed_rr(setup, {"data": snapshot["5m"]}, symbol, run_id, as_of, instrumento)
+    elif planner_policy == POLICY_V2_D:
         from agents.target_planner import plan_policy_d
         plan, target_decision = plan_policy_d(setup, {"data": snapshot["5m"]}, symbol, run_id, as_of, instrumento)
     elif planner_policy == POLICY_V2_F3:

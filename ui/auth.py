@@ -155,3 +155,19 @@ def require_dashboard_access(st, env=None, *, clock=time.monotonic, sleep=time.s
             st.error("Contraseña incorrecta")
     st.stop()
     return False
+
+
+def owner_authenticated(st, env=None, *, clock=time.monotonic):
+    """True only for a session that logged in with the owner password (``AI_FLOOR_DASHBOARD_PASSWORD``, strong
+    enough) and has not expired. The password-less loopback mode is NOT owner-authenticated: owner-only actions stay
+    disabled there. Never raises."""
+    env = os.environ if env is None else env
+    try:
+        if not password_strong_enough(env.get("AI_FLOOR_DASHBOARD_PASSWORD")):
+            return False
+        state = st.session_state
+        expires_at = state.get(EXPIRES_AT)
+        return (state.get(AUTHENTICATED) is True and isinstance(expires_at, (int, float))
+                and not isinstance(expires_at, bool) and clock() < expires_at)
+    except Exception:  # noqa: BLE001 - unknown session: not the owner
+        return False
