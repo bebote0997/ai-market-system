@@ -74,13 +74,31 @@ class EpochFilterTests(unittest.TestCase):
 
 
 class DayAndNumbersTests(unittest.TestCase):
+    @patch.dict(os.environ, {"AI_FLOOR_RESULTS_SOURCE": "OANDA_DEMO", "AI_FLOOR_DEMO_EPOCH": EPOCH.isoformat()})
     def test_demo_day_counts_from_the_epoch_new_york_date(self):
         demo = {"epoch": lambda: EPOCH}
         self.assertEqual(luxury.demo_day(demo, datetime(2026, 10, 25, 16, tzinfo=UTC)), 1)
         self.assertEqual(luxury.demo_day(demo, datetime(2026, 10, 26, 7, tzinfo=UTC)), 2)  # Monday 03:00 ET
         self.assertEqual(luxury.demo_day(demo, datetime(2026, 11, 24, 17, tzinfo=UTC)), 31)  # uncapped
         self.assertIsNone(luxury.demo_day(demo, datetime(2026, 10, 25, 15, tzinfo=UTC)))
-        self.assertIsNone(luxury.demo_day({"epoch": lambda: 1 / 0}, datetime(2026, 10, 26, tzinfo=UTC)))
+        with patch("execution.demo_epoch.demo_epoch", side_effect=RuntimeError):
+            self.assertIsNone(luxury.demo_day(demo, datetime(2026, 10, 26, tzinfo=UTC)))
+
+    def test_unavailable_demo_day_uses_authoritative_epoch_or_waiting_state(self):
+        now = datetime(2026, 10, 26, 7, tzinfo=UTC)
+        with patch.dict(os.environ, {"AI_FLOOR_RESULTS_SOURCE": "OANDA_DEMO",
+                                     "AI_FLOOR_DEMO_EPOCH": EPOCH.isoformat()}), \
+                patch.dict(sys.modules, {"execution.demo_dashboard": None}):
+            demo = luxury.demo_api()
+            self.assertNotEqual(demo["epoch"](), EPOCH)
+            day = luxury.demo_day(demo, now)
+            self.assertEqual(day, 2)
+            self.assertIn("Día 2 de 30", luxury.hero_subline(demo, day))
+            with patch("execution.demo_epoch.demo_epoch", side_effect=RuntimeError):
+                day = luxury.demo_day(demo, now)
+                self.assertIsNone(day)
+                self.assertIn(dashboard.FIRST_CYCLE_WAIT, luxury.hero_subline(demo, day))
+                self.assertNotIn("Día", luxury.hero_subline(demo, day))
 
     def snapshot(self, **extra):
         stats = {"trades": 0, "wins": 0, "total_pnl": 0.0, "today_pnl": 0.0, "max_drawdown": 0.0, "avg_r": None,

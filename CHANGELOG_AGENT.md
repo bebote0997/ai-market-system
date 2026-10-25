@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-25 — UI chunk 7: epoch autoritativo en Floor y contador de días
+
+- Floor obtiene `since` de `ui.views.dashboard.demo_since()` (fail-closed), nunca del epoch de respaldo de `demo_unavailable_api()`. El mismo filtro cubre snapshots, ciclos, agentes, feed, mercado y ciclos en curso; el día del encabezado usa ese epoch.
+- `luxury.demo_day()` usa el epoch autoritativo del dashboard; si no se puede leer, conserva «Esperando el primer ciclo», sin contar desde el respaldo del 18 de octubre.
+- Regresiones con módulo demo no disponible y epoch configurado posterior: evidencia antigua oculta, día correcto y espera ante epoch ilegible. Solo UI/tests; sin cambios de fase, runtime, ejecución, riesgo, broker, flags, dependencias, Render, commit ni push.
+- Validación: baseline 2571 tests OK (41 skipped, 1 expected failure); 62 tests enfocados OK; suite completa final (`/workspace/venv-ui/bin/python -m unittest discover -p "test_*.py"`) 2573 tests OK (41 skipped, 1 expected failure). `ruff check .` y `git diff --check` PASS.
+
 ## 2026-10-25 — UI chunk 6: tres correcciones de revisión
 
 - Control exige resumen practice `OK` y `stale is not True` para mostrar «Conectado · activo»; el saldo antiguo muestra «datos de saldo desactualizados» con tono de advertencia, conservando la prioridad de parada de emergencia/cuenta apagada.

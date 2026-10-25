@@ -497,7 +497,7 @@ def demo_day(demo, now):
     """Uncapped demo day counted from the EPOCH's New York date (``ui.demo_clock``) or None; never raises."""
     from ui.demo_clock import demo_day_from_epoch
     try:
-        return demo_day_from_epoch(demo['epoch'](), now)
+        return demo_day_from_epoch(demo_since(demo), now)
     except Exception:  # noqa: BLE001 - no day counter rather than a broken screen
         return None
 

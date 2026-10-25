@@ -7,7 +7,7 @@ by what the dashboard caches already hold (``ui.floor_cache`` peek readers: the 
 call; nothing cached => None) and never PAPER numbers in demo mode (header, trades and the analysts' signal outcomes). Every section is built inside a guard: a read error yields ``None`` for that
 section, never an exception. Missing data stays ``None`` (the page shows "—" / "sin datos aún"); nothing is invented.
 
-OANDA demo mode shows ONLY cycles / events at/after the demo epoch (``demo['epoch']()``): snapshot, runs, agent
+OANDA demo mode shows ONLY cycles / events at/after the demo epoch (``dashboard.demo_since()``): snapshot, runs, agent
 decisions, cycle evidence, journal feed and market lines older than it (old PAPER cycles still in the DB) or with a
 missing / unparsable time are left out; nothing left => ``waiting`` ("Esperando el primer ciclo"). ``running`` is
 active only for a fresh ``runs`` row with status RUNNING (the page animates only then). PAPER mode keeps the full DB.
@@ -594,7 +594,8 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         payload["source"] = "OANDA_DEMO"
         # OANDA demo mode: only cycles / events at/after the epoch (old PAPER history stays in the DB, never shown).
         # Unknown epoch => nothing passes (the far future), never pre-epoch data.
-        since = guarded(lambda: as_utc(demo['epoch']())) or datetime.max.replace(tzinfo=timezone.utc)
+        from ui.views.dashboard import FAR_FUTURE, demo_since
+        since = guarded(demo_since) or FAR_FUTURE
         payload["epoch_text"] = et_text(since) if since.year < 9999 else None
         from ui.floor_cache import peek_account_view, peek_demo_trades
         # peek-only readers: the stored cache contents, never a refresh (no broker / network call from the Floor)

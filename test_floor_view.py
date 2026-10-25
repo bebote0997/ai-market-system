@@ -20,7 +20,7 @@ from storage.codec import paper_encode
 from storage.database import Store
 from ui.floor_payload import AGENT_IDS, build_floor_payload, payload_json, signals_and_hit_rate
 from ui.state import dashboard_database
-from ui.views import floor_view
+from ui.views import dashboard, floor_view, luxury
 
 ROOT = Path(__file__).resolve().parent
 NOW = datetime(2026, 10, 20, 13, 30, tzinfo=timezone.utc)  # 09:30 ET
@@ -109,7 +109,8 @@ class FloorPayloadTests(unittest.TestCase):
         self.path = Path(self.tmp.name) / "floor.db"
 
     def build(self, **kwargs):
-        with dashboard_database(self.path) as db:
+        with dashboard_database(self.path) as db, \
+                patch.object(dashboard, "demo_since", return_value=NOW - timedelta(days=2)):
             return build_floor_payload(now=NOW, db=db, **kwargs)
 
     def test_no_database_is_all_none(self):
@@ -373,7 +374,9 @@ class FloorEpochTests(unittest.TestCase):
         seed(self.path)  # a PAPER cycle of 20 oct 12:00 UTC (+ journal, snapshot, agent decision)
 
     def build(self, now=NOW, **kwargs):
-        with dashboard_database(self.path) as db:
+        demo = kwargs.get("demo")
+        since = dashboard.epoch_or_far(demo["epoch"]) if demo else None
+        with dashboard_database(self.path) as db, patch.object(dashboard, "demo_since", return_value=since):
             return build_floor_payload(now=now, db=db, sample_mode=False, enabled_symbols=("EURUSD",), **kwargs)
 
     def test_pre_epoch_cycle_is_never_shown_and_floor_waits(self):
@@ -390,6 +393,25 @@ class FloorEpochTests(unittest.TestCase):
         html = floor_view.render_html(payload)
         for leaked in ("estructura alcista real", "sin eventos de alto impacto", "dentro de límites", "10055"):
             self.assertNotIn(leaked, html)
+
+    def test_unavailable_demo_module_uses_authoritative_epoch_and_fails_closed(self):
+        epoch = datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)
+        with patch.dict(os.environ, {"AI_FLOOR_RESULTS_SOURCE": "OANDA_DEMO",
+                                     "AI_FLOOR_DEMO_EPOCH": epoch.isoformat()}), \
+                patch.dict(sys.modules, {"execution.demo_dashboard": None}), \
+                dashboard_database(self.path) as db:
+            demo = luxury.demo_api()
+            self.assertLess(demo["epoch"](), datetime.fromisoformat(T_RUN))
+            for unreadable in (False, True):
+                with self.subTest(unreadable=unreadable), \
+                        patch.dict(sys.modules, {"execution.demo_epoch": None} if unreadable else {}):
+                    payload = build_floor_payload(now=NOW, db=db, demo=demo)
+                    self.assertEqual((payload["cycle"], payload["feed"], payload["market"]), (None, None, None))
+                    self.assertTrue(payload["waiting"])
+                    self.assertEqual(payload["waiting_text"], "Esperando el primer ciclo")
+                    self.assertFalse(payload["running"]["active"])
+                    self.assertTrue(all(value is None for value in payload["agents"].values()))
+                    self.assertEqual(payload["epoch_text"], None if unreadable else "20 oct 09:00 ET")
 
     def test_post_epoch_cycle_is_shown(self):
         epoch = datetime(2026, 10, 20, 11, 0, tzinfo=timezone.utc)
@@ -474,9 +496,11 @@ class FloorRunningTests(unittest.TestCase):
         self.assertEqual(state, {"active": False, "step": None, "symbol": None, "started_at_text": None,
                                  "started_at": None, "deadline": None})
 
-    def test_pre_epoch_running_row_is_not_active(self):
+    @patch("ui.views.dashboard.demo_since", return_value=NOW - timedelta(minutes=1))
+    def test_pre_epoch_running_row_is_not_active(self, since):
         state = self.running(NOW - timedelta(minutes=2), demo=demo_since(NOW - timedelta(minutes=1)))
         self.assertFalse(state["active"])
+        since.return_value = NOW - timedelta(minutes=5)
         self.assertTrue(self.running_again(demo_since(NOW - timedelta(minutes=5)))["active"])
 
     def running_again(self, demo):
