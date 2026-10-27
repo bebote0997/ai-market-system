@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-22 (America/New_York; rama `feat/fx-sl-week-hold`: DEC-FX-SL-1, DEC-HOLD-WEEK-1, DEC-REVERSAL-1, runbook del reinicio 2026-10-25. Anterior: 2026-10-18; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
+_Última actualización: 2026-10-27 (America/New_York; rama `fix/manual-close-sizing-day`: cierre manual inmediato (enmienda DEC-MANUAL-CLOSE-1), «Día N» desde la época en alertas/resumen, reintentos del resumen diario, DEC-FILL-ANCHOR-1; ver `CHANGELOG_AGENT.md`)._
+
+_Anterior: 2026-10-22 (America/New_York; rama `feat/fx-sl-week-hold`: DEC-FX-SL-1, DEC-HOLD-WEEK-1, DEC-REVERSAL-1, runbook del reinicio 2026-10-25. Anterior: 2026-10-18; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
 
 _Estado anterior: 2026-10-14 (America/New_York). Esta es la única fuente de estado; cualquier PR que cambie el estado debe actualizar este archivo._
 

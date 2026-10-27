@@ -11,7 +11,8 @@ The router never touches PaperBroker or the experiment DB. Its state is ``broker
 in the broker state DB (``execution/broker_demo_state.py``). Flow per cycle (``on_cycle``): candidate checks without
 network (PLAN_READY, EURUSD only, ``eligible`` True, Risk APPROVED, plan == decision, geometry) -> idempotency by
 ``client_id = aif-<run_id>`` -> ``reconcile()`` (drift / unresolved / read failure block routing) -> single net position
-gate -> sizing from broker NAV -> write-ahead intent (PENDING_SEND) -> ``OandaBroker.submit_plan`` -> ACCEPTED (OPEN) /
+gate -> sizing from broker NAV -> FX fill anchor (DEC-FILL-ANCHOR-1: entry/SL/TP translated onto the
+ask/bid within 5 pips, same pips and R) -> write-ahead intent (PENDING_SEND) -> ``OandaBroker.submit_plan`` -> ACCEPTED (OPEN) /
 REJECTED / UNKNOWN (blocks routing until reconcile proves the outcome).
 
 Dry-run (``AI_FLOOR_BROKER_DEMO_DRY_RUN=1``, opt-in) records the exact order JSON (event DRY_RUN) and never POSTs/PUTs;
@@ -59,6 +60,7 @@ import sqlite3
 import threading
 from uuid import uuid4
 
+from core import fx_policy
 from execution import friday_close as fc
 from execution import trade_duration as td
 from execution.account_registry import AccountRegistry
@@ -104,6 +106,8 @@ def reversal_flag(env):
     return (env or {}).get(REVERSAL_ENV) != "0"
 FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
 OUTBOX_CLAIM_GRACE = timedelta(minutes=10)  # a CLAIMED alert this old had a crash mid-delivery -> UNKNOWN, not resent
+# DEC-FILL-ANCHOR-1: max |expected fill - planned entry| (pips) for translating entry / SL / TP onto the fill.
+FILL_ANCHOR_TOLERANCE_PIPS = Decimal(5)
 PENDING_EVENT_CAP = 50  # FLATTEN_REQUEST_PENDING (and dry-run previews) per request: the events table is append-only
 FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(minutes=30)}
 # Events forwarded to the optional ``on_alert`` hook (best effort; FRIDAY_FLATTEN_FAILED has its own explicit call).
@@ -239,6 +243,11 @@ def _log_action(kind, trade_id, reason):
     level = logging.INFO if kind in _ACTION_LOG_OK else logging.WARNING
     LOG.log(level, "component=broker_demo event=%s trade_id=%s reason=%s", kind, _log_token(trade_id),
             _log_reason(reason))
+
+
+def _pips(value):
+    """Decimal pips as plain text (``-1.6``, ``60``), never exponent notation."""
+    return format(value.normalize(), "f")
 
 
 def _not_routed(reason):
@@ -450,10 +459,13 @@ class BrokerDemoRouter:
                 self._event("REVERSAL_FLAT", client_id, closed_client_id=reversing["client_id"],
                             reason=refused[1] if refused[0] == "NOT_ROUTED" else refused[0])
                 return refused
-        try:  # A re-sized approval derived from the APPROVED decision: only the quantity differs.
+        entry, stop, target = self._fill_anchor(client_id, symbol, decision.side, entry, stop, target)
+        try:  # A re-sized approval derived from the APPROVED decision: the quantity and (DEC-FILL-ANCHOR-1) the prices
+            # translated onto the expected fill; SL/TP distances and R are the approved ones.
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), entry, stop, target, client_id=client_id,
                                    source_run_id=run_id, risk_policy_version=getattr(plan, "policy_version", None))
-            approval = replace(RiskApproval.from_decision(decision, run_id=run_id), quantity=Decimal(units))
+            approval = replace(RiskApproval.from_decision(decision, run_id=run_id), quantity=Decimal(units),
+                               entry=entry, stop=stop, target=target)
         except (TypeError, ValueError, ArithmeticError):
             return self._refuse(client_id, "approval_invalid")
         row = {"client_id": client_id, "run_id": run_id, "symbol": symbol, "side": decision.side, "units": units,
@@ -461,6 +473,37 @@ class BrokerDemoRouter:
         if self.dry_run:
             return self._dry_run(order_plan, units, row)
         return self._send(order_plan, approval, row, at)
+
+    def _fill_anchor(self, client_id, symbol, side, entry, stop, target):
+        """DEC-FILL-ANCHOR-1: the MARKET order fills at the ask (LONG) / bid (SHORT), not at the planned entry (last
+        candle close), while SL/TP are sent as absolute prices. For FX symbols (DEC-FX-SL-1) with a valid tradeable
+        quote within ``FILL_ANCHOR_TOLERANCE_PIPS`` of the entry, entry, stop and target are translated by the same
+        delta, so the SL/TP pips and the R multiple stay exactly the policy's (units unchanged). Otherwise the prices
+        are returned unchanged (event ``FILL_ANCHOR_SKIPPED`` + reason). Non-FX symbols: unchanged, no quote read."""
+        if not fx_policy.is_fx(symbol):
+            return entry, stop, target
+        quote, problem = self._quote(symbol, None)
+        if problem is not None:
+            self._event("FILL_ANCHOR_SKIPPED", client_id, reason=problem)
+            return entry, stop, target
+        _tradeable, bid, ask = quote
+        pip = fx_policy.pip_size(symbol)
+        try:
+            fill = round_price(ask if side == "LONG" else bid)
+            delta = fill - entry
+            delta_pips = delta / pip
+            if abs(delta_pips) > FILL_ANCHOR_TOLERANCE_PIPS:
+                self._event("FILL_ANCHOR_SKIPPED", client_id, reason="delta_above_tolerance",
+                            delta_pips=_pips(delta_pips))
+                return entry, stop, target
+            anchored = fill, round_price(stop + delta), round_price(target + delta)
+        except (ValueError, ArithmeticError):
+            self._event("FILL_ANCHOR_SKIPPED", client_id, reason="anchor_invalid")
+            return entry, stop, target
+        self._event("FILL_ANCHORED", client_id, side=side, delta_pips=_pips(delta_pips), entry=str(anchored[0]),
+                    stop=str(anchored[1]), target=str(anchored[2]), sl_pips=_pips(abs(anchored[0] - anchored[1]) / pip),
+                    tp_pips=_pips(abs(anchored[2] - anchored[0]) / pip))
+        return anchored
 
     def _sized(self, client_id, run_id, decision, entry, stop, at):
         """``(units, None)`` sized on a fresh NAV read with the daily-loss gate passed, else ``(None, outcome)``."""
