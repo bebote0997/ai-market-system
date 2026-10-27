@@ -63,6 +63,11 @@ class DailySummaryRetryTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.sleeps = []
+        self.clock = [1000.0]
+        for name, value in (("_retry_started_at", None), ("_monotonic", lambda: self.clock[0])):
+            guard = patch.object(notifications, name, value)
+            guard.start()
+            self.addCleanup(guard.stop)
 
     def text(self, readers):
         with patch.multiple(oanda_readonly, account_view=readers.account_view, demo_trades=readers.demo_trades,
@@ -135,6 +140,66 @@ class DailySummaryRetryTests(unittest.TestCase):
         self.assertIn("NAV (a las 17:00 ET): 100,200.00 USD", text)
         self.assertIn("OANDA demo: sin datos de operaciones", text)
         self.assertIn("account=ok trades=http_502", logs.output[0])
+
+    def test_stale_account_view_is_retried_then_recovers(self):
+        stale = AccountView("OK", "practice", "***-001", "USD", Decimal("99000.00"), Decimal("99100.00"),
+                            Decimal("0"), 0, Decimal("0"), datetime(2026, 10, 27, 18, 0, tzinfo=timezone.utc),
+                            stale=True, error_code="timeout")
+        readers = Readers(stale, TRADES, [OK_VIEW], [TRADES])
+        with self.assertNoLogs("runtime.notifications", "WARNING"):
+            text = self.text(readers)
+        self.assertEqual(self.sleeps, [20])
+        self.assertIn("NAV (a las 17:00 ET): 100,200.00 USD", text)
+        self.assertNotIn("dato antiguo", text)
+
+    def test_stale_account_view_persistent_logs_and_keeps_dato_antiguo(self):
+        stale = AccountView("OK", "practice", "***-001", "USD", Decimal("99000.00"), Decimal("99100.00"),
+                            Decimal("0"), 0, Decimal("0"), datetime(2026, 10, 27, 18, 0, tzinfo=timezone.utc),
+                            stale=True, error_code="timeout")
+        readers = Readers(stale, TRADES, [FAILED_VIEW], [TRADES])  # fresh account reads keep failing
+        with self.assertLogs("runtime.notifications", "WARNING") as logs:
+            text = self.text(readers)
+        self.assertEqual(self.sleeps, [20, 40])
+        self.assertEqual([r.getMessage() for r in logs.records],
+                         ["component=notifications event=DAILY_SUMMARY_READ_FAILED account=http_503 trades=ok"])
+        self.assertIn("NAV (a las 2026-10-27 14:00 ET, dato antiguo): 99,100.00 USD", text)
+        self.assertIn("Balance (a las 2026-10-27 14:00 ET, dato antiguo): 99,000.00 USD", text)
+        self.assertIn("Operaciones cerradas en el día: 0 (ganadoras: 0)", text)
+
+    def test_waiting_retry_sequence_at_most_once_per_cooldown(self):
+        failing = Readers(FAILED_VIEW, None, [FAILED_VIEW], [{"error": "deadline", "as_of": SENT}])
+        with self.assertLogs("runtime.notifications", "WARNING") as logs:
+            for _ in range(3):
+                self.text(failing)
+        self.assertEqual(self.sleeps, [20, 40])  # later summaries: a single attempt, no wait
+        self.assertEqual(len(logs.records), 3)  # every incomplete summary is still diagnosed
+        self.clock[0] += notifications.SUMMARY_RETRY_COOLDOWN
+        with self.assertLogs("runtime.notifications", "WARNING"):
+            self.text(failing)
+        self.assertEqual(self.sleeps, [20, 40, 20, 40])
+
+    def test_five_pending_catch_up_days_block_at_most_60_s(self):
+        from runtime.demo_runner import DemoRunner
+        from storage.database import Store
+        failing = Readers(FAILED_VIEW, None, [FAILED_VIEW], [{"error": "deadline", "as_of": SENT}])
+        store = Store(Path(os.environ["AI_FLOOR_BROKER_STATE_DB_PATH"]).with_name("runner.db"))
+        self.addCleanup(store.close)
+        sent = []
+        runner = object.__new__(DemoRunner)
+        runner.store, runner.clock = store, lambda: SENT
+        runner.sink = notifications.SlackNotificationSink(
+            webhook_url="https://example.invalid/test", transport=lambda _url, payload, _timeout: sent.append(payload),
+            clock=lambda: SENT)
+        store.set_state("daily_summary_date", "2026-10-19")  # Mon: Oct 20..23 + 26..27 pending -> the last 5
+        with patch.multiple(oanda_readonly, account_view=failing.account_view, demo_trades=failing.demo_trades,
+                            cached_account_view=failing.cached_account_view,
+                            cached_demo_trades=failing.cached_demo_trades), \
+                patch.object(notifications, "_sleep", self.sleeps.append), \
+                self.assertLogs("runtime.notifications", "WARNING"):
+            self.assertTrue(runner.daily_summary(SENT))
+        self.assertEqual(len(sent), 5)
+        self.assertLessEqual(sum(self.sleeps), 60)
+        self.assertEqual(self.sleeps, [20, 40])
 
 
 class ReadCodeTests(unittest.TestCase):

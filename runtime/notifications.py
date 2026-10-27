@@ -10,9 +10,14 @@ from urllib.request import Request, urlopen
 
 LOG = logging.getLogger(__name__)
 # Daily OANDA demo summary: a failed read (seen exactly at the 17:00 ET rollover) is retried with FRESH reads after
-# these waits (seconds; ~60 s at most, once per day), then reported "sin datos" with one diagnostic warning line.
+# these waits (seconds; ~60 s at most), then reported "sin datos" with one diagnostic warning line. The waits block
+# the runner thread (no tick / heartbeat, watchdog 300 s; up to MAX_CATCH_UP summaries in a row): the waiting retry
+# sequence runs at most once per SUMMARY_RETRY_COOLDOWN seconds per process; other summaries get a single attempt.
 SUMMARY_READ_RETRY_WAITS = (20, 40)
+SUMMARY_RETRY_COOLDOWN = 600
 _sleep = time.sleep  # injectable (tests)
+_monotonic = time.monotonic  # injectable (tests)
+_retry_started_at = None  # monotonic time of the last waiting retry sequence in this process
 
 
 @dataclass(frozen=True)
@@ -241,23 +246,46 @@ def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=N
 
 
 def _summary_complete(snapshot):
-    return snapshot.get("nav") is not None and snapshot.get("stats") is not None
+    """NAV and trades read OK; a stale account view (last good NAV after a failed read) is NOT complete."""
+    return (snapshot.get("nav") is not None and snapshot.get("stats") is not None
+            and snapshot.get("stale") is not True)
+
+
+def _claim_retry_sequence():
+    """True (and starts the cooldown) when no waiting retry sequence ran in the last ``SUMMARY_RETRY_COOLDOWN`` s."""
+    global _retry_started_at
+    now = _monotonic()
+    if _retry_started_at is not None and now - _retry_started_at < SUMMARY_RETRY_COOLDOWN:
+        return False
+    _retry_started_at = now
+    return True
 
 
 def _summary_snapshot(demo_snapshot, now, sleep=None):
-    """``demo_snapshot(now)``; when NAV or the trades read failed, up to ``len(SUMMARY_READ_RETRY_WAITS)`` more tries
-    after those waits with FRESH reads (``oanda_readonly.account_view`` / ``demo_trades``, bypassing the TTL caches),
-    stopping at the first complete snapshot. Still incomplete: ONE warning with the non-secret read codes only."""
-    snapshot = demo_snapshot(now)
+    """``demo_snapshot(now)``; when NAV or the trades read failed (or NAV is stale), up to
+    ``len(SUMMARY_READ_RETRY_WAITS)`` more tries after those waits with FRESH reads (``oanda_readonly.account_view`` /
+    ``demo_trades``, bypassing the TTL caches), stopping at the first complete snapshot; at most one such waiting
+    sequence per ``SUMMARY_RETRY_COOLDOWN`` (catch-up summaries after it: the single first attempt). Still
+    incomplete: ONE warning with the non-secret read codes only. A failed fresh account read keeps the first
+    snapshot's stale last-good account figures (labelled "dato antiguo")."""
+    first = snapshot = demo_snapshot(now)
     if _summary_complete(snapshot):
         return snapshot
-    from execution.oanda_readonly import account_view, demo_trades
-    for wait in SUMMARY_READ_RETRY_WAITS:
-        (sleep or _sleep)(wait)
-        snapshot = demo_snapshot(now, trades_reader=lambda since: demo_trades(since=since, report_errors=True),
-                                 account_reader=account_view)
-        if _summary_complete(snapshot):
-            return snapshot
+    if _claim_retry_sequence():
+        from execution.oanda_readonly import account_view, demo_trades
+        for wait in SUMMARY_READ_RETRY_WAITS:
+            (sleep or _sleep)(wait)
+            snapshot = demo_snapshot(now, trades_reader=lambda since: demo_trades(since=since, report_errors=True),
+                                     account_reader=account_view)
+            if _summary_complete(snapshot):
+                return snapshot
+        if snapshot.get("nav") is None and first.get("nav") is not None:
+            from execution.demo_metrics import demo_capital
+            snapshot = {**snapshot, **{key: first.get(key) for key in ("nav", "balance", "currency", "stale", "as_of")}}
+            if snapshot.get("stats") is not None:
+                snapshot["capital"] = demo_capital(snapshot["nav"], snapshot["balance"], snapshot["stats"])
+            else:
+                snapshot["capital"] = first.get("capital") or snapshot.get("capital")
     codes = snapshot.get("read_codes") or {}
     LOG.warning("component=notifications event=DAILY_SUMMARY_READ_FAILED account=%s trades=%s",
                 codes.get("account", "unknown") or "ok", codes.get("trades", "unknown") or "ok")
