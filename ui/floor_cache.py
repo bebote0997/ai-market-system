@@ -7,7 +7,8 @@ reads what is already in those caches: the module is looked up in ``sys.modules`
 loaded or configured by the Floor), the stored entry is returned as is, and an absent module / entry is None ("sin
 datos"). Plug into ``execution.demo_dashboard.demo_snapshot(now, trades_reader=..., account_reader=...)``.
 
-A peeked entry can be arbitrarily old (nothing refreshes it while only the Floor is open), so the trades carry their
+The ``ui.demo_refresher`` producer keeps those caches warm with the same keys while the demo is shown; without it (no
+credentials, producer stopped / backing off) a peeked entry can be arbitrarily old, so the trades carry their
 observation time (``observed_at``) for the Floor to mark them "(dato antiguo)" like the NAV.
 """
 import sys

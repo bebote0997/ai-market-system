@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-10-27 — Floor: productor de cachés demo, lock de la vista OANDA, primer pintado (branch `fix/floor-data-producer`)
+
+- **Causa** (Floor sin datos reales en el móvil / pantallas apagadas; transiciones de 5-8 s): el Floor solo lee las cachés TTL de `execution.oanda_readonly` y nada las producía salvo visitar otras páginas; esas páginas bloqueaban en una lectura OANDA síncrona al vencer el TTL de 10 s, y `CachedAccountViews.get` mantenía el lock durante el GET.
+- `ui/demo_refresher.py` (nuevo): `ensure_started()` idempotente arranca UN hilo daemon (lifespan de `st.App` en `ui/asgi_app.py` + llamada idempotente en `ui/app.py`) solo con resultados demo visibles, epoch conocido y credenciales practice presentes (solo presencia). Cada 2 s llama a `cached_demo_trades(epoch)` / `cached_account_view("practice")` con las mismas claves que lee el Floor; el TTL de 10 s acota los GETs (≈3 cada 10 s); try/except por iteración (solo tipo de excepción), backoff de 30 s tras 3 fallos; sin escrituras, sin endpoints ni tipos de petición nuevos.
+- `CachedAccountViews.get`: sin lock durante el GET (patrón de `CachedDemoTrades`): un refresco en vuelo, los demás reciben la vista anterior al instante; primera lectura espera ≤ 4 s (si no, `ERROR` `timeout`); TTL ≥ 5 s, `stale` y nunca lanza se mantienen.
+- Floor: cachés frías con el productor corriendo ⇒ «cargando…» / «Cargando datos del demo…» (no «sin datos» / «dato antiguo»); reintento del fragmento a los 8 s y vuelta a 60 s al llegar los datos. Pantalla NAV: ya no dice «sin datos aún» bajo un NAV real con < 2 puntos de curva. Contraste de texto auditado (≥ 4.5:1, WCAG AA).
+- Tests: nuevo `test_demo_refresher.py`; ampliados `test_oanda_readonly.py`; actualizados `test_broker_wiring.py` (lectores permitidos del productor), `test_security_headers.py`, `test_floor_view.py`, `test_ui_polish_B.py`. Docs: `docs/floor_view.md` («Datos siempre calientes»). Solo ruta de lectura del dashboard; sin cambios en la ruta de órdenes/cierre/ejecución, env ni Render. REAL OFF.
+
 ## 2026-10-25 — UI chunk 8: inicio del fallback demo sin fecha inventada
 
 - `luxury.demo_unavailable_api()` toma el inicio de `dashboard.demo_since()` (fail-closed) para epoch, snapshot y progreso; Inicio/Operaciones y el panel lateral usan ese valor. Inicio ilegible ⇒ «inicio desconocido» y ningún ciclo pasa el filtro.
