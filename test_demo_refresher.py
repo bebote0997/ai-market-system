@@ -188,6 +188,15 @@ class ColdStartTests(RefresherTestCase):
         self.assertTrue(header["trades_loading"])
 
 
+class WallScreenTextTests(unittest.TestCase):
+    def test_known_trades_without_a_curve_never_say_sin_datos_on_the_nav_screen(self):
+        from ui.views import floor_view
+        html = floor_view.render_html({})
+        self.assertIn("NOTR?NOOP:HD.trades_loading===true?LOADT:Number.isInteger(HD.trades)?CURVE_SOON:EMPTY", html)
+        self.assertIn("CURVE_SOON='la curva aparece con 2 operaciones cerradas'", html)
+        self.assertIn("HD.trades_loading===true?`P&L ${LOADT}`", html)  # demo status wall while loading
+
+
 class FloorRefreshWiringTests(unittest.TestCase):
     def test_floor_retries_sooner_only_while_warming_up(self):
         from pathlib import Path
