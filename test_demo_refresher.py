@@ -119,6 +119,28 @@ class LoopTests(unittest.TestCase):
         self.assertFalse(demo_refresher.refresh_once(EPOCH_DT, ok_trades, lambda env: bad))
         self.assertTrue(demo_refresher.refresh_once(EPOCH_DT, ok_trades, ok_view))
 
+    def test_stale_last_good_view_counts_as_failure_and_backs_off(self):
+        # CachedAccountViews keeps the last good view marked stale after a failed refresh: shown, but a failed read
+        good = ro.CachedAccountViews(fetch=ok_view)
+        clock = [0.0]
+        good._clock = lambda: clock[0]
+        good.get("practice")
+        good._fetch = lambda environment, env=None: ro.AccountView("ERROR", environment, error_code="auth")
+        clock[0] = 60.0
+        stale = good.get("practice")
+        self.assertEqual((stale.status, stale.stale), ("OK", True))
+        self.assertFalse(demo_refresher.refresh_once(EPOCH_DT, ok_trades, lambda env: stale))
+        stop, sleeps = threading.Event(), []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) >= 4:
+                stop.set()
+
+        demo_refresher.run(EPOCH_DT, ok_trades, lambda env: stale, sleep=sleep, stop_event=stop, interval=2,
+                           backoff=30, failures_before_backoff=3)
+        self.assertEqual(sleeps, [2, 2, 30, 30])
+
 
 class FloorCacheKeyTests(RefresherTestCase):
     def test_fills_the_exact_keys_the_floor_peeks_and_the_floor_shows_fresh_numbers(self):
@@ -186,6 +208,49 @@ class ColdStartTests(RefresherTestCase):
             release.set()
         self.assertEqual((header["equity"], header["equity_stale"], header["equity_loading"]), (100300.75, False, False))
         self.assertTrue(header["trades_loading"])
+
+
+    def test_failed_trades_read_shows_sin_datos_not_loading(self):
+        # CachedDemoTrades stores None after an auth / connection error: a completed read, not a cold cache
+        from ui.views import floor_view
+        stored_none = {EPOCH_DT: (ro._TRADES._clock(), None)}
+        with patch.dict(os.environ, demo_env()), patch.object(ro._TRADES, "_cache", stored_none), \
+                patch.object(ro._VIEWS, "_cache", {"practice": (ro._VIEWS._clock(), ok_view())}):
+            release = threading.Event()
+            self.addCleanup(release.set)
+            self.assertTrue(demo_refresher.ensure_started(trades_reader=lambda epoch: release.wait(5),
+                                                          account_reader=ok_view))
+            self.assertFalse(demo_refresher.warming_up())  # back to the 60 s refresh, no endless 8 s retries
+            payload = self.build()
+            release.set()
+        header = payload["header"]
+        self.assertFalse(payload["loading"])
+        self.assertEqual((header["trades"], header["trades_loading"]), (None, False))
+        self.assertNotIn("Cargando datos del demo…", floor_view.render_html(payload).split("<script", 1)[0])
+
+    def test_failed_account_read_shows_sin_datos_not_loading(self):
+        error = ro.AccountView("ERROR", "practice", error_code="auth")
+        with patch.dict(os.environ, demo_env()), patch.object(ro._VIEWS, "_cache", {"practice": (
+                ro._VIEWS._clock(), error)}), patch.object(ro._TRADES, "_cache", {}):
+            release = threading.Event()
+            self.addCleanup(release.set)
+            demo_refresher.ensure_started(trades_reader=lambda epoch: release.wait(5), account_reader=ok_view)
+            payload = self.build()
+            release.set()
+        header = payload["header"]
+        self.assertEqual((header["equity"], header["equity_loading"]), (None, False))
+        self.assertTrue(header["trades_loading"])  # the trades entry is still truly cold
+
+
+class FloorCacheReadAttemptedTests(unittest.TestCase):
+    def test_absent_entry_vs_stored_failed_read(self):
+        from ui.floor_cache import peek_demo_trades, read_attempted
+        with patch.object(ro._TRADES, "_cache", {EPOCH_DT: (ro._TRADES._clock(), None)}):
+            self.assertIsNone(peek_demo_trades(EPOCH_DT))
+            self.assertTrue(read_attempted("_TRADES", EPOCH_DT))
+            self.assertFalse(read_attempted("_TRADES", datetime(2026, 1, 1, tzinfo=timezone.utc)))
+        with patch.object(ro._TRADES, "_cache", None):
+            self.assertFalse(read_attempted("_TRADES", EPOCH_DT))  # unreadable cache: never raises
 
 
 class WallScreenTextTests(unittest.TestCase):

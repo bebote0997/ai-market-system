@@ -537,10 +537,13 @@ def freshness(header, demo_snap, run, now, waiting):
 
 def cold_caches(peeked):
     """First paint after a process start: a demo cache the Floor peeked holds nothing YET while the producer
-    (``ui.demo_refresher``) is running => that cell shows "Cargando datos del demo…", not "sin datos" / old data."""
+    (``ui.demo_refresher``) is running => that cell shows "Cargando datos del demo…", not "sin datos" / old data.
+    A completed read that failed (``CachedDemoTrades`` stores None after an auth / connection error) is not cold: that
+    cell shows the normal "sin datos". ``peeked``: ``{'trades_read': bool, 'view_read': bool}`` (entry present)."""
     from ui.demo_refresher import running
     producing = running()
-    return {'equity': producing and peeked.get('view') is None, 'trades': producing and peeked.get('trades') is None}
+    return {'equity': producing and peeked.get('view_read') is False,
+            'trades': producing and peeked.get('trades_read') is False}
 
 
 def symbol_states(enabled):
@@ -615,16 +618,16 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         from ui.views.dashboard import FAR_FUTURE, demo_since
         since = guarded(demo_since) or FAR_FUTURE
         payload["epoch_text"] = et_text(since) if since.year < 9999 else None
-        from ui.floor_cache import peek_account_view, peek_demo_trades
+        from ui.floor_cache import peek_account_view, peek_demo_trades, read_attempted
         peeked = {}
 
         def peek_trades(since):
-            peeked['trades'] = value = peek_demo_trades(since)
-            return value
+            peeked['trades_read'] = read_attempted('_TRADES', since)
+            return peek_demo_trades(since)
 
         def peek_view(environment):
-            peeked['view'] = value = peek_account_view(environment)
-            return value
+            peeked['view_read'] = read_attempted('_VIEWS', environment)
+            return peek_account_view(environment)
         # peek-only readers: the stored cache contents, never a refresh (no broker / network call from the Floor)
         demo_snap = guarded(lambda: demo['snapshot'](now, trades_reader=peek_trades, account_reader=peek_view))
         loading = guarded(lambda: cold_caches(peeked), {'equity': False, 'trades': False})

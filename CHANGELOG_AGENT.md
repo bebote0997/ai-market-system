@@ -7,6 +7,7 @@
 - `CachedAccountViews.get`: sin lock durante el GET (patrón de `CachedDemoTrades`): un refresco en vuelo, los demás reciben la vista anterior al instante; primera lectura espera ≤ 4 s (si no, `ERROR` `timeout`); TTL ≥ 5 s, `stale` y nunca lanza se mantienen.
 - Floor: cachés frías con el productor corriendo ⇒ «cargando…» / «Cargando datos del demo…» (no «sin datos» / «dato antiguo»); reintento del fragmento a los 8 s y vuelta a 60 s al llegar los datos. Pantalla NAV: ya no dice «sin datos aún» bajo un NAV real con < 2 puntos de curva. Contraste de texto auditado (≥ 4.5:1, WCAG AA).
 - Tests: nuevo `test_demo_refresher.py`; ampliados `test_oanda_readonly.py`; actualizados `test_broker_wiring.py` (lectores permitidos del productor), `test_security_headers.py`, `test_floor_view.py`, `test_ui_polish_B.py`. Docs: `docs/floor_view.md` («Datos siempre calientes»). Solo ruta de lectura del dashboard; sin cambios en la ruta de órdenes/cierre/ejecución, env ni Render. REAL OFF.
+- Revisión Codex (2 MEDIUM): (1) una lectura de operaciones fallida (auth/conexión: `CachedDemoTrades` guarda None) ya no se toma por caché fría: `ui.floor_cache.read_attempted` distingue entrada ausente de lectura fallida ⇒ «sin datos» y refresco normal de 60 s; «Cargando…» y el reintento de 8 s solo con la caché realmente fría. (2) `refresh_once` cuenta una vista `OK` con `stale=True` (última buena tras un refresco fallido) como fallo para el backoff (se sigue mostrando). Tests nuevos en `test_demo_refresher.py`.
 
 ## 2026-10-25 — UI chunk 8: inicio del fallback demo sin fecha inventada
 

@@ -112,13 +112,15 @@ de lectura practice presentes (solo presencia; nunca se registran). Cada 2 s lla
 lo fija el TTL de 10 s de las cachés, no el bucle: 1 GET summary + GETs de trades (CLOSED + OPEN) por ventana de TTL,
 ≈3 GETs cada 10 s (el bucle corto solo acorta el momento tras el vencimiento en que un visitante refrescaría y esperaría).
 Sin endpoints nuevos ni tipos de petición nuevos, sin escrituras, sin órdenes. Cada iteración va en try/except (solo se
-registra el TIPO de excepción); tras 3 fallos seguidos espera 30 s. `stop()` para tests / apagado.
+registra el TIPO de excepción); tras 3 fallos seguidos espera 30 s (una vista `OK` con `stale=True`, la última buena
+conservada tras un refresco fallido, cuenta como fallo). `stop()` para tests / apagado.
 
 **Primer pintado.** Si el productor corre pero una caché aún está vacía (proceso recién arrancado), el payload marca
 `header.equity_loading` / `header.trades_loading` (+ `loading`) y el Floor muestra «cargando…» en esas celdas y
 «Cargando datos del demo…» en la nota (no «—» / «sin datos» / «dato antiguo»). Mientras `demo_refresher.warming_up()`,
 el fragmento del Floor se re-ejecuta a los 8 s (`FIRST_RETRY`); cuando llegan los datos hace un `st.rerun()` y vuelve al
-refresco de 60 s.
+refresco de 60 s. Una lectura ya hecha que falló (auth/conexión: `CachedDemoTrades` guarda None; vista `ERROR`) no es
+caché fría (`floor_cache.read_attempted`: hay entrada): muestra «sin datos» y refresco de 60 s, sin reintentos de 8 s.
 
 **Lock de `CachedAccountViews`.** `get` ya no mantiene el lock durante el GET (mismo patrón que `CachedDemoTrades`): un
 solo refresco en vuelo por entorno; los demás lectores reciben al instante la vista anterior; una primera lectura sin

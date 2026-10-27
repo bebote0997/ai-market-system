@@ -5,7 +5,7 @@
 ``cached_demo_trades`` / ``cached_account_view`` (which refresh, i.e. GET OANDA, when the TTL expired). The Floor only
 reads what is already in those caches: the module is looked up in ``sys.modules`` (never imported here, so nothing is
 loaded or configured by the Floor), the stored entry is returned as is, and an absent module / entry is None ("sin
-datos"). Plug into ``execution.demo_dashboard.demo_snapshot(now, trades_reader=..., account_reader=...)``.
+datos"; ``read_attempted`` tells a cold cache from a stored failed read). Plug into ``execution.demo_dashboard.demo_snapshot(now, trades_reader=..., account_reader=...)``.
 
 The ``ui.demo_refresher`` producer keeps those caches warm with the same keys while the demo is shown; without it (no
 credentials, producer stopped / backing off) a peeked entry can be arbitrarily old, so the trades carry their
@@ -17,10 +17,9 @@ from datetime import datetime, timedelta, timezone
 READONLY_MODULE = "execution.oanda_readonly"
 
 
-def cached_observation(cache_name, key):
-    """``(observed_at, value)`` of ``<READONLY_MODULE>.<cache_name>._cache[key]`` or ``(None, None)``; never refreshes,
-    never raises. ``observed_at``: aware UTC time the entry was stored, from the cache's own clock (``(fetched_at,
-    value)`` with ``fetched_at`` on ``_clock``); None when that clock is unusable."""
+def stored_entry(cache_name, key):
+    """``(holder, (fetched_at, value))`` of ``<READONLY_MODULE>.<cache_name>._cache[key]`` or ``(None, None)`` when
+    absent / unreadable; never refreshes, never raises."""
     try:
         module = sys.modules.get(READONLY_MODULE)
         holder = getattr(module, cache_name, None)
@@ -29,6 +28,16 @@ def cached_observation(cache_name, key):
         if not (isinstance(entry, tuple) and len(entry) == 2):
             return None, None
     except Exception:  # noqa: BLE001 - display only: unreadable cache = no data
+        return None, None
+    return holder, entry
+
+
+def cached_observation(cache_name, key):
+    """``(observed_at, value)`` of ``<READONLY_MODULE>.<cache_name>._cache[key]`` or ``(None, None)``; never refreshes,
+    never raises. ``observed_at``: aware UTC time the entry was stored, from the cache's own clock (``(fetched_at,
+    value)`` with ``fetched_at`` on ``_clock``); None when that clock is unusable."""
+    holder, entry = stored_entry(cache_name, key)
+    if entry is None:
         return None, None
     try:
         age = float(holder._clock()) - float(entry[0])
@@ -41,6 +50,12 @@ def cached_observation(cache_name, key):
 def cached_entry(cache_name, key):
     """The stored value of ``<READONLY_MODULE>.<cache_name>._cache[key]`` or None; never refreshes, never raises."""
     return cached_observation(cache_name, key)[1]
+
+
+def read_attempted(cache_name, key):
+    """True when the cache holds an entry for ``key``, even a stored None: ``CachedDemoTrades`` caches None after a
+    failed read (auth / connection error), which is "sin datos", not a cold cache still loading. Never raises."""
+    return stored_entry(cache_name, key)[1] is not None
 
 
 def peek_demo_trades(since):

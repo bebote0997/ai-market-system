@@ -16,8 +16,9 @@ page visitor would refresh (and wait) instead of the producer. No new endpoint o
 
 Each iteration is guarded (only the exception TYPE is logged) and never raises; after ``FAILURES_BEFORE_BACKOFF``
 consecutive failed reads it waits ``BACKOFF_SECONDS``. Sleep and readers are injectable; ``stop()`` (tests).
-``warming_up()``: running but the Floor's entries are still absent (``ui/app.py`` then retries the Floor after
-``FIRST_RETRY`` instead of 60 s, and the Floor shows "Cargando datos del demo…").
+``warming_up()``: running but the Floor's entries are still absent, i.e. never read (a stored failed read is not absent):
+``ui/app.py`` then retries the Floor after ``FIRST_RETRY`` instead of 60 s, and the Floor shows "Cargando datos del
+demo…".
 """
 from contextlib import asynccontextmanager
 import logging
@@ -76,7 +77,8 @@ def default_readers():
 
 
 def refresh_once(epoch, trades_reader, account_reader):
-    """One pass over both caches; True when both reads are usable. Never raises."""
+    """One pass over both caches; True when both reads are usable. A ``stale`` OK view (the last good view kept after
+    a failed refresh) is still shown by the pages but counts as a failed read here (backoff). Never raises."""
     try:
         trades = trades_reader(epoch)
         view = account_reader("practice")
@@ -84,7 +86,7 @@ def refresh_once(epoch, trades_reader, account_reader):
         log.warning("floor demo refresher: read failed (%s)", type(error).__name__)
         return False
     trades_ok = isinstance(trades, dict) and trades.get("error") is None
-    return trades_ok and getattr(view, "status", None) == "OK"
+    return trades_ok and getattr(view, "status", None) == "OK" and not getattr(view, "stale", False)
 
 
 def run(epoch, trades_reader, account_reader, *, sleep, stop_event, interval=INTERVAL_SECONDS,
@@ -136,12 +138,13 @@ def running():
 
 def warming_up():
     """True while the producer runs but a Floor cache entry (trades for the epoch / practice view) is still absent:
-    the first paint after a process start. Peek only (``ui.floor_cache``); never raises."""
+    the first paint after a process start. A stored failed read (None / ERROR) is not warming up: the Floor goes back
+    to the 60 s refresh and shows "sin datos". Peek only (``ui.floor_cache``); never raises."""
     try:
         if not running():
             return False
-        from ui.floor_cache import peek_account_view, peek_demo_trades
-        return peek_demo_trades(_epoch) is None or peek_account_view("practice") is None
+        from ui.floor_cache import read_attempted
+        return not read_attempted("_TRADES", _epoch) or not read_attempted("_VIEWS", "practice")
     except Exception:  # noqa: BLE001
         return False
 
