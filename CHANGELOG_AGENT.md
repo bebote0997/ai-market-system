@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-27 — Floor: nombres latinos de los personajes (DEC-AGENT-NAMES-1, branch `fix/oct27-manual-close-floor-data`)
+
+- Solo presentación: Atlas/Nova/Orion/Vega/Sage/Arbiter/Sentinel/Echo ⇒ Mateo/Sofía/Andrés/Valentina/Lucía/Diego/Camila/Carlos. Fuente única nueva `ui/agent_names.py` (id ⇒ nombre, rol largo, rol corto; helpers puros); `ui/floor_payload.py` añade `names` al payload; `ui/static/floor/floor.html` construye `NAMES` desde `payload.names` (sin él: el id como nombre, sin error) y ya no tiene nombres fijos; nombres escapados en la ficha.
+- Placas: escritorio y pared «NOMBRE · ROL» en una línea (las 8 caben sin solaparse a 1440×900 y 1920×1080); en móvil (< 600 px) o si la placa combinada se solaparía, solo el nombre (nunca se pierde la placa por el rol). El rol se ve en la ficha (subtítulo) y en la cadena de decisión («Mateo · Estructura — …»).
+- `MANUAL_CLOSE_TITLE` (`ui/views/floor_actions.py`) = «🧑‍💼 Carlos · Gestor de la operación · mesa de riesgo», derivado de `ui.agent_names`.
+- Ids internos (`agents.*`, DB, enums, env) sin cambios. Revisadas alertas Slack/email, La mesa, Analistas, Proceso, Setups/Decisiones: no usaban los nombres antiguos. Tests: nuevo `test_agent_names.py`. Docs: `docs/floor_view.md`, `docs/decisions.md`.
+
 ## 2026-10-27 — Cierre manual inmediato, día del demo, resumen diario, SL/TP anclados al fill (branch `fix/manual-close-sizing-day`)
 
 - **Parte 1 — cierre manual inmediato (enmienda DEC-MANUAL-CLOSE-1).** Causa: en sesión los ticks de ~30 s dentro de un slot de 15 min ya reclamado devuelven DUPLICATE y `run_cycle` no llama a `router.on_cycle`; el cierre esperaba hasta 15 min (fuera de sesión `manage_trade_duration` sí corría cada tick). Nuevo `BrokerDemoRouter.process_operator_requests(at)` (una lectura de flags `DemoStateStore.flags`; sin `flatten_request` ni `manual_close_request` vuelve sin red; si hay, `_process_requests` + `_process_manual_close` tal cual, sin heartbeat, ciclo ni apertura), wrappers en `runtime/service.py` (halt / router ausente igual que el manage) y `runtime/demo_runner.py` (notificaciones como el manage), y el bucle de `runtime/cloud_runner.py` (`_idle`) consulta cada 5 s (excepción ⇒ solo el tipo en el log; parada honrada en ≤ 1 s; `tick()` cada ~30 s y resumen diario sin cambios). Textos del Floor/Control: «en unos segundos». Tests: `test_manual_close_poll.py`.

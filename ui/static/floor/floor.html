@@ -113,7 +113,7 @@ const SRC={OANDA_DEMO:'OANDA Demo',PAPER:'Práctica interna'}[DATA.source]||null
 const SIDE={LONG:'Long',SHORT:'Short'};
 const UNITS=v=>ok(v)?v.toLocaleString('en-US',{maximumFractionDigits:0})+' unidades':NA+' unidades';
 let TR=TRADES.find(t=>t.status==='OPEN')||TRADES[0]||null;
-const OPEN=TRADES.find(t=>t.status==='OPEN')||null;  // the routed trade open right now (only Echo reflects it)
+const OPEN=TRADES.find(t=>t.status==='OPEN')||null;  // the routed trade open right now (only the Exec desk reflects it)
 
 // ---- header ----
 document.getElementById('brandSub').innerHTML=`V2.1 · ${esc(SRC||EMPTY)} · <b>${esc(HD.day_text||NA)}</b>${badge('header.day_text')}`;
@@ -275,11 +275,19 @@ const SAY={
  5:{RiskEng:[st('RiskEng'),`SL ${px(T0.sl_expected)} · TP ${px(T0.tp_expected)}`],Exec:['Plan recibido',UNITS(T0.units)]},
  6:{Exec:[`Entrada ${px(T0.entry_actual)}`,SRC?'orden · '+SRC:EMPTY]},
  7:{Exec:[`${fR(T0.r_realized)}${T0.status==='OPEN'?' abierta':''}`,`P&L ${money(T0.pnl,1)}`]}};
-const NAMES={Structure:['Atlas','Analista de estructura','Estructura'],Liquidity:['Nova','Analista de liquidez','Liquidez'],Macro:['Orion','Analista macro','Macro'],Risk:['Vega','Revisor de la operación (riesgo)','Riesgo'],Reviewer:['Sage','Revisor de consenso','Revisor'],Conflict:['Arbiter','Motor de conflictos','Motor de conflictos'],RiskEng:['Sentinel','Motor de riesgo (límites)','Motor de riesgo'],Exec:['Echo','Ejecución','Mesa EURUSD']};
+// display names come from the payload (ui/agent_names.py, DEC-AGENT-NAMES-1): [name, long role, short role];
+// without payload.names the internal id is the name and the roles are empty (never a crash)
+const AIDS=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng','Exec'],NM=(DATA.names&&typeof DATA.names==='object')?DATA.names:{};
+const NAMES=Object.fromEntries(AIDS.map(id=>{const n=NM[id]||{};return [id,[String(n.name||id),String(n.role||''),String(n.short||'')]]}));
+const LABEL=id=>NAMES[id][2]?`${NAMES[id][0]} · ${NAMES[id][2]}`:NAMES[id][0];
 let NHITS=[];
-function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));const f=Math.max(MINPX,9.5*s);cx.font=`${f}px Didot,Georgia,serif`;const t=NAMES[a.id][0].toUpperCase().split('').join(String.fromCharCode(8202));const w=cx.measureText(t).width+14*s,h=f+5*s,bx=x-w/2,by=y+5*s;
+function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));const f=Math.max(MINPX,9.5*s);cx.font=`${f}px Didot,Georgia,serif`;
+ const sp=v=>v.toUpperCase().split('').join(String.fromCharCode(8202)),h=f+5*s,by=y+5*s;
+ // desktop / wall: «NOMBRE · ROL»; phone, or when that pill would overlap a drawn one: the name only (role in drawer + list)
+ const opts=(!MOB()&&NAMES[a.id][2]?[sp(LABEL(a.id))]:[]).concat([sp(NAMES[a.id][0])]);let t=null,w=0,bx=0;
  // never two text boxes on top of each other: a plate that would overlap one already drawn is skipped
- if(PLACED.some(o=>bx<o[0]+o[2]+2&&bx+w+2>o[0]&&by<o[1]+o[3]+2&&by+h+2>o[1]))return;PLACED.push([bx,by,w,h]);
+ for(const o of opts){const ow=cx.measureText(o).width+14*s,ob=x-ow/2;if(!PLACED.some(q=>ob<q[0]+q[2]+2&&ob+ow+2>q[0]&&by<q[1]+q[3]+2&&by+h+2>q[1])){t=o;w=ow;bx=ob;break}}
+ if(t==null)return;PLACED.push([bx,by,w,h]);
  cx.fillStyle='rgba(10,10,11,.88)';const C=COL[a.id];cx.strokeStyle=C;cx.shadowColor=C;cx.shadowBlur=6;cx.lineWidth=.9;cx.beginPath();cx.roundRect(bx,by,w,h,h/2);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.textAlign='center';cx.textBaseline='middle';cx.fillText(t,x,by+h/2+.5);cx.textAlign='left';
  const pad=MOB()?8:3;NHITS.push([bx-pad,by-pad-34*s,w+pad*2,h+pad*2+34*s,a.id]);}
 // idle label: the real saved status, else "sin datos aún" (never a leftover of an older cycle: the payload is epoch-only)
@@ -353,7 +361,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
   const p=along(path,Math.min(1,ff));a.x=p[0];a.y=p[1];a.walk=ANIM?(f<.45||f>.55)?1:0:1;a.carry=ANIM?f<.5:1}
  if(step==6||step==7)A.Exec.carry=step==6;
  const say=Object.assign({},step!=null?SAY[step]||{}:{});
- // Echo (desk EURUSD) is the only one reflecting the open routed trade: side, R and P&L from the payload
+ // Exec (desk EURUSD) is the only one reflecting the open routed trade: side, R and P&L from the payload
  if(step==null&&OPEN)say.Exec=[`${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)}`,`P&L ${money(OPEN.pnl,1)}${TSTALE?' '+TSTALE:''}`];
  Object.values(A).sort((p,q)=>(p.x+p.y)-(q.x+q.y)).forEach(a=>person(a,t,!!say[a.id]));
  ROOMS.forEach(r=>r.after());
@@ -401,7 +409,7 @@ function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub
   ['Stop Loss',px(t.sl_expected),px(t.sl_actual),delta(t.sl_expected,t.sl_actual),''],['Take Profit',px(t.tp_expected),px(t.tp_actual),delta(t.tp_expected,t.tp_actual),''],
   ['Riesgo',money(t.risk_expected),NA,'',''],['R',ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA,fR(t.r_realized),'',''],
   ['P&L',NA,money(t.pnl,1),open?'abierta':(t.close_reason||''),''],['MAE / MFE',NA,NA,'','']];
- const chain=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng'].map(id=>`<span>◆</span> ${esc(NAMES[id][2])} — ${esc(AG[id]?(AG[id].status||NA):EMPTY)}`).join('<br>');
+ const chain=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng'].map(id=>`<span>◆</span> ${esc(LABEL(id))} — ${esc(AG[id]?(AG[id].status||NA):EMPTY)}`).join('<br>');
  const others=TRADES.length>1?`<div class="lab">Operaciones recientes${TSTALE?' '+esc(TSTALE):''}</div><table><tr><th>Fecha (ET)</th><th>Lado</th><th>Estado</th><th>R</th></tr>${TRADES.map((o,i)=>`<tr class="pick" onclick="pickTrade(${i})"><td>${esc(o.opened_at||NA)}</td><td>${esc(SIDE[o.side]||NA)}</td><td>${o.status==='OPEN'?'Abierta':esc(o.close_reason||'Cerrada')}</td><td class="${tone(o.r_realized)}">${esc(fR(o.r_realized))}</td></tr>`).join('')}</table>`:'';
  return `<h2 class="serif">${esc(t.symbol||'EURUSD')} · ${esc(SIDE[t.side]||NA)}</h2>
  <div class="sub">${esc(t.opened_at||NA)}${tradeNo(t)} · ${esc(UNITS(t.units))} · ${open?'Abierta':'Cerrada'}${t.closed_at?' '+esc(t.closed_at):''}${TSTALE?' · '+esc(TSTALE):''}${ex}</div>
@@ -413,7 +421,7 @@ function pickTrade(i){TR=TRADES[i]||TR;document.getElementById('tradeV').innerHT
 document.getElementById('tradeV').innerHTML=tradeHTML(TR);
 function openAgent(id){const n=NAMES[id],d=AG[id]||{};document.getElementById('tradeV').style.display='none';const v=document.getElementById('agentV');v.style.display='';
  const sig=d.signals&&d.signals.length?`<table><tr><th>Fecha (ET)</th><th>Señal</th><th>Resultado</th><th>R</th></tr>${d.signals.map(r=>`<tr><td>${esc(r.at||NA)}</td><td>${esc(r.signal||NA)}</td><td>${esc(r.outcome||NA)}</td><td class="${tone(r.r)}" style="font-weight:500">${esc(fR(r.r))}</td></tr>`).join('')}</table>`:`<div class="empty">${esc(WAITING?WTXT:EMPTY)}</div>`;
- v.innerHTML=`<h2 class="serif" style="color:${COL[id]};text-shadow:0 0 18px ${COL[id]}66">${n[0]}</h2><div style="height:2px;width:46px;background:${COL[id]};margin:10px 0 0;box-shadow:0 0 10px ${COL[id]}"></div><div class="sub">${n[1]} · Sala ${n[2]}${badge('agents.'+id)}</div>
+ v.innerHTML=`<h2 class="serif" style="color:${COL[id]};text-shadow:0 0 18px ${COL[id]}66">${esc(n[0])}</h2><div style="height:2px;width:46px;background:${COL[id]};margin:10px 0 0;box-shadow:0 0 10px ${COL[id]}"></div><div class="sub">${esc([n[1],n[2]?'Sala '+n[2]:''].filter(Boolean).join(' · '))}${badge('agents.'+id)}</div>
  <div class="big"><div><b>${ok(d.hit_rate)?d.hit_rate.toFixed(0)+'%':NA}</b><small>Tasa de acierto${ok(d.hit_rate)&&TSTALE?' '+esc(TSTALE):''}</small></div><div><b>${ok(d.confidence)?d.confidence.toFixed(2):NA}</b><small>Confianza</small></div><div><b style="font-size:16px;padding-top:12px;color:var(--gold2)">${esc(d.status||(WAITING?WTXT:EMPTY))}</b><small>Estado</small></div></div>
  <div class="lab">Último análisis · ${esc(d.as_of||NA)}</div><div class="chain" style="line-height:1.7">${esc(d.analysis||(WAITING?WTXT:EMPTY))}</div>
  <div class="lab">Últimas 5 señales</div>${sig}

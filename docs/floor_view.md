@@ -56,12 +56,13 @@ o previos al epoch.
 | `header.daily_loss_text` | Estado del límite de pérdida diaria en español ("Bien", "Límite alcanzado · …"). | `—` |
 | `trades[]` (EURUSD, abiertas + cerradas recientes, máx. 10) | Demo: filas OANDA; PAPER: `paper_positions` OPEN + `closed_trades`. Esperado (entrada/SL/TP/R:R) = plan persistido enlazado por identidad exacta (`luxury.linked_plan`; demo: `client_id aif-<run_id>`); riesgo esperado = `risk_decisions.capital_at_risk`; slippage = fill − entrada planeada (pips en EURUSD). | lista vacía ⇒ "sin datos aún" |
 | `trades[].MAE/MFE` | No se guarda. | siempre `—` |
-| `agents.Structure/Liquidity/Macro` | Último `ui_snapshots` EURUSD; si falta, último `agent_decisions`. | `None` ⇒ "sin datos aún" |
-| `agents.Risk` (Vega) | El motor no tiene una IA "analista de riesgo": se muestra el **Trade Reviewer** (revisa el plan y su riesgo). Sin plan su estado es "No hacía falta". | idem |
-| `agents.Reviewer` (Sage) | Setup Reviewer. | idem |
-| `agents.Conflict` (Arbiter) | Eventos de conflicto / política de setup opuesto del último ciclo (`process.cycle_evidence`). | idem |
-| `agents.RiskEng` (Sentinel) | `risk_decisions` del último ciclo (estado, motivo, % riesgo, capital en riesgo); si falta, `risk_status` del snapshot. | idem |
-| `agents.Exec` (Echo) | Última operación EURUSD (abierta o cerrada); hit rate = % de cerradas ganadoras. | idem |
+| `agents.Structure/Liquidity/Macro` (Mateo, Sofía, Andrés; antes Atlas, Nova, Orion) | Último `ui_snapshots` EURUSD; si falta, último `agent_decisions`. | `None` ⇒ "sin datos aún" |
+| `agents.Risk` (Valentina, antes Vega) | El motor no tiene una IA "analista de riesgo": se muestra el **Trade Reviewer** (revisa el plan y su riesgo). Sin plan su estado es "No hacía falta". | idem |
+| `agents.Reviewer` (Lucía, antes Sage) | Setup Reviewer. | idem |
+| `agents.Conflict` (Diego, antes Arbiter) | Eventos de conflicto / política de setup opuesto del último ciclo (`process.cycle_evidence`). | idem |
+| `agents.RiskEng` (Camila, antes Sentinel) | `risk_decisions` del último ciclo (estado, motivo, % riesgo, capital en riesgo); si falta, `risk_status` del snapshot. | idem |
+| `agents.Exec` (Carlos, antes Echo) | Última operación EURUSD (abierta o cerrada); hit rate = % de cerradas ganadoras. | idem |
+| `names` | Nombres visibles de los 8 personajes (`ui/agent_names.py`, DEC-AGENT-NAMES-1): `{id: {name, role, short}}`. Solo presentación; los ids internos (`agents.*`) no cambian. | sin `names` ⇒ el Floor muestra el id |
 | `agents.*.signals` / `hit_rate` | Últimas 5 decisiones direccionales del agente (BULLISH/BEARISH) con el resultado de la operación del **mismo run_id** en la fuente seleccionada (demo: operaciones OANDA `aif-<run_id>`; nunca resultados PAPER en métricas demo; operaciones demo desconocidas ⇒ resultado y hit rate `None`); acierto = el sesgo coincide con el lado y ganó (o lo contradice y perdió). | `—` si ninguna señal enlaza con una operación cerrada |
 | `cycle.steps[8]` | Último run EURUSD (demo: ≥ epoch): un paso está ✓ si tiene evidencia persistida (`process.cycle_evidence`); "Entrada / Salida" también si hay operación demo de ese run; "Resultado" si el run terminó. Hora = primer timestamp persistido del paso (nunca inferido). | sin marcas |
 | `symbols` | `enabled_market_symbols()` + `runtime.symbol_pause.is_paused` (XAUUSD pausado, DEC-XAU-OFF-1). | — |
@@ -83,8 +84,13 @@ el ejemplo.
   partículas ni monitores animados; pasos en gris con ✓ + hora solo del ciclo real guardado. Con un ciclo en marcha se
   anima solo el paso alcanzado (`running.step`). La página se reconstruye en cada refresco de 60 s del fragmento de
   `ui/app.py`: un ciclo que empieza aparece en el siguiente refresco.
-- Con una operación enrutada abierta solo Echo (mesa EURUSD) la refleja: lado, R y P&L del payload (sin ticks
+- Con una operación enrutada abierta solo Carlos (Exec, mesa EURUSD) la refleja: lado, R y P&L del payload (sin ticks
   inventados). XAUUSD pausado: "PAUSADO por el planificador".
+- Personajes (DEC-AGENT-NAMES-1, solo presentación; `ui/agent_names.py`): Structure = Mateo · Estructura, Liquidity = Sofía · Liquidez,
+  Macro = Andrés · Macro, Risk = Valentina · Riesgo, Reviewer = Lucía · Revisor, Conflict = Diego · Conflictos,
+  RiskEng = Camila · Motor de riesgo, Exec = Carlos · Mesa EURUSD. Escritorio/pared: placa «NOMBRE · ROL»; móvil
+  (< 600 px) o si esa placa se solaparía con otra: solo el nombre (el rol está en la ficha y en la cadena de decisión).
+  El bloque de cierre manual se titula con el nombre de Exec («Carlos · Gestor de la operación · mesa de riesgo»).
 - `?step=N` (capturas/tests) fija un paso; `?agent=<id>` abre la ficha; `?detail` abre el panel de operación.
 - Textos ≥ 10 px en el canvas; códigos del motor traducidos o humanizados (`floor_payload.code_text`).
 - HUD: las celdas pasan a una segunda fila en vez de solaparse o cortarse (360–1600 px); con 0 operaciones R total y

@@ -579,7 +579,9 @@ class FloorStaticTests(unittest.TestCase):
         self.assertIn("document.getElementById('legend').innerHTML=DESKS.map(", asset)
         self.assertIn("const wallTxt=!MOB();", asset)
         self.assertIn("const b=MOB()?[0,0,0,0]:tag(", asset)
-        self.assertIn("if(PLACED.some(o=>bx<o[0]+o[2]+2&&bx+w+2>o[0]&&by<o[1]+o[3]+2&&by+h+2>o[1]))return;", asset)
+        # a plate tries «NOMBRE · ROL» then the name alone; one overlapping a drawn plate is skipped
+        self.assertIn("if(!PLACED.some(q=>ob<q[0]+q[2]+2&&ob+ow+2>q[0]&&by<q[1]+q[3]+2&&by+h+2>q[1])){t=o;w=ow;bx=ob;break}}", asset)
+        self.assertIn("if(t==null)return;PLACED.push([bx,by,w,h]);", asset)
 
     def test_no_env_names_or_raw_codes_in_rendered_floor(self):
         with tempfile.TemporaryDirectory() as tmp:

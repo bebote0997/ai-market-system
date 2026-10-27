@@ -10,8 +10,10 @@ queues a second close. Nothing here touches the network.
 """
 from uuid import uuid4
 
+from ui.agent_names import display_name
 
-MANUAL_CLOSE_TITLE = "🧑‍💼 Gestor de la operación · mesa de riesgo"
+
+MANUAL_CLOSE_TITLE = f"🧑‍💼 {display_name('Exec')} · Gestor de la operación · mesa de riesgo"
 CONFIRM_KEY, RESULT_KEY = "floor-manual-close-confirming", "floor-manual-close-result"
 RESULT_TEXT = {
     "requested": "Cierre solicitado: el sistema cierra la operación en unos segundos (cuenta de práctica OANDA).",

@@ -23,10 +23,11 @@ import math
 import re
 
 from ui import i18n_es as es
+from ui.agent_names import names_payload
 
 AGENT_IDS = ("Structure", "Liquidity", "Macro", "Risk", "Reviewer", "Conflict", "RiskEng", "Exec")
 # Floor character -> persisted agent names (snapshot display name, agent_decisions.agent_name). The engine has no
-# separate "risk analyst" AI: Vega (Risk) shows the Trade Reviewer, the AI that reviews the plan and its risk.
+# separate "risk analyst" AI: the Risk character shows the Trade Reviewer, the AI that reviews the plan and its risk.
 AI_AGENTS = {"Structure": ("Structure AI", "structure_ai"), "Liquidity": ("Liquidity AI", "liquidity_ai"),
              "Macro": ("Macro AI", "macro_ai"), "Risk": ("Trade Reviewer", "trade_reviewer_ai"),
              "Reviewer": ("Setup Reviewer", "setup_reviewer_ai")}
@@ -608,7 +609,7 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
                "source": None, "header": None, "trades": None, "agents": {}, "cycle": None, "symbols": None,
                "feed": None, "market": None, "curve": None, "waiting": False, "waiting_text": None,
                "epoch_text": None, "running": running_state(None, now), "note_real": False, "cycle_text": None,
-               "loading": False}
+               "loading": False, "names": names_payload()}
     snapshot = demo_snap = run = None
     since = None
     if demo is not None:
