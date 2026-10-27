@@ -84,7 +84,8 @@ class MiddlewareTests(unittest.TestCase):
 class WiringTests(unittest.TestCase):
     def test_asgi_entry_wraps_the_dashboard_with_the_middleware(self):
         source = (ROOT / "ui" / "asgi_app.py").read_text(encoding="utf-8")
-        self.assertIn('st.App("app.py", middleware=[Middleware(SecurityHeadersMiddleware)])', source)
+        self.assertIn('st.App("app.py", middleware=[Middleware(SecurityHeadersMiddleware)], lifespan=lifespan)', source)
+        self.assertIn("from ui.demo_refresher import lifespan", source)
         self.assertTrue((ROOT / "ui" / "app.py").exists())
 
     def test_cloud_serve_uses_the_headers_entry_by_default_and_has_a_rollback(self):
