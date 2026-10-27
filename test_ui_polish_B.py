@@ -52,5 +52,6 @@ class PolishBTests(unittest.TestCase):
     def test_refresh_is_automatic_and_faster_than_snapshot(self):
         app = Path('ui/app.py').read_text()
         floor = app.split('if page == floor_view.PAGE:', 1)[1].split('if page in dashboard.PAGES:', 1)[0]
-        self.assertIn('@st.fragment(run_every="60s" if refresh else None)', floor)
+        self.assertIn('@st.fragment(run_every=(demo_refresher.FIRST_RETRY if warming else "60s") if refresh else None)',
+                      floor)
         self.assertIn('floor_view.render(st, enabled_symbols)', floor)

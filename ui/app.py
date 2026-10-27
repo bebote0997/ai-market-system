@@ -19,6 +19,7 @@ from ui.components import panels
 from ui.fixtures.demo_floor import demo_market
 from ui.views import dashboard, experiment, floor, journal, markets, system, luxury
 from ui.views import floor_view
+from ui import demo_refresher
 from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
@@ -26,6 +27,7 @@ from ui.state import current_market, default_market_index, enabled_market_symbol
 st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊")
 require_dashboard_access(st)
 luxury.apply(st)
+demo_refresher.ensure_started()  # idempotent: the Floor demo cache producer (also started by ui/asgi_app.py)
 
 if st.query_params.get("page") == "floor" and "luxury_navigation" not in st.session_state:
     st.session_state["luxury_navigation"] = floor_view.PAGE  # alert deep link (runtime.trade_alerts.floor_url)
@@ -52,9 +54,13 @@ if page in luxury.PAGES:
     st.stop()
 
 if page == floor_view.PAGE:
-    @st.fragment(run_every="60s" if refresh else None)
+    warming = refresh and demo_refresher.warming_up()  # cold demo caches: first retry after 8 s, then every 60 s
+
+    @st.fragment(run_every=(demo_refresher.FIRST_RETRY if warming else "60s") if refresh else None)
     def render_floor_view():
         floor_view.render(st, enabled_symbols)
+        if warming and not demo_refresher.warming_up():
+            st.rerun()  # data arrived: a full run registers the fragment with the 60 s refresh again
     render_floor_view()
     st.stop()
 

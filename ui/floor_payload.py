@@ -4,7 +4,8 @@
 ``ui.state.dashboard_database``) with the same helpers the dashboard uses (``ui.views.luxury`` / ``ui.views.process``),
 and, while broker-demo routing is ON, the existing guarded read-only OANDA demo view (``luxury.demo_api``) fed ONLY
 by what the dashboard caches already hold (``ui.floor_cache`` peek readers: the Floor never triggers a broker / network
-call; nothing cached => None) and never PAPER numbers in demo mode (header, trades and the analysts' signal outcomes). Every section is built inside a guard: a read error yields ``None`` for that
+call; nothing cached => None, shown as "Cargando datos del demo…" while the ``ui.demo_refresher`` producer is filling
+the caches after a process start) and never PAPER numbers in demo mode (header, trades and the analysts' signal outcomes). Every section is built inside a guard: a read error yields ``None`` for that
 section, never an exception. Missing data stays ``None`` (the page shows "—" / "sin datos aún"); nothing is invented.
 
 OANDA demo mode shows ONLY cycles / events at/after the demo epoch (``dashboard.demo_since()``): snapshot, runs, agent
@@ -534,6 +535,17 @@ def freshness(header, demo_snap, run, now, waiting):
     return real, cycle_text
 
 
+def cold_caches(peeked):
+    """First paint after a process start: a demo cache the Floor peeked holds nothing YET while the producer
+    (``ui.demo_refresher``) is running => that cell shows "Cargando datos del demo…", not "sin datos" / old data.
+    A completed read that failed (``CachedDemoTrades`` stores None after an auth / connection error) is not cold: that
+    cell shows the normal "sin datos". ``peeked``: ``{'trades_read': bool, 'view_read': bool}`` (entry present)."""
+    from ui.demo_refresher import running
+    producing = running()
+    return {'equity': producing and peeked.get('view_read') is False,
+            'trades': producing and peeked.get('trades_read') is False}
+
+
 def symbol_states(enabled):
     from runtime.symbol_pause import is_paused
     return {s: 'PAUSED' if is_paused(s) else 'ACTIVE' if s in enabled else 'DISABLED' for s in SYMBOLS}
@@ -553,7 +565,8 @@ def market_lines(snapshot):
 def real_field_paths(payload):
     paths = []
     for key in ('header', 'symbols'):
-        paths += [f"{key}.{k}" for k, v in (payload.get(key) or {}).items() if v is not None]
+        paths += [f"{key}.{k}" for k, v in (payload.get(key) or {}).items()
+                  if v is not None and not k.endswith('_loading')]
     paths += [f"agents.{k}" for k, v in (payload.get('agents') or {}).items() if v is not None]
     paths += [key for key in ('trades', 'cycle', 'feed', 'market', 'curve') if payload.get(key)]
     return paths
@@ -594,7 +607,8 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
     payload = {"version": 1, "sample_mode": bool(sample_mode), "generated_at": et_text(now),
                "source": None, "header": None, "trades": None, "agents": {}, "cycle": None, "symbols": None,
                "feed": None, "market": None, "curve": None, "waiting": False, "waiting_text": None,
-               "epoch_text": None, "running": running_state(None, now), "note_real": False, "cycle_text": None}
+               "epoch_text": None, "running": running_state(None, now), "note_real": False, "cycle_text": None,
+               "loading": False}
     snapshot = demo_snap = run = None
     since = None
     if demo is not None:
@@ -604,10 +618,19 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         from ui.views.dashboard import FAR_FUTURE, demo_since
         since = guarded(demo_since) or FAR_FUTURE
         payload["epoch_text"] = et_text(since) if since.year < 9999 else None
-        from ui.floor_cache import peek_account_view, peek_demo_trades
+        from ui.floor_cache import peek_account_view, peek_demo_trades, read_attempted
+        peeked = {}
+
+        def peek_trades(since):
+            peeked['trades_read'] = read_attempted('_TRADES', since)
+            return peek_demo_trades(since)
+
+        def peek_view(environment):
+            peeked['view_read'] = read_attempted('_VIEWS', environment)
+            return peek_account_view(environment)
         # peek-only readers: the stored cache contents, never a refresh (no broker / network call from the Floor)
-        demo_snap = guarded(lambda: demo['snapshot'](now, trades_reader=peek_demo_trades,
-                                                     account_reader=peek_account_view))
+        demo_snap = guarded(lambda: demo['snapshot'](now, trades_reader=peek_trades, account_reader=peek_view))
+        loading = guarded(lambda: cold_caches(peeked), {'equity': False, 'trades': False})
         from ui.demo_clock import demo_day_from_epoch
         day = guarded(lambda: demo_day_from_epoch(since, now))
         if isinstance(demo_snap, dict):
@@ -634,6 +657,10 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
     if isinstance(demo_snap, dict):
         payload["header"] = guarded(lambda: demo_header(
             demo_snap, day, now, running=payload["running"]["active"]))
+        if isinstance(payload["header"], dict):
+            payload["header"]["equity_loading"] = loading['equity'] and payload["header"]["equity"] is None
+            payload["header"]["trades_loading"] = loading['trades'] and payload["header"]["trades"] is None
+            payload["loading"] = payload["header"]["equity_loading"] or payload["header"]["trades_loading"]
     if demo is not None and run is None and snapshot is None:
         payload["waiting"], payload["waiting_text"] = True, WAITING_TEXT
     payload["note_real"], payload["cycle_text"] = guarded(

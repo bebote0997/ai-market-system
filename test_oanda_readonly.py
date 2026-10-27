@@ -5,8 +5,9 @@ from decimal import Decimal
 import json
 from pathlib import Path
 import re
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from execution import oanda_readonly as ro
 from execution.oanda_readonly import (CachedAccountViews, OandaReadOnlyClient, ReadOnlyError, account_view)
@@ -194,6 +195,64 @@ class AccountViewTests(ReadOnlyBase):
         self.assertEqual((stale.status, stale.balance, stale.stale, stale.error_code), ("OK", Decimal("1"), True,
                                                                                         "rate_limited"))
         self.assertEqual(len(calls), 2)
+
+    def test_lock_is_not_held_during_the_network_read(self):
+        import threading
+        now = [0.0]
+        release, entered = threading.Event(), threading.Event()
+        views = iter([ro.AccountView("OK", "practice", balance=Decimal("1")),
+                      ro.AccountView("OK", "practice", balance=Decimal("2"))])
+        calls = []
+
+        def fetch(environment, env):
+            calls.append(environment)
+            if len(calls) == 2:  # the second (TTL-expired) refresh blocks on the "network"
+                entered.set()
+                release.wait(5)
+            return next(views)
+
+        cache = CachedAccountViews(ttl=5, clock=lambda: now[0], fetch=fetch, wait_seconds=0.2)
+        self.assertEqual(cache.get("practice").balance, Decimal("1"))
+        now[0] = 6.0
+        result = {}
+        refresher = threading.Thread(target=lambda: result.update(view=cache.get("practice")))
+        refresher.start()
+        self.assertTrue(entered.wait(5))
+        started = time.monotonic()
+        other = cache.get("practice")  # another session while the GET is in flight: the previous view at once
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual(other.balance, Decimal("1"))
+        release.set()
+        refresher.join(5)
+        self.assertEqual(result["view"].balance, Decimal("2"))
+        self.assertEqual(cache.get("practice").balance, Decimal("2"))
+        self.assertEqual(len(calls), 2)  # one refresh, never one per reader
+
+    def test_first_read_waits_for_the_refresh_then_times_out_with_an_error_view(self):
+        import threading
+        release, entered = threading.Event(), threading.Event()
+
+        def fetch(environment, env):
+            entered.set()
+            release.wait(5)
+            return ro.AccountView("OK", environment, balance=Decimal("3"))
+
+        cache = CachedAccountViews(fetch=fetch, wait_seconds=0.1)
+        refresher = threading.Thread(target=cache.get, args=("practice",))
+        refresher.start()
+        self.assertTrue(entered.wait(5))
+        cold = cache.get("practice")  # nothing cached yet: waits up to wait_seconds, never raises
+        self.assertEqual((cold.status, cold.error_code), ("ERROR", "timeout"))
+        release.set()
+        refresher.join(5)
+        self.assertEqual(cache.get("practice").balance, Decimal("3"))
+
+    def test_fetch_exception_clears_the_inflight_marker(self):
+        cache = CachedAccountViews(fetch=Mock(side_effect=[RuntimeError("boom"),
+                                                           ro.AccountView("OK", "practice", balance=Decimal("4"))]))
+        with self.assertRaises(RuntimeError):
+            cache.get("practice")
+        self.assertEqual(cache.get("practice").balance, Decimal("4"))  # not stuck "refreshing"
 
     def test_cached_account_view_never_raises(self):
         with patch.object(ro._VIEWS, "get", side_effect=RuntimeError("boom")):

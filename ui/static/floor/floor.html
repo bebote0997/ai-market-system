@@ -19,7 +19,7 @@ header{min-height:78px;display:flex;align-items:center;justify-content:space-bet
 .kpis{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px 24px;min-width:0}.kpi{text-align:right;min-width:56px;max-width:150px}.kpi .ex{margin-left:5px;padding:1px 4px;font-size:10px;letter-spacing:.12em}
 .kpi b{min-width:0;overflow:hidden;text-overflow:ellipsis;display:block;font-size:17px;font-weight:300;letter-spacing:.02em;white-space:nowrap}.kpi b.txt{font-size:11px;line-height:1.25;padding:0 0 2px;letter-spacing:.04em;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;margin-left:auto}
 .kpi small{display:block;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}.kpi small.b2{letter-spacing:.06em;text-transform:none}
-.pos{color:#3ddc84}.neg{color:#ff4d6d}.na{color:var(--mute)}
+.pos{color:#3ddc84}.neg{color:#ff4d6d}.na{color:var(--mute)}.load{color:var(--gold2)}
 main{position:relative;flex:1;min-height:0;overflow:hidden}header,footer{flex:none}
 #stage{position:absolute;left:0;top:0;bottom:0;right:0;display:flex;flex-direction:column;transition:right .5s cubic-bezier(.2,.8,.2,1),bottom .5s}
 canvas{flex:1 1 0;min-height:0;width:100%;display:block;cursor:default}
@@ -101,6 +101,7 @@ const STALE=HD.equity_stale===true&&HD.equity_as_of?`(dato antiguo · ${HD.equit
 const TSTALE=HD.trades_stale===true?`(dato antiguo${HD.trades_as_of?` · ${HD.trades_as_of} ET`:''})`:'';
 const NA='—',EMPTY='sin datos aún',NOOP='sin operaciones aún',NOOPK='—';  // Short empty value; explanation stays in the tooltip
 const NOTR=HD.trades===0;  // stats known and no closed trade yet
+const CURVE_SOON='la curva aparece con 2 operaciones cerradas';  // trades known, fewer than 2 curve points
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ok=v=>typeof v==='number'&&isFinite(v);
 const money=(v,signed)=>ok(v)?(v<0?'−':signed&&v>0?'+':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):NA;
@@ -129,13 +130,18 @@ const KP=[[money(HD.equity),'NAV',ok(HD.equity)?'':'na',['equity','balance'],BAL
  [rt,'R total',NOTR?'na txt':tone(HD.r_total),['r_total']],[wr,'Tasa de acierto',NOTR?'na txt':ok(HD.win_rate)?'':'na',['win_rate']],
  [dd,'Caída máx.',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],
  [dl,'Pérdida diaria',dl==NA?'na':HD.daily_loss_status==='TRIGGERED'?'neg':'',['daily_loss_used_pct','daily_loss_limit_pct','daily_loss_text'],DLT]];
+// first paint after a process start: a demo cache still filling is "cargando…", never "—" / "sin datos" / dato antiguo
+const LOADING=DATA.loading===true,LOADT='cargando…',LOADN='Cargando datos del demo…';
+const LOADK={'NAV':HD.equity_loading===true,'Pérdida diaria':HD.equity_loading===true&&dl==NA};
+['P&L realizado','P&L hoy','R total','Tasa de acierto','Caída máx.'].forEach(k=>{LOADK[k]=HD.trades_loading===true});
+KP.forEach(k=>{if(LOADK[k[1]]){k[0]=LOADT;k[2]='load txt';k[4]=''}});
 // EJEMPLO next to each KPI that fell back to example data (sample mode only)
 document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi${k[1]==='Pérdida diaria'?' daily-loss':''}" title="${esc(k[1]+(NOTR&&['R total','Tasa de acierto'].includes(k[1])?' · sin operaciones':'')+(k[4]?' · '+k[4]:''))}"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small>${k[4]?`<small class="b2">${esc(k[4])}</small>`:''}</div>`).join('');
 const oldMarker=STALE||TSTALE;
 const ageTimes=[HD.equity_as_of?`NAV ${HD.equity_as_of} ET`:'',(HD.trades_as_of||HD.trades_stale)?`operaciones ${HD.trades_as_of?HD.trades_as_of+' ET':'sin hora'}`:''].filter(Boolean);
 if(oldMarker)document.getElementById('brandSub').innerHTML+=`<small class="data-age"> · ${esc('dato antiguo · '+ageTimes.join(' · '))}</small>`;
 // "datos reales" ONLY when the newest data point is fresh (payload.note_real); never on old / pre-epoch data
-const noteMain=EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:DATA.note_real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:
+const noteMain=EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:LOADING?`<i class="load">${LOADN}</i>`:DATA.note_real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:
  WAITING?`<i>${esc(WTXT)}</i>${DATA.epoch_text?' · demo desde '+esc(DATA.epoch_text):''}`:DATA.cycle_text?'':`<i>${EMPTY}</i>`;
 document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura`+
  (noteMain?' · '+noteMain:'')+(DATA.cycle_text?` · ${esc(DATA.cycle_text)}`:'')+(ACTIVE?`<span id="running-note"> · <i>ciclo en marcha</i>${RUN.started_at_text?' desde '+esc(RUN.started_at_text):''}</span>`:'');
@@ -305,7 +311,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  if(CURVE.length>1&&zc-1.98>.3){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1,top=zc-.06,bot=2.02;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=ANIM?8:4;cx.lineWidth=1.6;cx.beginPath();
   CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,bot+(top-bot)*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0;
   if(wallTxt&&isEx('curve'))wt(6.6,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4');else if(wallTxt&&TSTALE)wt(6.0,0,2.05,'CURVA '+TSTALE.toUpperCase(),7,'#ffb020',null,3)}
- else if(wallTxt&&!compact&&zc-1.98>.3)wt(3.3,0,Math.max(2.05,zc-fpx(7)/U),NOTR?NOOP:EMPTY,7,'#7f9593',null,5.4);
+ else if(wallTxt&&!compact&&zc-1.98>.3)wt(3.3,0,Math.max(2.05,zc-fpx(7)/U),NOTR?NOOP:HD.trades_loading===true?LOADT:Number.isInteger(HD.trades)?CURVE_SOON:EMPTY,7,'#7f9593',null,5.4);
  const F=[P(9.8,0,1.9),P(16.6,0,1.9),P(16.6,0,3.7),P(9.8,0,3.7)];scr(F,false);
  const feed=(FEED.length?FEED:[WAITING?WTXT:EMPTY]).slice(0,5).map((l,i)=>[l,7.2,i==0&&FEED.length?'#39ff88':'#aebfc0']);
  if(wallTxt)stack(10.1,0,3.66,1.93,compact?feed:[['FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(feed),6.2,compact);
@@ -316,7 +322,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  const S=[P(0,.5,1.9),P(0,6.0,1.9),P(0,6.0,3.7),P(0,.5,3.7)];scr(S,false);
  const cnt=Number.isInteger(HD.closed_trades)?`${HD.closed_trades} cerradas · ${Number.isInteger(HD.open_positions)?HD.open_positions:NA} abiertas`:null;
  const sl=[[(DATA.source==='OANDA_DEMO'?'ESTADO DEL DEMO':'ESTADO')+(isEx('header.day_text')?'  · EJEMPLO':''),8,'#3fa9a4'],
-  [HD.day_text||(WAITING?WTXT:NA),10,'#e8c873'],[`P&L ${money(HD.pnl,1)} · hoy ${money(HD.today_pnl,1)}${TSTALE?' '+TSTALE:''}`,7,'#aebfc0'],
+  [HD.day_text||(WAITING?WTXT:NA),10,'#e8c873'],[HD.trades_loading===true?`P&L ${LOADT}`:`P&L ${money(HD.pnl,1)} · hoy ${money(HD.today_pnl,1)}${TSTALE?' '+TSTALE:''}`,7,'#aebfc0'],
   [`Pérdida diaria ${dl.replace(' / ','/')}${HD.daily_loss_status==='TRIGGERED'?' · límite alcanzado':DLT?' · '+DLT:''}`,7,HD.daily_loss_status==='TRIGGERED'?'#ff4d6d':'#aebfc0'],
   cnt?[NOTR?NOOP:cnt,7,'#8aa3a1']:null].filter(Boolean);
  if(wallTxt)stack(0,5.8,3.66,1.93,compact?sl.slice(1,3):sl,5.2,compact);
@@ -388,7 +394,7 @@ function rrBar(t){const sl=t.sl_actual!=null?t.sl_actual:t.sl_expected,tp=t.tp_a
 const delta=(a,b)=>ok(a)&&ok(b)?(a===b?NA:px(b-a)):NA;
 // broker trade number only (never a run id / UUID / path)
 const tradeNo=t=>/^\d{1,12}$/.test(String(t.id||''))?` · Operación #${esc(t.id)}`:'';
-function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${esc(WAITING?WTXT:NOOP)}</div>`;
+function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${esc(HD.trades_loading===true?LOADN:WAITING?WTXT:NOOP)}</div>`;
  const open=t.status==='OPEN',ex=badge('trades');
  const slip=ok(t.slippage_pips)?t.slippage_pips.toFixed(1)+' pip':ok(t.slippage_price)?px(t.slippage_price):NA;
  const rows=[['Entrada',px(t.entry_expected),px(t.entry_actual),slip,t.slippage_against?'neg':t.slippage_against===false?'pos':''],
