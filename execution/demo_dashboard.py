@@ -41,12 +41,14 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
     """Everything the demo screens need. ``stats`` is None when the OANDA trades read failed (``trades_error`` is
     ``deadline``/``incomplete`` when that was the cause: never partial totals); NAV/balance are None when the summary
     read failed; ``stale``/``as_of``: NAV/balance are the last good read, observed at ``as_of``; ``trades_as_of``: when the
-    trades were read. Never raises."""
+    trades were read. ``read_codes``: non-secret diagnostics of both reads (``account``: AccountView status / error
+    code, ``trades``: the read's error code or ``unavailable``; None = read OK). Never raises."""
     env = os.environ if env is None else env
     epoch = demo_epoch(env)
     snapshot = {"epoch": epoch, "stats": None, "curve": [], "open_rows": [], "closed_rows": [], "nav": None,
                 "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False,
-                "as_of": None, "trades_as_of": None, "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {})}
+                "as_of": None, "trades_as_of": None, "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {}),
+                "read_codes": {"account": "not_read", "trades": "not_read"}}
     try:
         if trades_reader is None or account_reader is None:
             from execution.oanda_readonly import cached_account_view, cached_demo_trades
@@ -63,7 +65,9 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
             stats, curve, open_rows = demo_statistics(listed, now, epoch, risk)
             snapshot.update(stats=stats, curve=curve, open_rows=open_rows,
                             closed_rows=demo_rows(listed, epoch, risk)[0])
+        snapshot["read_codes"] = {**snapshot["read_codes"], "trades": _trades_code(trades, snapshot["stats"])}
         view = account_reader("practice")
+        snapshot["read_codes"] = {**snapshot["read_codes"], "account": _account_code(view)}
         if getattr(view, "status", None) == "OK":
             snapshot.update(nav=as_float(view.nav), balance=as_float(view.balance), currency=view.currency,
                             stale=getattr(view, "stale", False) is True, as_of=getattr(view, "as_of", None))
@@ -72,8 +76,35 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
         snapshot["daily_loss"] = daily_loss_view(_loss_flags(env), snapshot["nav"], now, env)
     except Exception:  # noqa: BLE001 - the demo view is display only: anything unexpected => "sin datos"
         return {**snapshot, "stats": None, "curve": [], "open_rows": [], "closed_rows": [],
-                "daily_loss": {**snapshot["daily_loss"], "status": "NO_DATA"}}
+                "daily_loss": {**snapshot["daily_loss"], "status": "NO_DATA"},
+                "read_codes": {**snapshot["read_codes"], "trades": "unexpected"}}
     return snapshot
+
+
+def _code(value):
+    """Short code token (``[a-z0-9_]``, <= 32 chars) for logs: never free text from a response."""
+    text = "".join(c if c.isalnum() or c == "_" else "_" for c in str(value).lower())[:32]
+    return text or "unknown"
+
+
+def _trades_code(trades, stats):
+    if stats is not None:
+        return None
+    if isinstance(trades, dict) and trades.get("error") is not None:
+        return _code(trades["error"])
+    return "unavailable" if trades is None else "invalid"
+
+
+def _account_code(view):
+    status = getattr(view, "status", None)
+    if status == "OK" and getattr(view, "stale", False) is not True:
+        return None
+    if status == "OK":  # last good view served stale by the cache: the current read failed
+        return "stale_" + _code(getattr(view, "error_code", None) or "unknown")
+    if status is None:
+        return "invalid"
+    error = getattr(view, "error_code", None)
+    return _code(error if error else status)
 
 
 def demo_progress(now, env=None):

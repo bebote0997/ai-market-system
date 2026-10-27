@@ -38,6 +38,9 @@ ALLOWED_READONLY = {("ui/views/control.py", "execution.account_registry"), ("ui/
                     # DEC-DEMO-GATE-1: daily Slack summary with OANDA demo figures while routing is ON: lazy + guarded.
                     ("runtime/notifications.py", "execution.demo_dashboard"),
                     ("runtime/notifications.py", "demo_dashboard"),
+                    # Daily summary: FRESH GET-only reads (no TTL cache) when the 17:00 ET read failed: lazy + guarded.
+                    ("runtime/notifications.py", "execution.oanda_readonly"),
+                    ("runtime/notifications.py", "oanda_readonly"),
                     # DEC-ALERTS-REDESIGN-1: Floor-style trade alerts from OANDA demo data (GET-only reads + broker
                     # state DB mode=ro; no writes, no orders), in the alert worker thread: lazy + guarded.
                     ("runtime/trade_alert_source.py", "execution.demo_dashboard"),
@@ -70,6 +73,7 @@ LAZY_IMPORTS = {"ui/views/process.py": {"execution.broker_demo_state": [["CLOSED
                 "runtime/trade_alert_source.py": {"execution.demo_dashboard": [["state_db_path"], ["demo_progress"]],
                                                   "execution.oanda_readonly": [["account_view", "demo_trades"]]},
                 "runtime/notifications.py": {"execution.demo_dashboard": [["demo_progress", "demo_snapshot"]],
+                                             "execution.oanda_readonly": [["account_view", "demo_trades"]],
                                              "execution.results_source": [["demo_results"]]}}
 
 

@@ -317,7 +317,8 @@ class SlackSummaryTests(unittest.TestCase):
         with patch.dict(os.environ, env), \
                 patch("execution.demo_dashboard.demo_snapshot", **patches.get("snapshot", {"return_value": SNAPSHOT})), \
                 patch("execution.demo_dashboard.demo_progress",
-                      return_value=(None, None, patches.get("day", 2))) as progress:
+                      return_value=(None, None, patches.get("day", 2))) as progress, \
+                patch("runtime.notifications._sleep"):  # failed reads are retried after 20 s / 40 s
             sink.deliver(event())
         return sent[0], progress
 
@@ -344,7 +345,8 @@ class SlackSummaryTests(unittest.TestCase):
         for patches in ({"snapshot": {"return_value": empty}}, {"snapshot": {"side_effect": RuntimeError("x")}}):
             with self.subTest(patches=patches):
                 text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}, **patches)
-                self.assertEqual(text.splitlines()[1:], ["OANDA demo: sin datos", "OANDA Demo · Día sin datos"])
+                # the demo day counts from the epoch: known even when both OANDA reads failed
+                self.assertEqual(text.splitlines()[1:], ["OANDA demo: sin datos", "OANDA Demo · Día 2 de 30"])
         nav_only = {**empty, "nav": 99990.0, "currency": "USD"}
         text, _ = self.send({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}, snapshot={"return_value": nav_only}, day=None)
         self.assertEqual(text.splitlines()[1:], ["Demo OANDA: aún sin operaciones del demo",

@@ -82,14 +82,14 @@ class DayCounterTests(unittest.TestCase):
                     "capital": {"change": 50.0}, "stale": True, "as_of": datetime(2026, 10, 19, 14, 30, tzinfo=timezone.utc)}
         with patch("execution.demo_dashboard.demo_snapshot", return_value=snapshot), \
                 patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
-            text = oanda_demo_summary_text("2026-10-20T21:00:00Z", sent_at=sent)
+            text = oanda_demo_summary_text("2026-10-20T21:00:00Z", sent_at=sent, sleep=lambda _s: None)
         self.assertIn("NAV (a las 2026-10-19 10:30 ET, dato antiguo): 100,000.00 USD", text)
         self.assertIn("Balance (a las 2026-10-19 10:30 ET, dato antiguo): 99,000.00 USD", text)
         self.assertIn("P&L desde el inicio del demo (a las 2026-10-19 10:30 ET, dato antiguo): +50.00 USD", text)
         self.assertNotIn("17:05 ET", text)
         with patch("execution.demo_dashboard.demo_snapshot", return_value={**snapshot, "as_of": None}), \
                 patch("execution.demo_dashboard.demo_progress", return_value=(None, None, 2)):
-            text = oanda_demo_summary_text("2026-10-20T21:00:00Z", sent_at=sent)
+            text = oanda_demo_summary_text("2026-10-20T21:00:00Z", sent_at=sent, sleep=lambda _s: None)
         self.assertIn("NAV (a las 17:05 ET): sin datos", text)
         self.assertIn("Balance (a las 17:05 ET): sin datos", text)
         self.assertIn("P&L desde el inicio del demo (a las 17:05 ET): sin datos", text)

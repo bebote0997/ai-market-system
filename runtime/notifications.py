@@ -3,11 +3,16 @@ from dataclasses import asdict, dataclass
 import json
 import logging
 import os
+import time
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 LOG = logging.getLogger(__name__)
+# Daily OANDA demo summary: a failed read (seen exactly at the 17:00 ET rollover) is retried with FRESH reads after
+# these waits (seconds; ~60 s at most, once per day), then reported "sin datos" with one diagnostic warning line.
+SUMMARY_READ_RETRY_WAITS = (20, 40)
+_sleep = time.sleep  # injectable (tests)
 
 
 @dataclass(frozen=True)
@@ -176,12 +181,12 @@ def paper_summary_text(summary):
     return "\n".join(lines)
 
 
-def oanda_demo_daily_alert(timestamp_utc=None, window_start_utc=None, sent_at=None):
+def oanda_demo_daily_alert(timestamp_utc=None, window_start_utc=None, sent_at=None, sleep=None):
     """``runtime.trade_alerts.DailyAlert`` of the OANDA demo summary (same figures as ``oanda_demo_summary_text``)."""
     from runtime.trade_alert_source import daily_alert
     meta = {}
     try:
-        lines = _demo_lines(timestamp_utc, window_start_utc, sent_at, meta)
+        lines = _demo_lines(timestamp_utc, window_start_utc, sent_at, meta, sleep)
     except Exception:  # noqa: BLE001 - no demo data: never PAPER numbers
         lines = ["OANDA demo: sin datos"]
     return daily_alert(lines, os.environ, date_label=meta.get("label"), demo_day=meta.get("day"),
@@ -222,7 +227,7 @@ def _amount(value, currency, signed=False):
     return (f"{value:+,.2f}" if signed else f"{value:,.2f}") + (f" {currency}" if currency else "")
 
 
-def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=None):
+def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=None, sleep=None):
     """Daily Slack summary of the OANDA practice demo (routing ON): figures since the demo epoch only, from
     ``execution.demo_dashboard`` (read-only, never raises); the day's figures cover the trading day ending at
     ``timestamp_utc`` (17:00 NY), from ``window_start_utc`` (default: the previous 17:00 NY). NAV, balance, open
@@ -230,12 +235,36 @@ def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=N
     catch-up summary of an older day is sent later). A failed read reads "sin datos"; no ids or tokens."""
     header = "AI Market System OANDA DEMO DAILY_SUMMARY"
     try:
-        return "\n".join([header, *_demo_lines(timestamp_utc, window_start_utc, sent_at)])
+        return "\n".join([header, *_demo_lines(timestamp_utc, window_start_utc, sent_at, sleep=sleep)])
     except Exception:  # noqa: BLE001 - no demo data: never PAPER numbers
         return header + "\nOANDA demo: sin datos"
 
 
-def _demo_lines(timestamp_utc, window_start_utc, sent_at=None, meta=None):
+def _summary_complete(snapshot):
+    return snapshot.get("nav") is not None and snapshot.get("stats") is not None
+
+
+def _summary_snapshot(demo_snapshot, now, sleep=None):
+    """``demo_snapshot(now)``; when NAV or the trades read failed, up to ``len(SUMMARY_READ_RETRY_WAITS)`` more tries
+    after those waits with FRESH reads (``oanda_readonly.account_view`` / ``demo_trades``, bypassing the TTL caches),
+    stopping at the first complete snapshot. Still incomplete: ONE warning with the non-secret read codes only."""
+    snapshot = demo_snapshot(now)
+    if _summary_complete(snapshot):
+        return snapshot
+    from execution.oanda_readonly import account_view, demo_trades
+    for wait in SUMMARY_READ_RETRY_WAITS:
+        (sleep or _sleep)(wait)
+        snapshot = demo_snapshot(now, trades_reader=lambda since: demo_trades(since=since, report_errors=True),
+                                 account_reader=account_view)
+        if _summary_complete(snapshot):
+            return snapshot
+    codes = snapshot.get("read_codes") or {}
+    LOG.warning("component=notifications event=DAILY_SUMMARY_READ_FAILED account=%s trades=%s",
+                codes.get("account", "unknown") or "ok", codes.get("trades", "unknown") or "ok")
+    return snapshot
+
+
+def _demo_lines(timestamp_utc, window_start_utc, sent_at=None, meta=None, sleep=None):
     """Summary lines; ``meta`` (dict) receives the trading-day label, demo day and day P&L for the Floor alert."""
     meta = {} if meta is None else meta
     from datetime import datetime, timezone
@@ -251,11 +280,11 @@ def _demo_lines(timestamp_utc, window_start_utc, sent_at=None, meta=None):
     meta["window"] = (start, end)
     now = sent_at if isinstance(sent_at, datetime) and sent_at.tzinfo else datetime.now(timezone.utc)
     at = f"(a las {now.astimezone(ET):%H:%M} ET)"
-    snapshot = demo_snapshot(now)
+    day = meta["day"] = demo_progress(now)[2]  # epoch-based: known even when both OANDA reads failed
+    snapshot = _summary_snapshot(demo_snapshot, now, sleep)
     stats, currency = snapshot.get("stats"), snapshot.get("currency")
     if stats is None and snapshot.get("nav") is None:
         return ["OANDA demo: sin datos"]
-    day = meta["day"] = demo_progress(now)[2]
     nav, balance, change = snapshot.get("nav"), snapshot.get("balance"), (snapshot.get("capital") or {}).get("change")
     account_at = at
     if snapshot.get("stale"):  # last good account read: never labelled as current

@@ -377,11 +377,12 @@ def cached_account_view(environment):
 
 
 def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.monotonic,
-                deadline_seconds=TRADES_REFRESH_DEADLINE_SECONDS):
+                deadline_seconds=TRADES_REFRESH_DEADLINE_SECONDS, report_errors=False):
     """``{"closed": [...], "open": [...], "as_of": now}`` for the PRACTICE account only (``OANDA_PRACTICE_TOKEN`` +
     ``OANDA_ACCOUNT_ID``); ``{"error": "deadline"|"incomplete", "as_of": now}`` when CLOSED+OPEN did not finish
     within ``deadline_seconds`` or the page cap ran out; None when not configured or on any other read failure.
-    Never raises."""
+    ``report_errors`` (daily-summary diagnostics): every failure is ``{"error": <code>, "as_of": now}`` instead of None
+    (the ``ReadOnlyError`` code, ``not_configured`` or ``unexpected``; never response text). Never raises."""
     env = os.environ if env is None else env
     deadline = clock() + float(deadline_seconds)
     try:
@@ -390,17 +391,17 @@ def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.mo
         token = token.strip() if isinstance(token, str) else ""
         account = account.strip() if isinstance(account, str) else ""
         if not token or not account:
-            return None
+            return {"error": "not_configured", "as_of": now or datetime.now(timezone.utc)} if report_errors else None
         client = OandaReadOnlyClient(token, account, "practice", transport=transport)
         closed = client.get_trades("CLOSED", since=since, deadline=deadline, clock=clock)
         opened = client.get_trades("OPEN", since=since, deadline=deadline, clock=clock)
         return {"closed": closed, "open": opened, "as_of": now or datetime.now(timezone.utc)}
     except ReadOnlyError as error:
-        if error.code in TRADES_ERRORS:
+        if error.code in TRADES_ERRORS or report_errors:
             return {"error": error.code, "as_of": now or datetime.now(timezone.utc)}
         return None
     except Exception:  # noqa: BLE001 - codes are not needed by the dashboard: no data is "sin datos"
-        return None
+        return {"error": "unexpected", "as_of": now or datetime.now(timezone.utc)} if report_errors else None
 
 
 class CachedDemoTrades:

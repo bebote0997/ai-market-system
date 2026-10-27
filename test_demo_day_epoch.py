@@ -77,11 +77,10 @@ class AlertsUseTheEpochDayTests(unittest.TestCase):
         from runtime.trade_alert_source import daily_alert
         env = {"AI_FLOOR_DEMO_EPOCH": EPOCH, "AI_FLOOR_BROKER_DEMO_ROUTING": "1",
                "AI_FLOOR_BROKER_STATE_DB_PATH": "/nonexistent/state.db"}
-        snapshot = {"stats": {"trades": 0, "wins": 0, "avg_r": None, "avg_r_reason": None, "today_pnl": 0.0},
-                    "nav": 100000.0, "currency": "USD", "capital": {"change": 0.0}, "open_rows": [], "closed_rows": []}
+        snapshot = {"stats": None, "nav": None, "currency": None, "capital": {"change": None}, "open_rows": []}
         sent = datetime(2026, 10, 26, 21, 0, 33, tzinfo=UTC)  # 17:00:33 ET
         with patch.dict(os.environ, env), patch("execution.demo_dashboard.demo_snapshot", return_value=snapshot):
-            alert = notifications.oanda_demo_daily_alert("2026-10-26T21:00:00Z", sent_at=sent)
+            alert = notifications.oanda_demo_daily_alert("2026-10-26T21:00:00Z", sent_at=sent, sleep=lambda _s: None)
         self.assertEqual(alert.demo_day, 2)
         self.assertEqual(daily_alert((), env, demo_day=3).demo_day, 3)
 
