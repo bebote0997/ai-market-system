@@ -26,7 +26,8 @@ withdrawals are excluded via a read-only ``TRANSFER_FUNDS`` query whenever the s
 while NAV (or that query) is unavailable entries are refused but an active halt keeps flattening.
 
 Operator requests from the dashboard (``execution/operator_actions.py``, another process) arrive as state-DB flags and
-are processed at the start of every ``on_cycle`` / ``manage``: ``flatten_request`` (emergency button) reconciles first,
+are processed at the start of every ``on_cycle`` / ``manage`` and by ``process_operator_requests`` (runner poll every
+~5 s between ticks, so an in-session DUPLICATE slot never delays them): ``flatten_request`` (emergency button) reconciles first,
 then closes every routed OPEN trade and is dropped only after a successful reconcile with no OPEN / PENDING_SEND /
 UNKNOWN row left; ``drift_clear_request`` is bound to the current ``drift_episode`` and honoured by ``reconcile`` only
 when that same pass verifies the broker and the local state match (clear + request consumption + audit event in one
@@ -915,6 +916,23 @@ class BrokerDemoRouter:
         except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
             LOG.error("component=broker_demo event=FLATTEN_REQUEST_ERROR error_type=%s", type(exc).__name__)
             return {}, None
+
+    def process_operator_requests(self, at):
+        """Between-cycle poll of the dashboard requests (runner loop, every few seconds): ONE flag read and nothing else
+        while neither ``flatten_request`` nor ``manual_close_request`` is stored; otherwise exactly the request part of
+        ``manage`` (``_process_requests`` + ``_process_manual_close``, same gates and outbox drain) under the router
+        lock. No heartbeat, no loss-limit / Friday / duration pass, never opens. Returns ``{client_id: outcome}``."""
+        try:
+            pending = self._store.flags((FLATTEN_REQUEST_FLAG, MANUAL_CLOSE_REQUEST_FLAG))
+        except Exception as exc:  # noqa: BLE001 - retried at the next poll / tick
+            LOG.warning("component=broker_demo event=OPERATOR_POLL_FAILED error_type=%s", type(exc).__name__)
+            return {}
+        if not any(pending.values()):
+            return {}
+        with self._lock:
+            flattened, report = self._process_requests(at)
+            manual, _report = self._process_manual_close(report)
+            return {**flattened, **manual}
 
     def _process_manual_close(self, report):
         """Floor "Cerrar operación" (``manual_close_request``): reconcile (unless this tick already did), then close

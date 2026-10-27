@@ -115,7 +115,8 @@ la operación enrutada al demo OANDA (`ui/views/floor_actions.py`; `floor_view.p
   ya solicitado.
 - El clic solo guarda `manual_close_request` en la DB de estado del broker
   (`execution.operator_actions.request_manual_close`, una transacción `set_flag_if_absent` + evento
-  `MANUAL_CLOSE_REQUESTED`); el router lo ejecuta en su próximo ciclo/tick con su propia ruta de cierre (`_close`, la
+  `MANUAL_CLOSE_REQUESTED`); el router lo ejecuta en segundos (el runner consulta las peticiones cada ~5 s entre ticks,
+  `process_operator_requests`; también en cada ciclo/tick) con su propia ruta de cierre (`_close`, la
   misma del flatten de emergencia), motivo `MANUAL_CLOSE`, evento `MANUAL_CLOSE` (alerta Slack por la ruta existente
   `runtime/broker_alerts.py`). Rechazo definitivo del broker ⇒ `MANUAL_CLOSE_FAILED` (alerta) y la solicitud se
   descarta; cierre UNKNOWN ⇒ la solicitud espera a la reconciliación (nunca un segundo cierre). Dry-run ⇒

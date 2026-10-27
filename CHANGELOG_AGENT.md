@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-10-27 — Cierre manual inmediato, día del demo, resumen diario, SL/TP anclados al fill (branch `fix/manual-close-sizing-day`)
+
+- **Parte 1 — cierre manual inmediato (enmienda DEC-MANUAL-CLOSE-1).** Causa: en sesión los ticks de ~30 s dentro de un slot de 15 min ya reclamado devuelven DUPLICATE y `run_cycle` no llama a `router.on_cycle`; el cierre esperaba hasta 15 min (fuera de sesión `manage_trade_duration` sí corría cada tick). Nuevo `BrokerDemoRouter.process_operator_requests(at)` (una lectura de flags `DemoStateStore.flags`; sin `flatten_request` ni `manual_close_request` vuelve sin red; si hay, `_process_requests` + `_process_manual_close` tal cual, sin heartbeat, ciclo ni apertura), wrappers en `runtime/service.py` (halt / router ausente igual que el manage) y `runtime/demo_runner.py` (notificaciones como el manage), y el bucle de `runtime/cloud_runner.py` (`_idle`) consulta cada 5 s (excepción ⇒ solo el tipo en el log; parada honrada en ≤ 1 s; `tick()` cada ~30 s y resumen diario sin cambios). Textos del Floor/Control: «en unos segundos». Tests: `test_manual_close_poll.py`.
+
 ## 2026-10-25 — UI chunk 8: inicio del fallback demo sin fecha inventada
 
 - `luxury.demo_unavailable_api()` toma el inicio de `dashboard.demo_since()` (fail-closed) para epoch, snapshot y progreso; Inicio/Operaciones y el panel lateral usan ese valor. Inicio ilegible ⇒ «inicio desconocido» y ningún ciclo pasa el filtro.
