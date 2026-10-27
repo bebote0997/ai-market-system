@@ -341,28 +341,52 @@ def account_view(environment, env=None, *, transport=None, now=None):
 
 
 class CachedAccountViews:
-    """TTL cache (>= 5 s) per environment. An ERROR keeps the last good view, marked ``stale`` with the error code."""
+    """TTL cache (>= 5 s) per environment. An ERROR keeps the last good view, marked ``stale`` with the error code.
 
-    def __init__(self, ttl=CACHE_TTL_SECONDS, *, clock=None, fetch=None):
+    The lock only guards the cache dicts, never the network (same pattern as ``CachedDemoTrades``): one caller
+    refreshes while the others get the previous view for that environment at once, or wait up to ``wait_seconds`` for
+    the first read when none exists (then an ERROR ``timeout`` view)."""
+
+    def __init__(self, ttl=CACHE_TTL_SECONDS, *, clock=None, fetch=None, wait_seconds=TIMEOUT_SECONDS):
         self.ttl = max(5.0, float(ttl))
         self._clock = clock or time.monotonic
         self._fetch = fetch or account_view
+        self._wait = float(wait_seconds)
         self._lock = threading.Lock()
         self._cache = {}  # environment -> (fetched_at, view)
         self._good = {}  # environment -> last OK view
+        self._inflight = {}  # environment -> threading.Event set when that refresh ends
 
     def get(self, environment, env=None):
         with self._lock:
             cached = self._cache.get(environment)
             if cached is not None and self._clock() - cached[0] < self.ttl:
                 return cached[1]
+            running = self._inflight.get(environment)
+            owner = running is None
+            if owner:
+                running = self._inflight[environment] = threading.Event()
+        if not owner:
+            if cached is not None:
+                return cached[1]  # previous view while another session refreshes
+            running.wait(self._wait)
+            with self._lock:
+                cached = self._cache.get(environment)
+            return cached[1] if cached is not None else AccountView(ERROR, str(environment), error_code="timeout")
+        view = None
+        try:
             view = self._fetch(environment, env)
-            if view.status == OK:
-                self._good[environment] = view
-            elif view.status == ERROR and environment in self._good:
-                view = replace(self._good[environment], stale=True, error_code=view.error_code)
-            self._cache[environment] = (self._clock(), view)
-            return view
+        finally:
+            with self._lock:
+                if view is not None:
+                    if view.status == OK:
+                        self._good[environment] = view
+                    elif view.status == ERROR and environment in self._good:
+                        view = replace(self._good[environment], stale=True, error_code=view.error_code)
+                    self._cache[environment] = (self._clock(), view)
+                self._inflight.pop(environment, None)
+            running.set()
+        return view
 
 
 _VIEWS = CachedAccountViews()
