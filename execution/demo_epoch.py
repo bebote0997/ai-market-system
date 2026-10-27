@@ -10,12 +10,14 @@ decimal) overrides it, an invalid value keeps the default. Pure; never raises.
 from datetime import datetime, timezone
 from decimal import Decimal
 import os
+from zoneinfo import ZoneInfo
 
 EPOCH_ENV = "AI_FLOOR_DEMO_EPOCH"
 DEFAULT_DEMO_EPOCH_UTC = "2026-10-18T22:25:00Z"
 DEMO_PREFIX, TEST_PREFIX = "aif-", "aif-test-"
 START_EQUITY_ENV = "AI_FLOOR_DEMO_START_EQUITY"
 DEFAULT_DEMO_START_EQUITY = Decimal("99999.977")  # OANDA practice NAV at the epoch (2026-10-18 18:25 ET)
+NEW_YORK = ZoneInfo("America/New_York")
 
 
 def parse_aware(value):
@@ -41,6 +43,17 @@ def demo_epoch(env=None):
     except Exception:  # noqa: BLE001 - a broken env mapping keeps the default
         override = None
     return override or parse_aware(DEFAULT_DEMO_EPOCH_UTC)
+
+
+def demo_day_from_epoch(epoch, now):
+    """"Día N" of the demo, the ONE rule for screens, alerts, daily summary and email: day 1 = the New York calendar
+    date of ``epoch``, every NY date after it adds one (weekends count). Uncapped int (> 30 = complete); None when
+    either timestamp is unknown / naive or ``now`` is before the epoch."""
+    if not isinstance(epoch, datetime) or not isinstance(now, datetime):
+        return None
+    if epoch.tzinfo is None or now.tzinfo is None or now < epoch:
+        return None
+    return (now.astimezone(NEW_YORK).date() - epoch.astimezone(NEW_YORK).date()).days + 1
 
 
 def demo_start_equity(env=None):

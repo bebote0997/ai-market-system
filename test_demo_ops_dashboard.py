@@ -1,6 +1,6 @@
 """Demo dashboard additions (feat/ops-diag-fixes): daily-loss status vs the 2 % limit (from the router's persisted
 flags + OANDA NAV), R per routed trade ("—" without an initial stop) and the "Día N de 30" counter (day 1 = NY date
-of the first routed trade for the Slack summary; the screens count from the demo EPOCH, ``ui.demo_clock``; capped
+of the demo EPOCH for the screens and the Slack / email alerts alike, ``execution.demo_epoch``; capped
 "30 de 30 – completo"). Synthetic data only; no network."""
 from contextlib import closing
 from datetime import datetime, timedelta, timezone

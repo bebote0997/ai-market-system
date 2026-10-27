@@ -9,8 +9,8 @@ read is "sin datos" (``stats`` None), never PAPER numbers. No writes, no orders.
 import os
 
 from execution.broker_demo_state import routing_flag
-from execution.demo_epoch import demo_epoch
-from execution.demo_metrics import (as_float, daily_loss_view, demo_capital, demo_day, demo_rows, demo_statistics,
+from execution.demo_epoch import demo_day_from_epoch, demo_epoch
+from execution.demo_metrics import (as_float, daily_loss_view, demo_capital, demo_rows, demo_statistics,
                                     first_demo_open, load_loss_flags, load_risk_rows)
 
 
@@ -77,9 +77,15 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
 
 
 def demo_progress(now, env=None):
-    """(epoch, first routed trade opened_at or None, day number or None). The day is NOT capped (> 30 = the demo is
-    complete; display via ``ui.i18n_es.demo_day_text``). Never raises."""
+    """(epoch, first routed trade opened_at or None, day number or None). The day counts from the EPOCH's New York
+    date (``execution.demo_epoch.demo_day_from_epoch``, the same rule as the Floor / Overview), with or without a
+    routed trade; NOT capped (> 30 = the demo is complete; display via ``ui.i18n_es.demo_day_text``); None only when
+    the epoch is unknown or ``now`` is before it. Never raises."""
     env = os.environ if env is None else env
     epoch = demo_epoch(env)
     first = first_demo_open(_risk_rows(env), epoch)
-    return epoch, first, demo_day(first, now, length=None)
+    try:
+        day = demo_day_from_epoch(epoch, now)
+    except Exception:  # noqa: BLE001 - display only
+        day = None
+    return epoch, first, day
