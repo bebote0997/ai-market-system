@@ -99,7 +99,7 @@ class RouterBase(unittest.TestCase):
         self.server.add("GET", OPEN_TRADES, trades(), trades(), trades(*(after or [open_trade()])))
         self.server.add("GET", SUMMARY, summary(nav))
         self.server.add("GET", TRADE_AT_CID, NOT_FOUND)
-        self.server.add("GET", PRICING, pricing())
+        self.server.add("GET", PRICING, pricing(bid="1.08990", ask="1.09000"))  # DEC-FILL-ANCHOR-2: no gap to the default plan
         if order is not None:
             self.server.add("POST", ORDERS, order)
 
@@ -229,7 +229,7 @@ class DryRunTests(RouterBase):
         self.assertTrue(router.dry_run)
         self.server.add("GET", OPEN_TRADES, trades())
         self.server.add("GET", SUMMARY, summary())
-        self.server.add("GET", PRICING, pricing())
+        self.server.add("GET", PRICING, pricing(bid="1.08990", ask="1.09000"))
         self.assertEqual(router.on_cycle(context(), "PLAN_READY", NOW), ("DRY_RUN", CID))
         self.assertEqual(self.writes(), [])
         [(_kind, cid, detail)] = self.events("DRY_RUN")
@@ -430,7 +430,7 @@ class ReconcileTests(RouterBase):
         self.server.routes[("GET", OPEN_TRADES)] = [trades()]
         self.server.add("GET", SUMMARY, summary())
         self.server.add("GET", TRADE_AT_CID, NOT_FOUND)
-        self.server.add("GET", PRICING, pricing())
+        self.server.add("GET", PRICING, pricing(bid="1.08990", ask="1.09000"))
         self.server.add("POST", ORDERS, FILLED)
         self.assertEqual(router.on_cycle(context(), "PLAN_READY", NOW)[0], "ACCEPTED")
         with self.assertRaises(ValueError):

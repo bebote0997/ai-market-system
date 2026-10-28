@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-10-28 — SL/TP anclados al fill también por encima de la tolerancia + verificación posterior (DEC-FILL-ANCHOR-2, branch `fix/fill-anchor-2`)
+
+- **Causa (operación #40, 28 oct 10:15 ET).** EURUSD LONG planificado en 1.11331 (SL 45 pips, TP 90 pips = 2R); el ask era 1.11269 (−6.2 pips). `BrokerDemoRouter._fill_anchor` devolvía los precios sin cambios cuando |delta| > 5 pips (`FILL_ANCHOR_SKIPPED delta_above_tolerance`) y el fill quedó con SL 38.8 pips y TP 96.2 pips (≈2.48R). Confirmado por el código y por la prueba nueva con esas cifras; el journal en vivo no se leyó.
+- `_fill_anchor`: ahora traslada entrada/SL/TP hasta |delta| ≤ 10 pips (`FILL_ANCHOR_MAX_PIPS`; `FILL_ANCHORED wide=true` por encima de 5); por encima de 10 pips devuelve None y `_route` rechaza (`NOT_ROUTED fill_gap_too_large`, evento+alerta `FILL_ANCHOR_REFUSED`, `REVERSAL_FLAT` si ya se había revertido). Sin cotización válida: igual que antes.
+- Nuevo `_verify_fill` tras `ACCEPTED`: pips reales de SL/TP y R frente al fill real; `FILL_VERIFIED` / `FILL_OUT_OF_POLICY` (log WARNING + alerta Slack) / `FILL_CHECK_UNAVAILABLE`. Solo observación. `runtime/broker_alerts.py`: textos en español de los dos eventos alertables.
+- Tests: `test_fill_anchor.py` (operación #40, límite exacto 10 / 10.1, ambos sentidos, JPY, reversión + rechazo, verificación OK / fuera de política / sin precio). Sin cambios en `oanda_broker.py`, env, configuración ni REAL (sigue bloqueado). Docs: `docs/decisions.md`, `docs/STATUS.md`. Sin archivo de fase afectado (ninguno cubre el router demo).
+
 ## 2026-10-27 — Revisión del PR #60: fecha del Día 30, códigos de lectura, pruebas del anclaje (branch `fix/oct27-manual-close-floor-data`)
 
 - Docs: DEC-DEMO-RESUME-1 «Día 1 = fecha NY de la época» (enmienda) y «Día 30 = 2026-11-23» (día 1 = 2026-10-25; antes «≈ 2026-11-24»); runbook `docs/runbooks/sunday_restart_2026-10-25.md` alineado; cabecera de `docs/STATUS.md` con la rama, el productor de cachés del Floor y DEC-AGENT-NAMES-1.
