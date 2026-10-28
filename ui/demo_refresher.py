@@ -30,6 +30,8 @@ BACKOFF_SECONDS = 30.0
 FAILURES_BEFORE_BACKOFF = 3
 THREAD_NAME = "floor-demo-refresher"
 FIRST_RETRY = "8s"  # Floor fragment refresh while the caches are still cold (then back to 60 s)
+IDLE_REFRESH = "60s"  # page auto-refresh with no open trade
+OPEN_REFRESH = "30s"  # page auto-refresh while an OPEN trade is cached (the broker cache TTL stays 10 s)
 
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -147,6 +149,24 @@ def warming_up():
         return not read_attempted("_TRADES", _epoch) or not read_attempted("_VIEWS", "practice")
     except Exception:  # noqa: BLE001
         return False
+
+
+def has_open_trade():
+    """True when the cached demo trades (peek only, never a broker call) hold at least one OPEN trade. Never raises."""
+    try:
+        if not running():
+            return False
+        from ui.floor_cache import peek_demo_trades
+        data = peek_demo_trades(_epoch)
+        return isinstance(data, dict) and data.get("error") is None and bool(data.get("open"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def open_trade_refresh():
+    """Page auto-refresh interval: ``OPEN_REFRESH`` while a trade is open (fresher unrealized P&L), else ``IDLE_REFRESH``.
+    Display timing only: the OANDA read cache keeps its 10 s TTL, so the GET rate does not change."""
+    return OPEN_REFRESH if has_open_trade() else IDLE_REFRESH
 
 
 def stop(timeout=5.0):

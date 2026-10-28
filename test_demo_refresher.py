@@ -273,6 +273,71 @@ class FloorRefreshWiringTests(unittest.TestCase):
         self.assertIn("demo_refresher.ensure_started()", app)
 
 
+class OpenTradeRefreshTests(RefresherTestCase):
+    """Page auto-refresh: 30 s while a cached OPEN trade exists, else 60 s. Peek only: no broker call, TTL unchanged."""
+
+    def started(self, trades):
+        reader = Mock(return_value=trades)
+        self.assertTrue(demo_refresher.ensure_started(demo_env(), trades_reader=reader, account_reader=Mock(return_value=None),
+                                                      interval=0.01))
+        return reader
+
+    def peek_with(self, trades):
+        epoch = demo_refresher._epoch
+        return patch.object(ro._TRADES, "_cache", {epoch: (ro._TRADES._clock(), trades)})
+
+    def test_constants_and_ttl_are_unchanged(self):
+        self.assertEqual((demo_refresher.IDLE_REFRESH, demo_refresher.OPEN_REFRESH, demo_refresher.FIRST_RETRY),
+                         ("60s", "30s", "8s"))
+        self.assertEqual(ro.CACHE_TTL_SECONDS, 10.0)
+
+    def test_idle_without_producer_or_cache(self):
+        self.assertFalse(demo_refresher.has_open_trade())
+        self.assertEqual(demo_refresher.open_trade_refresh(), "60s")
+
+    def test_open_trade_gives_30s_and_flips_back_when_it_closes(self):
+        opened = {"closed": [], "open": [{"id": "102"}], "as_of": datetime.now(timezone.utc)}
+        flat = {"closed": [{"id": "101"}], "open": [], "as_of": datetime.now(timezone.utc)}
+        self.started(flat)
+        with self.peek_with(opened):
+            self.assertTrue(demo_refresher.has_open_trade())
+            self.assertEqual(demo_refresher.open_trade_refresh(), "30s")
+        with self.peek_with(flat):
+            self.assertEqual(demo_refresher.open_trade_refresh(), "60s")
+
+    def test_failed_or_missing_reads_stay_at_60s(self):
+        self.started({"closed": [], "open": [], "as_of": datetime.now(timezone.utc)})
+        for stored in (None, {"error": "deadline", "open": [{"id": "1"}], "as_of": datetime.now(timezone.utc)}, "junk"):
+            with self.subTest(stored=stored), self.peek_with(stored):
+                self.assertEqual(demo_refresher.open_trade_refresh(), "60s")
+        with patch.object(ro._TRADES, "_cache", {}):
+            self.assertEqual(demo_refresher.open_trade_refresh(), "60s")
+
+    def test_peek_never_calls_the_broker(self):
+        self.started({"closed": [], "open": [], "as_of": datetime.now(timezone.utc)})
+        fetch = Mock(side_effect=AssertionError("no broker call from the interval peek"))
+        with patch.object(ro._TRADES, "_fetch", fetch), patch.object(ro._VIEWS, "_fetch", fetch):
+            with self.peek_with({"closed": [], "open": [{"id": "1"}], "as_of": datetime.now(timezone.utc)}):
+                self.assertEqual(demo_refresher.open_trade_refresh(), "30s")
+            with patch.object(ro._TRADES, "_cache", {}):
+                self.assertEqual(demo_refresher.open_trade_refresh(), "60s")
+        fetch.assert_not_called()
+
+    def test_app_wiring_uses_it_in_both_fragments_and_reruns_once_on_a_flip(self):
+        from pathlib import Path
+        app = (Path(__file__).resolve().parent / "ui" / "app.py").read_text(encoding="utf-8")
+        self.assertNotIn('run_every="60s"', app)
+        self.assertIn("def open_trade_refresh():", app)
+        luxury = app.split("if page in luxury.PAGES:", 1)[1].split("if page == floor_view.PAGE:", 1)[0]
+        self.assertIn("luxury_every = open_trade_refresh() if refresh else None", luxury)
+        self.assertIn("@st.fragment(run_every=luxury_every)", luxury)
+        self.assertIn("if refresh and open_trade_refresh() != luxury_every:\n            st.rerun()", luxury)
+        floor = app.split("if page == floor_view.PAGE:", 1)[1].split("if page in dashboard.PAGES:", 1)[0]
+        self.assertIn("(demo_refresher.FIRST_RETRY if warming else open_trade_refresh()) if refresh else None", floor)
+        self.assertIn("@st.fragment(run_every=floor_every)", floor)
+        self.assertIn("elif refresh and not warming and open_trade_refresh() != floor_every:\n            st.rerun()", floor)
+
+
 class LifespanTests(RefresherTestCase):
     def test_lifespan_starts_and_stops(self):
         import asyncio

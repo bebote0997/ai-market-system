@@ -1,3 +1,9 @@
+# Owner-authorized dashboard work — 2026-10-28 (feat/glass-ui)
+
+Auto-refresh interval is now 30 s while a cached OPEN trade exists and 60 s otherwise
+(`ui/demo_refresher.open_trade_refresh()`, peek-only, no broker call; fragment reruns once
+on an open/closed flip). Cache TTL, first-retry 8 s and the sidebar pause are unchanged.
+
 # Owner-authorized dashboard work — 2026-10-11
 
 ## Process timeline
