@@ -79,30 +79,31 @@ def render_manual_close(st, api=None, owner=None):
     owner = owner_authenticated(st) if owner is None else owner
     disabled = manual_close_disabled(api, owner)
     target = api.get("target") if isinstance(api, dict) else None
-    st.markdown(f"**{MANUAL_CLOSE_TITLE}**")
-    st.caption(target_text(target))
-    if st.button("Cerrar operación", disabled=disabled is not None, key="floor-manual-close"):
+    with st.container(key="manual-close-card"):  # glass card in theme.css (.st-key-manual-close-card)
+        st.markdown(f"**{MANUAL_CLOSE_TITLE}**")
+        st.caption(target_text(target))
+        if st.button("Cerrar operación", disabled=disabled is not None, key="floor-manual-close"):
+            pending = state.get(CONFIRM_KEY)
+            if not (isinstance(pending, dict) and pending.get("client_id") == target["client_id"]):
+                state[CONFIRM_KEY] = {"client_id": target["client_id"], "request_id": uuid4().hex}
+            state[RESULT_KEY] = None
         pending = state.get(CONFIRM_KEY)
-        if not (isinstance(pending, dict) and pending.get("client_id") == target["client_id"]):
-            state[CONFIRM_KEY] = {"client_id": target["client_id"], "request_id": uuid4().hex}
-        state[RESULT_KEY] = None
-    pending = state.get(CONFIRM_KEY)
-    if disabled is None and isinstance(pending, dict) and pending.get("client_id") == target["client_id"]:
-        st.warning("¿Cerrar ahora esta operación a mercado en la cuenta de práctica OANDA? Pulsa «Confirmar cierre».")
-        if st.button("Confirmar cierre", key="floor-manual-close-confirm"):
-            state.pop(CONFIRM_KEY, None)  # one request per confirmation: a re-render can never send it twice
-            try:
-                result = api["close"](actor="dashboard", reason="Floor: Cerrar operación",
-                                      client_id=pending["client_id"], request_id=pending["request_id"])
-            except Exception:  # noqa: BLE001 - request_manual_close never raises; belt and braces
-                result = None
-            state[RESULT_KEY] = result.get("reason") if isinstance(result, dict) else "error"
-        elif st.button("Cancelar", key="floor-manual-close-cancel"):
-            state.pop(CONFIRM_KEY, None)
-    elif pending is not None and disabled is not None:
-        state.pop(CONFIRM_KEY, None)  # the trade closed / the session lost owner rights: drop the confirmation
-    result = state.get(RESULT_KEY)
-    if result:
-        st.info(RESULT_TEXT.get(result, RESULT_ERROR))
-    if disabled is not None:
-        st.caption(disabled)
+        if disabled is None and isinstance(pending, dict) and pending.get("client_id") == target["client_id"]:
+            st.warning("¿Cerrar ahora esta operación a mercado en la cuenta de práctica OANDA? Pulsa «Confirmar cierre».")
+            if st.button("Confirmar cierre", key="floor-manual-close-confirm"):
+                state.pop(CONFIRM_KEY, None)  # one request per confirmation: a re-render can never send it twice
+                try:
+                    result = api["close"](actor="dashboard", reason="Floor: Cerrar operación",
+                                          client_id=pending["client_id"], request_id=pending["request_id"])
+                except Exception:  # noqa: BLE001 - request_manual_close never raises; belt and braces
+                    result = None
+                state[RESULT_KEY] = result.get("reason") if isinstance(result, dict) else "error"
+            elif st.button("Cancelar", key="floor-manual-close-cancel"):
+                state.pop(CONFIRM_KEY, None)
+        elif pending is not None and disabled is not None:
+            state.pop(CONFIRM_KEY, None)  # the trade closed / the session lost owner rights: drop the confirmation
+        result = state.get(RESULT_KEY)
+        if result:
+            st.info(RESULT_TEXT.get(result, RESULT_ERROR))
+        if disabled is not None:
+            st.caption(disabled)

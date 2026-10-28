@@ -110,7 +110,8 @@ def symbol_option(symbol):
 
 
 def render(st, db):
-    from ui.views.luxury import card, MISSING, demo_api, demo_since, state_chip, tr
+    from ui.components.glass import step_strip
+    from ui.views.luxury import card, MISSING, demo_api, demo_since, html, state_chip, tr
     from ui.i18n_es import STEPS as LABELS, AGENTS, cycle_label, status_text
     since = demo_since(demo_api())  # OANDA demo: only runs at/after the epoch (a pre-epoch deep link is ignored)
     runs = since_epoch(records(db, 'runs'), since, ('as_of', 'started_at'))
@@ -142,6 +143,9 @@ def render(st, db):
     evidence, gaps = cycle_evidence(db, runs[ids.index(selected)])
     if since is not None:
         evidence = {step: scrub_paper_sizing(rows) for step, rows in evidence.items()}
+    oanda = paper_hidden()
+    step_labels = {step: OANDA_LABELS.get(step, LABELS[step]) if oanda else LABELS[step] for step in STEPS}
+    html(st, step_strip([(step_labels.get(step, step), bool(rows)) for step, rows in evidence.items()]))
     st.caption(tr('Timestamps below are persisted record timestamps; absent step timestamps are not inferred.'))
     for index, (step, rows) in enumerate(evidence.items(), 1):
         timestamps = []

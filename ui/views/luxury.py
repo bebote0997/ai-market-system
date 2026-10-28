@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from runtime.scheduler import session_names
 from storage.codec import parse_utc
 from ui import i18n_es as es
+from ui.components.glass import day_progress, sparkline_svg
 from ui.adapters import from_persisted_snapshot
 from ui.views.dashboard import (FAR_FUTURE, FIRST_CYCLE_WAIT, PAPER_SIZING_KEYS, ROW_LIMIT, epoch_or_far, is_current, payloads,
                                 records, since_epoch)
@@ -84,11 +85,20 @@ def card(st, title, fields=(), *, value=None, summary=None):
     html(st, f'<div class="card"><h3>{e(title)}</h3>{body}</div>')
 
 
-def kpi(icon, phrase, value_html='', *, tone='', technical='', hint=''):
+def kpi(icon, phrase, value_html='', *, tone='', technical='', hint='', extra=''):
+    """``extra``: trusted HTML under the value (e.g. ``sparkline_svg`` of a real series)."""
     value = f'<div class="value {tone}">{value_html}</div>' if value_html else ''
     return (f'<div class="kpi {tone}"><div class="icon" aria-hidden="true">{icon}</div>'
-            f'<div class="phrase">{escape(phrase)}</div>{value}'
+            f'<div class="phrase">{escape(phrase)}</div>{value}{extra}'
             f'<div class="foot2"><span class="tech">{escape(technical)}</span>{es.tip(hint) if hint else ""}</div></div>')
+
+
+def pnl_sparkline(curve):
+    """Sparkline of the REAL cumulative realized P&L series (``curve`` rows); '' without >= 2 finite points."""
+    values = [row.get('Cumulative realized PnL') for row in curve or () if isinstance(row, dict)]
+    last = next((v for v in reversed(values) if number(v)), None)
+    color = '#4cf0a2' if last is None or last >= 0 else '#ff8099'
+    return sparkline_svg(values, color, label='Evolución del P&L realizado acumulado')
 
 
 def kpi_grid(st, tiles):
@@ -399,7 +409,7 @@ def overview(st, db, now):
             hint=es.TOOLTIPS['equity']),
         kpi('📈' if not number(total) or total >= 0 else '📉', es.pnl_since_start(total),
             escape(es.money(total, signed=True)), tone=es.tone(total), technical='P&L neto · operaciones cerradas',
-            hint=es.TOOLTIPS['pnl']),
+            hint=es.TOOLTIPS['pnl'], extra=pnl_sparkline(curve)),
         kpi('🎯', es.wins_phrase(stats['wins'], stats['trades']), escape(rate), tone='teal',
             technical='Ganadoras / operaciones cerradas', hint=es.TOOLTIPS['win_rate']),
         kpi('🛡️', es.drawdown_phrase(stats['max_drawdown']), tone='orange', technical='Mayor caída desde un máximo',
@@ -434,12 +444,14 @@ def curve_chart(st, curve, title, caption):
                                fillcolor='rgba(217,180,90,0.10)',
                                hovertemplate='%{x|%d %b %H:%M} ET<br>$%{y:,.2f}<extra></extra>'))
     fig.add_hline(y=0, line_color='#7f9593', line_width=1)
-    fig.update_layout(height=260, margin=dict(l=65, r=15, t=10, b=40), paper_bgcolor='#0d1416',
-                      plot_bgcolor='#0d1416', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
+    fig.update_layout(height=260, margin=dict(l=65, r=15, t=10, b=40), paper_bgcolor='rgba(0,0,0,0)',
+                      plot_bgcolor='rgba(8,10,16,0.35)', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
                                                         color='#c9d4d2', size=13),
                       hoverlabel=dict(bgcolor='#0d0d0e', bordercolor='#d9b45a', font=dict(color='#e8eceb')),
-                      xaxis=dict(gridcolor='#1f2c2e', linecolor='#25322f', tickformat='%d/%m %H:%M'),
-                      yaxis=dict(gridcolor='#1f2c2e', linecolor='#25322f', zerolinecolor='#25322f', automargin=True,
+                      xaxis=dict(gridcolor='rgba(255,255,255,0.08)', linecolor='rgba(255,255,255,0.16)',
+                                 tickformat='%d/%m %H:%M'),
+                      yaxis=dict(gridcolor='rgba(255,255,255,0.08)', linecolor='rgba(255,255,255,0.16)',
+                                 zerolinecolor='rgba(255,255,255,0.16)', automargin=True,
                                  tickprefix='$', title='P&L realizado acumulado'))
     with st.container(key='curve-card'):
         html(st, f'<h3 style="margin:0">{escape(title)}</h3><div class="small">{escape(caption)} · hora ET'
@@ -589,7 +601,8 @@ def demo_kpis(demo, now=None):
         kpi('🏦', 'Balance · OANDA demo', escape(demo_money(demo['balance'])),
             technical=f'Saldo sin contar las posiciones abiertas{stale}'),
         kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total), money_value(total),
-            tone=es.tone(total), technical='Suma del P&L neto de las operaciones cerradas' + aged, hint=es.TOOLTIPS['pnl']),
+            tone=es.tone(total), technical='Suma del P&L neto de las operaciones cerradas' + aged, hint=es.TOOLTIPS['pnl'],
+            extra=pnl_sparkline(demo.get('curve')) if number(total) else ''),
         kpi('📊', 'P&L no realizado', money_value(unrealized), tone=es.tone(unrealized),
             technical='Posiciones abiertas a precio de mercado' + aged, hint=es.TOOLTIPS['unrealized']),
         kpi('📅', 'P&L de hoy (ET)', money_value(today), tone=es.tone(today),
@@ -614,7 +627,7 @@ def demo_overview(st, db, now, demo, day=None):
     known = demo['stats'] is not None
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
              f'<div class="small"><b>{escape(es.demo_day_text(day) if day else FIRST_CYCLE_WAIT)}</b> · '
-             f'{escape(DEMO_ARCHIVE_NOTE + trades_age_note(demo, now))}</div></div>')
+             f'{escape(DEMO_ARCHIVE_NOTE + trades_age_note(demo, now))}</div>{day_progress(day, es.DEMO_LENGTH_DAYS)}</div>')
     kpi_grid(st, demo_kpis(demo, now))
     left, right = st.columns([1.7, 1])
     with left:
