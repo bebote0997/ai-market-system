@@ -36,7 +36,7 @@ def demo_numbers(st, now=None):
     if demo is None:
         return
     snapshot = demo["snapshot"](now or datetime.now(timezone.utc))
-    luxury.kpi_grid(st, luxury.demo_kpis(snapshot))
+    luxury.kpi_grid(st, luxury.demo_kpis(snapshot, now))
     luxury.card(st, es.DAILY_LOSS_TITLE, es.daily_loss_rows(snapshot.get("daily_loss")))
 
 

@@ -41,13 +41,14 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
     """Everything the demo screens need. ``stats`` is None when the OANDA trades read failed (``trades_error`` is
     ``deadline``/``incomplete`` when that was the cause: never partial totals); NAV/balance are None when the summary
     read failed; ``stale``/``as_of``: NAV/balance are the last good read, observed at ``as_of``; ``trades_as_of``: when the
-    trades were read. ``read_codes``: non-secret diagnostics of both reads (``account``: AccountView status / error
+    trades were read; ``trades_stale``: the trades are the last good read served again after a failed refresh
+    (DEC-DEMO-READ-RETRY-1; ``trades_as_of`` is that read's own time). ``read_codes``: non-secret diagnostics of both reads (``account``: AccountView status / error
     code, ``trades``: the read's error code or ``unavailable``; None = read OK). Never raises."""
     env = os.environ if env is None else env
     epoch = demo_epoch(env)
     snapshot = {"epoch": epoch, "stats": None, "curve": [], "open_rows": [], "closed_rows": [], "nav": None,
                 "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False,
-                "as_of": None, "trades_as_of": None, "trades_error": None, "daily_loss": daily_loss_view(None, None, now, {}),
+                "as_of": None, "trades_as_of": None, "trades_error": None, "trades_stale": False, "daily_loss": daily_loss_view(None, None, now, {}),
                 "read_codes": {"account": "not_read", "trades": "not_read"}}
     try:
         if trades_reader is None or account_reader is None:
@@ -58,6 +59,7 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
         trades = trades_reader(epoch)
         if isinstance(trades, dict):  # observation time of the trades read (peek readers add ``observed_at``)
             snapshot["trades_as_of"] = trades.get("observed_at") or trades.get("as_of")
+            snapshot["trades_stale"] = trades.get("stale") is True and trades.get("error") is None
         if isinstance(trades, dict) and trades.get("error") is not None:  # slow or incomplete read: no totals
             snapshot["trades_error"] = str(trades["error"])
         elif isinstance(trades, dict):
@@ -89,6 +91,8 @@ def _code(value):
 
 def _trades_code(trades, stats):
     if stats is not None:
+        if isinstance(trades, dict) and trades.get("stale") is True:  # last good read served after a failed refresh
+            return "stale_" + _code(trades.get("stale_error") or "unknown")
         return None
     if isinstance(trades, dict) and trades.get("error") is not None:
         return _code(trades["error"])

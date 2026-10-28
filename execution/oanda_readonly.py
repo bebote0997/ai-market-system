@@ -39,6 +39,12 @@ TRADES_PAGE_SIZE = 500
 TRADES_MAX_PAGES = 10  # hard cap: at most 10 GETs per state and refresh
 # CLOSED+OPEN share one budget; the summary GET (TIMEOUT_SECONDS) is separate: a refresh never exceeds ~12 s overall.
 TRADES_REFRESH_DEADLINE_SECONDS = 8.0
+# DEC-DEMO-READ-RETRY-1: OANDA's CLOSED-trades list intermittently hangs for 3-10 s while the summary answers in
+# ~0.1 s (observed 2026-10-28). A short attempt timeout + retries inside the same overall deadline ride it out.
+TRADES_ATTEMPT_TIMEOUT_SECONDS = 2.5
+TRADES_ATTEMPTS = 3  # per state (CLOSED / OPEN), always inside TRADES_REFRESH_DEADLINE_SECONDS
+TRADES_FAILURE_TTL_SECONDS = 5.0  # a failed read is retried after this (a good one is kept CACHE_TTL_SECONDS)
+TRADES_STALE_MAX_SECONDS = 1800.0  # the last good read is served (marked stale, with its own as_of) this long
 TRADES_ERRORS = ("incomplete", "deadline")  # explicit non-success states of demo_trades (dashboard: "sin datos")
 TRADES_QUERY_KEYS = ("state", "count", "beforeID")
 TRADES_PATH_RE = re.compile(r"^/v3/accounts/[0-9-]+/trades$")
@@ -400,6 +406,21 @@ def cached_account_view(environment):
         return AccountView(ERROR, str(environment), error_code="unexpected")
 
 
+def _transient(code):
+    """Read failures worth another attempt: slow / dropped connection or a 5xx. Never auth, refusals or caps."""
+    return code in ("timeout", "unavailable") or (isinstance(code, str) and code.startswith("http_5"))
+
+
+def _read_state(client, state, since, deadline, clock):
+    """``client.get_trades`` with up to ``TRADES_ATTEMPTS`` attempts on transient errors, inside ``deadline``."""
+    for attempt in range(TRADES_ATTEMPTS):
+        try:
+            return client.get_trades(state, since=since, deadline=deadline, clock=clock)
+        except ReadOnlyError as error:
+            if attempt == TRADES_ATTEMPTS - 1 or not _transient(error.code) or clock() >= deadline:
+                raise
+
+
 def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.monotonic,
                 deadline_seconds=TRADES_REFRESH_DEADLINE_SECONDS, report_errors=False):
     """``{"closed": [...], "open": [...], "as_of": now}`` for the PRACTICE account only (``OANDA_PRACTICE_TOKEN`` +
@@ -416,9 +437,10 @@ def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.mo
         account = account.strip() if isinstance(account, str) else ""
         if not token or not account:
             return {"error": "not_configured", "as_of": now or datetime.now(timezone.utc)} if report_errors else None
-        client = OandaReadOnlyClient(token, account, "practice", transport=transport)
-        closed = client.get_trades("CLOSED", since=since, deadline=deadline, clock=clock)
-        opened = client.get_trades("OPEN", since=since, deadline=deadline, clock=clock)
+        client = OandaReadOnlyClient(token, account, "practice", transport=transport,
+                                     timeout=TRADES_ATTEMPT_TIMEOUT_SECONDS)
+        closed = _read_state(client, "CLOSED", since, deadline, clock)
+        opened = _read_state(client, "OPEN", since, deadline, clock)
         return {"closed": closed, "open": opened, "as_of": now or datetime.now(timezone.utc)}
     except ReadOnlyError as error:
         if error.code in TRADES_ERRORS or report_errors:
@@ -428,11 +450,26 @@ def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.mo
         return {"error": "unexpected", "as_of": now or datetime.now(timezone.utc)} if report_errors else None
 
 
-class CachedDemoTrades:
-    """TTL cache (>= 5 s) of ``demo_trades`` keyed by ``since``; a failed read is cached too (no hammering).
+def _usable_trades(result):
+    return isinstance(result, dict) and result.get("error") is None and "closed" in result and "open" in result
 
-    The lock only guards the cache dict, never the network: one caller refreshes while the others get the previous
-    (stale) value for the same ``since`` at once, or wait up to ``wait_seconds`` for the first read when none exists."""
+
+def _failure_code(result):
+    if isinstance(result, dict) and result.get("error") is not None:
+        return str(result["error"])
+    return "unavailable"
+
+
+class CachedDemoTrades:
+    """TTL cache (>= 5 s) of ``demo_trades`` keyed by ``since``.
+
+    The lock only guards the cache dicts, never the network: one caller refreshes while the others get the previous
+    (stale) value for the same ``since`` at once, or wait up to ``wait_seconds`` for the first read when none exists.
+
+    DEC-DEMO-READ-RETRY-1: the last GOOD read per ``since`` is kept. When a refresh fails (None / ``{"error": ...}``)
+    and the last good read is at most ``TRADES_STALE_MAX_SECONDS`` old, that read is served again marked
+    ``stale=True`` + ``stale_error=<code>`` with its ORIGINAL ``as_of`` (never shown as current); otherwise the failure
+    is stored as before. A failed read is retried after ``TRADES_FAILURE_TTL_SECONDS`` (not the full TTL)."""
 
     def __init__(self, ttl=CACHE_TTL_SECONDS, *, clock=None, fetch=None, wait_seconds=TRADES_REFRESH_DEADLINE_SECONDS):
         self.ttl = max(5.0, float(ttl))
@@ -441,11 +478,21 @@ class CachedDemoTrades:
         self._wait = float(wait_seconds)
         self._lock = threading.Lock()
         self._cache = {}  # since -> (fetched_at, result)
+        self._good = {}  # since -> (fetched_at, last usable result)
         self._inflight = {}  # since -> threading.Event set when that refresh ends
+
+    def _expired(self, since, result):
+        """True for a stale-flagged result whose underlying good read is older than ``TRADES_STALE_MAX_SECONDS``."""
+        if not isinstance(result, dict) or result.get("stale") is not True:
+            return False
+        good = self._good.get(since)
+        return good is None or self._clock() - good[0] > TRADES_STALE_MAX_SECONDS
 
     def get(self, since, env=None):
         with self._lock:
             cached = self._cache.get(since)
+            if cached is not None and self._expired(since, cached[1]):
+                cached = None  # a stale fallback older than the maximum is never served again
             if cached is not None and self._clock() - cached[0] < self.ttl:
                 return cached[1]
             running = self._inflight.get(since)
@@ -466,7 +513,16 @@ class CachedDemoTrades:
             result = self._fetch(env, since=since)
         finally:
             with self._lock:
-                self._cache = {since: (self._clock(), result)}
+                now = self._clock()
+                if _usable_trades(result):
+                    self._good = {since: (now, result)}
+                    stored_at = now
+                else:
+                    good = self._good.get(since)
+                    if good is not None and now - good[0] <= TRADES_STALE_MAX_SECONDS:
+                        result = {**good[1], "stale": True, "stale_error": _failure_code(result)}
+                    stored_at = now - max(0.0, self.ttl - TRADES_FAILURE_TTL_SECONDS)
+                self._cache = {since: (stored_at, result)}
                 self._inflight.pop(since, None)
             running.set()
         return result

@@ -216,8 +216,14 @@ A.Exec={id:'Exec',hx:9.2,hy:8.6,x:0,y:0,walk:0,carry:0};
 const live=SYM.EURUSD==='ACTIVE';
 const DESKS=[{s:'EURUSD',x:8.5,y:7.2,live:live?1:0},{s:'XAUUSD',x:12.6,y:7.2,live:SYM.XAUUSD==='ACTIVE'?1:0}];
 const SPARE=[[8.5,10.6],[12.6,10.6]];
+// the open routed trade as text: side, its real P&L and (only when known) R; never a lone "—" in place of the P&L
+const openLine=o=>`${SIDE[o.side]||NA} · ${money(o.pnl,1)}${ok(o.r_realized)?' · '+fR(o.r_realized):''}`;
+// second bubble line (wide stage): entry / SL / TP as read from the broker, each only when it is a real number
+const openSub=o=>{const v=[['E',ok(o.entry_actual)?o.entry_actual:o.entry_expected],['SL',ok(o.sl_actual)?o.sl_actual:o.sl_expected],
+ ['TP',ok(o.tp_actual)?o.tp_actual:o.tp_expected]].filter(q=>ok(q[1])).map(q=>q[0]+' '+px(q[1])).join(' · ');
+ return (v+(TSTALE?(v?' ':'')+TSTALE:''))||null};
 function deskSub(d){const st=SYM[d.s];if(st==='PAUSED')return 'PAUSADO por el planificador';if(st==='DISABLED')return 'APAGADO';
- if(d.s==='EURUSD'){if(OPEN)return `${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)} · ${money(OPEN.pnl,1)}`;return st==='ACTIVE'?'ACTIVO · sin posición':EMPTY}
+ if(d.s==='EURUSD'){if(OPEN)return openLine(OPEN);return st==='ACTIVE'?'ACTIVO · sin posición':EMPTY}
  return st==='ACTIVE'?'ACTIVO':EMPTY}
 // narrow stage: the desk status boxes as one HTML line each under the canvas (EURUSD opens the trade drawer when live)
 const legCls=d=>SYM[d.s]==='ACTIVE'?'on':SYM[d.s]==='PAUSED'?'pa':'';
@@ -309,7 +315,9 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  cx.strokeStyle='#0b7f7c';cx.lineWidth=1;[[P(0,D,H),P(0,0,H),P(W,0,H)],[P(0,D,.08),P(0,0,.08),P(W,0,.08)]].forEach(l=>{cx.beginPath();cx.moveTo(...l[0]);cx.lineTo(...l[1]);cx.lineTo(...l[2]);cx.stroke()});
  poly([P(0,0),P(W,0),P(W,D),P(0,D)],'#0f0e0c','#173c3b');
  cx.strokeStyle='rgba(25,227,211,.06)';for(let i=1;i<W;i++){cx.beginPath();cx.moveTo(...P(i,0));cx.lineTo(...P(i,D));cx.stroke()}for(let j=1;j<D;j++){cx.beginPath();cx.moveTo(...P(0,j));cx.lineTo(...P(W,j));cx.stroke()}
- const scr=(pts,hot)=>poly(pts,'#0c0b09',hot?'#9ff5ee':'#0b7f7c',hot?1.4:1);
+ // narrow stage: the wall screens are lit (teal glass + glowing frame) so they never read as black holes
+ const scr=(pts,hot)=>{if(MOB()){cx.shadowColor='#19e3d3';cx.shadowBlur=hot?10:6}
+  poly(pts,MOB()?'#12393b':'#0c0b09',hot?'#9ff5ee':MOB()?'#19e3d3':'#0b7f7c',hot?1.4:MOB()?1.2:1);cx.shadowBlur=0};
  // equity wall: NAV large, balance smaller, then the real realised-P&L curve (when there is room)
  const E=[P(3,0,1.9),P(9,0,1.9),P(9,0,3.7),P(3,0,3.7)];scr(E,step==7);
  const navLab='NAV · '+(SRC||NA).toUpperCase()+(isEx('header.equity')?'  · EJEMPLO':'');
@@ -334,6 +342,12 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
   [`Pérdida diaria ${dl.replace(' / ','/')}${HD.daily_loss_status==='TRIGGERED'?' · límite alcanzado':DLT?' · '+DLT:''}`,7,HD.daily_loss_status==='TRIGGERED'?'#ff4d6d':'#aebfc0'],
   cnt?[NOTR?NOOP:cnt,7,'#8aa3a1']:null].filter(Boolean);
  if(wallTxt)stack(0,5.8,3.66,1.93,compact?sl.slice(1,3):sl,5.2,compact);
+ // narrow stage: ONE legible line per wall screen (the first candidate that fits; real payload values only)
+ if(MOB()){const cap=(x,y,cands,col,maxU)=>{const t=cands.find(c=>c&&fits(c,9,null,maxU));if(t)wt(x,y,2.5,t,9,col,null,maxU)};
+  cap(3.3,0,[`NAV ${money(HD.equity)}`,money(HD.equity),'NAV'],STALE?'#ffb020':'#9ff5ee',5.4);
+  cap(10.1,0,[FEED[0],'FEED DE LA MESA','FEED'],'#9ff5ee',6.2);
+  cap(0,12.5,[ML[0],'DATOS DE MERCADO','MERCADO'],'#9ff5ee',5.9);
+  cap(0,5.8,[HD.day_text,'ESTADO DEL DEMO','DEMO'],'#e8c873',5.2)}
  // market wall baseline: a flat rule while idle; it waves only while a real cycle runs
  if(zm>2.05){cx.strokeStyle='#0b7f7c';cx.beginPath();for(let i=0;i<=30;i++){const p=P(0,7.0+i*.1,1.98+(ANIM?.2*Math.abs(Math.sin(i*.5+t/2000)):.02));i?cx.lineTo(...p):cx.moveTo(...p)}cx.stroke()}
  if(ANIM&&step==0){for(let k=0;k<4;k++){const r=ROOMS[k];for(let j=0;j<3;j++){const ff=((f*1.6+j/3)%1);const a=P(0,8.5,2.3),b=P(r.x+r.w/2,r.y+1,1);const px=a[0]+(b[0]-a[0])*ff,py=a[1]+(b[1]-a[1])*ff-Math.sin(ff*Math.PI)*40;const C=RCOL[r.n];cx.fillStyle=rgba(C,1-ff*.7);cx.shadowColor=C;cx.shadowBlur=10;cx.beginPath();cx.arc(px,py,2.6,0,7);cx.fill();cx.shadowBlur=0}}}
@@ -362,7 +376,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  if(step==6||step==7)A.Exec.carry=step==6;
  const say=Object.assign({},step!=null?SAY[step]||{}:{});
  // Exec (desk EURUSD) is the only one reflecting the open routed trade: side, R and P&L from the payload
- if(step==null&&OPEN)say.Exec=[`${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)}`,`P&L ${money(OPEN.pnl,1)}${TSTALE?' '+TSTALE:''}`];
+ if(step==null&&OPEN)say.Exec=[openLine(OPEN)+(MOB()&&TSTALE?' '+TSTALE:''),openSub(OPEN)];
  Object.values(A).sort((p,q)=>(p.x+p.y)-(q.x+q.y)).forEach(a=>person(a,t,!!say[a.id]));
  ROOMS.forEach(r=>r.after());
  PLACED=hits.filter(h=>h.b[2]).map(h=>h.b.slice());
