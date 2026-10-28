@@ -75,9 +75,9 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
             snapshot["capital"] = demo_capital(snapshot["nav"], snapshot["balance"], snapshot["stats"])
         snapshot["daily_loss"] = daily_loss_view(_loss_flags(env), snapshot["nav"], now, env)
     except Exception:  # noqa: BLE001 - the demo view is display only: anything unexpected => "sin datos"
+        codes = {key: "unexpected" if code == "not_read" else code for key, code in snapshot["read_codes"].items()}
         return {**snapshot, "stats": None, "curve": [], "open_rows": [], "closed_rows": [],
-                "daily_loss": {**snapshot["daily_loss"], "status": "NO_DATA"},
-                "read_codes": {**snapshot["read_codes"], "trades": "unexpected"}}
+                "daily_loss": {**snapshot["daily_loss"], "status": "NO_DATA"}, "read_codes": codes}
     return snapshot
 
 

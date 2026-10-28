@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-27 (America/New_York; rama `fix/manual-close-sizing-day`: cierre manual inmediato (enmienda DEC-MANUAL-CLOSE-1), «Día N» desde la época en alertas/resumen, reintentos del resumen diario, DEC-FILL-ANCHOR-1; ver `CHANGELOG_AGENT.md`)._
+_Última actualización: 2026-10-27 (America/New_York; rama `fix/oct27-manual-close-floor-data` (incluye `fix/manual-close-sizing-day` y `fix/floor-data-producer`): cierre manual inmediato (enmienda DEC-MANUAL-CLOSE-1), «Día N» desde la época en alertas/resumen (Día 1 = 2026-10-25 ⇒ Día 30 = 2026-11-23, DEC-DEMO-RESUME-1), reintentos del resumen diario, DEC-FILL-ANCHOR-1, productor de cachés demo del Floor (`ui/demo_refresher.py`), DEC-AGENT-NAMES-1 (nombres latinos de los 8 personajes); ver `CHANGELOG_AGENT.md`)._
 
 _Anterior: 2026-10-22 (America/New_York; rama `feat/fx-sl-week-hold`: DEC-FX-SL-1, DEC-HOLD-WEEK-1, DEC-REVERSAL-1, runbook del reinicio 2026-10-25. Anterior: 2026-10-18; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
 

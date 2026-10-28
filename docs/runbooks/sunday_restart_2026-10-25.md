@@ -162,9 +162,10 @@ Cualquier otra diferencia ⇒ parar y revisar.
 2. Las DB activas **se conservan** (no se renombran ni se vacían): la experiencia PAPER, el journal y las filas
    enrutadas antiguas siguen ahí; el fingerprint no cambia, así que el preflight reanuda el experimento PAPER.
 3. La época nueva la fija `AI_FLOOR_DEMO_EPOCH` (sección 2): el dashboard muestra solo operaciones OANDA desde ese
-   instante y «Día N de 30» cuenta desde la primera operación enrutada tras él. Base de drawdown =
+   instante y «Día N de 30» cuenta desde la fecha NY de la época (día 1 = esa fecha; enmienda 2026-10-27,
+   antes «desde la primera operación enrutada»). Base de drawdown =
    `AI_FLOOR_DEMO_START_EQUITY` (y `AI_FLOOR_DAILY_LOSS_START_EQUITY` si el límite diario está ON).
-4. Día 30 ≈ 2026-11-24 si la primera operación entra el 2026-10-26. Registrar en `docs/STATUS.md` la época real.
+4. Con la época del 2026-10-25 (fecha NY): Día 1 = 2026-10-25 ⇒ Día 30 = 2026-11-23. Registrar en `docs/STATUS.md` la época real.
 
 ## 6. Rollback
 

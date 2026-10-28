@@ -218,6 +218,23 @@ class ReadCodeTests(unittest.TestCase):
         odd = self.snapshot(AccountView("ERROR", "practice", error_code="Bad thing: 101-001-x"), TRADES)
         self.assertRegex(odd["read_codes"]["account"], r"^[a-z0-9_]{1,32}$")
 
+    def test_unexpected_exception_only_marks_the_reads_not_done(self):
+        def boom(*_):
+            raise RuntimeError("boom " + TOKEN)
+
+        def snap(trades_reader, account_reader):
+            return demo_dashboard.demo_snapshot(SENT, {"AI_FLOOR_BROKER_STATE_DB_PATH": "/nonexistent/state.db"},
+                                                trades_reader=trades_reader, account_reader=account_reader)
+
+        after_trades = snap(lambda _since: TRADES, boom)  # trades read OK, account read raised
+        self.assertEqual(after_trades["read_codes"], {"account": "unexpected", "trades": None})
+        self.assertIsNone(after_trades["stats"])
+        self.assertEqual(snap(lambda _since: None, boom)["read_codes"],
+                         {"account": "unexpected", "trades": "unavailable"})
+        self.assertEqual(snap(boom, lambda _env: OK_VIEW)["read_codes"],
+                         {"account": "unexpected", "trades": "unexpected"})
+        self.assertNotIn(TOKEN, repr(after_trades))
+
     def test_demo_trades_reports_codes_only_when_asked(self):
         env = {"OANDA_PRACTICE_TOKEN": TOKEN, "OANDA_ACCOUNT_ID": ACCOUNT}
         self.assertIsNone(oanda_readonly.demo_trades({}))

@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-10-27 — Revisión del PR #60: fecha del Día 30, códigos de lectura, pruebas del anclaje (branch `fix/oct27-manual-close-floor-data`)
+
+- Docs: DEC-DEMO-RESUME-1 «Día 1 = fecha NY de la época» (enmienda) y «Día 30 = 2026-11-23» (día 1 = 2026-10-25; antes «≈ 2026-11-24»); runbook `docs/runbooks/sunday_restart_2026-10-25.md` alineado; cabecera de `docs/STATUS.md` con la rama, el productor de cachés del Floor y DEC-AGENT-NAMES-1.
+- `execution.demo_dashboard.demo_snapshot`: el `except` general ya no marca `trades="unexpected"` si la lectura de operaciones fue bien; solo pasa a `unexpected` la lectura aún `not_read` (operaciones y/o cuenta). Test en `test_daily_summary_retry.py`.
+- `test_fill_anchor.py`: cotización malformada (ask < bid, bid ≤ 0, tupla de forma incorrecta) ⇒ precios sin cambios + `FILL_ANCHOR_SKIPPED pricing_malformed`; anclaje tras una reversión (unidades re-dimensionadas con el NAV posterior al cierre y luego anclaje); par JPY (USDJPY, pip 0.01, ±5 pips) conserva 60/120 pips. Sin cambios en el código del anclaje (ninguna prueba reveló un fallo).
+
 ## 2026-10-27 — Floor: nombres latinos de los personajes (DEC-AGENT-NAMES-1, branch `fix/oct27-manual-close-floor-data`)
 
 - Solo presentación: Atlas/Nova/Orion/Vega/Sage/Arbiter/Sentinel/Echo ⇒ Mateo/Sofía/Andrés/Valentina/Lucía/Diego/Camila/Carlos. Fuente única nueva `ui/agent_names.py` (id ⇒ nombre, rol largo, rol corto; helpers puros); `ui/floor_payload.py` añade `names` al payload; `ui/static/floor/floor.html` construye `NAMES` desde `payload.names` (sin él: el id como nombre, sin error) y ya no tiene nombres fijos; nombres escapados en la ficha.
