@@ -285,7 +285,7 @@ header[data-testid="stHeader"] [data-testid="stToolbar"]{display:flex!important;
 .st-key-manual-close-card [data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) :is(svg,[data-testid="stIconMaterial"]){color:#ffc27d!important}
 .st-key-floor-manual-close-confirm button{color:#fff;background:linear-gradient(180deg,#d63a58,#a91d38);border-color:#ff8099;box-shadow:0 6px 22px rgba(255,77,109,.35)}
 .st-key-floor-manual-close-confirm button p{color:#fff}
-.st-key-floor-manual-close-confirm button:hover{background:linear-gradient(180deg,#e04664,#b8233f);color:#fff;border-color:#ffb3c1}
+.st-key-floor-manual-close-confirm button:hover{background:linear-gradient(180deg,#cf3351,#a01a34);color:#fff;border-color:#ffb3c1}
 .st-key-floor-manual-close-cancel button{color:var(--gl-t1);background:rgba(255,255,255,.08);border-color:var(--gl-line)}
 .st-key-floor-manual-close-cancel button p{color:var(--gl-t1)}
 .st-key-floor-manual-close-cancel button:hover{background:rgba(255,255,255,.14);color:var(--gl-t1);border-color:rgba(255,255,255,.3)}

@@ -232,6 +232,20 @@ class FloorLayoutTests(unittest.TestCase):
         self.assertEqual(st.calls[0], ("container", "manual-close-card"))
         self.assertIn("Solo el owner", "\n".join(st.markdowns))
 
+    def test_confirm_button_states_keep_white_text_contrast(self):
+        import re
+        css = (ROOT / "ui" / "static" / "theme.css").read_text(encoding="utf-8")
+
+        def lum(hex6):
+            ch = [int(hex6[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+            ch = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in ch]
+            return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+        rules = [line for line in css.splitlines() if ".st-key-floor-manual-close-confirm button" in line and "linear-gradient" in line]
+        self.assertGreaterEqual(len(rules), 2)  # base + hover
+        for line in rules:
+            for hex6 in re.findall(r"#([0-9a-f]{6})", line.split("linear-gradient", 1)[1].split(")", 1)[0]):
+                self.assertGreaterEqual(1.05 / (lum(hex6) + 0.05), 4.5, (hex6, line))
+
     def test_sidebar_starts_collapsed_on_phones(self):
         app = (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
         self.assertIn('initial_sidebar_state="auto"', app)
