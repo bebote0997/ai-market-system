@@ -579,7 +579,9 @@ class FloorStaticTests(unittest.TestCase):
         self.assertIn("document.getElementById('legend').innerHTML=DESKS.map(", asset)
         self.assertIn("const wallTxt=!MOB();", asset)
         self.assertIn("const b=MOB()?[0,0,0,0]:tag(", asset)
-        self.assertIn("if(PLACED.some(o=>bx<o[0]+o[2]+2&&bx+w+2>o[0]&&by<o[1]+o[3]+2&&by+h+2>o[1]))return;", asset)
+        # a plate tries «NOMBRE · ROL» then the name alone; one overlapping a drawn plate is skipped
+        self.assertIn("if(!PLACED.some(q=>ob<q[0]+q[2]+2&&ob+ow+2>q[0]&&by<q[1]+q[3]+2&&by+h+2>q[1])){t=o;w=ow;bx=ob;break}}", asset)
+        self.assertIn("if(t==null)return;PLACED.push([bx,by,w,h]);", asset)
 
     def test_no_env_names_or_raw_codes_in_rendered_floor(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -646,9 +648,9 @@ class FloorWiringTests(unittest.TestCase):
         self.assertIn("from ui.views import floor_view", source)
         self.assertIn("luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES", source)
         # Inside the 60s auto-refresh fragment (like the luxury pages) so payload/freshness recompute each refresh.
-        self.assertIn("if page == floor_view.PAGE:\n    @st.fragment(run_every=\"60s\" if refresh else None)\n"
-                      "    def render_floor_view():\n        floor_view.render(st, enabled_symbols)\n"
-                      "    render_floor_view()\n    st.stop()", source)
+        self.assertIn("    @st.fragment(run_every=(demo_refresher.FIRST_RETRY if warming else \"60s\") if refresh else None)\n"
+                      "    def render_floor_view():\n        floor_view.render(st, enabled_symbols)\n", source)
+        self.assertIn("    render_floor_view()\n    st.stop()", source)
         self.assertEqual((floor_view.PAGE, floor_view.LABEL), ("Floor", "Floor"))
 
     def test_floor_modules_import_no_order_or_broker_path(self):

@@ -297,6 +297,15 @@ class DemoStateStore:
             row = con.execute("SELECT value FROM broker_demo_flags WHERE key = ?", (key,)).fetchone()
         return None if row is None else row[0]
 
+    def flags(self, keys):
+        """``{key: value}`` for the given keys in ONE read (absent keys -> None)."""
+        keys = tuple(keys)
+        with closing(self._connect()) as con:
+            rows = con.execute(f"SELECT key, value FROM broker_demo_flags WHERE key IN ({','.join('?' * len(keys))})",
+                               keys).fetchall()
+        found = {row[0]: row[1] for row in rows}
+        return {key: found.get(key) for key in keys}
+
     def set_flag(self, key, value):
         with closing(self._connect()) as con:
             con.execute(_SET_FLAG_SQL, (key, value, self._clock()))

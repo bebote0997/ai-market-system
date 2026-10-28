@@ -196,6 +196,14 @@ class DemoRunner:
             self._capture_and_deliver()
         return results
 
+    def process_operator_requests(self, at):
+        """Between-tick poll of the dashboard requests (cloud runner loop); its closes are notified like any other."""
+        results = self.runtime.process_operator_requests(at)
+        gate = getattr(self, "halt_gate", None)
+        if results and (gate is None or gate.allow("S")):
+            self._capture_and_deliver()
+        return results
+
     def close_paused_symbols(self, at):
         """DEC-XAU-OFF-1 in-session flatten of paused symbols (Scheduler); its close is notified like any other."""
         results = self.runtime.close_paused_symbols(at)

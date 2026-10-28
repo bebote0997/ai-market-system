@@ -341,28 +341,52 @@ def account_view(environment, env=None, *, transport=None, now=None):
 
 
 class CachedAccountViews:
-    """TTL cache (>= 5 s) per environment. An ERROR keeps the last good view, marked ``stale`` with the error code."""
+    """TTL cache (>= 5 s) per environment. An ERROR keeps the last good view, marked ``stale`` with the error code.
 
-    def __init__(self, ttl=CACHE_TTL_SECONDS, *, clock=None, fetch=None):
+    The lock only guards the cache dicts, never the network (same pattern as ``CachedDemoTrades``): one caller
+    refreshes while the others get the previous view for that environment at once, or wait up to ``wait_seconds`` for
+    the first read when none exists (then an ERROR ``timeout`` view)."""
+
+    def __init__(self, ttl=CACHE_TTL_SECONDS, *, clock=None, fetch=None, wait_seconds=TIMEOUT_SECONDS):
         self.ttl = max(5.0, float(ttl))
         self._clock = clock or time.monotonic
         self._fetch = fetch or account_view
+        self._wait = float(wait_seconds)
         self._lock = threading.Lock()
         self._cache = {}  # environment -> (fetched_at, view)
         self._good = {}  # environment -> last OK view
+        self._inflight = {}  # environment -> threading.Event set when that refresh ends
 
     def get(self, environment, env=None):
         with self._lock:
             cached = self._cache.get(environment)
             if cached is not None and self._clock() - cached[0] < self.ttl:
                 return cached[1]
+            running = self._inflight.get(environment)
+            owner = running is None
+            if owner:
+                running = self._inflight[environment] = threading.Event()
+        if not owner:
+            if cached is not None:
+                return cached[1]  # previous view while another session refreshes
+            running.wait(self._wait)
+            with self._lock:
+                cached = self._cache.get(environment)
+            return cached[1] if cached is not None else AccountView(ERROR, str(environment), error_code="timeout")
+        view = None
+        try:
             view = self._fetch(environment, env)
-            if view.status == OK:
-                self._good[environment] = view
-            elif view.status == ERROR and environment in self._good:
-                view = replace(self._good[environment], stale=True, error_code=view.error_code)
-            self._cache[environment] = (self._clock(), view)
-            return view
+        finally:
+            with self._lock:
+                if view is not None:
+                    if view.status == OK:
+                        self._good[environment] = view
+                    elif view.status == ERROR and environment in self._good:
+                        view = replace(self._good[environment], stale=True, error_code=view.error_code)
+                    self._cache[environment] = (self._clock(), view)
+                self._inflight.pop(environment, None)
+            running.set()
+        return view
 
 
 _VIEWS = CachedAccountViews()
@@ -377,11 +401,12 @@ def cached_account_view(environment):
 
 
 def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.monotonic,
-                deadline_seconds=TRADES_REFRESH_DEADLINE_SECONDS):
+                deadline_seconds=TRADES_REFRESH_DEADLINE_SECONDS, report_errors=False):
     """``{"closed": [...], "open": [...], "as_of": now}`` for the PRACTICE account only (``OANDA_PRACTICE_TOKEN`` +
     ``OANDA_ACCOUNT_ID``); ``{"error": "deadline"|"incomplete", "as_of": now}`` when CLOSED+OPEN did not finish
     within ``deadline_seconds`` or the page cap ran out; None when not configured or on any other read failure.
-    Never raises."""
+    ``report_errors`` (daily-summary diagnostics): every failure is ``{"error": <code>, "as_of": now}`` instead of None
+    (the ``ReadOnlyError`` code, ``not_configured`` or ``unexpected``; never response text). Never raises."""
     env = os.environ if env is None else env
     deadline = clock() + float(deadline_seconds)
     try:
@@ -390,17 +415,17 @@ def demo_trades(env=None, *, since=None, transport=None, now=None, clock=time.mo
         token = token.strip() if isinstance(token, str) else ""
         account = account.strip() if isinstance(account, str) else ""
         if not token or not account:
-            return None
+            return {"error": "not_configured", "as_of": now or datetime.now(timezone.utc)} if report_errors else None
         client = OandaReadOnlyClient(token, account, "practice", transport=transport)
         closed = client.get_trades("CLOSED", since=since, deadline=deadline, clock=clock)
         opened = client.get_trades("OPEN", since=since, deadline=deadline, clock=clock)
         return {"closed": closed, "open": opened, "as_of": now or datetime.now(timezone.utc)}
     except ReadOnlyError as error:
-        if error.code in TRADES_ERRORS:
+        if error.code in TRADES_ERRORS or report_errors:
             return {"error": error.code, "as_of": now or datetime.now(timezone.utc)}
         return None
     except Exception:  # noqa: BLE001 - codes are not needed by the dashboard: no data is "sin datos"
-        return None
+        return {"error": "unexpected", "as_of": now or datetime.now(timezone.utc)} if report_errors else None
 
 
 class CachedDemoTrades:

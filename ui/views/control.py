@@ -321,7 +321,7 @@ def render_emergency(st, snapshot, api):
     result = state.get("control-emergency-result")
     if result == "ok":
         html(st, '<span class="chip neg">Parada activada: cuentas apagadas y cierre de posiciones solicitado '
-                 '(se ejecuta en el próximo ciclo del sistema).</span>')
+                 '(se ejecuta en unos segundos).</span>')
     elif result == "error":
         html(st, '<span class="chip neg">Error: la parada no se pudo guardar por completo. Revisa el sistema; como '
                  'respaldo, el propietario puede activar la parada de emergencia en la configuración del servidor.</span>')

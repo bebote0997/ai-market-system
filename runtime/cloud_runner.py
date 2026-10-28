@@ -19,6 +19,8 @@ EXPERIMENT_BASELINE_SHA = "f5032baeb87766ad74905093c1b4195117995092"
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{7,40}")
 STALL_DUMP_SECONDS = 240  # dump all thread stacks to stderr if one tick hangs past this (before the 300 s watchdog)
 SLOW_TICK_SECONDS = 90
+TICK_SECONDS = 30  # runner.tick() cadence (unchanged)
+OPERATOR_POLL_SECONDS = 5  # dashboard requests (manual close / flatten) between ticks
 LOGGER = logging.getLogger(__name__)
 
 
@@ -37,6 +39,29 @@ def _disarm_stall_dump(started):
             LOGGER.warning("component=runner event=SLOW_TICK seconds=%d", seconds)
     except Exception:  # noqa: BLE001 - diagnostics never stop the scheduler
         pass
+
+
+def _poll_operator_requests(runner):
+    """Floor «Cerrar operación» / emergency flatten between ticks; never raises into the loop."""
+    started = time.monotonic()
+    _arm_stall_dump()
+    try:
+        runner.process_operator_requests(datetime.now(timezone.utc))
+    except Exception as exc:  # noqa: BLE001 - the next poll / tick retries
+        LOGGER.warning("component=runner event=OPERATOR_POLL_FAILED error_type=%s", type(exc).__name__)
+    finally:
+        _disarm_stall_dump(started)
+
+
+def _idle(runner, stopped, *, sleep=None):
+    """~TICK_SECONDS between ticks in 1 s steps (a stop request is honoured within a second), polling the operator
+    requests every OPERATOR_POLL_SECONDS: a manual close no longer waits for the next 15-minute slot."""
+    for second in range(1, TICK_SECONDS + 1):
+        if stopped():
+            return
+        (sleep or time.sleep)(1)
+        if second % OPERATOR_POLL_SECONDS == 0 and not stopped():
+            _poll_operator_requests(runner)
 
 
 def main():
@@ -124,10 +149,7 @@ def main():
                     runner.daily_summary(datetime.now(timezone.utc))
                 finally:
                     _disarm_stall_dump(started)
-                for _ in range(30):
-                    if stop:
-                        break
-                    time.sleep(1)
+                _idle(runner, lambda: stop)
         finally:
             runner.close()
 

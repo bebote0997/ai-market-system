@@ -683,6 +683,18 @@ class OperationalRuntime:
                 results[symbol] = "ERROR"
         return results
 
+    def process_operator_requests(self, at):
+        """Dashboard requests (Floor «Cerrar operación», emergency flatten) between cycles: an in-session tick inside an
+        already claimed slot is DUPLICATE and never reaches ``router.on_cycle``. Same gates as the manage pass (router
+        configured, no halt); never raises. Returns {client_id: outcome}."""
+        if self.broker_router is None or (self.halt_gate is not None and self.halt_gate.halted):
+            return {}
+        try:
+            return self.broker_router.process_operator_requests(at)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("component=broker_demo event=OPERATOR_POLL_FAILED error_type=%s", type(exc).__name__)
+            return {}
+
     def close_paused_symbols(self, at):
         """DEC-XAU-OFF-1: flatten every paused enabled symbol in PAPER (simulated; never the broker router), called by
         the Scheduler at the start of each in-session tick (the manage pass does it out of session). Idempotent: a

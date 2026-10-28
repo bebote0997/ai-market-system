@@ -19,7 +19,7 @@ header{min-height:78px;display:flex;align-items:center;justify-content:space-bet
 .kpis{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px 24px;min-width:0}.kpi{text-align:right;min-width:56px;max-width:150px}.kpi .ex{margin-left:5px;padding:1px 4px;font-size:10px;letter-spacing:.12em}
 .kpi b{min-width:0;overflow:hidden;text-overflow:ellipsis;display:block;font-size:17px;font-weight:300;letter-spacing:.02em;white-space:nowrap}.kpi b.txt{font-size:11px;line-height:1.25;padding:0 0 2px;letter-spacing:.04em;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;margin-left:auto}
 .kpi small{display:block;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}.kpi small.b2{letter-spacing:.06em;text-transform:none}
-.pos{color:#3ddc84}.neg{color:#ff4d6d}.na{color:var(--mute)}
+.pos{color:#3ddc84}.neg{color:#ff4d6d}.na{color:var(--mute)}.load{color:var(--gold2)}
 main{position:relative;flex:1;min-height:0;overflow:hidden}header,footer{flex:none}
 #stage{position:absolute;left:0;top:0;bottom:0;right:0;display:flex;flex-direction:column;transition:right .5s cubic-bezier(.2,.8,.2,1),bottom .5s}
 canvas{flex:1 1 0;min-height:0;width:100%;display:block;cursor:default}
@@ -101,6 +101,7 @@ const STALE=HD.equity_stale===true&&HD.equity_as_of?`(dato antiguo · ${HD.equit
 const TSTALE=HD.trades_stale===true?`(dato antiguo${HD.trades_as_of?` · ${HD.trades_as_of} ET`:''})`:'';
 const NA='—',EMPTY='sin datos aún',NOOP='sin operaciones aún',NOOPK='—';  // Short empty value; explanation stays in the tooltip
 const NOTR=HD.trades===0;  // stats known and no closed trade yet
+const CURVE_SOON='la curva aparece con 2 operaciones cerradas';  // trades known, fewer than 2 curve points
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ok=v=>typeof v==='number'&&isFinite(v);
 const money=(v,signed)=>ok(v)?(v<0?'−':signed&&v>0?'+':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):NA;
@@ -112,7 +113,7 @@ const SRC={OANDA_DEMO:'OANDA Demo',PAPER:'Práctica interna'}[DATA.source]||null
 const SIDE={LONG:'Long',SHORT:'Short'};
 const UNITS=v=>ok(v)?v.toLocaleString('en-US',{maximumFractionDigits:0})+' unidades':NA+' unidades';
 let TR=TRADES.find(t=>t.status==='OPEN')||TRADES[0]||null;
-const OPEN=TRADES.find(t=>t.status==='OPEN')||null;  // the routed trade open right now (only Echo reflects it)
+const OPEN=TRADES.find(t=>t.status==='OPEN')||null;  // the routed trade open right now (only the Exec desk reflects it)
 
 // ---- header ----
 document.getElementById('brandSub').innerHTML=`V2.1 · ${esc(SRC||EMPTY)} · <b>${esc(HD.day_text||NA)}</b>${badge('header.day_text')}`;
@@ -129,13 +130,18 @@ const KP=[[money(HD.equity),'NAV',ok(HD.equity)?'':'na',['equity','balance'],BAL
  [rt,'R total',NOTR?'na txt':tone(HD.r_total),['r_total']],[wr,'Tasa de acierto',NOTR?'na txt':ok(HD.win_rate)?'':'na',['win_rate']],
  [dd,'Caída máx.',ok(HD.drawdown_pct)||ok(HD.drawdown)?(HD.drawdown>0||HD.drawdown_pct>0?'neg':''):'na',['drawdown','drawdown_pct']],
  [dl,'Pérdida diaria',dl==NA?'na':HD.daily_loss_status==='TRIGGERED'?'neg':'',['daily_loss_used_pct','daily_loss_limit_pct','daily_loss_text'],DLT]];
+// first paint after a process start: a demo cache still filling is "cargando…", never "—" / "sin datos" / dato antiguo
+const LOADING=DATA.loading===true,LOADT='cargando…',LOADN='Cargando datos del demo…';
+const LOADK={'NAV':HD.equity_loading===true,'Pérdida diaria':HD.equity_loading===true&&dl==NA};
+['P&L realizado','P&L hoy','R total','Tasa de acierto','Caída máx.'].forEach(k=>{LOADK[k]=HD.trades_loading===true});
+KP.forEach(k=>{if(LOADK[k[1]]){k[0]=LOADT;k[2]='load txt';k[4]=''}});
 // EJEMPLO next to each KPI that fell back to example data (sample mode only)
 document.getElementById('kpis').innerHTML=KP.map(k=>`<div class="kpi${k[1]==='Pérdida diaria'?' daily-loss':''}" title="${esc(k[1]+(NOTR&&['R total','Tasa de acierto'].includes(k[1])?' · sin operaciones':'')+(k[4]?' · '+k[4]:''))}"><b class="${k[2]}">${esc(k[0])}</b><small>${k[1]}${k[3].some(f=>EXF.has('header.'+f))?BADGE:''}</small>${k[4]?`<small class="b2">${esc(k[4])}</small>`:''}</div>`).join('');
 const oldMarker=STALE||TSTALE;
 const ageTimes=[HD.equity_as_of?`NAV ${HD.equity_as_of} ET`:'',(HD.trades_as_of||HD.trades_stale)?`operaciones ${HD.trades_as_of?HD.trades_as_of+' ET':'sin hora'}`:''].filter(Boolean);
 if(oldMarker)document.getElementById('brandSub').innerHTML+=`<small class="data-age"> · ${esc('dato antiguo · '+ageTimes.join(' · '))}</small>`;
 // "datos reales" ONLY when the newest data point is fresh (payload.note_real); never on old / pre-epoch data
-const noteMain=EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:DATA.note_real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:
+const noteMain=EXF.size?`<i>EJEMPLO</i> en partes sin datos reales`:LOADING?`<i class="load">${LOADN}</i>`:DATA.note_real?`<i>datos reales</i>${SRC?' · '+esc(SRC):''}`:
  WAITING?`<i>${esc(WTXT)}</i>${DATA.epoch_text?' · demo desde '+esc(DATA.epoch_text):''}`:DATA.cycle_text?'':`<i>${EMPTY}</i>`;
 document.getElementById('note').innerHTML=`<span class="hint">Pellizca o usa la rueda para zoom · doble clic para centrar · </span>Solo lectura`+
  (noteMain?' · '+noteMain:'')+(DATA.cycle_text?` · ${esc(DATA.cycle_text)}`:'')+(ACTIVE?`<span id="running-note"> · <i>ciclo en marcha</i>${RUN.started_at_text?' desde '+esc(RUN.started_at_text):''}</span>`:'');
@@ -269,11 +275,19 @@ const SAY={
  5:{RiskEng:[st('RiskEng'),`SL ${px(T0.sl_expected)} · TP ${px(T0.tp_expected)}`],Exec:['Plan recibido',UNITS(T0.units)]},
  6:{Exec:[`Entrada ${px(T0.entry_actual)}`,SRC?'orden · '+SRC:EMPTY]},
  7:{Exec:[`${fR(T0.r_realized)}${T0.status==='OPEN'?' abierta':''}`,`P&L ${money(T0.pnl,1)}`]}};
-const NAMES={Structure:['Atlas','Analista de estructura','Estructura'],Liquidity:['Nova','Analista de liquidez','Liquidez'],Macro:['Orion','Analista macro','Macro'],Risk:['Vega','Revisor de la operación (riesgo)','Riesgo'],Reviewer:['Sage','Revisor de consenso','Revisor'],Conflict:['Arbiter','Motor de conflictos','Motor de conflictos'],RiskEng:['Sentinel','Motor de riesgo (límites)','Motor de riesgo'],Exec:['Echo','Ejecución','Mesa EURUSD']};
+// display names come from the payload (ui/agent_names.py, DEC-AGENT-NAMES-1): [name, long role, short role];
+// without payload.names the internal id is the name and the roles are empty (never a crash)
+const AIDS=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng','Exec'],NM=(DATA.names&&typeof DATA.names==='object')?DATA.names:{};
+const NAMES=Object.fromEntries(AIDS.map(id=>{const n=NM[id]||{};return [id,[String(n.name||id),String(n.role||''),String(n.short||'')]]}));
+const LABEL=id=>NAMES[id][2]?`${NAMES[id][0]} · ${NAMES[id][2]}`:NAMES[id][0];
 let NHITS=[];
-function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));const f=Math.max(MINPX,9.5*s);cx.font=`${f}px Didot,Georgia,serif`;const t=NAMES[a.id][0].toUpperCase().split('').join(String.fromCharCode(8202));const w=cx.measureText(t).width+14*s,h=f+5*s,bx=x-w/2,by=y+5*s;
+function plate(a){const [x,y]=P(a.x,a.y,0);const s=Math.max(.75,Math.min(1.15,U/34));const f=Math.max(MINPX,9.5*s);cx.font=`${f}px Didot,Georgia,serif`;
+ const sp=v=>v.toUpperCase().split('').join(String.fromCharCode(8202)),h=f+5*s,by=y+5*s;
+ // desktop / wall: «NOMBRE · ROL»; phone, or when that pill would overlap a drawn one: the name only (role in drawer + list)
+ const opts=(!MOB()&&NAMES[a.id][2]?[sp(LABEL(a.id))]:[]).concat([sp(NAMES[a.id][0])]);let t=null,w=0,bx=0;
  // never two text boxes on top of each other: a plate that would overlap one already drawn is skipped
- if(PLACED.some(o=>bx<o[0]+o[2]+2&&bx+w+2>o[0]&&by<o[1]+o[3]+2&&by+h+2>o[1]))return;PLACED.push([bx,by,w,h]);
+ for(const o of opts){const ow=cx.measureText(o).width+14*s,ob=x-ow/2;if(!PLACED.some(q=>ob<q[0]+q[2]+2&&ob+ow+2>q[0]&&by<q[1]+q[3]+2&&by+h+2>q[1])){t=o;w=ow;bx=ob;break}}
+ if(t==null)return;PLACED.push([bx,by,w,h]);
  cx.fillStyle='rgba(10,10,11,.88)';const C=COL[a.id];cx.strokeStyle=C;cx.shadowColor=C;cx.shadowBlur=6;cx.lineWidth=.9;cx.beginPath();cx.roundRect(bx,by,w,h,h/2);cx.fill();cx.stroke();cx.shadowBlur=0;cx.fillStyle=C;cx.textAlign='center';cx.textBaseline='middle';cx.fillText(t,x,by+h/2+.5);cx.textAlign='left';
  const pad=MOB()?8:3;NHITS.push([bx-pad,by-pad-34*s,w+pad*2,h+pad*2+34*s,a.id]);}
 // idle label: the real saved status, else "sin datos aún" (never a leftover of an older cycle: the payload is epoch-only)
@@ -305,7 +319,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  if(CURVE.length>1&&zc-1.98>.3){const lo=Math.min(...CURVE),hi=Math.max(...CURVE),sp=(hi-lo)||1,top=zc-.06,bot=2.02;cx.strokeStyle='#3ddc84';cx.shadowColor='#3ddc84';cx.shadowBlur=ANIM?8:4;cx.lineWidth=1.6;cx.beginPath();
   CURVE.forEach((v,i)=>{const p=P(3.3+i*(5.4/(CURVE.length-1)),0,bot+(top-bot)*(v-lo)/sp);i?cx.lineTo(...p):cx.moveTo(...p)});cx.stroke();cx.shadowBlur=0;
   if(wallTxt&&isEx('curve'))wt(6.6,0,2.05,'CURVA · EJEMPLO',7,'#3fa9a4');else if(wallTxt&&TSTALE)wt(6.0,0,2.05,'CURVA '+TSTALE.toUpperCase(),7,'#ffb020',null,3)}
- else if(wallTxt&&!compact&&zc-1.98>.3)wt(3.3,0,Math.max(2.05,zc-fpx(7)/U),NOTR?NOOP:EMPTY,7,'#7f9593',null,5.4);
+ else if(wallTxt&&!compact&&zc-1.98>.3)wt(3.3,0,Math.max(2.05,zc-fpx(7)/U),NOTR?NOOP:HD.trades_loading===true?LOADT:Number.isInteger(HD.trades)?CURVE_SOON:EMPTY,7,'#7f9593',null,5.4);
  const F=[P(9.8,0,1.9),P(16.6,0,1.9),P(16.6,0,3.7),P(9.8,0,3.7)];scr(F,false);
  const feed=(FEED.length?FEED:[WAITING?WTXT:EMPTY]).slice(0,5).map((l,i)=>[l,7.2,i==0&&FEED.length?'#39ff88':'#aebfc0']);
  if(wallTxt)stack(10.1,0,3.66,1.93,compact?feed:[['FEED DE LA MESA'+(isEx('feed')?'  · EJEMPLO':''),8,'#3fa9a4']].concat(feed),6.2,compact);
@@ -316,7 +330,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
  const S=[P(0,.5,1.9),P(0,6.0,1.9),P(0,6.0,3.7),P(0,.5,3.7)];scr(S,false);
  const cnt=Number.isInteger(HD.closed_trades)?`${HD.closed_trades} cerradas · ${Number.isInteger(HD.open_positions)?HD.open_positions:NA} abiertas`:null;
  const sl=[[(DATA.source==='OANDA_DEMO'?'ESTADO DEL DEMO':'ESTADO')+(isEx('header.day_text')?'  · EJEMPLO':''),8,'#3fa9a4'],
-  [HD.day_text||(WAITING?WTXT:NA),10,'#e8c873'],[`P&L ${money(HD.pnl,1)} · hoy ${money(HD.today_pnl,1)}${TSTALE?' '+TSTALE:''}`,7,'#aebfc0'],
+  [HD.day_text||(WAITING?WTXT:NA),10,'#e8c873'],[HD.trades_loading===true?`P&L ${LOADT}`:`P&L ${money(HD.pnl,1)} · hoy ${money(HD.today_pnl,1)}${TSTALE?' '+TSTALE:''}`,7,'#aebfc0'],
   [`Pérdida diaria ${dl.replace(' / ','/')}${HD.daily_loss_status==='TRIGGERED'?' · límite alcanzado':DLT?' · '+DLT:''}`,7,HD.daily_loss_status==='TRIGGERED'?'#ff4d6d':'#aebfc0'],
   cnt?[NOTR?NOOP:cnt,7,'#8aa3a1']:null].filter(Boolean);
  if(wallTxt)stack(0,5.8,3.66,1.93,compact?sl.slice(1,3):sl,5.2,compact);
@@ -347,7 +361,7 @@ function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compa
   const p=along(path,Math.min(1,ff));a.x=p[0];a.y=p[1];a.walk=ANIM?(f<.45||f>.55)?1:0:1;a.carry=ANIM?f<.5:1}
  if(step==6||step==7)A.Exec.carry=step==6;
  const say=Object.assign({},step!=null?SAY[step]||{}:{});
- // Echo (desk EURUSD) is the only one reflecting the open routed trade: side, R and P&L from the payload
+ // Exec (desk EURUSD) is the only one reflecting the open routed trade: side, R and P&L from the payload
  if(step==null&&OPEN)say.Exec=[`${SIDE[OPEN.side]||NA} · ${fR(OPEN.r_realized)}`,`P&L ${money(OPEN.pnl,1)}${TSTALE?' '+TSTALE:''}`];
  Object.values(A).sort((p,q)=>(p.x+p.y)-(q.x+q.y)).forEach(a=>person(a,t,!!say[a.id]));
  ROOMS.forEach(r=>r.after());
@@ -388,14 +402,14 @@ function rrBar(t){const sl=t.sl_actual!=null?t.sl_actual:t.sl_expected,tp=t.tp_a
 const delta=(a,b)=>ok(a)&&ok(b)?(a===b?NA:px(b-a)):NA;
 // broker trade number only (never a run id / UUID / path)
 const tradeNo=t=>/^\d{1,12}$/.test(String(t.id||''))?` · Operación #${esc(t.id)}`:'';
-function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${esc(WAITING?WTXT:NOOP)}</div>`;
+function tradeHTML(t){if(!t)return `<h2 class="serif">EURUSD</h2><div class="sub">Operaciones</div><div class="empty">${esc(HD.trades_loading===true?LOADN:WAITING?WTXT:NOOP)}</div>`;
  const open=t.status==='OPEN',ex=badge('trades');
  const slip=ok(t.slippage_pips)?t.slippage_pips.toFixed(1)+' pip':ok(t.slippage_price)?px(t.slippage_price):NA;
  const rows=[['Entrada',px(t.entry_expected),px(t.entry_actual),slip,t.slippage_against?'neg':t.slippage_against===false?'pos':''],
   ['Stop Loss',px(t.sl_expected),px(t.sl_actual),delta(t.sl_expected,t.sl_actual),''],['Take Profit',px(t.tp_expected),px(t.tp_actual),delta(t.tp_expected,t.tp_actual),''],
   ['Riesgo',money(t.risk_expected),NA,'',''],['R',ok(t.r_planned)?t.r_planned.toFixed(2)+' R':NA,fR(t.r_realized),'',''],
   ['P&L',NA,money(t.pnl,1),open?'abierta':(t.close_reason||''),''],['MAE / MFE',NA,NA,'','']];
- const chain=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng'].map(id=>`<span>◆</span> ${esc(NAMES[id][2])} — ${esc(AG[id]?(AG[id].status||NA):EMPTY)}`).join('<br>');
+ const chain=['Structure','Liquidity','Macro','Risk','Reviewer','Conflict','RiskEng'].map(id=>`<span>◆</span> ${esc(LABEL(id))} — ${esc(AG[id]?(AG[id].status||NA):EMPTY)}`).join('<br>');
  const others=TRADES.length>1?`<div class="lab">Operaciones recientes${TSTALE?' '+esc(TSTALE):''}</div><table><tr><th>Fecha (ET)</th><th>Lado</th><th>Estado</th><th>R</th></tr>${TRADES.map((o,i)=>`<tr class="pick" onclick="pickTrade(${i})"><td>${esc(o.opened_at||NA)}</td><td>${esc(SIDE[o.side]||NA)}</td><td>${o.status==='OPEN'?'Abierta':esc(o.close_reason||'Cerrada')}</td><td class="${tone(o.r_realized)}">${esc(fR(o.r_realized))}</td></tr>`).join('')}</table>`:'';
  return `<h2 class="serif">${esc(t.symbol||'EURUSD')} · ${esc(SIDE[t.side]||NA)}</h2>
  <div class="sub">${esc(t.opened_at||NA)}${tradeNo(t)} · ${esc(UNITS(t.units))} · ${open?'Abierta':'Cerrada'}${t.closed_at?' '+esc(t.closed_at):''}${TSTALE?' · '+esc(TSTALE):''}${ex}</div>
@@ -407,7 +421,7 @@ function pickTrade(i){TR=TRADES[i]||TR;document.getElementById('tradeV').innerHT
 document.getElementById('tradeV').innerHTML=tradeHTML(TR);
 function openAgent(id){const n=NAMES[id],d=AG[id]||{};document.getElementById('tradeV').style.display='none';const v=document.getElementById('agentV');v.style.display='';
  const sig=d.signals&&d.signals.length?`<table><tr><th>Fecha (ET)</th><th>Señal</th><th>Resultado</th><th>R</th></tr>${d.signals.map(r=>`<tr><td>${esc(r.at||NA)}</td><td>${esc(r.signal||NA)}</td><td>${esc(r.outcome||NA)}</td><td class="${tone(r.r)}" style="font-weight:500">${esc(fR(r.r))}</td></tr>`).join('')}</table>`:`<div class="empty">${esc(WAITING?WTXT:EMPTY)}</div>`;
- v.innerHTML=`<h2 class="serif" style="color:${COL[id]};text-shadow:0 0 18px ${COL[id]}66">${n[0]}</h2><div style="height:2px;width:46px;background:${COL[id]};margin:10px 0 0;box-shadow:0 0 10px ${COL[id]}"></div><div class="sub">${n[1]} · Sala ${n[2]}${badge('agents.'+id)}</div>
+ v.innerHTML=`<h2 class="serif" style="color:${COL[id]};text-shadow:0 0 18px ${COL[id]}66">${esc(n[0])}</h2><div style="height:2px;width:46px;background:${COL[id]};margin:10px 0 0;box-shadow:0 0 10px ${COL[id]}"></div><div class="sub">${esc([n[1],n[2]?'Sala '+n[2]:''].filter(Boolean).join(' · '))}${badge('agents.'+id)}</div>
  <div class="big"><div><b>${ok(d.hit_rate)?d.hit_rate.toFixed(0)+'%':NA}</b><small>Tasa de acierto${ok(d.hit_rate)&&TSTALE?' '+esc(TSTALE):''}</small></div><div><b>${ok(d.confidence)?d.confidence.toFixed(2):NA}</b><small>Confianza</small></div><div><b style="font-size:16px;padding-top:12px;color:var(--gold2)">${esc(d.status||(WAITING?WTXT:EMPTY))}</b><small>Estado</small></div></div>
  <div class="lab">Último análisis · ${esc(d.as_of||NA)}</div><div class="chain" style="line-height:1.7">${esc(d.analysis||(WAITING?WTXT:EMPTY))}</div>
  <div class="lab">Últimas 5 señales</div>${sig}

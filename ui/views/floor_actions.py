@@ -10,11 +10,13 @@ queues a second close. Nothing here touches the network.
 """
 from uuid import uuid4
 
+from ui.agent_names import display_name
 
-MANUAL_CLOSE_TITLE = "🧑‍💼 Gestor de la operación · mesa de riesgo"
+
+MANUAL_CLOSE_TITLE = f"🧑‍💼 {display_name('Exec')} · Gestor de la operación · mesa de riesgo"
 CONFIRM_KEY, RESULT_KEY = "floor-manual-close-confirming", "floor-manual-close-result"
 RESULT_TEXT = {
-    "requested": "Cierre solicitado: el sistema cierra la operación en su próximo ciclo (cuenta de práctica OANDA).",
+    "requested": "Cierre solicitado: el sistema cierra la operación en unos segundos (cuenta de práctica OANDA).",
     "duplicate": "Este cierre ya estaba solicitado: no se envía otro.",
     "already_pending": "Ya hay un cierre pendiente: no se envía otro.",
     "no_open_trade": "La operación ya no está abierta: no se hizo nada.",
@@ -53,7 +55,7 @@ def manual_close_disabled(api, owner):
     if target.get("unresolved"):
         return "Hay una acción anterior sin resolver en el broker; espera a la reconciliación."
     if (api.get("state") or {}).get("manual_close_pending") is True:
-        return "Cierre ya solicitado: se ejecuta en el próximo ciclo del sistema."
+        return "Cierre ya solicitado: el sistema lo ejecuta en unos segundos."
     return None
 
 
