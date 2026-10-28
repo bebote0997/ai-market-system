@@ -24,7 +24,8 @@ from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
 
-st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊")
+st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊",
+                   initial_sidebar_state="auto")  # collapsed on phones: the sidebar opens only on tap
 require_dashboard_access(st)
 luxury.apply(st)
 demo_refresher.ensure_started()  # idempotent: the Floor demo cache producer (also started by ui/asgi_app.py)

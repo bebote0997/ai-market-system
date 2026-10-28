@@ -7,12 +7,17 @@ it cannot close the ``<script>`` tag). The browser fetches nothing. Rendered as 
 starts RUNNING (``payload["running"]``) shows up at the next refresh: the new ``srcdoc`` reloads the iframe. Idle, the
 asset draws one static frame; it animates only while that payload says a cycle is running.
 
+Glass layout (desktop): ``st.columns([1, 2.6, 1])`` = left agent cards (Mateo, Sofía, Andrés, Valentina), the
+unchanged iframe, right agent cards (Lucía, Diego, Camila, Carlos), all from the same payload (``ui.components.glass``).
+The cards sit in ``<details class="gl-agents">`` blocks: always open on desktop, a tap-to-open row on phones (CSS only).
+
 Below the floor, the trade manager / risk desk offers ONE owner action, «Cerrar operación» (``ui.views.floor_actions``;
 this module itself never imports any execution / broker code).
 """
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ui.components.glass import LEFT_AGENTS, RIGHT_AGENTS, agents_panel
 from ui.floor_payload import build_floor_payload, guarded, payload_json
 from ui.views.floor_actions import render_manual_close
 
@@ -49,12 +54,26 @@ def embed(st, html):
         components.html(html, height=HEIGHT, scrolling=False)
 
 
+def agents_html(st, agent_ids, payload, title):
+    st.markdown('<div class="tf">' + agents_panel(agent_ids, payload.get("agents"), title=title,
+                                                  waiting_text=payload.get("waiting_text"),
+                                                  example_fields=payload.get("example_fields") or ()) + '</div>',
+                unsafe_allow_html=True)
+
+
 def render(st, symbols):
     try:
         payload = current_payload(st, symbols)
     except Exception:  # noqa: BLE001 - DB unopenable etc.: empty floor ("—"), never a broken page
         payload = build_floor_payload(sample_mode=bool(st.session_state.get("sample_mode")))
-    embed(st, render_html(payload))
+    with st.container(key="floor-stage"):
+        left, centre, right = st.columns([1, 2.6, 1])
+        with left:
+            agents_html(st, LEFT_AGENTS, payload, "Equipo de análisis")
+        with centre:
+            embed(st, render_html(payload))
+        with right:
+            agents_html(st, RIGHT_AGENTS, payload, "Revisión y ejecución")
     render_manual_close(st)
     st.caption("Floor · solo lectura salvo «Cerrar operación» (owner, demo OANDA de práctica) · ninguna orden nueva "
                "se envía desde esta vista. "
