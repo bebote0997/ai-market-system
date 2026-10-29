@@ -276,12 +276,26 @@ class RouterFlowTests(RouterBase):
         transport = FakeTransport()
         router.on_alert = ba.broker_alert_sink_from_env(ENV, transport=transport)
         self.ready()
-        self.assertEqual(router.on_cycle(context(), "PLAN_READY", NOW), ("ACCEPTED", "6397"))
+        # A policy-conformant geometry (60 pip SL, 2R): the post-fill check (DEC-FILL-ANCHOR-2) stays silent.
+        self.assertEqual(router.on_cycle(context(stop=1.084, target=1.102), "PLAN_READY", NOW), ("ACCEPTED", "6397"))
         self.assertEqual(len(transport.texts), 1)
         self.assertTrue(transport.texts[0].startswith("[OANDA demo] Orden enviada · trade …6397"))
         for secret in (FAKE_TOKEN, FAKE_ACCOUNT, self.env["OANDA_PRACTICE_TOKEN"], self.env["OANDA_ACCOUNT_ID"],
                        "aif-run-1"):
             self.assertNotIn(secret, transport.texts[0])
+
+    def test_out_of_policy_fill_sends_a_second_safe_line(self):
+        router = self.router()
+        transport = FakeTransport()
+        router.on_alert = ba.broker_alert_sink_from_env(ENV, transport=transport)
+        self.ready()
+        # The default fixture plan has a 100 pip SL / 3R: DEC-FILL-ANCHOR-2 verifies the real distances after the fill.
+        self.assertEqual(router.on_cycle(context(), "PLAN_READY", NOW), ("ACCEPTED", "6397"))
+        self.assertEqual(len(transport.texts), 2)
+        self.assertTrue(transport.texts[1].startswith("[OANDA demo] Operación abierta con SL/TP fuera de la política"))
+        self.assertIn("EURUSD LONG · motivo: sl_100_pips,rr_3", transport.texts[1])
+        for secret in (FAKE_TOKEN, FAKE_ACCOUNT, "aif-run-1"):
+            self.assertNotIn(secret, transport.texts[1])
 
     def test_router_from_env_has_no_hook(self):
         self.assertIsNone(self.router().on_alert)

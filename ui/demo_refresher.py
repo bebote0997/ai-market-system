@@ -38,6 +38,7 @@ _lock = threading.Lock()
 _stop = threading.Event()
 _thread = None
 _epoch = None  # the ``since`` key of the running producer
+_last_trades_code = None  # last logged trades read outcome (log on change only)
 
 
 def demo_results_shown(env):
@@ -78,16 +79,38 @@ def default_readers():
     return cached_demo_trades, cached_account_view
 
 
+def _log_trades_outcome(trades):
+    """One log line per CHANGE of the trades read outcome (code only: never response text, URLs or secrets), so a
+    flaky OANDA trades endpoint is visible in the Render logs (DEC-DEMO-READ-RETRY-1). Never raises."""
+    global _last_trades_code
+    try:
+        if isinstance(trades, dict) and trades.get("stale") is True:
+            code = "stale:" + str(trades.get("stale_error") or "unknown")[:32]
+        elif isinstance(trades, dict) and trades.get("error") is not None:
+            code = "error:" + str(trades["error"])[:32]
+        else:
+            code = "ok" if isinstance(trades, dict) else "unavailable"
+        if code != _last_trades_code:
+            _last_trades_code = code
+            if code == "ok":
+                log.info("floor demo refresher: trades read ok")
+            else:
+                log.warning("floor demo refresher: trades read %s", code)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def refresh_once(epoch, trades_reader, account_reader):
-    """One pass over both caches; True when both reads are usable. A ``stale`` OK view (the last good view kept after
-    a failed refresh) is still shown by the pages but counts as a failed read here (backoff). Never raises."""
+    """One pass over both caches; True when both reads are usable. A ``stale`` OK view or stale trades (the last good read kept
+    after a failed refresh) are still shown by the pages but count as a failed read here (backoff). Never raises."""
     try:
         trades = trades_reader(epoch)
         view = account_reader("practice")
     except Exception as error:  # noqa: BLE001 - only the type: never broker text, URLs or secrets
         log.warning("floor demo refresher: read failed (%s)", type(error).__name__)
         return False
-    trades_ok = isinstance(trades, dict) and trades.get("error") is None
+    trades_ok = isinstance(trades, dict) and trades.get("error") is None and trades.get("stale") is not True
+    _log_trades_outcome(trades)
     return trades_ok and getattr(view, "status", None) == "OK" and not getattr(view, "stale", False)
 
 

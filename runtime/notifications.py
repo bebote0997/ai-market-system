@@ -246,9 +246,10 @@ def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=N
 
 
 def _summary_complete(snapshot):
-    """NAV and trades read OK; a stale account view (last good NAV after a failed read) is NOT complete."""
+    """NAV and trades read OK; a stale account view (last good NAV after a failed read) or a stale trades read
+    (last good trades after a failed read) is NOT complete: the summary retries with fresh reads."""
     return (snapshot.get("nav") is not None and snapshot.get("stats") is not None
-            and snapshot.get("stale") is not True)
+            and snapshot.get("stale") is not True and snapshot.get("trades_stale") is not True)
 
 
 def _claim_retry_sequence():

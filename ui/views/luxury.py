@@ -531,6 +531,29 @@ def demo_money(value, signed=False):
 NO_TRADES_YET = 'sin operaciones aún'
 
 
+def age_text(seconds):
+    """"hace 45 s" / "hace 3 min" / "hace 1 h 5 min" for a non-negative age in seconds."""
+    seconds = max(0, int(seconds))
+    if seconds < 90:
+        return f'hace {seconds} s'
+    minutes = seconds // 60
+    if minutes < 60:
+        return f'hace {minutes} min'
+    return f'hace {minutes // 60} h {minutes % 60} min'
+
+
+def trades_age_note(demo, now=None):
+    """" · datos de hace N min" when the trade-derived numbers are the last good OANDA read served again after a failed
+    refresh (DEC-DEMO-READ-RETRY-1), else ''. The age comes from the read's own time; unknown time => "anteriores"."""
+    if not demo.get('trades_stale'):
+        return ''
+    seen = demo.get('trades_as_of')
+    if not isinstance(seen, datetime) or seen.tzinfo is None:
+        return ' · datos anteriores'
+    now = now or datetime.now(timezone.utc)
+    return f' · datos de {age_text((now - seen).total_seconds())} ({es.datetime_et(seen)[-8:]})'
+
+
 def demo_pnl_phrase(total):
     if not number(total):
         return f'P&L realizado: {DEMO_NO_DATA}'
@@ -547,7 +570,7 @@ def mute(text):
     return f'<span class="mute">{escape(text)}</span>'
 
 
-def demo_kpis(demo):
+def demo_kpis(demo, now=None):
     """Start page tiles: real OANDA practice numbers only. A failed read => "sin datos (motivo)"; no closed trade yet
     => "sin operaciones aún" for win rate / R / drawdown (never a blank tile)."""
     stats = demo['stats']
@@ -556,6 +579,7 @@ def demo_kpis(demo):
     count = stats['trades'] if known else 0
     traded = known and count > 0
     stale = ' · datos anteriores' if demo.get('stale') else ''
+    aged = trades_age_note(demo, now)
     total = stats['total_pnl'] if known else None
     today = stats['today_pnl'] if known else None
     open_rows = demo['open_rows'] if known else []
@@ -577,12 +601,12 @@ def demo_kpis(demo):
         kpi('🏦', 'Balance · OANDA demo', escape(demo_money(demo['balance'])),
             technical=f'Saldo sin contar las posiciones abiertas{stale}'),
         kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total), money_value(total),
-            tone=es.tone(total), technical='Suma del P&L neto de las operaciones cerradas', hint=es.TOOLTIPS['pnl'],
+            tone=es.tone(total), technical='Suma del P&L neto de las operaciones cerradas' + aged, hint=es.TOOLTIPS['pnl'],
             extra=pnl_sparkline(demo.get('curve')) if number(total) else ''),
         kpi('📊', 'P&L no realizado', money_value(unrealized), tone=es.tone(unrealized),
-            technical='Posiciones abiertas a precio de mercado', hint=es.TOOLTIPS['unrealized']),
+            technical='Posiciones abiertas a precio de mercado' + aged, hint=es.TOOLTIPS['unrealized']),
         kpi('📅', 'P&L de hoy (ET)', money_value(today), tone=es.tone(today),
-            technical='P&L realizado · día de Nueva York', hint=es.TOOLTIPS['today']),
+            technical='P&L realizado · día de Nueva York' + aged, hint=es.TOOLTIPS['today']),
         kpi('📂', 'Posiciones abiertas', escape(str(len(open_rows))) if known else mute(reason), tone='teal',
             technical='Abiertas ahora en la cuenta demo'),
         kpi('✅', 'Operaciones cerradas', escape(str(count)) if known else mute(reason), tone='teal',
@@ -603,8 +627,8 @@ def demo_overview(st, db, now, demo, day=None):
     known = demo['stats'] is not None
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
              f'<div class="small"><b>{escape(es.demo_day_text(day) if day else FIRST_CYCLE_WAIT)}</b> · '
-             f'{escape(DEMO_ARCHIVE_NOTE)}</div>{day_progress(day, es.DEMO_LENGTH_DAYS)}</div>')
-    kpi_grid(st, demo_kpis(demo))
+             f'{escape(DEMO_ARCHIVE_NOTE + trades_age_note(demo, now))}</div>{day_progress(day, es.DEMO_LENGTH_DAYS)}</div>')
+    kpi_grid(st, demo_kpis(demo, now))
     left, right = st.columns([1.7, 1])
     with left:
         title = 'Curva de operaciones cerradas · OANDA demo'
@@ -763,7 +787,7 @@ def trade_label(row):
 def demo_trades(st, demo):
     """Trades while broker-demo routing is ON: OANDA demo trades (closed + open) since the epoch only."""
     html(st, f'<div class="card"><h3>{escape(demo_title(demo["epoch"]))}</h3>'
-             f'<div class="small">{escape(DEMO_ARCHIVE_NOTE)}</div></div>')
+             f'<div class="small">{escape(DEMO_ARCHIVE_NOTE + trades_age_note(demo))}</div></div>')
     if demo['stats'] is None:
         card(st, 'Operaciones · OANDA demo', summary=demo_no_data(demo))
         return

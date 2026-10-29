@@ -108,6 +108,13 @@ FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
 OUTBOX_CLAIM_GRACE = timedelta(minutes=10)  # a CLAIMED alert this old had a crash mid-delivery -> UNKNOWN, not resent
 # DEC-FILL-ANCHOR-1: max |expected fill - planned entry| (pips) for translating entry / SL / TP onto the fill.
 FILL_ANCHOR_TOLERANCE_PIPS = Decimal(5)
+# DEC-FILL-ANCHOR-2: up to this gap the translation still applies (SL/TP pips and R stay the policy's); above it the
+# plan is stale and the entry is REFUSED (fail closed), never sent with absolute SL/TP that no longer fit the fill.
+FILL_ANCHOR_MAX_PIPS = Decimal(10)
+# DEC-FILL-ANCHOR-2 post-fill check: slack (pips) around [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS] and tolerance (R) around
+# FX_TP_RR for the SL/TP actually sent versus the actual fill (covers the few pips of slippage between quote and fill).
+FILL_CHECK_SL_SLACK_PIPS = Decimal(2)
+FILL_CHECK_RR_TOLERANCE = Decimal("0.15")
 PENDING_EVENT_CAP = 50  # FLATTEN_REQUEST_PENDING (and dry-run previews) per request: the events table is append-only
 FRIDAY_ALERT_EVERY = {fc.PREFLATTEN: timedelta(minutes=5), fc.CLOSED: timedelta(minutes=30)}
 # Events forwarded to the optional ``on_alert`` hook (best effort; FRIDAY_FLATTEN_FAILED has its own explicit call).
@@ -115,7 +122,7 @@ ALERT_KINDS = frozenset({"ACCEPTED", REJECTED, UNKNOWN, CLOSED, "CLOSE_UNKNOWN",
                          BREAKEVEN, "DRIFT", "UNRESOLVED_ACTION", "DAILY_LOSS_HALT", "DAILY_LOSS_RESUMED",
                          "DRAWDOWN_HALT", "FLATTEN_DAILY_LOSS", "FLATTEN_DRAWDOWN", EMERGENCY_BUTTON,
                          "FLATTEN_REQUEST_DONE", "DRIFT_CLEARED", "DRIFT_CLEAR_REFUSED", MANUAL_CLOSE,
-                         "MANUAL_CLOSE_FAILED"})
+                         "MANUAL_CLOSE_FAILED", "FILL_ANCHOR_REFUSED", "FILL_OUT_OF_POLICY"})
 CLOSE_SENT = {"CLOSED", CLOSED_AT_BROKER, "CLOSE_FAILED", "CLOSE_REJECTED", UNKNOWN, DRY_RUN}
 
 
@@ -459,7 +466,13 @@ class BrokerDemoRouter:
                 self._event("REVERSAL_FLAT", client_id, closed_client_id=reversing["client_id"],
                             reason=refused[1] if refused[0] == "NOT_ROUTED" else refused[0])
                 return refused
-        entry, stop, target = self._fill_anchor(client_id, symbol, decision.side, entry, stop, target)
+        anchored = self._fill_anchor(client_id, symbol, decision.side, entry, stop, target)
+        if anchored is None:  # DEC-FILL-ANCHOR-2: the plan is too far from the market to keep a valid SL/TP
+            if reversing is not None:  # the profitable opposite trade is already closed: stays flat, nothing opened
+                self._event("REVERSAL_FLAT", client_id, closed_client_id=reversing["client_id"],
+                            reason="fill_gap_too_large")
+            return self._refuse(client_id, "fill_gap_too_large")
+        entry, stop, target = anchored
         try:  # A re-sized approval derived from the APPROVED decision: the quantity and (DEC-FILL-ANCHOR-1) the prices
             # translated onto the expected fill; SL/TP distances and R are the approved ones.
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), entry, stop, target, client_id=client_id,
@@ -475,11 +488,14 @@ class BrokerDemoRouter:
         return self._send(order_plan, approval, row, at)
 
     def _fill_anchor(self, client_id, symbol, side, entry, stop, target):
-        """DEC-FILL-ANCHOR-1: the MARKET order fills at the ask (LONG) / bid (SHORT), not at the planned entry (last
+        """DEC-FILL-ANCHOR-1/2: the MARKET order fills at the ask (LONG) / bid (SHORT), not at the planned entry (last
         candle close), while SL/TP are sent as absolute prices. For FX symbols (DEC-FX-SL-1) with a valid tradeable
-        quote within ``FILL_ANCHOR_TOLERANCE_PIPS`` of the entry, entry, stop and target are translated by the same
-        delta, so the SL/TP pips and the R multiple stay exactly the policy's (units unchanged). Otherwise the prices
-        are returned unchanged (event ``FILL_ANCHOR_SKIPPED`` + reason). Non-FX symbols: unchanged, no quote read."""
+        quote, entry, stop and target are translated by the same delta (expected fill - planned entry), so the SL/TP
+        pips and the R multiple stay exactly the policy's (units unchanged). DEC-FILL-ANCHOR-2: this holds up to
+        ``FILL_ANCHOR_MAX_PIPS`` (the ``FILL_ANCHOR_TOLERANCE_PIPS`` band is the usual case, the wider band is flagged
+        ``wide`` on the event); a larger gap returns None (the caller refuses the entry; event ``FILL_ANCHOR_REFUSED``).
+        Without a valid quote or non-numeric prices the prices are returned unchanged (``FILL_ANCHOR_SKIPPED`` + reason;
+        the post-fill check then verifies the real distances). Non-FX symbols: unchanged, no quote read."""
         if not fx_policy.is_fx(symbol):
             return entry, stop, target
         quote, problem = self._quote(symbol, None)
@@ -492,18 +508,57 @@ class BrokerDemoRouter:
             fill = round_price(ask if side == "LONG" else bid)
             delta = fill - entry
             delta_pips = delta / pip
-            if abs(delta_pips) > FILL_ANCHOR_TOLERANCE_PIPS:
-                self._event("FILL_ANCHOR_SKIPPED", client_id, reason="delta_above_tolerance",
-                            delta_pips=_pips(delta_pips))
-                return entry, stop, target
+            if abs(delta_pips) > FILL_ANCHOR_MAX_PIPS:
+                self._event("FILL_ANCHOR_REFUSED", client_id, symbol=symbol, side=side, reason="delta_above_max",
+                            delta_pips=_pips(delta_pips), max_pips=_pips(FILL_ANCHOR_MAX_PIPS))
+                LOG.warning("component=broker_demo event=FILL_ANCHOR_REFUSED symbol=%s side=%s delta_pips=%s max_pips=%s",
+                            symbol, side, _pips(delta_pips), _pips(FILL_ANCHOR_MAX_PIPS))
+                return None
             anchored = fill, round_price(stop + delta), round_price(target + delta)
         except (ValueError, ArithmeticError):
             self._event("FILL_ANCHOR_SKIPPED", client_id, reason="anchor_invalid")
             return entry, stop, target
         self._event("FILL_ANCHORED", client_id, side=side, delta_pips=_pips(delta_pips), entry=str(anchored[0]),
                     stop=str(anchored[1]), target=str(anchored[2]), sl_pips=_pips(abs(anchored[0] - anchored[1]) / pip),
-                    tp_pips=_pips(abs(anchored[2] - anchored[0]) / pip))
+                    tp_pips=_pips(abs(anchored[2] - anchored[0]) / pip),
+                    wide=abs(delta_pips) > FILL_ANCHOR_TOLERANCE_PIPS)
         return anchored
+
+    def _verify_fill(self, client_id, symbol, side, stop, target):
+        """DEC-FILL-ANCHOR-2 post-fill check (FX only, never raises, never changes the order or closes anything): the SL
+        / TP actually sent versus the broker's actual fill price. Inside [FX_SL_MIN - slack, FX_SL_MAX + slack] pips and
+        FX_TP_RR +/- ``FILL_CHECK_RR_TOLERANCE`` -> ``FILL_VERIFIED`` (journal only); outside -> ``FILL_OUT_OF_POLICY``
+        (journal + WARNING log + Slack alert); fill price unknown -> ``FILL_CHECK_UNAVAILABLE``."""
+        try:
+            if not fx_policy.is_fx(symbol):
+                return
+            row = self._store.trade(client_id) or {}
+            fill = _dec(row.get("fill_price"))
+            stop, target = _dec(stop), _dec(target)
+            if fill is None or stop is None or target is None:
+                self._event("FILL_CHECK_UNAVAILABLE", client_id, reason="fill_price_unknown")
+                return
+            pip = fx_policy.pip_size(symbol)
+            sl_pips = (fill - stop if side == "LONG" else stop - fill) / pip
+            tp_pips = (target - fill if side == "LONG" else fill - target) / pip
+            rr = tp_pips / sl_pips if sl_pips > 0 else None
+            problems = []
+            if not (fx_policy.FX_SL_MIN_PIPS - FILL_CHECK_SL_SLACK_PIPS <= sl_pips
+                    <= fx_policy.FX_SL_MAX_PIPS + FILL_CHECK_SL_SLACK_PIPS):
+                problems.append(f"sl_{_pips(sl_pips.quantize(Decimal('0.1')))}_pips")
+            if rr is None or abs(rr - fx_policy.FX_TP_RR) > FILL_CHECK_RR_TOLERANCE:
+                problems.append("rr_" + ("invalid" if rr is None else _pips(rr.quantize(Decimal("0.01")))))
+            detail = {"symbol": symbol, "side": side, "sl_pips": _pips(sl_pips.quantize(Decimal("0.1"))),
+                      "tp_pips": _pips(tp_pips.quantize(Decimal("0.1"))),
+                      "rr": None if rr is None else _pips(rr.quantize(Decimal("0.01")))}
+            if not problems:
+                self._event("FILL_VERIFIED", client_id, **detail)
+                return
+            LOG.warning("component=broker_demo event=FILL_OUT_OF_POLICY symbol=%s side=%s sl_pips=%s tp_pips=%s rr=%s",
+                        symbol, side, detail["sl_pips"], detail["tp_pips"], detail["rr"])
+            self._event("FILL_OUT_OF_POLICY", client_id, reasons=problems, **detail)
+        except Exception as exc:  # noqa: BLE001 - verification is observation only
+            LOG.warning("component=broker_demo event=FILL_CHECK_FAILED error_type=%s", type(exc).__name__)
 
     def _sized(self, client_id, run_id, decision, entry, stop, at):
         """``(units, None)`` sized on a fresh NAV read with the daily-loss gate passed, else ``(None, outcome)``."""
@@ -582,6 +637,7 @@ class BrokerDemoRouter:
         if result.status == ACCEPTED:
             self._mark_open(client_id, result.broker_ref, at)
             self._event("ACCEPTED", client_id, trade_id=result.broker_ref, reason=result.reason)
+            self._verify_fill(client_id, order_plan.symbol, order_plan.side, row["stop"], row["target"])
             return ACCEPTED, result.broker_ref
         if result.status == REJECTED:
             self._store.update(client_id, status=REJECTED, closed_reason=result.reason)

@@ -254,7 +254,7 @@ class ReadOnlyTradesTests(unittest.TestCase):
         result = ro.demo_trades(env, transport=slow, since=EPOCH, now=NOW, clock=lambda: now[0], deadline_seconds=8)
         self.assertEqual(result, {"error": "deadline", "as_of": NOW})
         self.assertEqual(len(timeouts), 3)  # 0 s, 3 s, 6 s; at 9 s the budget is gone: no 4th GET
-        self.assertEqual(timeouts, [ro.TIMEOUT_SECONDS, ro.TIMEOUT_SECONDS, 2.0])  # capped by the time left
+        self.assertEqual(timeouts, [ro.TRADES_ATTEMPT_TIMEOUT_SECONDS, ro.TRADES_ATTEMPT_TIMEOUT_SECONDS, 2.0])  # capped by the time left
         now[0] = 0.0
 
         def late(method, url, headers, body, timeout):  # one short page, but it ends past the deadline

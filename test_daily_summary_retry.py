@@ -141,6 +141,15 @@ class DailySummaryRetryTests(unittest.TestCase):
         self.assertIn("OANDA demo: sin datos de operaciones", text)
         self.assertIn("account=ok trades=http_502", logs.output[0])
 
+    def test_stale_trades_read_is_retried_with_fresh_reads_never_published_as_current(self):
+        stale = {**TRADES, "stale": True, "stale_error": "timeout"}
+        readers = Readers(OK_VIEW, stale, [OK_VIEW], [TRADES])
+        with self.assertNoLogs("runtime.notifications", "WARNING"):
+            text = self.text(readers)
+        self.assertEqual(self.sleeps, [20])  # DEC-DEMO-READ-RETRY-1: a stale trades read is not "complete"
+        self.assertIn(("fresh_trades", True), readers.calls)
+        self.assertIn("Operaciones cerradas en el día: 0 (ganadoras: 0)", text)
+
     def test_stale_account_view_is_retried_then_recovers(self):
         stale = AccountView("OK", "practice", "***-001", "USD", Decimal("99000.00"), Decimal("99100.00"),
                             Decimal("0"), 0, Decimal("0"), datetime(2026, 10, 27, 18, 0, tzinfo=timezone.utc),
