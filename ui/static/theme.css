@@ -184,3 +184,207 @@ header[data-testid="stHeader"]{background:transparent}
   font-size:20px!important;
   line-height:1.35;
 }
+
+/* ===== Glass layer ===== */
+/* Glassy dashboard (owner-approved mockups). Static ambient colour blobs (radial gradients, no images or media, no
+   animation), translucent panels with backdrop blur over a dark under-layer that keeps every text token >= 4.5:1
+   (WCAG AA) even over the brightest blob. Fallbacks at the end: no backdrop-filter support / reduced transparency =>
+   opaque dark panels (the previous look); reduced motion => no animation or transition. */
+.stApp{--gl-t1:#f5f5f9;--gl-t2:#c9ccd8;--gl-t3:#a9aebd;--gl-gold:#e8c46f;--gl-green:#4cf0a2;--gl-red:#ff8099;--gl-amber:#ffc27d;
+ --gl-page:#07070b;--gl-fill:rgba(255,255,255,.06);--gl-base:rgba(9,10,16,.55);--gl-line:rgba(255,255,255,.16);
+ --gl-bg:linear-gradient(var(--gl-fill),var(--gl-fill)),var(--gl-base);
+ --gl-blur:20px;--gl-filter:blur(var(--gl-blur)) saturate(150%);--gl-radius:20px;
+ --gl-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 14px 40px rgba(0,0,0,.40);
+ background:var(--gl-page);color:var(--gl-t1);isolation:isolate}
+/* Ambient blobs: gold, purple, blue, green (peak alphas are part of the contrast budget, see test_ui_glass.py) */
+.stApp::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+ background:radial-gradient(38vmax 38vmax at 6% 4%,rgba(217,180,90,.20),rgba(217,180,90,0) 70%),
+  radial-gradient(40vmax 40vmax at 96% 14%,rgba(106,61,240,.22),rgba(106,61,240,0) 70%),
+  radial-gradient(36vmax 36vmax at 42% 108%,rgba(31,99,255,.18),rgba(31,99,255,0) 70%),
+  radial-gradient(28vmax 28vmax at 80% 92%,rgba(18,201,124,.14),rgba(18,201,124,0) 70%),
+  radial-gradient(120% 90% at 50% 0%,#12101c 0%,var(--gl-page) 60%)}
+[data-testid="stAppViewContainer"],[data-testid="stMain"],[data-testid="stBottomBlockContainer"]{background:transparent}
+.stApp .tf{--text:#f5f5f9;--dim:#a9aebd;--line:rgba(255,255,255,.09);--line2:rgba(255,255,255,.16);--panel2:rgba(0,0,0,.24);
+ --panel3:rgba(255,255,255,.07);--red:#ff6b85;--gold-bg:rgba(232,196,111,.12);--gold-line:rgba(232,196,111,.45);
+ --green-bg:rgba(76,240,162,.10);--green-line:rgba(76,240,162,.40);--red-bg:rgba(255,77,109,.12);--red-line:rgba(255,128,153,.45);
+ --orange-bg:rgba(255,179,92,.12);--orange-line:rgba(255,179,92,.45);--teal-bg:rgba(25,227,211,.10);--radius:20px}
+/* Glass panels */
+.tf .card,.tf .kpi,.tf .hero,[data-testid="stMetric"],[data-testid="stExpander"] details,[data-testid="stDataFrame"],
+[data-testid="stTable"],.st-key-curve-card,.st-key-manual-close-card,.tf .gl-agent,.tf .gl-steps-card,
+.tf details.gl-agents > summary{
+ background:var(--gl-bg);border:1px solid var(--gl-line)!important;border-radius:var(--gl-radius);box-shadow:var(--gl-shadow);
+ -webkit-backdrop-filter:var(--gl-filter);backdrop-filter:var(--gl-filter)}
+[data-testid="stExpander"] details,[data-testid="stDataFrame"],[data-testid="stTable"]{border-radius:16px}
+.tf .kpi.pos{background:linear-gradient(180deg,rgba(76,240,162,.10),rgba(76,240,162,0) 70%),var(--gl-bg);border-color:rgba(76,240,162,.38)!important}
+.tf .kpi.neg{background:linear-gradient(180deg,rgba(255,77,109,.12),rgba(255,77,109,0) 70%),var(--gl-bg);border-color:rgba(255,128,153,.42)!important}
+.tf .kpi .icon{background:rgba(255,255,255,.08);border:1px solid var(--gl-line)}
+.tf .kpi .value.neg,.tf .neg,.tf .big.neg{color:var(--gl-red)}
+.tf .bubble{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.12)}
+.tf .scroll{border-color:rgba(255,255,255,.12)}
+.tf .hero .sub{color:#b7f7f1}
+[data-testid="stPlotlyChart"]{background:transparent}
+/* Streamlit paints captions at opacity .6 (< 4.5:1 on dark); keep them muted through the colour token instead */
+[data-testid="stCaptionContainer"]{opacity:1;color:var(--gl-t3)}
+.st-key-curve-card{padding:18px 20px}
+/* CSS-only entrance: short and subtle (no invisible start), so a 60 s fragment refresh never flashes */
+@keyframes gl-in{from{opacity:.55;transform:translateY(4px)}to{opacity:1;transform:none}}
+.tf .card,.tf .kpi{animation:gl-in .35s ease-out both}
+/* Sidebar: glass panel, navigation as pills */
+[data-testid="stSidebar"]{background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03)),rgba(9,10,16,.62);
+ border-right:1px solid var(--gl-line);-webkit-backdrop-filter:var(--gl-filter);backdrop-filter:var(--gl-filter);box-shadow:var(--gl-shadow)}
+[data-testid="stSidebar"] [role="radiogroup"]{gap:4px}
+[data-testid="stSidebar"] [role="radiogroup"] label{border-radius:999px;min-height:44px;padding:10px 14px;align-items:center;color:var(--gl-t2);
+ transition:background .25s ease,border-color .25s ease}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.12)}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked){background:rgba(232,196,111,.14);border-color:rgba(232,196,111,.55);
+ box-shadow:0 0 18px rgba(232,196,111,.16)}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p{color:var(--gl-gold)}
+/* Decorative leading icon: the 8 luxury pages already start with an emoji in their (Spanish) label; the 9th main page
+   (Floor) has none, so it gets one here. Labels stay visible (no icon-only rail). */
+[data-testid="stSidebar"] [role="radiogroup"] > div:nth-child(9) label p::before{content:"🕹️ ";content:"🕹️ "/""}
+/* Native sidebar toggles (Streamlit 1.65: stExpandSidebarButton lives in the header toolbar, stSidebarCollapseButton in
+   the sidebar header). Keep the toolbar for that button only; glass, >= 44 px tap targets. */
+header[data-testid="stHeader"] [data-testid="stToolbar"]{display:flex!important;background:transparent}
+[data-testid="stToolbarActions"],[data-testid="stAppDeployButton"],[data-testid="stMainMenu"]{display:none!important}
+[data-testid="stExpandSidebarButton"],[data-testid="stSidebarCollapseButton"] button{min-width:44px;min-height:44px;border-radius:14px;
+ color:var(--gl-gold)!important;background:rgba(14,14,22,.72);border:1px solid rgba(232,196,111,.55);box-shadow:var(--gl-shadow);
+ -webkit-backdrop-filter:var(--gl-filter);backdrop-filter:var(--gl-filter)}
+[data-testid="stExpandSidebarButton"]{display:inline-flex;align-items:center;gap:6px;padding:0 14px 0 10px;margin:8px 0 0 8px}
+[data-testid="stExpandSidebarButton"]::after{content:"Menú";font-size:14px;font-weight:700;letter-spacing:.02em;color:var(--gl-gold)}
+[data-testid="stExpandSidebarButton"] span,[data-testid="stSidebarCollapseButton"] span{color:var(--gl-gold)!important}
+/* Tabs: glass pills */
+[data-baseweb="tab-list"]{gap:4px;padding:5px;border:1px solid var(--gl-line);border-radius:999px;background:var(--gl-bg);
+ width:max-content;max-width:100%;overflow-x:auto;scrollbar-width:none;-webkit-backdrop-filter:var(--gl-filter);backdrop-filter:var(--gl-filter)}
+[data-baseweb="tab"]{min-height:40px;padding:6px 16px;border-radius:999px;background:transparent;color:var(--gl-t2)}
+[data-baseweb="tab"]:hover{background:rgba(255,255,255,.08)}
+[data-baseweb="tab"][aria-selected="true"]{background:linear-gradient(180deg,#f1d283,#d9b45a);box-shadow:0 4px 16px rgba(217,180,90,.30)}
+[data-baseweb="tab"][aria-selected="true"] p{color:#1a1405}
+[data-baseweb="tab-highlight"],[data-baseweb="tab-border"]{display:none}
+/* Buttons: glass with gold outline; primary = gold fill; disabled stays readable */
+.stButton > button,.stDownloadButton > button,.stLinkButton > a,.stFormSubmitButton > button{min-height:44px;border-radius:14px;
+ background:rgba(255,255,255,.06);border:1px solid rgba(232,196,111,.65);color:var(--gl-gold);
+ -webkit-backdrop-filter:var(--gl-filter);backdrop-filter:var(--gl-filter);transition:background .25s ease,border-color .25s ease}
+.stButton > button:hover,.stDownloadButton > button:hover,.stLinkButton > a:hover,.stFormSubmitButton > button:hover{background:rgba(232,196,111,.14);color:#f1d283;border-color:#f1d283}
+.stButton > button[kind="primary"],.stFormSubmitButton > button[kind="primary"]{background:linear-gradient(180deg,#f1d283,#d9b45a);color:#1a1405;border-color:#f1d283;
+ box-shadow:0 6px 20px rgba(217,180,90,.28)}
+.stButton > button[kind="primary"] p{color:#1a1405}
+.stButton > button:disabled,.stButton > button:disabled:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.16);color:var(--gl-t3);box-shadow:none}
+.stButton > button:disabled p{color:var(--gl-t3)}
+/* Alerts: glass (info / success / warning keep the gold rule; errors stay red) */
+[data-testid="stAlertContainer"]{background:var(--gl-bg)!important;border:1px solid var(--gl-line)!important;border-left:3px solid #d9b45a!important;
+ border-radius:16px;color:var(--gl-t1)!important;-webkit-backdrop-filter:var(--gl-filter);backdrop-filter:var(--gl-filter)}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]){background:linear-gradient(rgba(255,77,109,.14),rgba(255,77,109,.14)),var(--gl-base)!important;
+ border:1px solid rgba(255,128,153,.5)!important;border-left:3px solid #e05b70!important;color:#ffd2da!important}
+/* Manual close (Carlos · gestor de la operación): glass card, danger-tinted action, amber confirmation, two steps kept */
+.st-key-manual-close-card{padding:18px 20px;margin:18px 0 8px;gap:10px}
+.st-key-floor-manual-close button:not(:disabled){color:#ffd2da;background:rgba(255,77,109,.14);border-color:rgba(255,128,153,.6)}
+.st-key-floor-manual-close button:not(:disabled) p{color:#ffd2da}
+.st-key-floor-manual-close button:not(:disabled):hover{background:rgba(255,77,109,.24);border-color:#ff8099}
+.st-key-manual-close-card [data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]){background:linear-gradient(rgba(255,179,92,.13),rgba(255,179,92,.13)),var(--gl-base)!important;
+ border:1px solid rgba(255,179,92,.5)!important;border-left:3px solid #ffb35c!important;color:#ffe2c0!important}
+.st-key-manual-close-card [data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) :is(svg,[data-testid="stIconMaterial"]){color:#ffc27d!important}
+.st-key-floor-manual-close-confirm button{color:#fff;background:linear-gradient(180deg,#d63a58,#a91d38);border-color:#ff8099;box-shadow:0 6px 22px rgba(255,77,109,.35)}
+.st-key-floor-manual-close-confirm button p{color:#fff}
+.st-key-floor-manual-close-confirm button:hover{background:linear-gradient(180deg,#cf3351,#a01a34);color:#fff;border-color:#ffb3c1}
+.st-key-floor-manual-close-cancel button{color:var(--gl-t1);background:rgba(255,255,255,.08);border-color:var(--gl-line)}
+.st-key-floor-manual-close-cancel button p{color:var(--gl-t1)}
+.st-key-floor-manual-close-cancel button:hover{background:rgba(255,255,255,.14);color:var(--gl-t1);border-color:rgba(255,255,255,.3)}
+/* Floor agent cards (ui.components.glass) */
+.tf details.gl-agents{margin:0 0 6px}
+.tf details.gl-agents > summary{list-style:none;cursor:pointer;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-height:48px;
+ padding:10px 16px;border-radius:999px;color:var(--gl-t1)}
+.tf details.gl-agents > summary::-webkit-details-marker{display:none}
+.tf details.gl-agents > summary::after{content:"▾";margin-left:auto;color:var(--gl-gold);transition:transform .25s ease}
+.tf details.gl-agents[open] > summary::after{transform:rotate(180deg)}
+.tf details.gl-agents[open] > summary{border-radius:18px;margin-bottom:12px}
+.tf .gl-sum-title{font-weight:700;font-size:14px}
+.tf .gl-sum-names{font-size:12.5px;color:var(--gl-t2)}
+.tf .gl-sum-hint{font-size:12px;color:var(--gl-gold)}
+.tf .gl-agents-body{display:flex;flex-direction:column;gap:14px}
+.tf .gl-agent{padding:14px 15px;display:flex;flex-direction:column;gap:10px;min-width:0;border-color:rgba(255,255,255,.16)!important;
+ border-color:color-mix(in srgb,var(--c) 38%,rgba(255,255,255,.14))!important;border-radius:20px}
+.tf .gl-hd{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;min-width:0}
+.tf .gl-avatar{flex:none;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:16px;
+ color:#06070b;background:var(--c);box-shadow:0 0 16px color-mix(in srgb,var(--c) 55%,transparent)}
+.tf .gl-who{flex:1 1 auto;min-width:72px}
+.tf .gl-name,.tf .gl-role{word-break:normal;overflow-wrap:normal}
+.tf .gl-name{font-weight:700;font-size:15px;line-height:1.2;color:var(--gl-t1)}
+.tf .gl-role{font-size:12px;color:var(--gl-t2)}
+.tf .gl-status{margin-left:auto;max-width:100%;font-size:11.5px;font-weight:700;line-height:1.3;padding:3px 9px;border-radius:12px;text-align:right;
+ border:1px solid var(--c);color:var(--gl-t1);color:color-mix(in srgb,var(--c) 45%,#fff);background:rgba(255,255,255,.05);overflow-wrap:anywhere}
+.tf .gl-empty .gl-status{border-color:var(--gl-line);color:var(--gl-t2)}
+.tf .gl-ex{align-self:flex-start;font-size:11px;font-weight:700;color:var(--gl-amber);border:1px solid rgba(255,179,92,.5);background:rgba(255,179,92,.10);
+ border-radius:999px;padding:2px 9px}
+.tf .gl-bubble{position:relative;margin-bottom:8px;padding:10px 13px;border-radius:16px 16px 16px 5px;background:rgba(255,255,255,.075);
+ border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:1.5;color:var(--gl-t1);overflow-wrap:anywhere}
+.tf .gl-bubble::after{content:"";position:absolute;left:16px;bottom:-9px;width:16px;height:9px;background:rgba(255,255,255,.16);
+ clip-path:polygon(0 0,100% 0,0 100%)}
+.tf .gl-bubble.gl-muted{color:var(--gl-t3)}
+.tf .gl-facts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;font-size:12px;color:var(--gl-t2)}
+.tf .gl-bias{font-weight:700;font-size:11.5px;padding:2px 9px;border-radius:999px;border:1px solid}
+.tf .gl-bias.pos{color:var(--gl-green);border-color:rgba(76,240,162,.45);background:rgba(76,240,162,.09)}
+.tf .gl-bias.neg{color:var(--gl-red);border-color:rgba(255,128,153,.5);background:rgba(255,77,109,.10)}
+.tf .gl-conf{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+.tf .gl-meter{display:inline-block;width:64px;height:5px;border-radius:99px;background:rgba(255,255,255,.14);overflow:hidden}
+.tf .gl-meter i{display:block;height:100%;border-radius:99px;background:var(--c)}
+.tf .gl-time{margin-left:auto;color:var(--gl-t2);font-variant-numeric:tabular-nums}
+/* Desktop: agent panels always open, summary hidden. Only where ::details-content exists (elsewhere the summary stays
+   visible and tappable). */
+@supports selector(::details-content){
+ @media(min-width:900px){
+  .tf details.gl-agents > summary{display:none}
+  .tf details.gl-agents::details-content{content-visibility:visible;display:block}
+ }
+}
+.st-key-floor-stage [data-testid="stColumn"]{min-width:0}
+/* KPI sparkline (real cumulative realized P&L only) and the demo day progress bar */
+.tf .gl-spark{display:block;width:100%;height:36px;margin-top:4px;overflow:visible}
+.tf .gl-progress{height:8px;margin-top:12px;border-radius:99px;background:rgba(255,255,255,.12);overflow:hidden}
+.tf .gl-progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#d9b45a,#f1d283);box-shadow:0 0 12px rgba(232,196,111,.5)}
+/* Process step strip */
+.tf .gl-steps-card{padding:16px 18px;margin-bottom:16px}
+.tf .gl-steps-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.stApp .tf .gl-steps-head h3{margin:0}
+.tf .gl-steps-count{font-size:12.5px;color:var(--gl-t2)}
+.tf .gl-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:8px}
+.tf .gl-step{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 6px;border-radius:14px;text-align:center;font-size:12px;
+ line-height:1.3;color:var(--gl-t2);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);overflow-wrap:anywhere;min-width:0}
+.tf .gl-step-dot{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.25)}
+.tf .gl-step-state{font-weight:700;color:var(--gl-t3)}
+.tf .gl-step.done{color:var(--gl-t1);border-color:rgba(76,240,162,.45);background:rgba(76,240,162,.08)}
+.tf .gl-step.done .gl-step-dot{background:var(--gl-green);box-shadow:0 0 10px rgba(76,240,162,.6)}
+.tf .gl-step.done .gl-step-state{color:var(--gl-green)}
+/* Tablet */
+@media(max-width:1024px){.stApp{--gl-blur:14px}}
+@media(max-width:1200px){
+ .st-key-floor-stage [data-testid="stHorizontalBlock"]{flex-wrap:wrap}
+ .st-key-floor-stage [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{flex:1 1 calc(50% - 1rem)!important;width:auto!important}
+ .st-key-floor-stage [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2){order:-1;flex:1 1 100%!important;width:100%!important}
+}
+@media(max-width:900px){.tf .gl-steps{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* Phones: lighter blur, fewer shadows, one KPI column, Floor scene first, agent panels closed until tapped */
+@media(max-width:640px){
+ .stApp{--gl-blur:10px;--gl-radius:18px;--gl-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 6px 18px rgba(0,0,0,.30)}
+ .tf .kpis{grid-template-columns:minmax(0,1fr)}
+ [data-testid="stSidebar"]{background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03)),rgba(9,10,16,.88)}
+ [data-testid="stSidebarCollapseButton"]{display:block!important;visibility:visible!important}
+ .stApp,.block-container{overflow-x:hidden}
+}
+@media(max-width:768px){
+ .block-container{padding-top:68px}
+}
+@media(max-width:420px){.tf .gl-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Fallback: no backdrop-filter => opaque dark panels (the previous look) */
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+ .stApp{--gl-fill:rgba(0,0,0,0);--gl-base:#0d1416;--gl-filter:none}
+ [data-testid="stSidebar"]{background:#0d0d0e}
+}
+@media(prefers-reduced-transparency:reduce){
+ .stApp{--gl-fill:rgba(0,0,0,0);--gl-base:#0d1416;--gl-filter:none}
+ .stApp::before{display:none}
+ [data-testid="stSidebar"]{background:#0d0d0e}
+ .stApp *{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+}
+@media(prefers-reduced-motion:reduce){
+ .stApp *,.stApp *::before,.stApp *::after{animation:none!important;transition:none!important}
+}

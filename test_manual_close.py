@@ -1,6 +1,7 @@
 """Floor «Cerrar operación» (manual close of the routed OANDA demo trade): owner-only, practice-only request stored as a
 state-DB flag, closed by the router through its own close path (reason MANUAL_CLOSE), idempotent, Slack alert and
 Spanish close reason. Offline: fake transport only (helpers from test_broker_demo_router / test_ops_hardening)."""
+from contextlib import nullcontext
 from datetime import timedelta
 import json
 import threading
@@ -301,6 +302,9 @@ TARGET = {"client_id": CID, "trade_id": "6397", "symbol": "EURUSD", "side": "LON
 class FloorStub(FakeSt):
     def caption(self, body, **_):
         self.markdowns.append(body)
+
+    def container(self, **_):  # the glass card wrapper (``st.container(key="manual-close-card")``)
+        return nullcontext()
 
     warning = info = caption
 

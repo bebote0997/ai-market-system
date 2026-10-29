@@ -24,7 +24,8 @@ from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
 
-st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊")
+st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊",
+                   initial_sidebar_state="auto")  # collapsed on phones: the sidebar opens only on tap
 require_dashboard_access(st)
 luxury.apply(st)
 demo_refresher.ensure_started()  # idempotent: the Floor demo cache producer (also started by ui/asgi_app.py)
@@ -46,21 +47,33 @@ with st.sidebar:
     st.caption("🧪 " + tr("PAPER · REAL EXECUTION DISABLED"))
     st.caption(tr("Observation only · no live orders"))
 
+def open_trade_refresh():
+    """"30s" while the cached OPEN trades list is non-empty (peek only, never the broker), else "60s"."""
+    return demo_refresher.open_trade_refresh()
+
+
 if page in luxury.PAGES:
-    @st.fragment(run_every="60s" if refresh else None)
+    luxury_every = open_trade_refresh() if refresh else None
+
+    @st.fragment(run_every=luxury_every)
     def render_luxury():
         luxury.render(st, page, enabled_symbols)
+        if refresh and open_trade_refresh() != luxury_every:
+            st.rerun()  # a trade opened / closed: a full run registers the fragment with the new interval once
     render_luxury()
     st.stop()
 
 if page == floor_view.PAGE:
-    warming = refresh and demo_refresher.warming_up()  # cold demo caches: first retry after 8 s, then every 60 s
+    warming = refresh and demo_refresher.warming_up()  # cold demo caches: first retry after 8 s, then 30 s / 60 s
+    floor_every = (demo_refresher.FIRST_RETRY if warming else open_trade_refresh()) if refresh else None
 
-    @st.fragment(run_every=(demo_refresher.FIRST_RETRY if warming else "60s") if refresh else None)
+    @st.fragment(run_every=floor_every)
     def render_floor_view():
         floor_view.render(st, enabled_symbols)
         if warming and not demo_refresher.warming_up():
-            st.rerun()  # data arrived: a full run registers the fragment with the 60 s refresh again
+            st.rerun()  # data arrived: a full run registers the fragment with the 30 s / 60 s refresh again
+        elif refresh and not warming and open_trade_refresh() != floor_every:
+            st.rerun()  # a trade opened / closed: a full run registers the fragment with the new interval once
     render_floor_view()
     st.stop()
 

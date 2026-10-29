@@ -1,3 +1,9 @@
+# Owner-authorized dashboard work — 2026-10-28 (feat/glass-ui)
+
+Auto-refresh interval is now 30 s while a cached OPEN trade exists and 60 s otherwise
+(`ui/demo_refresher.open_trade_refresh()`, peek-only, no broker call; fragment reruns once
+on an open/closed flip). Cache TTL, first-retry 8 s and the sidebar pause are unchanged.
+
 # Owner-authorized dashboard work — 2026-10-11
 
 ## Process timeline
@@ -102,3 +108,11 @@ Local read-only audit: zero persisted runs available through dashboard_database.
 Therefore the exact local missing-step list is all nine Process steps above;
 the UI reports this explicitly. Populated offline SQLite fixtures exercise the
 persisted-row paths; no sample/provider values are substituted in production UI.
+
+## Glass UI — 2026-10-28 (`feat/glass-ui`)
+
+Presentation only: glass layer appended to `ui/static/theme.css` (static ambient blobs, translucent blurred panels,
+opaque fallbacks for no backdrop-filter / reduced transparency, no motion for reduced motion, AA contrast), phone sidebar
+toggle made visible, Floor three-column layout with real-payload agent cards (`ui/components/glass.py`, `<details>`
+closed on phones), manual close wrapped in `st.container(key="manual-close-card")` (logic unchanged), Inicio P&L
+sparkline (real series only) and «Día N de 30» bar, Process step strip. Tests: `test_ui_glass.py`.

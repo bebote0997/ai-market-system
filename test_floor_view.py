@@ -648,7 +648,7 @@ class FloorWiringTests(unittest.TestCase):
         self.assertIn("from ui.views import floor_view", source)
         self.assertIn("luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES", source)
         # Inside the 60s auto-refresh fragment (like the luxury pages) so payload/freshness recompute each refresh.
-        self.assertIn("    @st.fragment(run_every=(demo_refresher.FIRST_RETRY if warming else \"60s\") if refresh else None)\n"
+        self.assertIn("    @st.fragment(run_every=floor_every)\n"
                       "    def render_floor_view():\n        floor_view.render(st, enabled_symbols)\n", source)
         self.assertIn("    render_floor_view()\n    st.stop()", source)
         self.assertEqual((floor_view.PAGE, floor_view.LABEL), ("Floor", "Floor"))
