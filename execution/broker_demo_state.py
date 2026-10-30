@@ -29,11 +29,19 @@ HEARTBEAT_MAX_AGE_SECONDS = 20 * 60  # the dashboard shows routing "activo" only
 # Trade row statuses.
 PENDING_SEND, OPEN, UNKNOWN, REJECTED = "PENDING_SEND", "OPEN", "UNKNOWN", "REJECTED"
 CLOSED, CLOSED_AT_BROKER, DRY_RUN = "CLOSED", "CLOSED_AT_BROKER", "DRY_RUN"
+PENDING_LIMIT, CANCELLED = "PENDING_LIMIT", "CANCELLED"  # resting GTD limit, and one that expired or was cancelled
 UNRESOLVED_STATUSES = (PENDING_SEND, UNKNOWN)
-LIVE_STATUSES = (PENDING_SEND, OPEN, UNKNOWN)  # rows that block a new entry (single net position)
+# A resting limit blocks a second entry (one position) but it is a known order, not an unresolved submission.
+LIVE_STATUSES = (PENDING_SEND, OPEN, UNKNOWN, PENDING_LIMIT)
+# Nullable columns added for the EURUSD limit pullback. Absent on a database created before that change; ``_migrate``
+# adds them. NULL means a legacy market row: the router must not scale it out or trail it.
+_ADDED_COLUMNS = (("order_kind", "TEXT"), ("limit_price", "TEXT"), ("expires_at", "TEXT"), ("order_id", "TEXT"),
+                  ("strategy", "TEXT"), ("scale_stage", "TEXT"), ("units_remaining", "INTEGER"),
+                  ("risk_distance", "TEXT"), ("signal_entry", "TEXT"))
 TRADE_COLUMNS = ("client_id", "run_id", "symbol", "side", "units", "entry", "stop", "target", "initial_stop",
                  "trade_id", "fill_price", "opened_at", "stage", "status", "closed_reason", "pending_action",
-                 "action_status", "created_at", "updated_at")
+                 "action_status", "created_at", "updated_at",
+                 *(name for name, _ddl in _ADDED_COLUMNS))
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS broker_demo_trades (
     client_id TEXT PRIMARY KEY,
@@ -54,7 +62,16 @@ CREATE TABLE IF NOT EXISTS broker_demo_trades (
     pending_action TEXT,
     action_status TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    order_kind TEXT,
+    limit_price TEXT,
+    expires_at TEXT,
+    order_id TEXT,
+    strategy TEXT,
+    scale_stage TEXT,
+    units_remaining INTEGER,
+    risk_distance TEXT,
+    signal_entry TEXT
 );
 CREATE TABLE IF NOT EXISTS broker_demo_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +156,7 @@ class DemoStateStore:
         con.row_factory = sqlite3.Row
         try:
             con.executescript(SCHEMA)
+            _migrate(con)
             secure_sqlite_files(self.path, created_dir=created_dir)
         except BaseException:
             con.close()
@@ -316,6 +334,14 @@ class DemoStateStore:
             con.execute(_CLEAR_FLAG_SQL, (key, value, value))
 
 
+def _migrate(con):
+    """Add pullback columns on a database created before them. New databases already have the columns."""
+    have = {row[1] for row in con.execute("PRAGMA table_info(broker_demo_trades)")}
+    for name, ddl in _ADDED_COLUMNS:
+        if name not in have:
+            con.execute(f"ALTER TABLE broker_demo_trades ADD COLUMN {name} {ddl}")
+
+
 def _counts(rows):
     counts = {}
     for row in rows:
@@ -330,7 +356,8 @@ def summarize_status(rows, events, *, routing, dry_run, blocked_reason, max_unit
     current = open_rows[-1] if open_rows else None
     open_trade = None if current is None else {
         key: current.get(key) for key in ("client_id", "symbol", "side", "units", "entry", "stop", "target",
-                                          "trade_id", "opened_at", "stage", "status")}
+                                          "trade_id", "opened_at", "stage", "status", "order_kind", "limit_price",
+                                          "expires_at", "scale_stage", "units_remaining", "strategy")}
     out = {"routing": bool(routing), "dry_run": bool(dry_run), "blocked_reason": blocked_reason,
            "max_units": max_units, "counts": _counts(rows), "open_trade": open_trade,
            "last_events": [{"ts": e["ts"], "kind": e["kind"], "client_id": e["client_id"]} for e in events]}
@@ -338,7 +365,8 @@ def summarize_status(rows, events, *, routing, dry_run, blocked_reason, max_unit
 
 
 RUN_TRADE_FIELDS = ("client_id", "symbol", "side", "units", "entry", "stop", "target", "trade_id", "fill_price",
-                    "opened_at", "status", "closed_reason", "updated_at")
+                    "opened_at", "status", "closed_reason", "updated_at", "order_kind", "limit_price", "expires_at",
+                    "order_id", "strategy", "scale_stage", "units_remaining", "risk_distance", "signal_entry")
 
 
 def read_run_trades(run_id, path=None, *, env=None):
@@ -355,7 +383,7 @@ def read_run_trades(run_id, path=None, *, env=None):
                                (str(run_id),)).fetchall()
     except Exception:  # noqa: BLE001 - router never ran, locked or corrupt: nothing trustworthy to show
         return None
-    return [{key: row[key] for key in RUN_TRADE_FIELDS} for row in rows]
+    return [{key: (row[key] if key in row.keys() else None) for key in RUN_TRADE_FIELDS} for row in rows]
 
 
 def _recent(value, now):

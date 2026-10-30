@@ -62,6 +62,11 @@ MESSAGES = {
     "MANUAL_CLOSE_FAILED": "Cierre manual rechazado por el broker (la operación sigue abierta)",
     "FILL_ANCHOR_REFUSED": "Entrada rechazada: el precio se alejó demasiado del plan (no se abrió operación)",
     "FILL_OUT_OF_POLICY": "Operación abierta con SL/TP fuera de la política (SL 45-60 pips, 1:2): revisar",
+    "LIMIT_PENDING": "Orden límite pendiente (retroceso de 1 ATR, válida 24 h)",
+    "LIMIT_EXPIRED": "Orden límite cancelada: no se ejecutó a tiempo",
+    "LIMIT_CANCELLED": "Orden límite cancelada",
+    "PARTIAL_CLOSE": "Cierre parcial",
+    "TRAIL": "Stop de seguimiento movido (a 1R)",
 }
 _SAFE = re.compile(r"[^A-Za-z0-9_:.\-]")
 _LONG_DIGITS = re.compile(r"\d{5,}")
@@ -138,7 +143,22 @@ def build_message(kind, detail):
     reason = _reason(detail)
     if reason:
         parts.append(f"motivo: {reason}")
+    for key, name in (("limit_price", "límite"), ("price", "precio"), ("stop", "stop")):
+        shown = _price(detail.get(key))
+        if shown:
+            parts.append(f"{name} {shown}")
     return " · ".join(parts)
+
+
+def _price(value):
+    """A FX price for an alert (not an account id, not a token)."""
+    try:
+        out = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    if not out.is_finite() or out <= 0 or out >= 100000:
+        return None
+    return format(out.quantize(Decimal("0.00001")), "f")
 
 
 class BrokerAlertSink:

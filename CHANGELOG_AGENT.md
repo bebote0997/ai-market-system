@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-30 — Entrada límite EURUSD en el demo OANDA practice (DEC-EURUSD-PULLBACK-1, borrador)
+
+- El motor sigue eligiendo dirección, stop y objetivo. El filtro de noticias de alto impacto no cambia. Solo EURUSD, solo la cuenta practice. `REAL_EXECUTION_ENABLED` sigue `False`.
+- Con el flag sin definir, la entrada del demo es una orden LIMIT GTD al precio de la señal retirado 1×ATR(14) de Wilder en H1 (compra por debajo, venta por encima), y solo a favor de la EMA(200) del H1 cerrado. Si faltan velas, no se opera. Stop y objetivo se quedan en los precios del plan.
+- Si no se llena: se cancela a las 24 h, o antes al llegar el viernes 16:45 NY (el demo ya no admite entradas ahí).
+- Con la posición abierta por esta variante: cierre de 1/3 a +0.5R, otro 1/3 a +1R con el stop en el precio de entrada, y el resto con el stop a 1R del precio favorable. La salida del viernes / máximo de una semana se mantiene.
+- Rollback: `AI_FLOOR_EURUSD_LIMIT_PULLBACK=0`. Las filas ya abiertas no tienen la marca `EURUSD_H1_PULLBACK` y siguen con la gestión anterior; un deploy no las modifica.
+- DEC-FILL-ANCHOR-2: las órdenes de mercado siguen con el tope de 10 pips y el re-anclaje. Un límite pendiente no se trata como fill malo; un fill en el nivel previsto (o mejor) se acepta sin mover SL/TP.
+- Journal y Slack: límite pendiente, cancelación, cierre parcial, breakeven y trailing. El estado del router muestra el límite y la etapa.
+- Tests: `test_eurusd_pullback.py`. Sin secretos, sin ID de cuenta, sin cambios en Render.
+
 ## 2026-10-28 — P&L del Inicio sin «sin datos» + etiqueta de Carlos y paredes del Floor en móvil (DEC-DEMO-READ-RETRY-1, DEC-FLOOR-LABELS-1, branch `fix/fill-anchor-2`)
 
 - **Causa confirmada en vivo (P&L realizado / no realizado / hoy = «sin datos (no se pudo leer OANDA)» mientras el balance sí salía).** `GET /v3/accounts/{id}/trades?state=CLOSED&count=500` de OANDA practice se cuelga de forma intermitente 3–10 s (el resumen y `state=OPEN` responden en ~0.1 s). El cliente de producción tenía 4 s de timeout → `ReadOnlyError("timeout")` → `demo_trades` = None; `CachedDemoTrades` cacheaba ese fallo 10 s y descartaba el último valor bueno; sin reintento. El balance usa otra caché (`CachedAccountViews`) que ya conserva el último valor, por eso solo fallaron las 3 tarjetas. No hay bug de cálculo: la reproducción offline con los payloads reales da total 151 / hoy 65 (correcto, operación #40 y cierre manual incluidos).

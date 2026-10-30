@@ -981,6 +981,7 @@ class OperationalRuntime:
         try:
             returned = self._run_cycle(symbol, scheduled_at, rex_holder, cycle_context)
             off_observe = cycle_context.pop("_off_observe", None)
+            h1_bars = cycle_context.pop("_h1_bars", None)  # not part of the recorded cycle (no candle payload)
             if off_observe is not None:  # the newest per symbol only: a missed flush never accumulates snapshots
                 self._off_observe_pending[symbol] = (*off_observe, cycle_context.get("run_id"))
             if cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}:
@@ -991,7 +992,7 @@ class OperationalRuntime:
             router = self.broker_router
             if (router is not None and cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}
                     and not (self.halt_gate is not None and self.halt_gate.halted)):
-                self._audit_safely(lambda: router.on_cycle(cycle_context, returned, self.clock()),
+                self._audit_safely(lambda: router.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars),
                                    cycle_context.get("run_id"), symbol)  # never raises, never changes `returned`
             if rex_holder and rex_holder[0] is not None:
                 try:
@@ -1460,3 +1461,10 @@ class OperationalRuntime:
                 "symbol", "slot", "run_id", "stage", "deterministic", "ai", "fresh", "data_state",
                 "execution_fresh", "execution_state", "session_open", "ai_healthy", "eligible",
                 "paper_blocked", "execution_status", "execution_reason") if name in evidence})
+            snapshot = evidence.get("snapshot")
+            if isinstance(snapshot, dict):  # closed H1 bars for the demo limit; popped before the cycle record
+                try:
+                    from execution.eurusd_pullback import bars_from_frame
+                    cycle_context["_h1_bars"] = bars_from_frame(snapshot.get("1h"))
+                except Exception:  # noqa: BLE001 - missing bars skip the limit; they never fail the paper cycle
+                    cycle_context["_h1_bars"] = None

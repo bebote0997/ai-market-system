@@ -30,3 +30,11 @@ inválidos y verificación del cierre/reverse/abandono en journal y alertas. Dis
 
 ## 2026-10-17 · Demo de broker OANDA (fuera de las fases certificadas)
 Ver `docs/oanda_adapter.md` y `docs/security_audit.md`. Sin cambios en el estado de las fases 0–13.
+
+## 2026-10-30 · DEC-EURUSD-PULLBACK-1 (borrador, sin certificación)
+
+Entrada límite EURUSD solo en el router del demo OANDA practice (`execution/eurusd_pullback.py`,
+`execution/broker_demo_router.py`). No cambia el planner, el Risk Engine ni el filtro de noticias.
+Flag `AI_FLOOR_EURUSD_LIMIT_PULLBACK`: ON si no está definido; `0` vuelve a la orden de mercado.
+Las posiciones ya abiertas no se re-gestionan. Fase 13 sigue STARTED. Sin merge, sin deploy, sin Render.
+Detalle en `docs/decisions.md` y `CHANGELOG_AGENT.md`.

@@ -75,8 +75,12 @@ class RouterBase(unittest.TestCase):
         self.default_transport.assert_not_called()
 
     def router(self, env=None, **extra):
-        return router_from_env({**self.env, **extra} if env is None else env, transport=self.server,
-                               clock=lambda: self.now, sleep=self.clock.sleep, broker_clock=self.clock)
+        # Existing cases keep the market path. Production leaves the flag unset, which is ON.
+        # Pass AI_FLOOR_EURUSD_LIMIT_PULLBACK=1 to exercise the H1 limit.
+        merged = {**self.env, **extra} if env is None else dict(env)
+        merged.setdefault("AI_FLOOR_EURUSD_LIMIT_PULLBACK", "0")
+        return router_from_env(merged, transport=self.server, clock=lambda: self.now, sleep=self.clock.sleep,
+                               broker_clock=self.clock)
 
     def registry(self):
         return AccountRegistry(self.db, env=self.env)
@@ -742,7 +746,7 @@ class RuntimeHookTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def on_cycle(self, context, status, at):
+            def on_cycle(self, context, status, at, h1_bars=None):
                 self.calls.append((context.get("symbol"), status))
                 raise RuntimeError("router down")
 
