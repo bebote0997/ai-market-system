@@ -144,7 +144,8 @@ header[data-testid="stHeader"]{background:transparent}
 [data-testid="stCode"] pre,.stApp code{background:#0d0d0e;color:#9ff5ee}
 [data-testid="stVerticalBlockBorderWrapper"]:has(> div > [data-testid="stVerticalBlock"]){border-radius:16px;border-color:#1a2325}
 .st-key-curve-card{background:#0d1416;border:1px solid #1a2325!important;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.35);padding:18px 20px;margin-bottom:18px}
-.st-key-open-floor button{width:100%;min-height:48px;font-size:16px;letter-spacing:.08em}
+.st-key-open-floor{margin:4px 0 16px}
+.st-key-open-floor button{width:100%;min-height:52px;font-size:17px;font-weight:700;letter-spacing:.04em}
 @media(max-width:900px){.tf .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:480px){.tf .kpis{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:640px){

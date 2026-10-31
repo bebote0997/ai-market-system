@@ -15,9 +15,10 @@ def build_setup_figure(bars, plan, symbol):
         raise ValueError('chart unavailable: bars not persisted')
     close_only = all(bar.get('source') == 'candle_cache' and bar.get('timeframe') == '5m' for bar in bars)
     close_body = all(bar.get('source') == 'close_body' and bar.get('timeframe') == '5m' for bar in bars)
+    ohlc_5m = all(bar.get('source') == 'oanda_practice' and bar.get('timeframe') == '5m' for bar in bars)
     times, candles = [], []
     for bar in bars:
-        if not close_only and not close_body and str(bar.get('timeframe', '15m')).lower() not in ('15m', '15min'):
+        if not close_only and not close_body and not ohlc_5m and str(bar.get('timeframe', '15m')).lower() not in ('15m', '15min'):
             raise ValueError('15m bars required')
         raw = bar.get('timestamp') or bar.get('start') or bar.get('bar_start')
         at = datetime.fromisoformat(raw.replace('Z', '+00:00'))
@@ -35,8 +36,9 @@ def build_setup_figure(bars, plan, symbol):
         candles.append(values)
     ordered = sorted(zip(times, candles), key=lambda item: item[0])
     times, candles = zip(*ordered)
-    frame_label = '5m closes · no OHLC' if close_only else ('5m candles · close bodies' if close_body else '15m')
-    candle_name = '5m' if close_body else '15m'
+    frame_label = ('5m closes · no OHLC' if close_only else '5m candles · close bodies' if close_body
+                   else '5m OHLC' if ohlc_5m else '15m')
+    candle_name = '5m' if close_body or ohlc_5m else '15m'
     fig = go.Figure(go.Scatter(x=times, y=[v[0] for v in candles], mode='lines',
         line=dict(color=GOLD), name='5m close') if close_only else go.Candlestick(x=times,
         open=[v[0] for v in candles], high=[v[1] for v in candles],
@@ -100,7 +102,8 @@ def bars_for_dashboard(bars):
 # Dashboard-only restyle in the app's dark + gold Floor palette (the name is historical). build_setup_figure (shared
 # with the setup e-mail PNG) is left unchanged.
 LIGHT = {'bg': '#0d1416', 'grid': '#1f2c2e', 'text': '#c9d4d2', 'entry': '#d9b45a', 'up': '#3ddc84', 'down': '#ff4d6d'}
-LABELS_ES = (('5m candles · close bodies', 'velas de 5 min · cuerpo de cierres'),
+LABELS_ES = (('5m OHLC', 'velas de 5 min · OHLC'),
+             ('5m candles · close bodies', 'velas de 5 min · cuerpo de cierres'),
              ('TAKE PROFIT', 'TAKE PROFIT (TP)'), ('STOP LOSS', 'STOP LOSS'), ('ENTRY', 'ENTRADA'),
              ('price distance', 'de distancia de precio'), (' risk', ' de riesgo'), (' reward', ' de beneficio'),
              ('R:R unavailable', 'R:R no disponible'), ('Plan levels not persisted', 'Niveles del plan no guardados'),

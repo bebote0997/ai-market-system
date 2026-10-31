@@ -1,10 +1,9 @@
-"""Short Spanish presentation of agent prose and evidence blobs.
+"""Spanish presentation of agent notes and evidence blobs.
 
-No network and no model call: a fixed glossary of the phrases the floor agents actually write, cached in
-process memory. Text that does not match is left unchanged (the caller shows the original). Nothing here
-invents a market fact that was not in the source sentence.
+English prose is translated by ``ui.es_translate`` (the OpenAI model already configured for the app, cached
+per text). A note that is already Spanish is kept. If translation is unavailable or fails, the original is
+shown. Nothing here invents a market fact.
 """
-from functools import lru_cache
 from html import escape
 import re
 
@@ -16,27 +15,6 @@ _ENGLISH = re.compile(
     r"sweeps?|retracement|indeterminate|calendar|high-impact|specialist|deterministic)\b",
     re.IGNORECASE)
 
-# (pattern, Spanish fact). Order is the order facts are spoken. A sentence can contribute several.
-_FACTS = (
-    (r"no directional confluence|no executable setup|executable setup is not",
-     "No hay confluencia direccional ni un setup operable."),
-    (r"caution is warranted", "Conviene ser prudente."),
-    (r"remains watch|\bwatch\b", "La evaluación sigue en observación."),
-    (r"non-directional|neutral in both bias|all supplied timeframes are neutral|structure_state",
-     "Los marcos están neutrales, sin dirección."),
-    (r"\bbos\b|break of structure", "Hay ruptura de estructura (BOS)."),
-    (r"retracement", "Hay retroceso en algunos marcos y no en todos."),
-    (r"liquidity below|favor liquidity below", "La liquidez de marcos altos apunta por debajo del precio."),
-    (r"more concentrated above|liquidity above", "En el marco corto la liquidez está más arriba."),
-    (r"no sweeps|order blocks|evidence is mixed|\bmixed\b", "Sin barridas claras: la evidencia está mixta."),
-    (r"high-impact|calendar risk|two-sided", "Hay riesgo de calendario por eventos de alto impacto, en ambos sentidos."),
-    (r"no active event window|indeterminate|no timestamps",
-     "Sin ventana de evento activa: la dirección queda indeterminada."),
-    (r"\bbullish\b", "Sesgo de compra."),
-    (r"\bbearish\b", "Sesgo de venta."),
-    (r"valid setup", "Setup válido."),
-    (r"\binvalid\b|no setup", "Sin setup operable."),
-)
 _SHORT = 280
 
 
@@ -49,26 +27,15 @@ def _clip(text, limit=_SHORT):
     return (cut[:space] if space > limit // 2 else cut).rstrip(" ,.;:") + "…"
 
 
-@lru_cache(maxsize=1024)
-def _summarize(text):
-    """Cached on the normalised sentence. ``None`` when the English did not match the glossary."""
+def summarize_es(text):
+    """Full Spanish translation, the text itself when it is already Spanish, or None when translation fails."""
+    text = " ".join(str(text or "").split())
     if not text:
         return None
     if not _ENGLISH.search(text):
-        return _clip(text)
-    low = text.lower()
-    facts = []
-    for pattern, sentence in _FACTS:
-        if re.search(pattern, low) and sentence not in facts:
-            facts.append(sentence)
-    if not facts:
-        return None
-    return _clip(" ".join(facts))
-
-
-def summarize_es(text):
-    """Spanish summary, the original when it is already Spanish, or ``None`` if it cannot be summarised."""
-    return _summarize(" ".join(str(text or "").split()))
+        return text
+    from ui.es_translate import translate_es
+    return translate_es(text)
 
 
 def history_fields(text, at=None):

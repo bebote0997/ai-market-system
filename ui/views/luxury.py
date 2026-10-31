@@ -385,7 +385,7 @@ def start_hero(st, now, *, demo, day=None):
              + (f'<div class="hero-day">{escape(day_line)}</div>' if day_line else '')
              + f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>'
              f'{badge}</div>{art}</div>')
-    open_floor_button(st)
+    open_floor_button(st)  # directly under the hero, full width, on phones too
 
 
 def open_floor_button(st):
