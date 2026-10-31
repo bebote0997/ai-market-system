@@ -75,7 +75,8 @@ class LogFormatTests(unittest.TestCase):
         self.assertEqual(bdr._log_reason(None), "-")
         self.assertEqual(bdr.ACTION_LOG_KINDS, {
             "CLOSED", "CLOSE_UNKNOWN", "CLOSE_FAILED", "CLOSE_REJECTED", "CLOSED_AT_BROKER", "BREAKEVEN",
-            "BREAKEVEN_UNKNOWN", "BREAKEVEN_REJECTED", "BREAKEVEN_BLOCKED"})
+            "BREAKEVEN_UNKNOWN", "BREAKEVEN_REJECTED", "BREAKEVEN_BLOCKED", "PARTIAL_CLOSE", "TRAIL",
+            "LIMIT_PENDING", "LIMIT_EXPIRED", "LIMIT_CANCELLED"})
 
     def test_uncontrolled_reasons_never_reach_the_log(self):
         for reason, expected in ((f"EMERGENCY:account {ACCOUNT}", "EMERGENCY"), (f"EMERGENCY_{TOKEN}", "EMERGENCY"),

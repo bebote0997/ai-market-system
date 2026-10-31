@@ -147,6 +147,23 @@ def _dec(value):
 
 
 @dataclass(frozen=True)
+class LimitResult:
+    """Outcome of a LIMIT submission. ``RESTING`` is a known pending order, not an ambiguous fill."""
+    status: str  # ACCEPTED (filled now) | RESTING | REJECTED | UNKNOWN
+    client_id: str
+    broker_ref: str = None  # trade id when ACCEPTED, order id when RESTING
+    reason: str = None
+
+
+@dataclass(frozen=True)
+class PendingOrder:
+    order_id: str
+    instrument: str
+    client_ext_id: str = None
+    price: Decimal = None
+
+
+@dataclass(frozen=True)
 class OpenTrade:
     trade_id: str
     instrument: str
@@ -244,6 +261,25 @@ def _reject_code(transaction, *fields):
     return reason_code(reason) if reason else None
 
 
+def _close_matched(fill, position_ref, units=None):
+    """True when a close fill names ``position_ref``. ``units`` set: the closed size must match (partial close)."""
+    if not isinstance(fill, dict) or not _transaction_id(fill):
+        return False
+    reduced = fill.get("tradeReduced")
+    candidates = [reduced] if isinstance(reduced, dict) else []
+    closed = fill.get("tradesClosed")
+    if isinstance(closed, list):
+        candidates.extend(item for item in closed if isinstance(item, dict))
+    for item in candidates:
+        if item.get("tradeID") != position_ref:
+            continue
+        if units is None:
+            return True
+        got = _dec(item.get("units"))
+        return got is None or abs(got) == units
+    return False
+
+
 def _not_found(error):
     return isinstance(error, BrokerRejected) and error.status == 404 and error.code in TRADE_NOT_FOUND_CODES
 
@@ -310,7 +346,18 @@ class OandaBroker:
         with self._lock:
             return self._submit_plan(plan, approval)
 
-    def _submit_plan(self, plan, approval):
+    def submit_limit(self, plan, approval, *, price, gtd_time):
+        """LIMIT GTD with the engine's absolute SL/TP. Same approval gate as ``submit_plan``. Practice only."""
+        if self.close_only:
+            raise BrokerGuardError("close-only broker: submit refused")
+        if not isinstance(plan, OrderPlan):
+            raise TypeError("plan must be an OrderPlan")
+        if not isinstance(price, Decimal) or not isinstance(gtd_time, str):
+            return LimitResult("REJECTED", getattr(plan, "client_id", None) or "", reason="limit_invalid")
+        with self._lock:
+            return self._submit_plan(plan, approval, limit=(price, gtd_time))
+
+    def _submit_plan(self, plan, approval, limit=None):
         cid = plan.client_id
         problem = approval_problem(plan, approval)
         if problem:
@@ -342,8 +389,14 @@ class OandaBroker:
             return gate if isinstance(gate, SubmitResult) else SubmitResult(REJECTED, cid, reason=gate)
 
         extensions = {"id": ext_id, "tag": CLIENT_TAG, "comment": _comment(plan.source_run_id)}
-        order = OandaClient.build_market_order(instrument=instrument, units=units, stop=stop, target=target,
-                                               client_extensions=extensions, trade_client_extensions=extensions)
+        if limit is None:
+            order = OandaClient.build_market_order(instrument=instrument, units=units, stop=stop, target=target,
+                                                   client_extensions=extensions, trade_client_extensions=extensions)
+        else:
+            limit_price, gtd_time = limit
+            order = OandaClient.build_limit_order(instrument=instrument, units=units, price=limit_price, stop=stop,
+                                                  target=target, gtd_time=gtd_time, client_extensions=extensions,
+                                                  trade_client_extensions=extensions)
         self._unresolved[ext_id] = IN_FLIGHT  # Before the POST: any unexpected exit keeps the id latched.
         try:
             with self._guarded_sends():  # Fresh switch/emergency check right before every POST attempt.
@@ -359,7 +412,7 @@ class OandaBroker:
         except BrokerUnavailable as error:  # Timeout/5xx/transport/unparseable: the order may exist. Never repost.
             result = self._reconcile_submit(cid, ext_id, type(error).__name__)
         else:
-            result = self._map_submit(cid, payload)
+            result = self._map_submit(cid, payload) if limit is None else self._map_limit(cid, payload)
         if result.status == UNKNOWN:
             self._unresolved[ext_id] = OUTCOME_UNKNOWN
         else:
@@ -452,6 +505,33 @@ class OandaBroker:
             return SubmitResult(UNKNOWN, cid, reason="no_fill_evidence")
         return SubmitResult(UNKNOWN, cid, reason="no_acceptance_evidence")
 
+    @staticmethod
+    def _map_limit(cid, payload):
+        """A resting LIMIT is RESTING (order id), not UNKNOWN. An immediate fill is ACCEPTED (trade id)."""
+        if not isinstance(payload, dict):
+            return LimitResult("UNKNOWN", cid, reason="no_acceptance_evidence")
+        if "orderFillTransaction" in payload:
+            fill = payload["orderFillTransaction"]
+            opened = fill.get("tradeOpened") if isinstance(fill, dict) else None
+            trade_id = opened.get("tradeID") if isinstance(opened, dict) else None
+            if _transaction_id(fill) and isinstance(trade_id, str) and _TRADE_ID_RE.match(trade_id):
+                return LimitResult("ACCEPTED", cid, broker_ref=trade_id)
+            return LimitResult("UNKNOWN", cid, reason="malformed_fill_evidence")
+        for key, fields in (("orderCancelTransaction", ("reason",)),
+                            ("orderRejectTransaction", ("rejectReason", "reason"))):
+            if key in payload:
+                code = _reject_code(payload[key], *fields)
+                if code is None:
+                    return LimitResult("UNKNOWN", cid, reason="malformed_reject_evidence")
+                return LimitResult("REJECTED", cid, reason=code)
+        created = payload.get("orderCreateTransaction")
+        if isinstance(created, dict) and created.get("type") == "LIMIT_ORDER":
+            order_id = created.get("id")
+            if _transaction_id(created) and isinstance(order_id, str) and _TRADE_ID_RE.match(order_id):
+                return LimitResult("RESTING", cid, broker_ref=order_id)
+            return LimitResult("UNKNOWN", cid, reason="malformed_limit_evidence")
+        return LimitResult("UNKNOWN", cid, reason="no_acceptance_evidence")
+
     def close_market(self, position_ref, *, reason: str, client_id: str) -> CloseResult:
         """Close ALL units of trade ``position_ref``. Allowed with the switch OFF or emergency (reduces risk)."""
         if not isinstance(position_ref, str) or not _TRADE_ID_RE.match(position_ref):
@@ -472,11 +552,8 @@ class OandaBroker:
             return CloseResult(UNKNOWN, client_id, reason="no_acceptance_evidence")
         if "orderFillTransaction" in payload:
             fill = payload["orderFillTransaction"]
-            closed = fill.get("tradesClosed") if isinstance(fill, dict) else None
-            ref = _transaction_id(fill)
-            if ref and isinstance(closed, list) and any(
-                    isinstance(item, dict) and item.get("tradeID") == position_ref for item in closed):
-                return CloseResult(ACCEPTED, client_id, broker_ref=ref)
+            if _close_matched(fill, position_ref):
+                return CloseResult(ACCEPTED, client_id, broker_ref=_transaction_id(fill))
             return CloseResult(UNKNOWN, client_id, reason="malformed_fill_evidence")
         if "orderCancelTransaction" in payload:
             code = _reject_code(payload["orderCancelTransaction"], "reason")
@@ -484,6 +561,86 @@ class OandaBroker:
                 return CloseResult(UNKNOWN, client_id, reason="malformed_reject_evidence")
             return CloseResult(REJECTED, client_id, reason=code)
         return CloseResult(UNKNOWN, client_id, reason="no_acceptance_evidence")
+
+    def close_units(self, position_ref, units, *, client_id: str) -> CloseResult:
+        """Close ``units`` of one trade (a scale-out). Same failure rules as ``close_market``; never widens risk."""
+        if type(units) is not int or units < 1:
+            return CloseResult(REJECTED, client_id, reason="invalid_units")
+        if not isinstance(position_ref, str) or not _TRADE_ID_RE.match(position_ref):
+            return CloseResult(REJECTED, client_id, reason="invalid_position_ref")
+        with self._lock:
+            return self._close_units(position_ref, units, client_id)
+
+    def _close_units(self, position_ref, units, client_id):
+        try:
+            payload = self._client.close_trade(position_ref, units=units)
+        except BrokerRejected as error:
+            if error.status != 404:
+                return CloseResult(REJECTED, client_id, reason=reason_code(error.code, f"broker_rejected:{error.status}"))
+            return self._verify_absent(position_ref, client_id)
+        except BrokerUnavailable as error:
+            return CloseResult(UNKNOWN, client_id, reason=type(error).__name__)
+        if not isinstance(payload, dict):
+            return CloseResult(UNKNOWN, client_id, reason="no_acceptance_evidence")
+        if "orderFillTransaction" in payload:
+            fill = payload["orderFillTransaction"]
+            if _close_matched(fill, position_ref, units):
+                return CloseResult(ACCEPTED, client_id, broker_ref=_transaction_id(fill))
+            return CloseResult(UNKNOWN, client_id, reason="malformed_fill_evidence")
+        if "orderCancelTransaction" in payload:
+            code = _reject_code(payload["orderCancelTransaction"], "reason")
+            if code is None:
+                return CloseResult(UNKNOWN, client_id, reason="malformed_reject_evidence")
+            return CloseResult(REJECTED, client_id, reason=code)
+        return CloseResult(UNKNOWN, client_id, reason="no_acceptance_evidence")
+
+    def cancel_order(self, order_id, *, client_id: str) -> CloseResult:
+        """Cancel one resting order. Allowed with the switch OFF (it stops a new fill)."""
+        if not isinstance(order_id, str) or not _TRADE_ID_RE.match(order_id):
+            return CloseResult(REJECTED, client_id, reason="invalid_order_id")
+        try:
+            payload = self._client.cancel_order(order_id)
+        except BrokerRejected as error:
+            if error.status == 404:
+                return CloseResult(REJECTED, client_id, reason="order_not_found")
+            return CloseResult(REJECTED, client_id, reason=reason_code(error.code, f"broker_rejected:{error.status}"))
+        except BrokerUnavailable as error:
+            return CloseResult(UNKNOWN, client_id, reason=type(error).__name__)
+        if isinstance(payload, dict) and "orderCancelTransaction" in payload:
+            cancelled = payload["orderCancelTransaction"]
+            ref = _transaction_id(cancelled)
+            if ref:
+                return CloseResult(ACCEPTED, client_id, broker_ref=ref)
+            return CloseResult(UNKNOWN, client_id, reason="malformed_cancel_evidence")
+        if isinstance(payload, dict) and "orderCancelRejectTransaction" in payload:
+            code = _reject_code(payload["orderCancelRejectTransaction"], "rejectReason", "reason")
+            if code is None:
+                return CloseResult(UNKNOWN, client_id, reason="malformed_reject_evidence")
+            return CloseResult(REJECTED, client_id, reason=code)
+        return CloseResult(UNKNOWN, client_id, reason="no_acceptance_evidence")
+
+    def pending_orders(self):
+        """Fresh read of pending orders. Malformed answers raise; an empty list is a real empty book."""
+        payload = self._client.get_pending_orders()
+        if not isinstance(payload, dict):
+            raise BrokerMalformedResponse("pending orders answer is not an object")
+        items = payload.get("orders")
+        if not isinstance(items, list):
+            raise BrokerMalformedResponse("pending orders answer without 'orders'")
+        found = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise BrokerMalformedResponse("pending order entry is not an object")
+            order_id = item.get("id")
+            if not isinstance(order_id, str) or not _TRADE_ID_RE.match(order_id):
+                raise BrokerMalformedResponse("pending order without a valid id")
+            extensions = item.get("clientExtensions")
+            ext = extensions.get("id") if isinstance(extensions, dict) else None
+            if ext is not None and not isinstance(ext, str):
+                raise BrokerMalformedResponse("pending order with an invalid client id")
+            instrument = item.get("instrument") if isinstance(item.get("instrument"), str) else ""
+            found.append(PendingOrder(order_id, instrument, ext, _dec(item.get("price"))))
+        return tuple(found)
 
     def _verify_absent(self, position_ref, client_id):
         try:

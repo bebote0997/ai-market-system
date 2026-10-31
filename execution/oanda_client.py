@@ -232,8 +232,25 @@ class OandaClient:
         body = {"stopLoss": {"price": format_price(price), "timeInForce": "GTC"}}
         return self._call(TRADING, "PUT", self._path(f"trades/{self._trade(specifier)}/orders"), body)
 
-    def close_trade(self, specifier):
-        return self._call(TRADING, "PUT", self._path(f"trades/{self._trade(specifier)}/close"), {"units": "ALL"})
+    def close_trade(self, specifier, units="ALL"):
+        """Close ``units`` of one trade. ``"ALL"`` closes the whole trade; a positive int closes that many units."""
+        if units == "ALL":
+            body = {"units": "ALL"}
+        elif type(units) is int and units > 0:
+            body = {"units": str(units)}
+        else:
+            raise ValueError("units must be 'ALL' or a positive int")
+        return self._call(TRADING, "PUT", self._path(f"trades/{self._trade(specifier)}/close"), body)
+
+    def get_pending_orders(self):
+        """Read-only list of pending orders (resting limits included)."""
+        return self._call(DATA, "GET", self._path("pendingOrders"))
+
+    def cancel_order(self, order_id):
+        """Cancel one pending order by its numeric id. Reduces risk; never opens."""
+        if not isinstance(order_id, str) or not _TRANSACTION_ID_RE.match(order_id):
+            raise ValueError("invalid order id")
+        return self._call(TRADING, "PUT", self._path(f"orders/{quote(order_id, safe='')}/cancel"))
 
     def close_position(self, instrument, side):
         if side not in ("LONG", "SHORT"):
@@ -246,6 +263,18 @@ class OandaClient:
         """MARKET FOK order with SL/TP on fill (GTC). Prices: 5-decimal strings; units: signed integer string."""
         return {"type": "MARKET", "instrument": _instrument(instrument), "units": format_units(units),
                 "timeInForce": "FOK", "positionFill": "DEFAULT",
+                "stopLossOnFill": {"price": format_price(stop), "timeInForce": "GTC"},
+                "takeProfitOnFill": {"price": format_price(target), "timeInForce": "GTC"},
+                "clientExtensions": dict(client_extensions), "tradeClientExtensions": dict(trade_client_extensions)}
+
+    @staticmethod
+    def build_limit_order(*, instrument, units, price, stop, target, gtd_time, client_extensions,
+                          trade_client_extensions):
+        """LIMIT GTD order. Stop and target are the engine's absolute prices, attached on fill, not shifted."""
+        if not isinstance(gtd_time, str) or "T" not in gtd_time or not gtd_time.endswith("Z"):
+            raise ValueError("gtd_time must be an RFC3339 UTC timestamp")
+        return {"type": "LIMIT", "instrument": _instrument(instrument), "units": format_units(units),
+                "price": format_price(price), "timeInForce": "GTD", "gtdTime": gtd_time, "positionFill": "DEFAULT",
                 "stopLossOnFill": {"price": format_price(stop), "timeInForce": "GTC"},
                 "takeProfitOnFill": {"price": format_price(target), "timeInForce": "GTC"},
                 "clientExtensions": dict(client_extensions), "tradeClientExtensions": dict(trade_client_extensions)}

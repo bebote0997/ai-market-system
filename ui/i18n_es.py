@@ -228,6 +228,9 @@ STATUS = {
     "ORDER_CANCELLED": "Orden cancelada", "STOP_HIT": "Stop loss alcanzado", "TARGET_HIT": "Take profit alcanzado",
     "DAILY_SUMMARY": "Resumen diario", "CYCLE_STARTED": "Ciclo iniciado", "CYCLE_COMPLETED": "Ciclo completado",
     "CLOSED_AT_BROKER": "Cerrada en el broker", "TRIGGERED": "Activado",
+    "PENDING_LIMIT": "Límite pendiente", "LIMIT_PENDING": "Límite pendiente",
+    "LIMIT_EXPIRED": "Límite vencido", "LIMIT_CANCELLED": "Límite cancelado",
+    "PARTIAL_CLOSE": "Cierre parcial", "TRAIL": "Stop de seguimiento",
 }
 
 # Explicit labels for persisted execution, risk, health and notification evidence.

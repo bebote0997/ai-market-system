@@ -26,7 +26,9 @@ def oanda_steps(run_id):
     trades = read_run_trades(run_id)
     if trades is None:
         return [], [], [{'source': 'OANDA_DEMO', 'outcome': NO_DATA}]
-    entry = [{'source': 'OANDA_DEMO', **t} for t in trades if t.get('trade_id') or t.get('fill_price')]
+    entry = [{'source': 'OANDA_DEMO', **t} for t in trades
+             if t.get('trade_id') or t.get('fill_price') or t.get('status') == 'PENDING_LIMIT'
+             or t.get('order_kind') == 'LIMIT']
     exits = [{'source': 'OANDA_DEMO', **t} for t in trades if t.get('status') in (CLOSED, CLOSED_AT_BROKER)]
     outcome = [{'source': 'OANDA_DEMO', 'client_id': t['client_id'], 'status': t['status'],
                 'closed_reason': t.get('closed_reason')} for t in trades]

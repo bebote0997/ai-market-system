@@ -229,7 +229,8 @@ def render_router(st, status, since=None):
     from ui.views.luxury import html
     text, kind = routing_chip(status)
     trade = status.get("open_trade")
-    parts = (("lado", "side"), ("unidades", "units"), ("estado", "status"))
+    parts = (("lado", "side"), ("unidades", "units"), ("estado", "status"), ("límite", "limit_price"),
+             ("gestión", "scale_stage"))
     trade_text = DASH if not trade else " · ".join(
         [f"operación …{escape(str(trade['trade_id'])[-4:])}"] * bool(trade.get("trade_id"))
         + [f"{label} {escape(status_text(trade.get(key)))}" for label, key in parts if trade.get(key) is not None])
