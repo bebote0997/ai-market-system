@@ -9,10 +9,12 @@ Hardening (security audit M-1, L-1, L-3):
 - without a password the dashboard opens only when Streamlit is bound to a loopback address.
 """
 from collections import deque
+import hashlib
 import hmac
 import logging
 import math
 import os
+import secrets
 import threading
 import time
 
@@ -33,6 +35,12 @@ AUTHENTICATED = "dashboard_authenticated"
 EXPIRES_AT = "dashboard_auth_expires_at"
 FAILURES = "dashboard_login_failures"
 LOCKED_UNTIL = "dashboard_locked_until"
+# Remember-me: a signed token in a cookie. The password never leaves the server and is not stored in the browser.
+REMEMBER_COOKIE = "aif_remember"
+REMEMBER_ISSUE = "dashboard_remember_issue"
+REMEMBER_CLEAR = "dashboard_remember_clear"
+REMEMBER_TTL_SECONDS = 30 * 24 * 3600
+REMEMBER_VERSION = "v1"
 
 
 class LoginLimiter:
@@ -92,6 +100,142 @@ def _loopback_only(st):
     return isinstance(address, str) and address.strip().strip("[]") in LOOPBACK_ADDRESSES
 
 
+def _remember_key(password):
+    return hmac.new(b"aifloor-remember-v1", password.encode("utf-8"), hashlib.sha256).digest()
+
+
+def issue_remember_token(password, now, ttl=REMEMBER_TTL_SECONDS):
+    """``v1.<exp>.<nonce>.<hmac>``. Stateless: changing the password invalidates every outstanding token."""
+    exp = int(now) + int(ttl)
+    nonce = secrets.token_hex(16)
+    message = f"{exp}.{nonce}".encode("ascii")
+    signature = hmac.new(_remember_key(password), message, hashlib.sha256).hexdigest()
+    return f"{REMEMBER_VERSION}.{exp}.{nonce}.{signature}"
+
+
+def remember_token_valid(token, password, now):
+    """True only for a well-formed, unexpired token signed with the current password. Never raises."""
+    try:
+        if not isinstance(token, str) or not password_strong_enough(password):
+            return False
+        version, exp, nonce, signature = token.split(".")
+        if version != REMEMBER_VERSION or not nonce or len(nonce) > 64:
+            return False
+        expires = int(exp)
+        if expires < now or expires > now + REMEMBER_TTL_SECONDS + 120:
+            return False
+        message = f"{expires}.{nonce}".encode("ascii")
+        expected = hmac.new(_remember_key(password), message, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(signature, expected)
+    except (TypeError, ValueError):
+        return False
+
+
+def request_cookie(st, name):
+    context = getattr(st, "context", None)
+    cookies = getattr(context, "cookies", None) if context is not None else None
+    if not cookies:
+        return ""
+    try:
+        value = cookies.get(name, "")
+    except Exception:  # noqa: BLE001 - a strange cookie jar is the same as no cookie
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def _flush_remember_cookie(st):
+    """Write or clear the remember cookie once, after a login that asked for it. No-op without the flag."""
+    from ui.client_script import set_cookie
+    state = st.session_state
+    token = state.pop(REMEMBER_ISSUE, None)
+    if isinstance(token, str) and token:
+        set_cookie(st, REMEMBER_COOKIE, token, REMEMBER_TTL_SECONDS)
+        return
+    if state.pop(REMEMBER_CLEAR, None):
+        set_cookie(st, REMEMBER_COOKIE, "0", 0)
+
+
+_LOGIN_CSS = """<style>
+.stApp:has(.aif-login){min-height:100vh;background:
+ radial-gradient(42vmax 34vmax at 0% 0%,rgba(217,180,90,.22),transparent 70%),
+ radial-gradient(38vmax 32vmax at 100% 8%,rgba(106,61,240,.20),transparent 68%),#07070b;color:#f5f5f9}
+.stApp:has(.aif-login) .block-container{max-width:460px;margin:8vh auto 0;padding:28px 26px 22px;border-radius:22px;
+ background:rgba(16,18,28,.55);border:1px solid rgba(232,196,111,.45);
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 18px 50px rgba(0,0,0,.35);
+ -webkit-backdrop-filter:blur(18px) saturate(140%);backdrop-filter:blur(18px) saturate(140%)}
+.aif-login h1{font-family:Didot,Georgia,serif;font-weight:400;font-size:26px;letter-spacing:.04em;
+ color:#f3e2b0;margin:0 0 6px;line-height:1.25}
+.aif-login p{color:#c9ccd8;font-size:14px;margin:0 0 14px}
+.stApp:has(#tf-theme-light):has(.aif-login){background:#f4f0e6;color:#1c1914}
+.stApp:has(#tf-theme-light) .block-container{background:rgba(255,252,247,.78);border-color:rgba(120,90,30,.35)}
+.stApp:has(#tf-theme-light) .aif-login h1{color:#6d5420}
+.stApp:has(#tf-theme-light) .aif-login p{color:#3d3830}
+@media(max-width:640px){
+ .stApp:has(.aif-login) .block-container{margin:12px 12px 0;padding:20px 16px;max-width:none}
+}
+</style>"""
+
+
+def _login_form(st, *, expired, password, now, state, limiter, ttl, sleep):
+    markdown = getattr(st, "markdown", None)
+    if callable(markdown):
+        light = bool(state.get("ui_theme"))
+        markdown(_LOGIN_CSS + ('<div id="tf-theme-light" hidden></div>' if light else '')
+                 + '<div class="aif-login"><h1>AI Trading Floor</h1>'
+                 '<p>Panel privado · OANDA Demo (práctica). La contraseña no se guarda en el navegador.</p></div>',
+                 unsafe_allow_html=True)
+    else:
+        st.title("AI Trading Floor · panel privado · OANDA Demo (práctica)")
+    if expired:
+        st.info("La sesión expiró; vuelve a entrar.")
+    toggle = getattr(st, "toggle", None)
+    if callable(toggle):
+        if "ui_theme" not in state:
+            state["ui_theme"] = request_cookie(st, "aif_theme") == "light"
+        light = bool(toggle("Modo claro", key="ui_theme"))
+        from ui.client_script import set_cookie
+        set_cookie(st, "aif_theme", "light" if light else "dark", 365 * 24 * 3600)
+    locked_until = max(limiter.locked_until(now), state.get(LOCKED_UNTIL) or 0.0)
+    if now < locked_until:
+        return _deny(st, "Demasiados intentos fallidos. Intenta de nuevo en "
+                         f"{math.ceil(locked_until - now)} s.")
+    supplied = st.text_input("Contraseña", type="password") or ""
+    remember = False
+    checkbox = getattr(st, "checkbox", None)
+    if callable(checkbox):
+        remember = bool(checkbox("Recordar sesión en este navegador (30 días)"))
+        caption = getattr(st, "caption", None)
+        if callable(caption):
+            caption("La sesión queda en una cookie firmada que caduca a los 30 días. La contraseña no se guarda.")
+    if st.button("Entrar"):
+        if hmac.compare_digest(supplied.encode("utf-8"), password.encode("utf-8")):
+            state[FAILURES] = 0
+            state.pop(LOCKED_UNTIL, None)
+            state[AUTHENTICATED] = True
+            state[EXPIRES_AT] = now + ttl
+            if remember:
+                state[REMEMBER_ISSUE] = issue_remember_token(password, time.time())
+                state.pop(REMEMBER_CLEAR, None)
+            else:
+                state[REMEMBER_CLEAR] = True
+                state.pop(REMEMBER_ISSUE, None)
+            LOG.info("component=dashboard event=LOGIN_OK")
+            st.rerun()
+        else:
+            failures = int(state.get(FAILURES) or 0) + 1
+            # The supplied value is never logged or echoed.
+            LOG.warning("component=dashboard event=LOGIN_FAILED session_failures=%d", failures)
+            limiter.record_failure(now)
+            if failures >= SESSION_MAX_FAILURES:
+                failures = 0
+                state[LOCKED_UNTIL] = now + SESSION_LOCKOUT_SECONDS
+            state[FAILURES] = failures
+            sleep(FAILURE_DELAY_SECONDS)
+            st.error("Contraseña incorrecta")
+    st.stop()
+    return False
+
+
 def _deny(st, message):
     st.error(message)
     st.stop()
@@ -119,42 +263,22 @@ def require_dashboard_access(st, env=None, *, clock=time.monotonic, sleep=time.s
     now = clock()
     expires_at = state.get(EXPIRES_AT)
     if state.get(AUTHENTICATED) is True and isinstance(expires_at, (int, float)) and now < expires_at:
+        _flush_remember_cookie(st)
         return True
     expired = state.get(AUTHENTICATED) is True
     state[AUTHENTICATED] = False
     state.pop(EXPIRES_AT, None)
     if expired:
         LOG.info("component=dashboard event=SESSION_EXPIRED")
-
-    st.title("AI Trading Floor · panel privado · OANDA Demo (práctica)")
-    if expired:
-        st.info("La sesión expiró; vuelve a entrar.")
-    locked_until = max(limiter.locked_until(now), state.get(LOCKED_UNTIL) or 0.0)
-    if now < locked_until:
-        return _deny(st, "Demasiados intentos fallidos. Intenta de nuevo en "
-                         f"{math.ceil(locked_until - now)} s.")
-    supplied = st.text_input("Contraseña", type="password") or ""
-    if st.button("Entrar"):
-        if hmac.compare_digest(supplied.encode("utf-8"), password.encode("utf-8")):
-            state[FAILURES] = 0
-            state.pop(LOCKED_UNTIL, None)
-            state[AUTHENTICATED] = True
-            state[EXPIRES_AT] = now + ttl
-            LOG.info("component=dashboard event=LOGIN_OK")
-            st.rerun()
-        else:
-            failures = int(state.get(FAILURES) or 0) + 1
-            # The supplied value is never logged or echoed.
-            LOG.warning("component=dashboard event=LOGIN_FAILED session_failures=%d", failures)
-            limiter.record_failure(now)
-            if failures >= SESSION_MAX_FAILURES:
-                failures = 0
-                state[LOCKED_UNTIL] = now + SESSION_LOCKOUT_SECONDS
-            state[FAILURES] = failures
-            sleep(FAILURE_DELAY_SECONDS)
-            st.error("Contraseña incorrecta")
-    st.stop()
-    return False
+    remembered = request_cookie(st, REMEMBER_COOKIE)
+    if remembered and remember_token_valid(remembered, password, time.time()):
+        state[FAILURES] = 0
+        state[AUTHENTICATED] = True
+        state[EXPIRES_AT] = now + ttl
+        LOG.info("component=dashboard event=LOGIN_REMEMBER")
+        return True
+    return _login_form(st, expired=expired, password=password, now=now, state=state, limiter=limiter,
+                       ttl=ttl, sleep=sleep)
 
 
 def owner_authenticated(st, env=None, *, clock=time.monotonic):

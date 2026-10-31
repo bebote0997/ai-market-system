@@ -33,6 +33,12 @@
 .tf .hero h1{font-size:15px;letter-spacing:.32em;margin:0;color:var(--gold2)}
 .tf .hero .sub{font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--teal2)}
 .tf .hero .banner{align-self:flex-start}
+.tf .hero:has(.hero-copy){display:grid;grid-template-columns:minmax(0,1.35fr) minmax(180px,.75fr);align-items:stretch;background:transparent}
+.tf .hero:has(.hero-copy) .wordmark{padding:0;letter-spacing:.18em;font-size:28px}
+.tf .hero-copy{padding:22px 22px 18px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.tf .hero-art{min-width:0;overflow:hidden}
+.tf .hero-art img{width:100%;height:100%;max-height:240px;object-fit:cover;display:block}
+.tf .hero-day{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal2)}
 /* KPI tiles: one grid, 3 columns -> 2 (tablet) -> 1 (phone) */
 .tf .kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 .tf .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 20px;height:100%;display:flex;flex-direction:column;gap:6px;overflow-wrap:anywhere}
@@ -146,7 +152,10 @@ header[data-testid="stHeader"]{background:transparent}
  [data-testid="stHorizontalBlock"]{flex-wrap:wrap}
  [data-testid="stColumn"]{min-width:100%!important;flex:1 1 100%!important}
  .tf h1{font-size:22px;letter-spacing:.1em}.tf .big{font-size:28px}.tf .kpi .value{font-size:26px}.tf .card{padding:16px}
- .tf .hero .wordmark{font-size:22px;letter-spacing:.2em;padding:20px 16px 4px}
+ .tf .hero .wordmark{font-size:22px;letter-spacing:.16em;padding:0}
+ .tf .hero:has(.hero-copy){grid-template-columns:minmax(0,1fr)}
+ .tf .hero-copy{padding:16px}
+ .tf .hero-art img{max-height:140px}
  .tf .hero .body{padding:12px 16px 14px}.tf .hero .sub{font-size:13px;letter-spacing:.1em}
  .tf .banner{border-radius:12px}
  .tf td,.tf th{min-width:80px;font-size:13px}
@@ -289,6 +298,16 @@ header[data-testid="stHeader"] [data-testid="stToolbar"]{display:flex!important;
 .st-key-floor-manual-close-cancel button{color:var(--gl-t1);background:rgba(255,255,255,.08);border-color:var(--gl-line)}
 .st-key-floor-manual-close-cancel button p{color:var(--gl-t1)}
 .st-key-floor-manual-close-cancel button:hover{background:rgba(255,255,255,.14);color:var(--gl-t1);border-color:rgba(255,255,255,.3)}
+/* The visible «Cerrar operación» sits in Carlos's drawer. This widget stays for the same two clicks. */
+.st-key-floor-manual-close{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.tf .kpis .account-sheet{grid-column:1 / -1}
+.tf details.more{margin-top:8px}
+.tf details.more > summary{cursor:pointer;color:var(--teal);font-weight:700;list-style:none;min-height:44px;display:flex;align-items:center}
+.tf details.more > summary::-webkit-details-marker{display:none}
+.tf details.more .when-open{display:none}
+.tf details.more[open] .when-closed{display:none}
+.tf details.more[open] .when-open{display:inline}
+.tf details.more .raw{margin-top:8px;max-height:220px;overflow:auto;font-size:13px;line-height:1.5;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.28);overflow-wrap:anywhere;max-width:100%}
 /* Floor agent cards (ui.components.glass) */
 .tf details.gl-agents{margin:0 0 6px}
 .tf details.gl-agents > summary{list-style:none;cursor:pointer;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-height:48px;
@@ -388,3 +407,16 @@ header[data-testid="stHeader"] [data-testid="stToolbar"]{display:flex!important;
 @media(prefers-reduced-motion:reduce){
  .stApp *,.stApp *::before,.stApp *::after{animation:none!important;transition:none!important}
 }
+/* Day theme. Text is dark on a warm glass; the dark tokens above stay the default. */
+.stApp:has(#tf-theme-light){--gl-t1:#1c1914;--gl-t2:#3f3a32;--gl-t3:#5c564c;--gl-gold:#7a5b16;--gl-green:#0c7a45;--gl-red:#a11d36;--gl-amber:#8a5a10;
+ --gl-page:#f4f0e6;--gl-fill:rgba(255,255,255,.55);--gl-base:rgba(255,252,247,.78);--gl-line:rgba(28,25,20,.14);color:#1c1914}
+.stApp:has(#tf-theme-light)::before{background:
+ radial-gradient(38vmax 38vmax at 6% 4%,rgba(217,180,90,.35),rgba(217,180,90,0) 70%),
+ radial-gradient(40vmax 40vmax at 96% 14%,rgba(120,140,200,.22),rgba(120,140,200,0) 70%),
+ radial-gradient(36vmax 36vmax at 42% 108%,rgba(90,140,180,.16),rgba(90,140,180,0) 70%),
+ radial-gradient(28vmax 28vmax at 80% 92%,rgba(40,160,110,.14),rgba(40,160,110,0) 70%),
+ #f7f3ea}
+.stApp:has(#tf-theme-light) .tf{--text:#1c1914;--mute:#3f3a32;--gold:#7a5b16;--gold2:#6d5420;--teal:#0e6e66;--teal2:#0e6e66}
+.stApp:has(#tf-theme-light) .tf .card h3,.stApp:has(#tf-theme-light) .tf h1{color:#6d5420}
+.stApp:has(#tf-theme-light) details.more .raw{background:rgba(255,255,255,.72);color:#1c1914}
+.stApp:has(#tf-theme-light) [data-testid="stSidebar"]{background:rgba(255,252,247,.82)}

@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-10-31 — Rediseño de UI del panel (borrador, solo presentación)
+
+- Login con cristal y «Recordar sesión»: cookie firmada (HMAC, 30 días). La contraseña no se guarda en el navegador. La sesión de 8 h se renueva al volver si la cookie sigue vigente.
+- Cabecera del Floor: solo Balance, P&L y Equity, sobre cristal. Las tarjetas de Inicio ponen el Balance antes que el NAV; las siete cifras marcadas pasan a filas en una ficha como la de pérdida diaria. Esa ficha no cambia.
+- Las tarjetas de agente muestran el estado corto. El texto largo va al historial de la ficha (con hora). Diego, Camila y Valentina leen el journal y las decisiones reales cuando existen; si no hay filas, sigue «sin datos».
+- «Cerrar operación» también está junto al nombre de Carlos. El botón de Streamlit, los dos clics y la solicitud al router no cambian.
+- Resumen de Decisiones, el detalle de ciclo, los pasos y La mesa: frase corta en español y «Ver más / Ocultar» para el texto crudo. Si no hay frase en el glosario, se ve el original.
+- El gráfico del setup dibuja velas de 5 min (48 velas, 4 h). El archivo solo guarda cierres: la apertura es el cierre anterior y no hay mecha intradía. El PNG del correo sigue en línea.
+- Modo claro / oscuro. Inicio con un héroe nuevo. En el teléfono el menú lateral sigue cerrado hasta tocarlo.
+- Sin cambios de motor, órdenes, Render, flags ni secretos. REAL sigue bloqueado.
+
 ## 2026-10-30 — Entrada límite EURUSD en el demo OANDA practice (DEC-EURUSD-PULLBACK-1, borrador)
 
 - El motor sigue eligiendo dirección, stop y objetivo. El filtro de noticias de alto impacto no cambia. Solo EURUSD, solo la cuenta practice. `REAL_EXECUTION_ENABLED` sigue `False`.

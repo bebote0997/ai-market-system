@@ -16,6 +16,7 @@ from runtime.scheduler import session_names
 from storage.codec import parse_utc
 from ui import i18n_es as es
 from ui.components.glass import day_progress, sparkline_svg
+from ui.es_brief import _ENGLISH, present_summary
 from ui.adapters import from_persisted_snapshot
 from ui.views.dashboard import (FAR_FUTURE, FIRST_CYCLE_WAIT, PAPER_SIZING_KEYS, ROW_LIMIT, epoch_or_far, is_current, payloads,
                                 records, since_epoch)
@@ -79,7 +80,8 @@ def card(st, title, fields=(), *, value=None, summary=None):
     """Card with optional big value, summary and label/value rows. Only ``Trusted`` values skip escaping."""
     body = f'<div class="big num">{e(value)}</div>' if value is not None else ''
     if summary is not None:
-        body += f'<div class="bubble">{content(summary)}</div>'
+        fold = not isinstance(summary, str) or len(summary) > 180 or bool(_ENGLISH.search(summary))
+        body += present_summary(summary) if fold else f'<div class="bubble">{content(summary)}</div>'
     body += ''.join(f'<div class="row"><span class="mute">{e(key)}</span>'
                     f'<span>{val if isinstance(val, Trusted) else content(val)}</span></div>' for key, val in fields)
     html(st, f'<div class="card"><h3>{e(title)}</h3>{body}</div>')
@@ -128,6 +130,8 @@ def table(st, title, rows, columns=None, render=None, empty=None):
 
 def apply(st):
     # One stylesheet block per Streamlit render, after authentication.
+    if st.session_state.get('ui_theme'):
+        st.markdown('<div id="tf-theme-light" hidden></div>', unsafe_allow_html=True)
     css = (Path(__file__).parents[1] / 'static' / 'theme.css').read_text()
     # Separator before the legacy/detail pages (position depends on the number of main pages).
     child = len(PAGES) + 1
@@ -368,15 +372,19 @@ def hero_subline(demo, day):
 
 
 def start_hero(st, now, *, demo, day=None):
-    """Start page header with the Floor look: banner (or the serif gold wordmark), sub line, safety line."""
+    """Start page header: glass wordmark, day line and the banner as a side plate (not a full-bleed strip)."""
     uri = banner_uri()
-    art = (f'<img src="{uri}" alt="AI Trading Floor">' if uri
-           else f'<p class="wordmark">{escape(tr("AI TRADING FLOOR"))}</p>')
+    art = (f'<div class="hero-art"><img src="{uri}" alt="AI Trading Floor"></div>' if uri else '')
     badge = f'<span class="ex">{escape(tr("SAMPLE / DEMO"))}</span>' if st.session_state.get('sample_mode') else ''
-    html(st, f'<div class="hero">{art}<div class="body"><div class="eyebrow">{escape(es.long_date_et(now))}</div>'
-             f'<h1>{escape(es.PAGE_TITLES["Overview"])}</h1><div class="sub">{escape(hero_subline(demo, day))}</div>'
-             f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>'
-             f'{badge}</div></div>')
+    known = isinstance(day, int) and not isinstance(day, bool) and day >= 1
+    day_line = es.demo_day_text(day) if demo and known else (FIRST_CYCLE_WAIT if demo else '')
+    html(st, f'<div class="hero"><div class="hero-copy"><div class="eyebrow">{escape(es.long_date_et(now))}</div>'
+             f'<p class="wordmark">{escape(tr("AI TRADING FLOOR"))}</p>'
+             f'<h1>{escape(es.PAGE_TITLES["Overview"])}</h1>'
+             f'<div class="sub">{escape(hero_subline(demo, day))}</div>'
+             + (f'<div class="hero-day">{escape(day_line)}</div>' if day_line else '')
+             + f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>'
+             f'{badge}</div>{art}</div>')
     open_floor_button(st)
 
 
@@ -595,29 +603,31 @@ def demo_kpis(demo, now=None):
     rate = escape(f"{100 * stats['wins'] / count:.0f}%") if traded else ''
     r_value = (escape(f'{avg_r:+.2f} R') if number(avg_r) else mute(stats['avg_r_reason'] or MISSING)) if traded else ''
     drawdown = escape(demo_money(stats['max_drawdown'])) if traded else ''
-    return [
-        kpi('💰', 'NAV (equity) · OANDA demo', escape(demo_money(demo['nav'])),
-            technical=f"Capital inicial {demo_money(demo['capital']['start'])}{stale}", hint=es.TOOLTIPS['equity']),
+    # Balance sits where NAV was; the seven secondary figures are rows, same shape as the daily-loss card.
+    tiles = [
         kpi('🏦', 'Balance · OANDA demo', escape(demo_money(demo['balance'])),
             technical=f'Saldo sin contar las posiciones abiertas{stale}'),
+        kpi('💰', 'NAV (equity) · OANDA demo', escape(demo_money(demo['nav'])),
+            technical=f"Capital inicial {demo_money(demo['capital']['start'])}{stale}", hint=es.TOOLTIPS['equity']),
         kpi('📈' if not number(total) or total >= 0 else '📉', demo_pnl_phrase(total), money_value(total),
             tone=es.tone(total), technical='Suma del P&L neto de las operaciones cerradas' + aged, hint=es.TOOLTIPS['pnl'],
             extra=pnl_sparkline(demo.get('curve')) if number(total) else ''),
-        kpi('📊', 'P&L no realizado', money_value(unrealized), tone=es.tone(unrealized),
-            technical='Posiciones abiertas a precio de mercado' + aged, hint=es.TOOLTIPS['unrealized']),
-        kpi('📅', 'P&L de hoy (ET)', money_value(today), tone=es.tone(today),
-            technical='P&L realizado · día de Nueva York' + aged, hint=es.TOOLTIPS['today']),
-        kpi('📂', 'Posiciones abiertas', escape(str(len(open_rows))) if known else mute(reason), tone='teal',
-            technical='Abiertas ahora en la cuenta demo'),
-        kpi('✅', 'Operaciones cerradas', escape(str(count)) if known else mute(reason), tone='teal',
-            technical='Desde el inicio del demo'),
-        kpi('🎯', es.wins_phrase(stats['wins'], count) if traded else 'Acierto', by_trades(rate), tone='teal',
-            technical='Ganadoras / operaciones cerradas', hint=es.TOOLTIPS['win_rate']),
-        kpi('⚖️', 'R medio (expectativa)', by_trades(r_value), tone=es.tone(avg_r),
-            technical='Media del R realizado por operación', hint=es.TOOLTIPS['avg_r']),
-        kpi('🛡️', 'Caída máxima (P&L realizado)', by_trades(drawdown), tone='orange',
-            technical='Mayor caída desde un máximo', hint=es.TOOLTIPS['drawdown']),
     ]
+    sheet_rows = [
+        ('P&L no realizado', money_value(unrealized)),
+        ('P&L de hoy (ET)', money_value(today)),
+        ('Posiciones abiertas', escape(str(len(open_rows))) if known else mute(reason)),
+        ('Operaciones cerradas', escape(str(count)) if known else mute(reason)),
+        (es.wins_phrase(stats['wins'], count) if traded else 'Acierto', by_trades(rate)),
+        ('R medio (expectativa)', by_trades(r_value)),
+        ('Caída máxima (P&L realizado)', by_trades(drawdown)),
+    ]
+    rows_html = ''.join(f'<div class="row"><span class="mute">{escape(label)}</span><span>{value}</span></div>'
+                        for label, value in sheet_rows)
+    note = escape((aged or stale).strip(' ·'))
+    note_html = f'<div class="small">{note}</div>' if note else ''
+    tiles.append(f'<div class="card account-sheet"><h3>Cuenta</h3>{note_html}{rows_html}</div>')
+    return tiles
 
 
 def demo_overview(st, db, now, demo, day=None):
@@ -896,6 +906,8 @@ DECISION_CELLS = {
     'status': lambda row: state_chip(row.get('status')), 'bias': lambda row: state_chip(row.get('bias')) if row.get('bias') else f'<span class="mute" title="{escape(MISSING)}">—</span>',
     'source': lambda row: f'<span title="{escape(row["source"], quote=True)}">{escape(SOURCES.get(row["source"], row["source"]))}</span>',
     'agent_name': lambda row: escape(es.AGENTS.get(row.get('agent_name'), row.get('agent_name') or '—')),
+    'reasoning_summary': lambda row: present_summary(row.get('reasoning_summary')) if row.get('reasoning_summary')
+    else '<span class="mute">—</span>',
     'run_id': lambda row: (f'<span class="small" title="{escape(row["run_id"], quote=True)}">{escape(row["run_id"][:8])}…</span>'
                            if row.get('run_id') else '—'),
 }

@@ -14,9 +14,10 @@ def build_setup_figure(bars, plan, symbol):
     if not bars:
         raise ValueError('chart unavailable: bars not persisted')
     close_only = all(bar.get('source') == 'candle_cache' and bar.get('timeframe') == '5m' for bar in bars)
+    close_body = all(bar.get('source') == 'close_body' and bar.get('timeframe') == '5m' for bar in bars)
     times, candles = [], []
     for bar in bars:
-        if not close_only and str(bar.get('timeframe', '15m')).lower() not in ('15m', '15min'):
+        if not close_only and not close_body and str(bar.get('timeframe', '15m')).lower() not in ('15m', '15min'):
             raise ValueError('15m bars required')
         raw = bar.get('timestamp') or bar.get('start') or bar.get('bar_start')
         at = datetime.fromisoformat(raw.replace('Z', '+00:00'))
@@ -34,13 +35,14 @@ def build_setup_figure(bars, plan, symbol):
         candles.append(values)
     ordered = sorted(zip(times, candles), key=lambda item: item[0])
     times, candles = zip(*ordered)
-    frame_label = '5m closes · no OHLC' if close_only else '15m'
+    frame_label = '5m closes · no OHLC' if close_only else ('5m candles · close bodies' if close_body else '15m')
+    candle_name = '5m' if close_body else '15m'
     fig = go.Figure(go.Scatter(x=times, y=[v[0] for v in candles], mode='lines',
         line=dict(color=GOLD), name='5m close') if close_only else go.Candlestick(x=times,
         open=[v[0] for v in candles], high=[v[1] for v in candles],
         low=[v[2] for v in candles], close=[v[3] for v in candles],
         increasing_line_color=UP, increasing_fillcolor=UP,
-        decreasing_line_color=DOWN, decreasing_fillcolor=DOWN, name='15m'))
+        decreasing_line_color=DOWN, decreasing_fillcolor=DOWN, name=candle_name))
     entry, stop, target = (plan.get(key) for key in ('entry', 'stop', 'target'))
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (entry, stop, target)):
         quantity = plan.get('quantity')
@@ -75,10 +77,31 @@ def build_setup_figure(bars, plan, symbol):
     return fig
 
 
+def bars_for_dashboard(bars):
+    """5-minute Japanese candles for the dashboard.
+
+    The candle cache stores closes only (``runtime.setup_candle_reader`` never invents OHLC). Each candle's
+    open is the previous stored close and its high/low are the max/min of those two real prices, so the body
+    is a close-to-close move and there is no intra-bar wick. Real OHLC bars are returned unchanged. The email
+    chart keeps calling ``build_setup_figure`` on the raw closes.
+    """
+    if not bars or not all(bar.get('source') == 'candle_cache' and bar.get('timeframe') == '5m' for bar in bars):
+        return bars
+    out, prev = [], None
+    for bar in bars:
+        close = float(bar['close'])
+        open_ = close if prev is None else prev
+        out.append({**bar, 'open': open_, 'high': max(open_, close), 'low': min(open_, close),
+                    'source': 'close_body', 'timeframe': '5m'})
+        prev = close
+    return out
+
+
 # Dashboard-only restyle in the app's dark + gold Floor palette (the name is historical). build_setup_figure (shared
 # with the setup e-mail PNG) is left unchanged.
 LIGHT = {'bg': '#0d1416', 'grid': '#1f2c2e', 'text': '#c9d4d2', 'entry': '#d9b45a', 'up': '#3ddc84', 'down': '#ff4d6d'}
-LABELS_ES = (('TAKE PROFIT', 'TAKE PROFIT (TP)'), ('STOP LOSS', 'STOP LOSS'), ('ENTRY', 'ENTRADA'),
+LABELS_ES = (('5m candles · close bodies', 'velas de 5 min · cuerpo de cierres'),
+             ('TAKE PROFIT', 'TAKE PROFIT (TP)'), ('STOP LOSS', 'STOP LOSS'), ('ENTRY', 'ENTRADA'),
              ('price distance', 'de distancia de precio'), (' risk', ' de riesgo'), (' reward', ' de beneficio'),
              ('R:R unavailable', 'R:R no disponible'), ('Plan levels not persisted', 'Niveles del plan no guardados'),
              ('5m closes · no OHLC', 'cierres de 5 min · sin velas completas'), ('Last:', 'Último:'),

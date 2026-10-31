@@ -110,7 +110,7 @@ def setup_table_rows(rows, traded):
 
 def render(st, db):
     from datetime import datetime, timezone
-    from ui.components.setup_chart import build_setup_figure, light_setup_figure
+    from ui.components.setup_chart import bars_for_dashboard, build_setup_figure, light_setup_figure
     from ui.views.dashboard import FIRST_CYCLE_WAIT, since_epoch
     from ui.views.luxury import MISSING, card, demo_api, demo_since, display, process_link, state_chip, table, tr
     from ui.i18n_es import cycle_label
@@ -139,7 +139,9 @@ def render(st, db):
     selected = st.selectbox(tr('Setup · newest first'), range(len(visible)),
                             format_func=lambda i: cycle_label(visible[i]['as_of'], visible[i]['symbol']))
     for index, row in enumerate([visible[selected]]):
-        row['bars'] = cached_candles(str(cache_path()), row['symbol'], row['as_of']) or row['bars'][-48:]
+        # 72 closed 5-minute bars = 6 hours (at least the 3 hours asked for on the chart).
+        # 48 closed 5-minute bars = 4 hours, which covers the 3 hours asked for on the chart.
+        row['bars'] = cached_candles(str(cache_path()), row['symbol'], row['as_of'], limit=48) or row['bars'][-48:]
         card(st, f"{row['symbol']} · {cycle_label(row['as_of'])}", [('Estado', state_chip(row['setup_status'])),
              ('Hora', display(row['as_of'])), ('Lado', state_chip(setup_side(row)) if setup_side(row) else MISSING)],
              summary=row['setup'] or None)
@@ -153,8 +155,12 @@ def render(st, db):
             card(st, tr('Gaps'), summary=tr('Exact-cycle 15m OHLC bars not persisted'))
         else:
             try:
-                st.caption(tr('5m close prices · candle_cache · no OHLC available') if row['bars'][0].get('source') == 'candle_cache' else tr('Persisted 15m OHLC'))
-                st.plotly_chart(light_setup_figure(build_setup_figure(row['bars'], row['plan'], row['symbol'])),
+                close_cache = row['bars'][0].get('source') == 'candle_cache'
+                st.caption('Velas de 5 min · 4 horas · precios de cierre de 5 min · sin velas completas: '
+                           'cada vela usa el cierre anterior como apertura (sin mecha intradía).' if close_cache
+                           else tr('Persisted 15m OHLC'))
+                shown = bars_for_dashboard(row['bars'])
+                st.plotly_chart(light_setup_figure(build_setup_figure(shown, row['plan'], row['symbol'])),
                                 width='stretch', theme=None, key=f'setup-chart-{index}')
             except (ValueError, KeyError, TypeError):
                 card(st, tr('Chart'), summary=tr('chart unavailable: persisted bars invalid'))
