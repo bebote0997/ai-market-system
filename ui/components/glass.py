@@ -42,7 +42,7 @@ def finite(value):
 
 def agent_card(agent_id, view, *, waiting_text=None, example=False):
     """One agent card from the REAL ``payload["agents"][agent_id]`` (``None`` => "Sin datos aún")."""
-    color = AGENT_COLORS.get(agent_id, "#d9b45a")
+    color = AGENT_COLORS.get(agent_id, "#22d3ee")
     name = display_name(agent_id)
     initial = name[:1].upper() or "?"
     head = (f'<div class="gl-hd"><span class="gl-avatar" aria-hidden="true">{esc(initial)}</span>'

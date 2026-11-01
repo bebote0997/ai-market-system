@@ -248,9 +248,11 @@ class FloorLayoutTests(unittest.TestCase):
             for hex6 in re.findall(r"#([0-9a-f]{6})", line.split("linear-gradient", 1)[1].split(")", 1)[0]):
                 self.assertGreaterEqual(1.05 / (lum(hex6) + 0.05), 4.5, (hex6, line))
 
-    def test_sidebar_starts_collapsed_on_phones(self):
+    def test_sidebar_stays_mounted_and_the_pill_collapses_in_css(self):
         app = (ROOT / "ui" / "app.py").read_text(encoding="utf-8")
-        self.assertIn('initial_sidebar_state="auto"', app)
+        self.assertIn('initial_sidebar_state="expanded"', app)
+        self.assertIn(".stApp:not(.aif-nav-open)", CSS)
+        self.assertIn("border-radius:999px", CSS)
 
 
 class OverviewGlassTests(unittest.TestCase):
@@ -346,7 +348,7 @@ class GlassCssTests(unittest.TestCase):
         self.assertIn("transition:none!important", motion)
         transparency = media_block(GLASS_CSS, "prefers-reduced-transparency:reduce")
         self.assertIn("backdrop-filter:none!important", transparency)
-        self.assertIn("--gl-base:#0d1416", transparency)
+        self.assertIn("--gl-base:#0a1028", transparency)
 
     def test_phone_blur_is_at_most_12px_and_kpis_are_one_column(self):
         phone = media_block(GLASS_CSS, "max-width:640px")
@@ -355,7 +357,6 @@ class GlassCssTests(unittest.TestCase):
         self.assertGreaterEqual(blur, 8)
         self.assertIn(".tf .kpis{grid-template-columns:minmax(0,1fr)}", phone)
         self.assertIn("overflow-x:clip", phone)
-        self.assertIn('[data-testid="stSidebar"][aria-expanded="false"]{width:0!important', phone)
         # The desktop tracking rule is more specific than `.tf .hero .wordmark`, so the phone rule must repeat
         # `.tf .hero:has(.hero-copy) .wordmark` or the 28px / .18em title stays one line and overflows at 390px.
         self.assertIn(".tf .hero:has(.hero-copy) .wordmark{font-size:20px;letter-spacing:.06em", CSS)
@@ -366,7 +367,7 @@ class GlassCssTests(unittest.TestCase):
             self.assertNotIn(forbidden, lowered)
 
     def test_existing_rules_still_present(self):
-        for rule in ('[data-testid="stAlertContainer"]{background:#0d1416!important', "/* Detail KPIs",
+        for rule in ('[data-testid="stAlertContainer"]{background:#0a1028!important', "/* Detail KPIs",
                      '[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked)'):
             self.assertIn(rule, CSS)
 
@@ -379,11 +380,11 @@ class GlassCssTests(unittest.TestCase):
         self.assertNotIn("summary{display:none}", outside)  # without support the summary stays tappable
 
     def test_tap_targets_and_sidebar_toggle(self):
-        self.assertIn('header[data-testid="stHeader"] [data-testid="stToolbar"]{display:flex!important', GLASS_CSS)
-        toggle = GLASS_CSS.split('[data-testid="stExpandSidebarButton"],[data-testid="stSidebarCollapseButton"] button{', 1)[1]
-        self.assertIn("min-width:44px;min-height:44px", toggle.split("}", 1)[0])
+        self.assertIn('header[data-testid="stHeader"]{display:none!important}', CSS)
+        self.assertIn(".aif-expand", CSS)
+        self.assertIn("border-radius:28px", CSS)
         self.assertIn("min-height:44px", GLASS_CSS.split('[role="radiogroup"] label{', 1)[1].split("}", 1)[0])
-        self.assertIn('content:"Menú"', GLASS_CSS)
+        self.assertNotIn('content:"Menú"', CSS)
 
     def test_manual_close_card_styles_both_steps(self):
         for key in (".st-key-manual-close-card", ".st-key-floor-manual-close button",

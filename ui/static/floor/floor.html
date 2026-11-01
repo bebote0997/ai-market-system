@@ -6,11 +6,11 @@
      Idle (no cycle running) = ONE static drawing, redrawn only on demand (load, resize, zoom/pan, drawer); the
      time ticker runs ONLY while payload.running.active (a real RUNNING cycle) and animates only the step it reached. -->
 <style>
-:root{--gold:#19e3d3;--gold2:#9ff5ee;--ink:#0a0a0b;--line:#1a2325;--mute:#7f9593;--dim:#6f8583}
+:root{--gold:#22d3ee;--gold2:#e8eefc;--ink:#05071a;--line:#1a2744;--mute:#9aabc4;--dim:#7d8eab}
 *{box-sizing:border-box}html,body{margin:0;height:100%;display:flex;flex-direction:column;color:#e6eef0;font-family:"Helvetica Neue",Inter,Arial,sans-serif;overflow:hidden;background:
- radial-gradient(42vmax 34vmax at 0% 0%,rgba(217,180,90,.22),transparent 70%),
- radial-gradient(38vmax 32vmax at 100% 8%,rgba(106,61,240,.22),transparent 68%),
- radial-gradient(32vmax 28vmax at 70% 100%,rgba(18,201,124,.14),transparent 70%),var(--ink)}
+ radial-gradient(42vmax 34vmax at 0% 0%,rgba(47,123,255,.28),transparent 70%),
+ radial-gradient(38vmax 32vmax at 100% 8%,rgba(168,85,247,.22),transparent 68%),
+ radial-gradient(32vmax 28vmax at 70% 100%,rgba(34,211,238,.16),transparent 70%),var(--ink)}
 .serif{font-family:Didot,"Bodoni 72","Playfair Display",Georgia,serif}
 header{min-height:78px;display:flex;align-items:center;justify-content:space-between;padding:10px 36px;gap:24px;background:rgba(10,12,18,.38);border-bottom:1px solid rgba(255,255,255,.14);-webkit-backdrop-filter:blur(18px) saturate(140%);backdrop-filter:blur(18px) saturate(140%)}
 .brand{display:flex;flex-direction:column;gap:4px;flex:none}
@@ -53,11 +53,11 @@ footer{height:78px;border-top:1px solid var(--line);display:flex;align-items:cen
 details.more{margin-top:8px}details.more summary{cursor:pointer;color:var(--gold2);font-size:13px;font-weight:600;min-height:44px;display:flex;align-items:center;list-style:none}
 details.more summary::-webkit-details-marker{display:none}
 details.more .when-open{display:none}details.more[open] .when-closed{display:none}details.more[open] .when-open{display:inline}
-html[data-theme="light"]{--ink:#f4f0e6;--line:rgba(28,25,20,.14);--mute:#5c564c;color:#1c1914}
-html[data-theme="light"] body{color:#1c1914;background:
- radial-gradient(42vmax 34vmax at 0% 0%,rgba(217,180,90,.28),transparent 70%),
- radial-gradient(38vmax 32vmax at 100% 8%,rgba(90,110,200,.16),transparent 68%),
- #f4f0e6}
+html[data-theme="light"]{--ink:#f4f7fc;--line:rgba(26,26,26,.14);--mute:#555555;--gold:#1d4ed8;--gold2:#1e3a8a;color:#1a1a1a}
+html[data-theme="light"] body{color:#1a1a1a;background:
+ radial-gradient(42vmax 34vmax at 0% 0%,rgba(47,123,255,.22),transparent 70%),
+ radial-gradient(38vmax 32vmax at 100% 8%,rgba(168,85,247,.14),transparent 68%),
+ #f4f7fc}
 html[data-theme="light"] header{background:rgba(255,252,247,.62);border-bottom-color:rgba(28,25,20,.12)}
 html[data-theme="light"] #drawer{background:rgba(255,252,247,.9);color:#1c1914}
 html[data-theme="light"] .log-item{background:rgba(255,255,255,.7);border-color:rgba(28,25,20,.1)}
@@ -328,13 +328,13 @@ function stack(x,y,zTop,zBot,lines,maxU,strict){let z=zTop;for(const l of lines)
 function draw(t){const step=STEP;const f=ANIM?(t%STEP_MS)/STEP_MS:.5;const compact=U<22;
  const wallTxt=!MOB();  // narrow stage: wall screens without text (it cannot be legible there; the HUD carries it)
  cx.clearRect(0,0,vw,vh);
- const g=cx.createRadialGradient(vw/2,vh*.55,10,vw/2,vh*.55,vw*.7);g.addColorStop(0,'#0d1416');g.addColorStop(1,'#0a0a0b');cx.fillStyle=g;cx.fillRect(0,0,vw,vh);
+ const g=cx.createRadialGradient(vw/2,vh*.55,10,vw/2,vh*.55,vw*.7);g.addColorStop(0,'#0a1028');g.addColorStop(1,'#05071a');cx.fillStyle=g;cx.fillRect(0,0,vw,vh);
  poly([P(0,0),P(0,D),P(0,D,H),P(0,0,H)],'#121110',null);poly([P(0,0),P(W,0),P(W,0,H),P(0,0,H)],'#151412',null);
  cx.strokeStyle='#0b7f7c';cx.lineWidth=1;[[P(0,D,H),P(0,0,H),P(W,0,H)],[P(0,D,.08),P(0,0,.08),P(W,0,.08)]].forEach(l=>{cx.beginPath();cx.moveTo(...l[0]);cx.lineTo(...l[1]);cx.lineTo(...l[2]);cx.stroke()});
  poly([P(0,0),P(W,0),P(W,D),P(0,D)],'#0f0e0c','#173c3b');
  cx.strokeStyle='rgba(25,227,211,.06)';for(let i=1;i<W;i++){cx.beginPath();cx.moveTo(...P(i,0));cx.lineTo(...P(i,D));cx.stroke()}for(let j=1;j<D;j++){cx.beginPath();cx.moveTo(...P(0,j));cx.lineTo(...P(W,j));cx.stroke()}
  // narrow stage: the wall screens are lit (teal glass + glowing frame) so they never read as black holes
- const scr=(pts,hot)=>{if(MOB()){cx.shadowColor='#19e3d3';cx.shadowBlur=hot?10:6}
+ const scr=(pts,hot)=>{if(MOB()){cx.shadowColor='#22d3ee';cx.shadowBlur=hot?10:6}
   poly(pts,MOB()?'#12393b':'#0c0b09',hot?'#9ff5ee':MOB()?'#19e3d3':'#0b7f7c',hot?1.4:MOB()?1.2:1);cx.shadowBlur=0};
  // equity wall: NAV large, balance smaller, then the real realised-P&L curve (when there is room)
  const E=[P(3,0,1.9),P(9,0,1.9),P(9,0,3.7),P(3,0,3.7)];scr(E,step==7);

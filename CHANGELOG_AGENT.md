@@ -1,5 +1,22 @@
 # Agent Changelog
 
+## 2026-11-01 — Banner nuevo y paleta azul / violeta (borrador)
+
+- `runtime/assets/floor_banner.png` es el banner del owner (2172×724, 3:1). El generador se niega a pisarlo.
+- El panel deja el dorado: fondo navy, acentos azul eléctrico, cian y violeta, títulos plata. Verde y rojo siguen siendo el P&L. El modo claro usa los mismos acentos con texto oscuro.
+- Sin cambios de motor, órdenes, Render ni secretos. Sin merge y sin deploy.
+
+## 2026-11-01 — Menú en modo claro legible (borrador)
+
+- El panel de día es un cristal blanco (75 %) con texto #1a1a1a y secundarios #555. La barra activa sigue en oro. Los títulos, pies y el buscador del resto del panel dejan de usar el gris del tema oscuro.
+- Sin cambios de motor, órdenes, Render ni secretos. Sin merge y sin deploy.
+
+## 2026-11-01 — Menú flotante de cristal (borrador)
+
+- El botón «Menú» y el cajón de Streamlit pasan a ser una barra flotante: pastilla de iconos cerrada, panel de radio 28 px abierto. Acento oro. Buscar páginas filtra las páginas que ya existen. Grupos PRINCIPAL, MESA y DETALLE. El interruptor de modo claro y Stop quedan al pie. En el teléfono la pastilla no ensancha la página; el panel abierto tapa el contenido y se cierra al tocar fuera.
+- La insignia de Trades solo aparece si la caché del demo ya tiene operaciones abiertas. No hay lectura nueva.
+- Sin cambios de motor, órdenes, Render, flags ni secretos. Sin merge y sin deploy.
+
 ## 2026-11-01 — iPhone: Inicio sin scroll horizontal y el Floor deja de quedarse cargando (borrador)
 
 - **Inicio (375–430 px, claro y oscuro).** El título «AI TRADING FLOOR» seguía a 28 px y `.18em` en el teléfono: esa regla gana a la de 640 px. Con la insignia larga de OANDA Demo el héroe, la imagen y las tarjetas se salían por la derecha. En el teléfono el título baja a 20 px / `.06em`, parte, y la insignia ocupa el ancho y hace salto de línea. El menú cerrado no reserva 300 px. `html` / el panel no se desplazan de lado.

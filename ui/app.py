@@ -25,7 +25,7 @@ from ui.i18n_es import tr
 from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
 
 st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊",
-                   initial_sidebar_state="auto")  # collapsed on phones: the sidebar opens only on tap
+                   initial_sidebar_state="expanded")  # mounted, never slid off-screen; the pill collapses in CSS
 require_dashboard_access(st)
 if "ui_theme" not in st.session_state:
     from ui.auth import request_cookie
@@ -37,21 +37,27 @@ if st.query_params.get("page") == "floor" and "luxury_navigation" not in st.sess
     st.session_state["luxury_navigation"] = floor_view.PAGE  # alert deep link (runtime.trade_alerts.floor_url)
 
 with st.sidebar:
-    luxury.html(st, f'<div class="brand">{tr("Trading Floor")}<small>{tr("PAPER · V2")}</small></div>')
-    light = st.toggle("Modo claro", key="ui_theme")
-    from ui.client_script import set_cookie
-    set_cookie(st, "aif_theme", "light" if light else "dark", 365 * 24 * 3600)
+    from ui.nav_menu import chrome, install, open_trades_count, stop_button
+    luxury.html(st, chrome(open_trades_count()))
     page = st.radio(tr("Navigation"), luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES
                     + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation",
                     format_func=lambda key: floor_view.LABEL if key == floor_view.PAGE else es.page_label(key))
     enabled_symbols = enabled_market_symbols()
-    symbol = st.selectbox(tr("Market"), MARKETS, index=default_market_index(enabled_symbols),
-                          format_func=lambda market: f"{market} · {es.symbol_status(market, enabled_symbols)}")
-    st.caption(tr("Enabled for experiment: ") + es.enabled_caption(enabled_symbols))
-    st.toggle(tr("SAMPLE / DEMO · FLOOR, MARKETS, JOURNAL, SYSTEM"), value=not remote_dashboard_enabled(), key="sample_mode")
-    refresh = st.toggle(tr("Auto-refresh · every 60s"), value=True, key="auto_refresh")
-    st.caption("🧪 " + tr("PAPER · REAL EXECUTION DISABLED"))
-    st.caption(tr("Observation only · no live orders"))
+    with st.container(key="aif-ajustes"):
+        symbol = st.selectbox(tr("Market"), MARKETS, index=default_market_index(enabled_symbols),
+                              format_func=lambda market: f"{market} · {es.symbol_status(market, enabled_symbols)}")
+        st.caption(tr("Enabled for experiment: ") + es.enabled_caption(enabled_symbols))
+        st.toggle(tr("SAMPLE / DEMO · FLOOR, MARKETS, JOURNAL, SYSTEM"), value=not remote_dashboard_enabled(),
+                  key="sample_mode")
+        refresh = st.toggle(tr("Auto-refresh · every 60s"), value=True, key="auto_refresh")
+        st.caption("🧪 " + tr("PAPER · REAL EXECUTION DISABLED"))
+        st.caption(tr("Observation only · no live orders"))
+    with st.container(key="aif-footer"):
+        light = st.toggle("Modo claro", key="ui_theme")
+        from ui.client_script import set_cookie
+        set_cookie(st, "aif_theme", "light" if light else "dark", 365 * 24 * 3600)
+        luxury.html(st, stop_button())
+    install(st)
 
 def open_trade_refresh():
     """"30s" while the cached OPEN trades list is non-empty (peek only, never the broker), else "60s"."""

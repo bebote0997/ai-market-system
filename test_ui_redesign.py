@@ -182,8 +182,8 @@ class SpanishPresentationTests(unittest.TestCase):
         self.assertFalse(Path('ui/static/luxury.css').exists())
         self.assertNotIn('@import', css)
         self.assertNotIn('http', css)
-        self.assertIn('#0a0a0b', css)
-        self.assertIn('#d9b45a', css)
+        self.assertIn('#05071a', css)
+        self.assertIn('#22d3ee', css)
         self.assertNotIn('#f3f6fb', css)  # no light page background left
 
 

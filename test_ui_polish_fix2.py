@@ -49,8 +49,8 @@ class HealthRecoveryTests(unittest.TestCase):
 class PresentationTests(unittest.TestCase):
     def test_alert_inner_container(self):
         css = Path("ui/static/theme.css").read_text()
-        self.assertIn('[data-testid="stAlertContainer"]{background:#0d1416!important', css)
-        self.assertIn('border-left:3px solid #d9b45a!important', css)
+        self.assertIn('[data-testid="stAlertContainer"]{background:#0a1028!important', css)
+        self.assertIn('border-left:3px solid #7eb6ff!important', css)
         self.assertIn('stAlertContentError', css)
 
     def test_compact_kpis_and_daily_loss_row(self):

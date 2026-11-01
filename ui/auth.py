@@ -157,19 +157,19 @@ def _flush_remember_cookie(st):
 
 _LOGIN_CSS = """<style>
 .stApp:has(.aif-login){min-height:100vh;background:
- radial-gradient(42vmax 34vmax at 0% 0%,rgba(217,180,90,.22),transparent 70%),
- radial-gradient(38vmax 32vmax at 100% 8%,rgba(106,61,240,.20),transparent 68%),#07070b;color:#f5f5f9}
+ radial-gradient(42vmax 34vmax at 0% 0%,rgba(47,123,255,.28),transparent 70%),
+ radial-gradient(38vmax 32vmax at 100% 8%,rgba(168,85,247,.22),transparent 68%),#05071a;color:#f5f7ff}
 .stApp:has(.aif-login) .block-container{max-width:460px;margin:8vh auto 0;padding:28px 26px 22px;border-radius:22px;
- background:rgba(16,18,28,.55);border:1px solid rgba(232,196,111,.45);
+ background:rgba(10,16,40,.62);border:1px solid rgba(34,211,238,.45);
  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 18px 50px rgba(0,0,0,.35);
  -webkit-backdrop-filter:blur(18px) saturate(140%);backdrop-filter:blur(18px) saturate(140%)}
 .aif-login h1{font-family:Didot,Georgia,serif;font-weight:400;font-size:26px;letter-spacing:.04em;
- color:#f3e2b0;margin:0 0 6px;line-height:1.25}
-.aif-login p{color:#c9ccd8;font-size:14px;margin:0 0 14px}
-.stApp:has(#tf-theme-light):has(.aif-login){background:#f4f0e6;color:#1c1914}
-.stApp:has(#tf-theme-light) .block-container{background:rgba(255,252,247,.78);border-color:rgba(120,90,30,.35)}
-.stApp:has(#tf-theme-light) .aif-login h1{color:#6d5420}
-.stApp:has(#tf-theme-light) .aif-login p{color:#3d3830}
+ color:#e8eefc;margin:0 0 6px;line-height:1.25}
+.aif-login p{color:#c5d0e6;font-size:14px;margin:0 0 14px}
+.stApp:has(#tf-theme-light):has(.aif-login){background:#f4f7fc;color:#1a1a1a}
+.stApp:has(#tf-theme-light) .block-container{background:rgba(255,255,255,.75);border-color:rgba(29,78,216,.35)}
+.stApp:has(#tf-theme-light) .aif-login h1{color:#1e3a8a}
+.stApp:has(#tf-theme-light) .aif-login p{color:#555555}
 @media(max-width:640px){
  .stApp:has(.aif-login) .block-container{margin:12px 12px 0;padding:20px 16px;max-width:none}
 }

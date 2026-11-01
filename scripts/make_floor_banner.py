@@ -1,4 +1,5 @@
-"""Regenerate ``runtime/assets/floor_banner.png`` (isometric Floor + serif gold «AI Trading Floor») for the alerts.
+"""Regenerate a draft banner PNG. The committed ``runtime/assets/floor_banner.png`` is the owner's
+2172×724 artwork and must not be overwritten by this generator.
 
     python scripts/make_floor_banner.py OUT.png   # needs playwright + Chrome; then quantize to 256 colours (PIL)
 
@@ -85,6 +86,9 @@ svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox
       f'<text x="40" y="128" font-family="Cormorant Garamond, Georgia, serif" font-weight="600" font-size="86" fill="url(#gold)">AI Trading</text>' \
       f'<text x="112" y="232" font-family="Cormorant Garamond, Georgia, serif" font-weight="600" font-size="98" fill="url(#gold)">Floor</text></svg>'
 out = Path(sys.argv[1])
+committed = Path(__file__).resolve().parents[1] / "runtime" / "assets" / "floor_banner.png"
+if out.resolve() == committed:
+    raise SystemExit("refusing to overwrite runtime/assets/floor_banner.png (owner artwork, 2172x724)")
 out.with_suffix(".svg").write_text(svg)
 html = f'<!DOCTYPE html><html><body style="margin:0">{svg}</body></html>'
 out.with_suffix(".html").write_text(html)
