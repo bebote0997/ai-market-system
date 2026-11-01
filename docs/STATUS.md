@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-01 (America/New_York; rama `cursor/floating-glass-menu-cc4c`, borrador solo de UI: el menú es una barra flotante de cristal, pastilla de iconos o panel, en teléfono y escritorio. Sin merge, sin deploy, sin cambios de motor, órdenes, Render ni secretos. REAL sigue bloqueado. Antes: arreglo de iPhone en `main`. Ver `CHANGELOG_AGENT.md`)._
+_Última actualización: 2026-11-01 (America/New_York; rama `cursor/menu-home-layout-cc4c`, borrador solo de UI: pastilla del menú más fina, iconos centrados, sin buscador, «Día N de 30» una sola vez, panel abierto más estrecho en el teléfono. Sin merge, sin deploy, sin cambios de motor, órdenes, Render ni secretos. REAL sigue bloqueado. Antes: menú de cristal y paleta en `main` `667f967`. Ver `CHANGELOG_AGENT.md`)._
 
 _Anterior: 2026-10-22 (America/New_York; rama `feat/fx-sl-week-hold`: DEC-FX-SL-1, DEC-HOLD-WEEK-1, DEC-REVERSAL-1, runbook del reinicio 2026-10-25. Anterior: 2026-10-18; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
 
