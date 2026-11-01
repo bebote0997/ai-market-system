@@ -317,6 +317,37 @@ def agent_view(status=None, bias=None, confidence=None, analysis=None, as_of=Non
             "hit_rate": None, "signals": None}
 
 
+HISTORY_LIMIT = 12
+
+
+def history_row(text, at):
+    """One log line. ``summary`` is a shorter Spanish line when the glossary can make one; the original stays in ``text``.
+
+    ``at`` may be an ISO timestamp or an already formatted ET label."""
+    from ui.es_brief import history_fields
+    shown = et_text(at) if at else None
+    if shown is None and isinstance(at, str) and at.strip():
+        shown = at.strip()
+    return history_fields(text, shown)
+
+
+def _with_history(view, rows):
+    items, seen = [], set()
+    for row in rows:
+        if not row:
+            continue
+        key = (row.get("at"), row.get("text"))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(row)
+        if len(items) >= HISTORY_LIMIT:
+            break
+    if items:
+        view["history"] = items
+    return view
+
+
 def closed_by_run(db):
     from ui.views.luxury import closed_trade_rows
     return {r['run_id']: r for r in closed_trade_rows(db) if r.get('run_id') and r.get('symbol') == SYMBOL}
@@ -376,6 +407,14 @@ def ai_agents(db, snapshot, closed, since=None):
         else:
             continue
         view["signals"], view["hit_rate"] = signals_and_hit_rate(mine, closed)
+        log = []
+        if latest is not None:
+            log.append(history_row(latest.get("reasoning_summary"),
+                                   latest.get("timestamp") or (snapshot or {}).get("as_of")))
+        for row in mine:
+            log.append(history_row(row.get("reasoning_summary") or short_status(row.get("status"), row.get("bias")),
+                                   row.get("as_of")))
+        _with_history(view, log)
         agents[agent_id] = view
     return agents
 
@@ -396,15 +435,85 @@ def run_risk(db, run):
     return dict(row) if row else None
 
 
-def engine_agents(db, snapshot, run, evidence):
+def _table(db, name):
+    return db is not None and db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (name,)).fetchone()
+
+
+def conflict_history(db, since=None):
+    """Past conflict-engine journal rows for EURUSD (real text only). Empty when the table or the rows are absent."""
+    if not _table(db, "journal"):
+        return []
+    rows = db.execute(
+        "SELECT timestamp, event_type, payload, source FROM journal WHERE symbol=? "
+        "AND (source IN ('opposite_policy', 'conflict_engine') OR event_type LIKE '%CONFLICT%' "
+        "OR event_type LIKE '%OPPOSITE%' OR event_type='DEC14_DECISION') "
+        "ORDER BY timestamp DESC LIMIT 40", (SYMBOL,))
+    items = []
+    for row in rows:
+        row = dict(row)
+        if not at_or_after(row.get("timestamp"), since):
+            continue
+        body = {}
+        try:
+            body = json.loads(row["payload"]) if isinstance(row.get("payload"), str) else {}
+        except (ValueError, TypeError):
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        text = code_text(body.get("reason") or body.get("decision") or row.get("event_type"))
+        item = history_row(text, row.get("timestamp"))
+        if item:
+            items.append(item)
+        if len(items) >= HISTORY_LIMIT:
+            break
+    return items
+
+
+def risk_history(db, since=None):
+    """Past risk-engine decisions for EURUSD. Cash-at-risk from the PAPER account is omitted in demo mode."""
+    if not _table(db, "risk_decisions"):
+        return []
+    from ui.views.dashboard import paper_hidden
+    hide_cash = paper_hidden()
+    rows = db.execute(
+        "SELECT d.status, d.reason, d.risk_fraction, d.capital_at_risk, r.as_of, r.completed_at "
+        "FROM risk_decisions d JOIN runs r ON r.slot_key=d.slot_key WHERE r.symbol=? "
+        "ORDER BY r.as_of DESC LIMIT 40", (SYMBOL,))
+    items = []
+    for row in rows:
+        row = dict(row)
+        if not at_or_after(row.get("as_of"), since):
+            continue
+        parts = [code_text(row.get("reason"))] if row.get("reason") else []
+        if row.get("status"):
+            parts.insert(0, code_text(row.get("status")))
+        if number(row.get("risk_fraction")):
+            parts.append(f"riesgo {100 * row['risk_fraction']:.2f} %")
+        if not hide_cash and number(row.get("capital_at_risk")):
+            parts.append(f"capital en riesgo {es.money(row['capital_at_risk'])}")
+        item = history_row(" · ".join(part for part in parts if part), row.get("completed_at") or row.get("as_of"))
+        if item:
+            items.append(item)
+        if len(items) >= HISTORY_LIMIT:
+            break
+    return items
+
+
+def engine_agents(db, snapshot, run, evidence, since=None):
     agents = {}
     conflict = (evidence or {}).get("Conflict engine / opposite-setup policy") or []
+    past_conflict = guarded(lambda: conflict_history(db, since), [])
     if conflict:
         event = conflict[0]
         body = event.get('payload') if isinstance(event.get('payload'), dict) else {}
         agents["Conflict"] = agent_view(event.get('event_type'),
                                         analysis=code_text(body.get('reason') or body.get('decision')),
                                         as_of=event.get('timestamp'))
+    elif past_conflict:
+        agents["Conflict"] = agent_view(analysis=past_conflict[0].get("text"), as_of=None)
+        agents["Conflict"]["as_of"] = past_conflict[0].get("at")
+    if agents.get("Conflict") is not None and past_conflict:
+        _with_history(agents["Conflict"], past_conflict)
     risk = guarded(lambda: run_risk(db, run))
     if risk:
         parts = [code_text(risk.get('reason'))] if risk.get('reason') else []
@@ -418,6 +527,12 @@ def engine_agents(db, snapshot, run, evidence):
         decision = snapshot.get('risk_decision') or {}
         agents["RiskEng"] = agent_view(snapshot['risk_status'], analysis=code_text(decision.get('reason')),
                                        as_of=snapshot.get('as_of'))
+    past_risk = guarded(lambda: risk_history(db, since), [])
+    if "RiskEng" not in agents and past_risk:
+        agents["RiskEng"] = agent_view(analysis=past_risk[0].get("text"), as_of=None)
+        agents["RiskEng"]["as_of"] = past_risk[0].get("at")
+    if agents.get("RiskEng") is not None and past_risk:
+        _with_history(agents["RiskEng"], past_risk)
     return agents
 
 
@@ -442,6 +557,13 @@ def exec_agent(trades, source):
     view["signals"] = [{"at": t['opened_at'], "signal": f"{SYMBOL} {(t['side'] or '—').title()}",
                         "outcome": 'Abierta' if t['status'] == 'OPEN' else (t['close_reason'] or 'Cerrada'),
                         "r": t['r_realized']} for t in trades[:SIGNAL_LIMIT]]
+    log = [history_row(view.get("analysis"), view.get("as_of"))]
+    for signal in view["signals"]:
+        outcome = signal.get("outcome") or "sin resultado"
+        log.append(history_row(f"{signal.get('signal') or SYMBOL} · {outcome}", None))
+        if log[-1] is not None:
+            log[-1]["at"] = signal.get("at")
+    _with_history(view, log)
     return view
 
 
@@ -650,7 +772,7 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         closed = (guarded(lambda: demo_closed_by_run(demo_snap)) if demo is not None
                   else guarded(lambda: closed_by_run(db)))
         payload["agents"].update(guarded(lambda: ai_agents(db, snapshot, closed, since), {}))
-        payload["agents"].update(guarded(lambda: engine_agents(db, snapshot, run, evidence), {}))
+        payload["agents"].update(guarded(lambda: engine_agents(db, snapshot, run, evidence, since), {}))
         payload["cycle"] = guarded(lambda: cycle_view(run, evidence, payload["trades"])) if run else None
         payload["feed"] = guarded(lambda: journal_feed(db, since))
         payload["market"] = guarded(lambda: market_lines(snapshot))

@@ -452,6 +452,30 @@ class CoarseClockTests(Checks):
 FROZEN_NS = 1_000
 
 
+def _arm_opcode_tracing():
+    """CPython 3.12 emits only ``line`` events on the first ``sys.settrace`` that asks for opcodes; a throwaway
+    trace arms them. 3.13 already emits ``opcode`` on that first trace (the handler below). Either way the warmup
+    is discarded before the real measurement."""
+    def probe():
+        return 1
+
+    def local(frame, event, arg):  # noqa: ARG001
+        return local
+
+    def global_trace(frame, event, arg):  # noqa: ARG001
+        if event == "call" and frame.f_code is probe.__code__:
+            frame.f_trace_opcodes = True
+            frame.f_trace = local
+            return local
+        return None
+
+    sys.settrace(global_trace)
+    try:
+        probe()
+    finally:
+        sys.settrace(None)
+
+
 def interrupted_clock_trace(gate, opcode, request):
     """A ``sys.settrace`` hook that runs the handler (``request()``) at the ``opcode``-th bytecode of the FIRST
     ``HaltGate.now_ns`` frame entered while ``request`` has not fired: a signal arriving inside the gate clock."""
@@ -486,6 +510,7 @@ class ClockReentrancyTests(unittest.TestCase):
         ``opcode``-th bytecode inside ``now_ns``; then T_ack. Frozen monotonic clock."""
         gate = HaltGate()
         out = {"refused": None}
+        _arm_opcode_tracing()
         with patch("time.monotonic_ns", lambda: FROZEN_NS):
             trace, state = interrupted_clock_trace(gate, opcode, lambda: gate.request(15))
             admission = None

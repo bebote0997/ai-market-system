@@ -27,6 +27,9 @@ from ui.state import current_market, default_market_index, enabled_market_symbol
 st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊",
                    initial_sidebar_state="auto")  # collapsed on phones: the sidebar opens only on tap
 require_dashboard_access(st)
+if "ui_theme" not in st.session_state:
+    from ui.auth import request_cookie
+    st.session_state["ui_theme"] = request_cookie(st, "aif_theme") == "light"
 luxury.apply(st)
 demo_refresher.ensure_started()  # idempotent: the Floor demo cache producer (also started by ui/asgi_app.py)
 
@@ -35,6 +38,9 @@ if st.query_params.get("page") == "floor" and "luxury_navigation" not in st.sess
 
 with st.sidebar:
     luxury.html(st, f'<div class="brand">{tr("Trading Floor")}<small>{tr("PAPER · V2")}</small></div>')
+    light = st.toggle("Modo claro", key="ui_theme")
+    from ui.client_script import set_cookie
+    set_cookie(st, "aif_theme", "light" if light else "dark", 365 * 24 * 3600)
     page = st.radio(tr("Navigation"), luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES
                     + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation",
                     format_func=lambda key: floor_view.LABEL if key == floor_view.PAGE else es.page_label(key))

@@ -4,5 +4,5 @@ from runtime.setup_candle_reader import read_candles
 
 
 @st.cache_data(ttl=30, max_entries=32, show_spinner=False)
-def cached_candles(path, symbol, as_of):
-    return read_candles(path, symbol, as_of, limit=48)
+def cached_candles(path, symbol, as_of, limit=48):
+    return read_candles(path, symbol, as_of, limit=limit)

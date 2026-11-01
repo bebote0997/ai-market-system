@@ -55,9 +55,8 @@ def agent_card(agent_id, view, *, waiting_text=None, example=False):
                 f'<div class="gl-bubble gl-muted">{esc(waiting_text or WAITING_FALLBACK)}</div></article>')
     status = view.get("status")
     status_html = f'<span class="gl-status">{esc(status)}</span>' if status else ''
-    analysis = truncate(view.get("analysis"))
-    bubble = (f'<div class="gl-bubble">{esc(analysis)}</div>' if analysis
-              else f'<div class="gl-bubble gl-muted">{esc(NO_DATA_TITLE)}</div>')
+    # The long analysis lives in the Floor drawer history, not on the card.
+    bubble = '' if status else f'<div class="gl-bubble gl-muted">{esc(NO_DATA_TITLE)}</div>'
     facts = []
     bias = view.get("bias")
     if bias in ("LONG", "SHORT"):

@@ -539,11 +539,11 @@ class FloorTextTests(unittest.TestCase):
 
     def test_asset_has_spanish_labels(self):
         asset = floor_view.ASSET.read_text(encoding="utf-8")
-        for label in ("'NAV'", "'P&L realizado'", "'Tasa de acierto'", "'Caída máx.'", "'Pérdida diaria'",
-                      '"Entrada / Salida"', '"Motor de conflictos"', '"Motor de riesgo"', '"Revisor"',
-                      "' unidades'", "'PAUSADO por el planificador'"):
+        for label in ("'Balance'", "'P&L'", "'Equity'", '"Entrada / Salida"', '"Motor de conflictos"',
+                      '"Motor de riesgo"', '"Revisor"', "' unidades'", "'PAUSADO por el planificador'",
+                      "Tasa de acierto"):
             self.assertIn(label, asset)
-        for english in ("'Equity'", "'Win rate'", "'Drawdown'", "'Daily loss'", '"Entry / Exit"',
+        for english in ("'Win rate'", "'Drawdown'", "'Daily loss'", '"Entry / Exit"',
                         '"Conflict Engine"', '"Risk Engine"', "' units'", "'PnL'", "Hit rate"):
             self.assertNotIn(english, asset)
 
@@ -568,10 +568,11 @@ class FloorStaticTests(unittest.TestCase):
 
     def test_hud_and_narrow_stage_layout(self):
         asset = floor_view.ASSET.read_text(encoding="utf-8")
-        # HUD: compact empty values; balance only when it differs from the NAV
+        # HUD: Balance, P&L and Equity. The wall still mentions balance only when it differs from equity.
         self.assertIn("NOOPK='—'", asset)
-        self.assertIn("const wr=NOTR?NOOPK:", asset)
         self.assertIn("const BALX=ok(HD.balance)&&!(ok(HD.equity)&&Math.abs(HD.balance-HD.equity)<.005);", asset)
+        self.assertIn("['balance']", asset)
+        self.assertIn("['equity']", asset)
         self.assertIn(".kpis{display:flex;flex-wrap:wrap;", asset)
         # narrow stage: fit to the rooms, desk legend strip as HTML, no wall / room text, no overlapping plates
         self.assertIn("document.body.classList.toggle('mob',document.getElementById('stage').clientWidth<600)", asset)

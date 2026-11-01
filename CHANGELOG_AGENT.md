@@ -1,5 +1,23 @@
 # Agent Changelog
 
+## 2026-10-31 — UI del panel: botón de La mesa, velas OHLC y traducción (borrador)
+
+- Inicio vuelve a mostrar «Abrir La mesa animada (Floor)» justo debajo del héroe, a lo ancho (también en el teléfono).
+- El gráfico del setup pide velas M5 con mecha a OANDA practice (solo lectura, mid o bid/ask, 48 velas = 4 h, caché 2 min). Si no hay token o la lectura falla, se quedan las velas de cierres. Entrada, stop y objetivo no cambian. El PNG del correo sigue en línea.
+- Las notas en inglés se traducen con el modelo ya configurado (`AI_FLOOR_AI_PROVIDER=openai` y `OPENAI_API_KEY`). Cada texto se traduce una vez y se recuerda. La página no espera más de 1,2 s y, si falla, enseña el original. Sin variables nuevas.
+- El test del reloj de halt en Python 3.12 fallaba igual en `main`: el primer `settrace` no emite opcodes. Un trazado de calentamiento (solo en el test) lo arregla; el motor no cambia.
+
+## 2026-10-31 — Rediseño de UI del panel (borrador, solo presentación)
+
+- Login con cristal y «Recordar sesión»: cookie firmada (HMAC, 30 días). La contraseña no se guarda en el navegador. La sesión de 8 h se renueva al volver si la cookie sigue vigente.
+- Cabecera del Floor: solo Balance, P&L y Equity, sobre cristal. Las tarjetas de Inicio ponen el Balance antes que el NAV; las siete cifras marcadas pasan a filas en una ficha como la de pérdida diaria. Esa ficha no cambia.
+- Las tarjetas de agente muestran el estado corto. El texto largo va al historial de la ficha (con hora). Diego, Camila y Valentina leen el journal y las decisiones reales cuando existen; si no hay filas, sigue «sin datos».
+- «Cerrar operación» también está junto al nombre de Carlos. El botón de Streamlit, los dos clics y la solicitud al router no cambian.
+- Resumen de Decisiones, el detalle de ciclo, los pasos y La mesa: frase corta en español y «Ver más / Ocultar» para el texto crudo. Si no hay frase en el glosario, se ve el original.
+- El gráfico del setup dibuja velas de 5 min (48 velas, 4 h). El archivo solo guarda cierres: la apertura es el cierre anterior y no hay mecha intradía. El PNG del correo sigue en línea.
+- Modo claro / oscuro. Inicio con un héroe nuevo. En el teléfono el menú lateral sigue cerrado hasta tocarlo.
+- Sin cambios de motor, órdenes, Render, flags ni secretos. REAL sigue bloqueado.
+
 ## 2026-10-30 — Entrada límite EURUSD en el demo OANDA practice (DEC-EURUSD-PULLBACK-1, borrador)
 
 - El motor sigue eligiendo dirección, stop y objetivo. El filtro de noticias de alto impacto no cambia. Solo EURUSD, solo la cuenta practice. `REAL_EXECUTION_ENABLED` sigue `False`.

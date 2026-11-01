@@ -61,11 +61,37 @@ def agents_html(st, agent_ids, payload, title):
                 unsafe_allow_html=True)
 
 
+def close_hint(st):
+    """Read-only state of the existing «Cerrar operación» control, so Carlos's drawer can show the same button."""
+    try:
+        from ui.auth import owner_authenticated
+        from ui.views.floor_actions import manual_close_api, manual_close_disabled
+        reason = manual_close_disabled(manual_close_api(), owner_authenticated(st))
+    except Exception:  # noqa: BLE001 - the drawer still opens; the Streamlit button below keeps the real gate
+        reason = "Acciones del operador no disponibles."
+    return {"enabled": reason is None, "hint": reason or ""}
+
+
+def install_close_bridge(st):
+    """The drawer button posts a message; this clicks the real Streamlit button (same confirmation, same request)."""
+    from ui.client_script import client_script
+    client_script(st, (
+        "if(!window.__aifClose){window.__aifClose=1;window.addEventListener('message',function(ev){"
+        "if(!ev.data||ev.data.aif!=='manual-close')return;"
+        "var ok=false;document.querySelectorAll('iframe').forEach(function(frame){"
+        "try{if(frame.contentWindow===ev.source)ok=true;}catch(e){}});"
+        "if(!ok)return;var btn=document.querySelector('.st-key-floor-manual-close button');"
+        "if(btn&&!btn.disabled)btn.click();});}"
+    ))
+
+
 def render(st, symbols):
     try:
         payload = current_payload(st, symbols)
     except Exception:  # noqa: BLE001 - DB unopenable etc.: empty floor ("—"), never a broken page
         payload = build_floor_payload(sample_mode=bool(st.session_state.get("sample_mode")))
+    payload["theme"] = "light" if st.session_state.get("ui_theme") else "dark"
+    payload["close"] = close_hint(st)
     with st.container(key="floor-stage"):
         left, centre, right = st.columns([1, 2.6, 1])
         with left:
@@ -75,6 +101,7 @@ def render(st, symbols):
         with right:
             agents_html(st, RIGHT_AGENTS, payload, "Revisión y ejecución")
     render_manual_close(st)
+    install_close_bridge(st)
     st.caption("Floor · solo lectura salvo «Cerrar operación» (owner, demo OANDA de práctica) · ninguna orden nueva "
                "se envía desde esta vista. "
                "«—» = sin datos aún" + (" · «EJEMPLO» = datos de ejemplo (modo muestra)" if payload["example_fields"]
