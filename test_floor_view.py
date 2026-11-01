@@ -113,6 +113,33 @@ class FloorPayloadTests(unittest.TestCase):
                 patch.object(dashboard, "demo_since", return_value=NOW - timedelta(days=2)):
             return build_floor_payload(now=NOW, db=db, **kwargs)
 
+    def test_history_translation_stops_at_the_rows_the_drawer_shows(self):
+        from ui import es_translate
+        from ui.floor_payload import HISTORY_LIMIT
+        store = Store(self.path)
+        note = "The structure remains bullish across timeframes and this evidence is not a setup {}."
+        for index in range(30):
+            slot = f"slot-h{index}"
+            store.db.execute("INSERT INTO runs(slot_key,run_id,symbol,as_of,started_at,completed_at,status,final_status) "
+                             "VALUES(?,?,?,?,?,?,?,?)", (slot, f"run-h{index}", "EURUSD", T_RUN, T_RUN, T_OPEN,
+                                                         "COMPLETED", "PLAN_READY"))
+            store.db.execute("INSERT INTO agent_decisions(slot_key,agent_name,as_of,status,bias,confidence,"
+                             "reasoning_summary) VALUES(?,?,?,?,?,?,?)",
+                             (slot, "structure_ai", T_RUN, "OK", "BULLISH", 0.7, note.format(index)))
+        store.close()
+        calls = []
+
+        def transport(text, _key, _model, _timeout):
+            calls.append(text)
+            return "Estructura en observación, sin setup."
+
+        env = {"AI_FLOOR_AI_PROVIDER": "openai", "OPENAI_API_KEY": "test-key", "OPENAI_MODEL": "gpt-5.6-terra"}
+        with es_translate.override(transport, env):
+            payload = self.build()
+        history = payload["agents"]["Structure"]["history"]
+        self.assertEqual(len(history), HISTORY_LIMIT)
+        self.assertEqual(len(calls), HISTORY_LIMIT)  # the other 18 notes are not sent to the model
+
     def test_no_database_is_all_none(self):
         payload = self.build(sample_mode=False)
         for key in ("source", "header", "trades", "cycle", "symbols", "feed", "market", "curve"):

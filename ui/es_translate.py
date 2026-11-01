@@ -2,9 +2,9 @@
 
 No new environment variables. A call happens only when ``AI_FLOOR_AI_PROVIDER`` is ``openai`` and
 ``OPENAI_API_KEY`` is set (the same names the runner uses). Each distinct text is translated once per process
-and remembered, including a failure, so a refresh does not call again. The page waits at most a short budget
-for texts already in flight and otherwise shows the original. Nothing here raises to the caller, and the key
-is never logged.
+and remembered, including a failure, so a refresh does not call again. One page render waits at most a single
+short budget (the next note does not start another wait) and otherwise shows the original. Nothing here
+raises to the caller, and the key is never logged.
 """
 from contextlib import contextmanager
 import json
@@ -20,7 +20,9 @@ _CACHE = {}
 _EVENTS = {}
 _LOCK = threading.Lock()
 _BUDGET_UNTIL = 0.0
+_LAST_TRANSLATE = 0.0
 _BUDGET_SECONDS = 1.2
+_PAGE_GAP = 3.0  # quiet longer than this is a new page render (the Floor retries at 8 s)
 _TIMEOUT = 2.5
 _TRANSPORT = None
 _ENV = None
@@ -33,9 +35,12 @@ _INSTRUCTIONS = (
 
 
 def clear_cache():
+    global _BUDGET_UNTIL, _LAST_TRANSLATE
     with _LOCK:
         _CACHE.clear()
         _EVENTS.clear()
+    _BUDGET_UNTIL = 0.0
+    _LAST_TRANSLATE = 0.0
 
 
 @contextmanager
@@ -126,12 +131,22 @@ def _ensure(text, key, model):
 
 
 def _wait(event):
-    global _BUDGET_UNTIL
+    """Wait inside one short window per page render. Do not open another window for the next text.
+
+    A render that translates every stored note used to start a fresh 1.2 s wait after each window expired, so the
+    Floor script never finished and the phone stayed on the loading spinner. A later render (a few seconds of quiet)
+    may open one new window. Never raises.
+    """
+    global _BUDGET_UNTIL, _LAST_TRANSLATE
+    now = time.monotonic()
+    idle = now - _LAST_TRANSLATE
+    _LAST_TRANSLATE = now
     if event is None or event.is_set():
         return
-    now = time.monotonic()
-    if now >= _BUDGET_UNTIL:
+    if _BUDGET_UNTIL <= 0.0 or idle > _PAGE_GAP:
         _BUDGET_UNTIL = now + _BUDGET_SECONDS
+    elif now >= _BUDGET_UNTIL:
+        return
     remaining = _BUDGET_UNTIL - time.monotonic()
     if remaining > 0:
         event.wait(remaining)

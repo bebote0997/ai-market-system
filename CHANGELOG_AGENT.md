@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-01 — iPhone: Inicio sin scroll horizontal y el Floor deja de quedarse cargando (borrador)
+
+- **Inicio (375–430 px, claro y oscuro).** El título «AI TRADING FLOOR» seguía a 28 px y `.18em` en el teléfono: esa regla gana a la de 640 px. Con la insignia larga de OANDA Demo el héroe, la imagen y las tarjetas se salían por la derecha. En el teléfono el título baja a 20 px / `.06em`, parte, y la insignia ocupa el ancho y hace salto de línea. El menú cerrado no reserva 300 px. `html` / el panel no se desplazan de lado.
+- **Floor cargando sin fin.** No es la ruta, ni la cookie, ni CSP, ni un error del JS del iframe: el `srcdoc` mismo origen pinta (Chrome, 390 px). Al abrir el Floor, cada nota en inglés de hasta 400 decisiones esperaba su propia ventana de 1,2 s a OpenAI; al agotarse, la siguiente nota abría otra. El script no terminaba y el teléfono se quedaba en el spinner. Ahora una sola espera por render, y solo se traducen las 12 filas que muestra el historial.
+- Sin cambios de motor, órdenes, Render, flags ni secretos. REAL sigue bloqueado. Sin merge y sin deploy.
+
 ## 2026-10-31 — UI del panel: botón de La mesa, velas OHLC y traducción (borrador)
 
 - Inicio vuelve a mostrar «Abrir La mesa animada (Floor)» justo debajo del héroe, a lo ancho (también en el teléfono).

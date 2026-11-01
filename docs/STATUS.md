@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-10-31 (America/New_York; rama `cursor/dashboard-ui-redesign-cc4c`, borrador de UI solamente: login con cristal y cookie firmada de 30 días, cabecera Balance/P&L/Equity, historial en la ficha de cada agente, «Cerrar operación» junto a Carlos sin cambiar el cierre, resúmenes en español con «Ver más», velas de 5 min a partir de cierres, tarjetas de cuenta reordenadas, héroe nuevo y modo claro/oscuro. Sin merge, sin deploy, sin cambios de motor, órdenes, Render ni secretos. REAL sigue bloqueado. Antes: 2026-10-30, rama `cursor/eurusd-limit-pullback-daa1`, DEC-EURUSD-PULLBACK-1. Ver `CHANGELOG_AGENT.md`)._
+_Última actualización: 2026-11-01 (America/New_York; rama `cursor/iphone-inicio-floor-cc4c`, borrador solo de UI: Inicio no se desplaza de lado en 375–430 px, y el Floor no se queda cargando porque la traducción ya no espera 1,2 s por cada nota. Sin merge, sin deploy, sin cambios de motor, órdenes, Render ni secretos. REAL sigue bloqueado. Antes: 2026-10-31, rediseño de UI en `main` `1634f0d`. Ver `CHANGELOG_AGENT.md`)._
 
 _Anterior: 2026-10-22 (America/New_York; rama `feat/fx-sl-week-hold`: DEC-FX-SL-1, DEC-HOLD-WEEK-1, DEC-REVERSAL-1, runbook del reinicio 2026-10-25. Anterior: 2026-10-18; ver `CHANGELOG_AGENT.md` — hardening OANDA demo: límite diario, botón de emergencia, drift-clear, cierre del viernes, Historial; todo OFF salvo el botón)._
 

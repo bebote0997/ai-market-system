@@ -354,6 +354,11 @@ class GlassCssTests(unittest.TestCase):
         self.assertLessEqual(blur, 12)
         self.assertGreaterEqual(blur, 8)
         self.assertIn(".tf .kpis{grid-template-columns:minmax(0,1fr)}", phone)
+        self.assertIn("overflow-x:clip", phone)
+        self.assertIn('[data-testid="stSidebar"][aria-expanded="false"]{width:0!important', phone)
+        # The desktop tracking rule is more specific than `.tf .hero .wordmark`, so the phone rule must repeat
+        # `.tf .hero:has(.hero-copy) .wordmark` or the 28px / .18em title stays one line and overflows at 390px.
+        self.assertIn(".tf .hero:has(.hero-copy) .wordmark{font-size:20px;letter-spacing:.06em", CSS)
 
     def test_no_external_assets_media_or_imports(self):
         lowered = CSS.lower()
