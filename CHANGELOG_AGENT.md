@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-01 — Banner nuevo y paleta azul / violeta (borrador)
+
+- `runtime/assets/floor_banner.png` es el banner del owner (2172×724, 3:1). El generador se niega a pisarlo.
+- El panel deja el dorado: fondo navy, acentos azul eléctrico, cian y violeta, títulos plata. Verde y rojo siguen siendo el P&L. El modo claro usa los mismos acentos con texto oscuro.
+- Sin cambios de motor, órdenes, Render ni secretos. Sin merge y sin deploy.
+
 ## 2026-11-01 — Menú en modo claro legible (borrador)
 
 - El panel de día es un cristal blanco (75 %) con texto #1a1a1a y secundarios #555. La barra activa sigue en oro. Los títulos, pies y el buscador del resto del panel dejan de usar el gris del tema oscuro.

@@ -154,9 +154,9 @@ class LuxuryDashboardTests(unittest.TestCase):
             self.assertNotIn(dark, styles[0])
         config = Path('.streamlit/config.toml').read_text()
         self.assertIn('base = "dark"', config)
-        self.assertIn('backgroundColor = "#0a0a0b"', config)
+        self.assertIn('backgroundColor = "#05071a"', config)
         self.assertIn('showSidebarNavigation = false', config)
-        self.assertIn('#d9b45a', styles[0])  # brand gold
+        self.assertIn('#22d3ee', styles[0])  # brand cyan
         self.assertIn('Didot', styles[0])  # serif brand headings (system fonts, no download)
 
     def test_empty_database_screens_are_read_only(self):

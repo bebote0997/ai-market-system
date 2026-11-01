@@ -58,7 +58,7 @@ class NavStyleTests(unittest.TestCase):
         self.assertIn("border-radius:28px!important", css)
         self.assertIn("rgba(255,255,255,.10)", css)
         self.assertIn("blur(22px)", css)
-        self.assertIn("inset 3px 0 0 #e8c46f", css)
+        self.assertIn("inset 3px 0 0 #22d3ee", css)
         self.assertIn("rgba(255,255,255,.75)", css)
         self.assertIn("color:#1a1a1a", css)
         self.assertIn("--aif-section:#555555", css)
@@ -84,7 +84,7 @@ class NavStyleTests(unittest.TestCase):
         # The gold bar is a UI boundary, not text: WCAG 1.4.11 asks for 3:1.
         self.assertGreaterEqual(ratio("a8842a", white), 3.0)
         self.assertIn("color:#1a1a1a", self.css)
-        self.assertIn("box-shadow:inset 3px 0 0 #a8842a", self.css)
+        self.assertIn("box-shadow:inset 3px 0 0 #1d4ed8", self.css)
 
     def test_collapsed_rail_does_not_widen_the_page(self):
         self.assertIn("width:76px!important", self.css)

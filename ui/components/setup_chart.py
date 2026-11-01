@@ -101,7 +101,7 @@ def bars_for_dashboard(bars):
 
 # Dashboard-only restyle in the app's dark + gold Floor palette (the name is historical). build_setup_figure (shared
 # with the setup e-mail PNG) is left unchanged.
-LIGHT = {'bg': '#0d1416', 'grid': '#1f2c2e', 'text': '#c9d4d2', 'entry': '#d9b45a', 'up': '#3ddc84', 'down': '#ff4d6d'}
+LIGHT = {'bg': '#0a1028', 'grid': '#1a2744', 'text': '#c5d0e6', 'entry': '#22d3ee', 'up': '#3ddc84', 'down': '#ff4d6d'}
 LABELS_ES = (('5m OHLC', 'velas de 5 min · OHLC'),
              ('5m candles · close bodies', 'velas de 5 min · cuerpo de cierres'),
              ('TAKE PROFIT', 'TAKE PROFIT (TP)'), ('STOP LOSS', 'STOP LOSS'), ('ENTRY', 'ENTRADA'),
@@ -143,7 +143,7 @@ def light_setup_figure(fig):
         if annotation.font.color in colors:
             annotation.font.color = colors[annotation.font.color]
     fig.update_layout(title=dict(text=_es(fig.layout.title.text),
-                                 font=dict(family='Inter, Segoe UI, system-ui, sans-serif', size=17, color='#d9b45a')),
+                                 font=dict(family='Inter, Segoe UI, system-ui, sans-serif', size=17, color='#e8eefc')),
                       paper_bgcolor=LIGHT['bg'], plot_bgcolor=LIGHT['bg'],
                       font=dict(family='Inter, Segoe UI, system-ui, sans-serif', color=LIGHT['text']),
                       xaxis=dict(gridcolor=LIGHT['grid'], title='Hora de Nueva York (ET)', tickformat='%d/%m %H:%M'),

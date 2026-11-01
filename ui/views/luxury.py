@@ -443,15 +443,15 @@ def curve_chart(st, curve, title, caption):
     import plotly.graph_objects as go
     fig = go.Figure(go.Scatter(x=[r['Closed at'].astimezone(es.ET) for r in curve],
                                y=[r['Cumulative realized PnL'] for r in curve], mode='lines+markers',
-                               line=dict(color='#d9b45a', width=2.5, shape='hv'),
+                               line=dict(color='#22d3ee', width=2.5, shape='hv'),
                                marker=dict(size=7, color='#19e3d3'), fill='tozeroy',
-                               fillcolor='rgba(217,180,90,0.10)',
+                               fillcolor='rgba(34,211,238,0.12)',
                                hovertemplate='%{x|%d %b %H:%M} ET<br>$%{y:,.2f}<extra></extra>'))
     fig.add_hline(y=0, line_color='#7f9593', line_width=1)
     fig.update_layout(height=260, margin=dict(l=65, r=15, t=10, b=40), paper_bgcolor='rgba(0,0,0,0)',
                       plot_bgcolor='rgba(8,10,16,0.35)', font=dict(family='Inter, Segoe UI, system-ui, sans-serif',
                                                         color='#c9d4d2', size=13),
-                      hoverlabel=dict(bgcolor='#0d0d0e', bordercolor='#d9b45a', font=dict(color='#e8eceb')),
+                      hoverlabel=dict(bgcolor='#070b1e', bordercolor='#22d3ee', font=dict(color='#e8eefc')),
                       xaxis=dict(gridcolor='rgba(255,255,255,0.08)', linecolor='rgba(255,255,255,0.16)',
                                  tickformat='%d/%m %H:%M'),
                       yaxis=dict(gridcolor='rgba(255,255,255,0.08)', linecolor='rgba(255,255,255,0.16)',

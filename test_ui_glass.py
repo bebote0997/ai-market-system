@@ -348,7 +348,7 @@ class GlassCssTests(unittest.TestCase):
         self.assertIn("transition:none!important", motion)
         transparency = media_block(GLASS_CSS, "prefers-reduced-transparency:reduce")
         self.assertIn("backdrop-filter:none!important", transparency)
-        self.assertIn("--gl-base:#0d1416", transparency)
+        self.assertIn("--gl-base:#0a1028", transparency)
 
     def test_phone_blur_is_at_most_12px_and_kpis_are_one_column(self):
         phone = media_block(GLASS_CSS, "max-width:640px")
@@ -367,7 +367,7 @@ class GlassCssTests(unittest.TestCase):
             self.assertNotIn(forbidden, lowered)
 
     def test_existing_rules_still_present(self):
-        for rule in ('[data-testid="stAlertContainer"]{background:#0d1416!important', "/* Detail KPIs",
+        for rule in ('[data-testid="stAlertContainer"]{background:#0a1028!important', "/* Detail KPIs",
                      '[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked)'):
             self.assertIn(rule, CSS)
 

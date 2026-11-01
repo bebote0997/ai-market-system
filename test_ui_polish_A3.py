@@ -97,7 +97,7 @@ class DetailPolishTests(unittest.TestCase):
         for kind in ('Info', 'Warning', 'Success'):
             selector = '[data-testid="stAlert"]:has([data-testid="stAlertContent' + kind + '"])'
             rule = css.split(selector + '{', 1)[1].split('}', 1)[0]
-            self.assertIn('background:#0d1416', rule)
-            self.assertIn('border-left:3px solid #d9b45a', rule)
+            self.assertIn('background:#0a1028', rule)
+            self.assertIn('border-left:3px solid #7eb6ff', rule)
             self.assertIn('[data-testid="stAlertContent' + kind + '"]{background:transparent;color:inherit}', css)
         self.assertIn('background:#2a0f16;color:#ffc2cd', css)

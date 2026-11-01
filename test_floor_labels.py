@@ -69,7 +69,7 @@ class MobileWallTests(unittest.TestCase):
     def test_wall_screens_are_lit_on_a_narrow_stage(self):
         self.assertIn("const wallTxt=!MOB();", ASSET)  # long wall text stays desktop-only
         self.assertIn("poly(pts,MOB()?'#12393b':'#0c0b09',", ASSET)
-        self.assertIn("cx.shadowColor='#19e3d3';cx.shadowBlur=hot?10:6", ASSET)
+        self.assertIn("cx.shadowColor='#22d3ee';cx.shadowBlur=hot?10:6", ASSET)
 
     def test_one_legible_line_per_wall_from_the_payload(self):
         self.assertIn("if(MOB()){const cap=(x,y,cands,col,maxU)=>", ASSET)
