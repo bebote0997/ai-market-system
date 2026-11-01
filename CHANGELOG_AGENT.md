@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-11-01 — Menú en modo claro legible (borrador)
+
+- El panel de día es un cristal blanco (75 %) con texto #1a1a1a y secundarios #555. La barra activa sigue en oro. Los títulos, pies y el buscador del resto del panel dejan de usar el gris del tema oscuro.
+- Sin cambios de motor, órdenes, Render ni secretos. Sin merge y sin deploy.
+
 ## 2026-11-01 — Menú flotante de cristal (borrador)
 
 - El botón «Menú» y el cajón de Streamlit pasan a ser una barra flotante: pastilla de iconos cerrada, panel de radio 28 px abierto. Acento oro. Buscar páginas filtra las páginas que ya existen. Grupos PRINCIPAL, MESA y DETALLE. El interruptor de modo claro y Stop quedan al pie. En el teléfono la pastilla no ensancha la página; el panel abierto tapa el contenido y se cierra al tocar fuera.

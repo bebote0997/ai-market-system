@@ -43,7 +43,8 @@ _SCRIPT = r"""
     app.classList.toggle('aif-nav-open', !!open);
     try{sessionStorage.setItem('aif-nav', open?'open':'closed')}catch(e){}
     var bd=document.querySelector('.aif-backdrop');
-    if(!bd){bd=document.createElement('div'); bd.className='aif-backdrop'; document.body.appendChild(bd)}
+    if(!bd){bd=document.createElement('div'); bd.className='aif-backdrop';}
+    if(bd.parentNode!==app) app.appendChild(bd);
   }
   function applyStored(){
     var stored=null;
@@ -128,7 +129,7 @@ def section_css():
             f'[data-testid="stSidebar"] [role="radiogroup"] > div:nth-child({index}){{position:relative;margin-top:28px}}'
             f'[data-testid="stSidebar"] [role="radiogroup"] > div:nth-child({index})::before{{content:"{text}";'
             f'position:absolute;top:-18px;left:12px;font-size:10px;font-weight:700;letter-spacing:.14em;'
-            f'text-transform:uppercase;color:#a9b8b6;white-space:nowrap}}'
+            f'text-transform:uppercase;color:var(--aif-section,#a9b8b6);white-space:nowrap}}'
         )
     return rule(1, "PRINCIPAL") + rule(mesa, "MESA") + rule(detail, "DETALLE")
 
