@@ -372,14 +372,11 @@ def start_hero(st, now, *, demo, day=None):
     uri = banner_uri()
     art = (f'<div class="hero-art"><img src="{uri}" alt="AI Trading Floor"></div>' if uri else '')
     badge = f'<span class="ex">{escape(tr("SAMPLE / DEMO"))}</span>' if st.session_state.get('sample_mode') else ''
-    known = isinstance(day, int) and not isinstance(day, bool) and day >= 1
-    day_line = es.demo_day_text(day) if demo and known else (FIRST_CYCLE_WAIT if demo else '')
     html(st, f'<div class="hero"><div class="hero-copy"><div class="eyebrow">{escape(es.long_date_et(now))}</div>'
              f'<p class="wordmark">{escape(tr("AI TRADING FLOOR"))}</p>'
              f'<h1>{escape(es.PAGE_TITLES["Overview"])}</h1>'
              f'<div class="sub">{escape(hero_subline(demo, day))}</div>'
-             + (f'<div class="hero-day">{escape(day_line)}</div>' if day_line else '')
-             + f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>'
+             f'<span class="banner">🧪 {escape(tr("PAPER · REAL EXECUTION DISABLED · NO REAL MONEY"))}</span>'
              f'{badge}</div>{art}</div>')
     open_floor_button(st)  # directly under the hero, full width, on phones too
 

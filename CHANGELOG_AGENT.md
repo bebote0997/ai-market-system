@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-01 — Menú más fino, iconos centrados, sin buscador (borrador)
+
+- La pastilla cerrada pasa de 76 px a 56 px. Cada icono queda centrado en su círculo. La flecha de abrir/cerrar ocupa el sitio de la lupa; el campo «Buscar páginas» desaparece, cerrado y abierto.
+- En el teléfono (≤768 px) el panel abierto mide como máximo 78 vw y 260 px. En Inicio, «Día N de 30» sale solo en el subtítulo.
+- Sin cambios de motor, órdenes, Render ni secretos. Sin merge y sin deploy.
+
 ## 2026-11-01 — Banner nuevo y paleta azul / violeta (borrador)
 
 - `runtime/assets/floor_banner.png` es el banner del owner (2172×724, 3:1). El generador se niega a pisarlo.

@@ -58,6 +58,24 @@ class SpanishValuesTests(unittest.TestCase):
         self.assertNotIn(WORD, luxury.hero_subline(False, None))
         self.assertTrue(luxury.banner_uri().startswith("data:image/png;base64,"))
 
+    def test_hero_states_the_day_only_in_the_subline(self):
+        captured = {}
+
+        class Screen:
+            session_state = {}
+
+            def markdown(self, html, unsafe_allow_html=False):
+                captured["html"] = html
+
+            def button(self, *_args, **_kwargs):
+                return False
+
+        from datetime import datetime, timezone
+        luxury.start_hero(Screen(), datetime(2026, 11, 1, tzinfo=timezone.utc), demo=True, day=8)
+        html = captured["html"]
+        self.assertEqual(html.count("Día 8 de 30"), 1)
+        self.assertNotIn("hero-day", html)
+
 
 class RenderedScreensTests(unittest.TestCase):
     def setUp(self):

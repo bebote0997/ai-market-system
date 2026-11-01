@@ -1,18 +1,20 @@
 """The floating glass menu: real pages, no invented badge, gold accent, collapsed pill and expanded panel."""
 import unittest
 
-from ui.nav_menu import SEARCH, SUBTITLE, TITLE, chrome, open_trades_count, section_css, stop_button
+from ui.nav_menu import SUBTITLE, TITLE, chrome, open_trades_count, section_css, stop_button
 from ui.views.luxury import PAGES
 
 
 class NavChromeTests(unittest.TestCase):
-    def test_header_names_the_floor_and_the_search(self):
+    def test_header_names_the_floor_without_a_search_field(self):
         html = chrome(None)
         self.assertIn(TITLE, html)
         self.assertIn(SUBTITLE, html)
-        self.assertIn(SEARCH, html)
+        self.assertIn("aif-switch", html)
         self.assertIn("aif-expand", html)
         self.assertIn("aif-collapse", html)
+        self.assertNotIn("Buscar páginas", html)
+        self.assertNotIn("aif-search", html)
         self.assertNotIn("data-open-trades", html)
         self.assertNotIn("http", html.lower())
 
@@ -87,7 +89,8 @@ class NavStyleTests(unittest.TestCase):
         self.assertIn("box-shadow:inset 3px 0 0 #1d4ed8", self.css)
 
     def test_collapsed_rail_does_not_widen_the_page(self):
-        self.assertIn("width:76px!important", self.css)
-        self.assertIn("padding-left:100px!important", self.css)
+        self.assertIn("width:56px!important", self.css)
+        self.assertIn("min(78vw,260px)", self.css)
+        self.assertIn("padding-left:80px!important", self.css)
         self.assertIn("max-width:100%", self.css)
         self.assertIn("overflow-x:clip", self.css)
