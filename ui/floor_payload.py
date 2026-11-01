@@ -407,14 +407,25 @@ def ai_agents(db, snapshot, closed, since=None):
         else:
             continue
         view["signals"], view["hit_rate"] = signals_and_hit_rate(mine, closed)
-        log = []
+        # Translate only the rows the drawer will show. The query can return hundreds of notes; translating each
+        # one blocks the Floor script (one model call per note) and the phone stays on the loading spinner.
+        candidates = []
         if latest is not None:
-            log.append(history_row(latest.get("reasoning_summary"),
-                                   latest.get("timestamp") or (snapshot or {}).get("as_of")))
+            candidates.append((latest.get("reasoning_summary"),
+                               latest.get("timestamp") or (snapshot or {}).get("as_of")))
         for row in mine:
-            log.append(history_row(row.get("reasoning_summary") or short_status(row.get("status"), row.get("bias")),
-                                   row.get("as_of")))
-        _with_history(view, log)
+            candidates.append((row.get("reasoning_summary") or short_status(row.get("status"), row.get("bias")),
+                               row.get("as_of")))
+        kept, seen = [], set()
+        for text, at in candidates:
+            key = (at, " ".join(str(text or "").split()))
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append((text, at))
+            if len(kept) >= HISTORY_LIMIT:
+                break
+        _with_history(view, [history_row(text, at) for text, at in kept])
         agents[agent_id] = view
     return agents
 

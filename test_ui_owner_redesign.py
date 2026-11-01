@@ -1,4 +1,5 @@
 """Owner UI pass: remember-me token, Spanish summaries, header KPIs, close-body candles, agent cards."""
+import threading
 import time
 import unittest
 
@@ -58,6 +59,23 @@ class SpanishSummaryTests(unittest.TestCase):
         self.assertIn(text.split(",")[0], html)  # the original stays behind Ver más
         self.assertIsNone(summarize_es(text))  # no key in this process: the page shows the original
         self.assertNotIn("<script>", present_summary("<script>alert(1)</script> " * 5))
+
+    def test_one_render_does_not_wait_again_after_the_budget(self):
+        from ui import es_translate
+        pending = threading.Event()
+        es_translate.clear_cache()
+        previous = es_translate._BUDGET_SECONDS
+        es_translate._BUDGET_SECONDS = 0.2
+        try:
+            started = time.monotonic()
+            es_translate._wait(pending)
+            es_translate._wait(pending)  # the window is already over: the next note must not open another
+            elapsed = time.monotonic() - started
+        finally:
+            es_translate._BUDGET_SECONDS = previous
+            es_translate.clear_cache()
+        self.assertGreater(elapsed, 0.15)
+        self.assertLess(elapsed, 0.45)
 
     def test_practice_candles_keep_wicks_and_refuse_anything_else(self):
         from ui.oanda_candles import _allowed, override, practice_candles
