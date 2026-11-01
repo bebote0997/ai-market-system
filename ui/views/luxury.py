@@ -133,12 +133,8 @@ def apply(st):
     if st.session_state.get('ui_theme'):
         st.markdown('<div id="tf-theme-light" hidden></div>', unsafe_allow_html=True)
     css = (Path(__file__).parents[1] / 'static' / 'theme.css').read_text()
-    # Separator before the legacy/detail pages (position depends on the number of main pages).
-    child = len(PAGES) + 1
-    css += ('\n[data-testid="stSidebar"] [role="radiogroup"] > div:nth-child(%d){margin-top:40px;position:relative;'
-            'overflow:visible}\n[data-testid="stSidebar"] [role="radiogroup"] > div:nth-child(%d)::before{content:"%s";'
-            'position:absolute;top:-26px;left:10px;color:#a9b8b6;font-size:12px;font-weight:700;white-space:nowrap}'
-            % (child, child, tr('Legacy / Detail')))
+    from ui.nav_menu import section_css
+    css += "\n" + section_css()
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
 
