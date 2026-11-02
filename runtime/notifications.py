@@ -44,6 +44,21 @@ class NotificationEvent:
         return asdict(self)
 
 
+# Provider failure journal events: their sanitized payload (provider, HTTP status, provider error code) becomes the
+# notification's ``execution`` block, whose ``reason`` the Slack payload and the alert summary already show.
+PROVIDER_FAILURE_EVENTS = frozenset({"PROVIDER_FAILURE", "AUTH_ERROR", "ENTITLEMENT_ERROR", "RATE_LIMITED"})
+
+
+def provider_failure_execution(payload):
+    """``{"reason": "provider=openai http_status=429 error_code=…", ...}`` or None when no field is available.
+
+    Only allow-listed, token-shaped fields are copied (never a body, URL, header or key)."""
+    from ai.outcomes import provider_failure_reason, sanitize_provider_detail
+    detail = sanitize_provider_detail(payload)
+    reason = provider_failure_reason(detail)
+    return None if reason is None else {"reason": reason, **detail}
+
+
 class NotificationSink(Protocol):
     def deliver(self, event: NotificationEvent) -> None:
         ...

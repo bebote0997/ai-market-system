@@ -5,6 +5,8 @@ Engine and execution keep their certified semantics. Outcomes are derived only f
 the validator actually produced; nothing is guessed.
 """
 
+import re
+
 AVAILABILITY_VERSION = "V2_P7_AI_AVAILABILITY_1"
 
 # Typed outcomes of one agent call.
@@ -52,6 +54,90 @@ def classify_exception(error):
     return UNKNOWN_PROVIDER_ERROR
 
 
+def _token(value, limit=64):
+    """A short [A-Za-z0-9_.-] token (provider name / error code), else None: never free text or a body."""
+    if not isinstance(value, str) or not value or len(value) > limit:
+        return None
+    return value if all(ch.isalnum() or ch in "_.-" for ch in value) else None
+
+
+REDACTED = "redacted"
+_ERROR_CODE = re.compile(r"[a-z][a-z_]{0,63}")
+
+
+def _error_code(value):
+    """A known-shape provider error code (lowercase snake_case, no digits: ``insufficient_quota``,
+    ``rate_limit_exceeded``). Anything else that is present (keys such as ``sk-…``, account ids, bearer tokens,
+    free text) becomes ``redacted``; absent stays None."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and _ERROR_CODE.fullmatch(value) and not value.startswith("sk_"):
+        return value
+    return REDACTED
+
+
+def _status(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599 else None
+
+
+def provider_error_detail(error, provider=None):
+    """``{"provider", "http_status", "error_code"}`` of a provider exception; each None when not available.
+
+    Uses only the sanitized attributes the adapter set (``http_status``, ``error_code`` / ``error_type``), never the
+    message, body, headers or key. ``provider`` is the adapter's public name (e.g. ``openai``).
+    """
+    return sanitize_provider_detail({
+        "provider": provider if provider is not None else getattr(error, "provider", None),
+        "http_status": getattr(error, "http_status", None),
+        "error_code": getattr(error, "error_code", None) or getattr(error, "error_type", None)})
+
+
+def provider_name(provider):
+    """The adapter's public provider name (``metadata["provider"]``), or None; never raises."""
+    try:
+        metadata = provider.metadata
+    except Exception:  # noqa: BLE001 - observability only
+        return None
+    return metadata.get("provider") if isinstance(metadata, dict) else None
+
+
+def sanitize_provider_detail(detail):
+    """Allow-listed ``provider`` / ``http_status`` / ``error_code`` of a mapping, each sanitized or None."""
+    detail = detail if isinstance(detail, dict) else {}
+    return {"provider": _token(detail.get("provider")), "http_status": _status(detail.get("http_status")),
+            "error_code": _error_code(detail.get("error_code"))}
+
+
+def provider_failure_fields(detail):
+    """``provider=… http_status=… error_code=…`` for log lines; ``-`` when absent (key=value format)."""
+    detail = sanitize_provider_detail(detail)
+    return " ".join(f"{key}={_token(str(value)) if value is not None and _token(str(value)) else '-'}"
+                    for key, value in ((k, detail.get(k)) for k in ("provider", "http_status", "error_code")))
+
+
+def provider_failure_reason(detail):
+    """Alert reason: the same fields, only those that are available (``provider=openai http_status=429``)."""
+    detail = sanitize_provider_detail(detail)
+    parts = [f"{key}={detail[key]}" for key in ("provider", "http_status", "error_code")
+             if detail.get(key) is not None and _token(str(detail[key]))]
+    return " ".join(parts) or None
+
+
+def provider_failure_detail(entries):
+    """Provider detail of a cycle's failed agent calls (``ai.runtime.AuditLog`` entries whose response is ERROR).
+
+    The first failure that carries an HTTP status or error code wins (else the first failure); ``agents`` lists every
+    failed agent. Empty when nothing failed.
+    """
+    failed = [e for e in entries or () if getattr(e.get("response"), "status", None) == "ERROR"]
+    if not failed:
+        return {}
+    first = next((e for e in failed if e.get("http_status") is not None or e.get("error_code")), failed[0])
+    return {"provider": _token(first.get("provider")), "http_status": _status(first.get("http_status")),
+            "error_code": _error_code(first.get("error_code")), "outcome": _token(first.get("outcome")),
+            "agents": sorted({str(e.get("agent")) for e in failed})}
+
+
 def classify_validation(reason):
     """Typed outcome of a ``validate_ai_response`` rejection reason."""
     return UNGROUNDED_RESPONSE if str(reason).startswith("ungrounded_") else INVALID_SCHEMA
@@ -94,4 +180,6 @@ __all__ = ["AI_TIME_BUDGET_EXHAUSTED", "AUTH_ERROR", "AVAILABILITY_VERSION", "CO
            "INVALID_RESPONSE", "INVALID_SCHEMA", "MODEL_REPORTED_ERROR", "MODEL_UNAVAILABLE", "NON_TRANSIENT", "NOT_CONFIGURED", "NO_DATA",
            "OK", "OUTCOME_WARNING_PREFIX", "PROVIDER_FAILURE", "QUOTA_EXHAUSTED", "RATE_LIMITED", "SHORT_CIRCUITED",
            "TIMEOUT", "TRANSIENT", "UNGROUNDED_RESPONSE", "UNKNOWN_PROVIDER_ERROR", "ai_availability",
-           "classify_exception", "classify_validation", "outcome_of"]
+           "classify_exception", "classify_validation", "outcome_of", "provider_error_detail",
+           "provider_failure_detail", "provider_failure_fields", "provider_failure_reason", "provider_name",
+           "sanitize_provider_detail"]

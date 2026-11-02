@@ -9,6 +9,7 @@ only: no key, header, prompt, body or balance claim.
 import logging
 import uuid
 
+from ai.outcomes import provider_failure_fields, provider_failure_reason, sanitize_provider_detail
 from runtime.notifications import NotificationEvent
 
 LOG = logging.getLogger(__name__)
@@ -29,6 +30,10 @@ class AIProviderAlerts:
             if event.get("event") not in ALERTED:
                 continue
             key = (event["event"], event.get("incident_started_at"))
+            detail = sanitize_provider_detail(event) if event["event"] == "PROVIDER_FAILED" else {}
+            if detail:
+                LOG.warning("component=ai_alerts event=AI_PROVIDER_FAILED %s outcome=%s",
+                            provider_failure_fields(detail), event.get("outcome") or "-")
             if not self.enabled or self.sink is None or key in self._delivered:
                 self.suppressed += 1
                 continue
@@ -39,13 +44,20 @@ class AIProviderAlerts:
                 "WARNING" if event["event"] == "PROVIDER_FAILED" else "INFO", "AI_" + event["event"], symbol, (),
                 ({"outcome": event.get("outcome"), "from": event.get("from"), "to": event.get("to"),
                   "incident_started_at": event.get("incident_started_at"),
-                  "duration_seconds": event.get("duration_seconds")},), None, (), (), ())
+                  "duration_seconds": event.get("duration_seconds"), **detail},), None, (), (), (),
+                execution=_execution(event["event"], detail))
             try:
                 self.sink.deliver(notification)
                 delivered += 1
             except Exception as exc:  # noqa: BLE001 - delivery never controls anything
                 LOG.warning("component=ai_alerts event=DELIVERY_FAILED error_type=%s", type(exc).__name__)
         return delivered
+
+
+def _execution(kind, detail):
+    """Alert reason for a failure (``provider=openai http_status=429 error_code=…``); None for a recovery."""
+    reason = provider_failure_reason(detail) if kind == "PROVIDER_FAILED" else None
+    return None if reason is None else {"reason": reason, **detail}
 
 
 __all__ = ["AIProviderAlerts"]

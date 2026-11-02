@@ -11,7 +11,7 @@ Each state change produces one event (PROVIDER_DEGRADED / PROVIDER_FAILED / PROV
 start, the triggering outcome and, on recovery, the first-known-good time and incident duration.
 """
 from ai.outcomes import (AI_TIME_BUDGET_EXHAUSTED, MODEL_REPORTED_ERROR, NO_DATA, NON_TRANSIENT, OK,
-                         SHORT_CIRCUITED)
+                         SHORT_CIRCUITED, sanitize_provider_detail)
 
 READY, DEGRADED, FAILED, UNKNOWN = "READY", "DEGRADED", "FAILED", "UNKNOWN"
 SUCCESS = frozenset({OK, NO_DATA, MODEL_REPORTED_ERROR})
@@ -29,8 +29,9 @@ class ProviderHealthTracker:
         self.last_outcome = None
         self.events = []
 
-    def observe(self, outcome, *, at, run_id=None):
-        """Apply one provider outcome; returns (state_before, state_after)."""
+    def observe(self, outcome, *, at, run_id=None, detail=None):
+        """Apply one provider outcome; returns (state_before, state_after). ``detail`` (sanitized provider name,
+        HTTP status, provider error code) is copied onto a failure transition event; it never changes a state."""
         before = self.state
         if outcome in NOT_OBSERVED:
             return before, before
@@ -52,7 +53,7 @@ class ProviderHealthTracker:
         self.state = FAILED if failed else DEGRADED
         if self.state != before:
             self._event("PROVIDER_FAILED" if failed else "PROVIDER_DEGRADED", before, outcome, at, run_id,
-                        incident_started_at=self.incident_started_at)
+                        incident_started_at=self.incident_started_at, **sanitize_provider_detail(detail))
         return before, self.state
 
     def _event(self, name, before, outcome, at, run_id, **extra):
