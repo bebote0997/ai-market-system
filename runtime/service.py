@@ -10,6 +10,7 @@ import time
 import uuid
 
 from ai.orchestrator import run as run_ai
+from ai.outcomes import provider_failure_detail, provider_failure_fields
 from ai.provider import DeterministicAIProvider
 from ai.runtime import AuditLog
 from core.risk_policy import stamp_fx_order
@@ -29,7 +30,7 @@ from runtime.config import RuntimeConfig
 from runtime import health_hooks, symbol_pause
 from runtime.gates import fresh_snapshot, paper_policy
 from runtime.halt import HaltGate, HaltRefused, halt_bookkeeping, startup_halt_check, startup_write
-from runtime.observability import setup_id as audit_setup_id
+from runtime.observability import setup_id as audit_setup_id, setup_log_fields
 from runtime.paper_contracts import apply_paper_quantity_increment
 from runtime.scheduler import session_names, slot_at, slot_key
 from storage.codec import parse_utc, utc
@@ -1210,6 +1211,8 @@ class OperationalRuntime:
                 self._persist("O", lambda: self.store.event(self.clock(), run_id, symbol, "macro_news",
                                                             "PROVIDER_FAILURE", "ERROR",
                                                             {"provider": self.config.macro_provider_mode}))
+                LOG.warning("run_id=%s symbol=%s component=runtime event=PROVIDER_FAILURE source=macro_news %s",
+                            run_id, symbol, provider_failure_fields({"provider": self.config.macro_provider_mode}))
             if (self.config.macro_provider_mode in {"finnhub", "official_hybrid", "fxmacrodata"} and macro_report and
                     macro_report.status in {"OK", "PARTIAL"} and macro_report.evidence):
                 self._audit_safely(lambda: self.store.record_macro_awareness(
@@ -1260,8 +1263,12 @@ class OperationalRuntime:
                                                           if isinstance(self.ai_provider, DeterministicAIProvider)
                                                           else "CONFIGURED"),)))
             if provider_failed:
+                failure = provider_failure_detail(audit.entries)
                 self._persist("O", lambda: self.store.event(self.clock(), ai.run_id, symbol, "ai_provider",
-                                                            "PROVIDER_FAILURE", "ERROR"))
+                                                            "PROVIDER_FAILURE", "ERROR", failure))
+                LOG.warning("run_id=%s symbol=%s component=runtime event=PROVIDER_FAILURE source=ai_provider %s "
+                            "outcome=%s agents=%s", ai.run_id, symbol, provider_failure_fields(failure),
+                            failure.get("outcome") or "-", ",".join(failure.get("agents", ())) or "-")
             # Provider/AI latency may cross a freshness or session boundary.
             # Recheck before progressing any pending order or submitting a new one.
             execution_at = self.clock()
@@ -1434,8 +1441,10 @@ class OperationalRuntime:
                 symbol, self._snapshot(from_ai_report(ai, now=slot))), run_id, symbol)
             if not self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", ai.final_status)):
                 return "ERROR"
-            LOG.info("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_COMPLETED status=%s",
-                     ai.run_id, symbol, utc(slot), ai.final_status)
+            LOG.info("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_COMPLETED status=%s "
+                     "setup_status=%s side=%s setup_warnings=%s",
+                     ai.run_id, symbol, utc(slot), ai.final_status,
+                     *setup_log_fields(deterministic.setup_assessment))
             return ai.final_status
         except HaltRefused as halt:  # V2 P4a: an admission or the run lifecycle was refused after T_h
             return self._halt_run(key, run_id, symbol, halt, rex)

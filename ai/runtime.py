@@ -12,7 +12,7 @@ import time
 
 from ai.contracts import AI_SCHEMA_VERSION, AIResponse, validate_ai_response
 from ai.outcomes import (MODEL_REPORTED_ERROR, NO_DATA, OK, OUTCOME_WARNING_PREFIX, classify_exception,
-                         classify_validation)
+                         classify_validation, provider_error_detail, provider_name)
 
 
 def _error_response(request, *warnings):
@@ -49,6 +49,9 @@ class AuditLog:
             "outcome": typed.get("outcome"),
             "error_kind": typed.get("error_kind"),
             "http_status": typed.get("http_status"),
+            # Sanitized provider name and error code (e.g. openai / rate_limit_exceeded) for failure alerts and logs.
+            "provider": typed.get("provider"),
+            "error_code": typed.get("error_code"),
             # V2 P7.1 Batch B (DEC-7.2/7.10): call timing/attempts/response id and the evidence fingerprint.
             "call": typed.get("call"),
             "evidence_fingerprint": typed.get("evidence_fingerprint"),
@@ -128,6 +131,7 @@ def call_agent(provider, request, audit_log=None):
         return response
 
     error_kind = http_status = None
+    failure = provider_error_detail(None, provider_name(provider))  # provider name only until an exception
     call = {"called": True, "requested_at": datetime.now(timezone.utc).isoformat()}
     _observe(request, provider_called=True, reason="emitted")
     started = time.perf_counter()
@@ -139,6 +143,7 @@ def call_agent(provider, request, audit_log=None):
         error_kind = kind if isinstance(kind, str) else None
         status = getattr(error, "http_status", None)
         http_status = status if isinstance(status, int) and not isinstance(status, bool) else None
+        failure = provider_error_detail(error, failure["provider"])
         # DEC-7.1: the typed outcome is ADDED after the unchanged legacy warning (System Health reads warnings[0]).
         response = _error_response(request, f"provider_exception:{type(error).__name__}",
                                    OUTCOME_WARNING_PREFIX + outcome)
@@ -165,6 +170,7 @@ def call_agent(provider, request, audit_log=None):
             request.run_id, request.agent_name, request.prompt_version, evidence_id_list,
             response, reason, getattr(provider, "metadata", {}),
             outcome=outcome, error_kind=error_kind, http_status=http_status, call=call,
+            provider=failure["provider"], error_code=failure["error_code"],
             evidence_fingerprint=fingerprint,
         )
     return response

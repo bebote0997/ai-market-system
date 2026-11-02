@@ -17,11 +17,14 @@ from datetime import datetime
 from enum import Enum
 import hashlib
 import json
+import logging
 import math
 import re
 
 from storage.codec import parse_utc, utc
 from storage.health_store import HealthStore, HealthStoreError
+
+LOG = logging.getLogger("ai_floor.system_health")
 
 
 class HealthStatus(str, Enum):
@@ -138,6 +141,23 @@ def _from_status(status):
     if 500 <= status <= 599:
         return ProviderErrorType.PROVIDER_5XX
     return None
+
+
+_ERROR_CODE = re.compile(r"[a-z][a-z_]{0,63}")  # lowercase snake_case, no digits (same rule as ai.outcomes)
+
+
+def _http_status(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599 else None
+
+
+def _error_code(value):
+    """A known-shape provider error code (``insufficient_quota``, ``rate_limit_exceeded``); any other present value
+    (``sk-…`` key, account id, bearer token, free text) is ``redacted``; absent stays None."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and _ERROR_CODE.fullmatch(value) and not value.startswith("sk_"):
+        return value
+    return "redacted"
 
 
 def sanitize_reason(text):
@@ -273,11 +293,14 @@ class SystemHealth:
                              **self._details(details))
 
     def record_error(self, component, *, at, observation_id, provider=None, kind=None, http_status=None,
-                     exception=None, reason=None, latency_ms=None, details=None, component_error=None):
+                     exception=None, reason=None, latency_ms=None, details=None, component_error=None,
+                     error_code=None):
         """Provider errors are classified with ProviderErrorType; a non-provider component passes
         ``component_error`` (ComponentErrorType) instead and is never given a provider label.
         A NOT_CONFIGURED kind is a known configuration condition, not a provider failure: it is
-        recorded as an UNKNOWN state with reason NOT_CONFIGURED and never counts as an error."""
+        recorded as an UNKNOWN state with reason NOT_CONFIGURED and never counts as an error.
+        A provider error's HTTP status and provider error code (``http_status`` / ``error_code``, or the same
+        attributes of ``exception``) are kept in ``details`` when available; absent ones add no key."""
         if component_error is None and kind == NOT_CONFIGURED:
             return self.record_state(component, at=at, observation_id=observation_id, provider=provider,
                                      status=HealthStatus.UNKNOWN, reason=NOT_CONFIGURED, details=details)
@@ -285,6 +308,13 @@ class SystemHealth:
             error_type, legacy = ComponentErrorType(component_error), None
         else:
             error_type, legacy = classify_provider_error(kind=kind, http_status=http_status, exception=exception)
+            evidence = {key: value for key, value in (
+                ("http_status", _http_status(http_status if http_status is not None
+                                             else getattr(exception, "http_status", None))),
+                ("error_code", _error_code(error_code) or _error_code(getattr(exception, "error_code", None))
+                 or _error_code(getattr(exception, "error_type", None)))) if value is not None}
+            if evidence:
+                details = {**(details or {}), **evidence}
         return self._observe("ERROR", component, provider, at, observation_id, latency_ms=_latency(latency_ms),
                              error_type=error_type.value, legacy_error_name=legacy, reason=sanitize_reason(reason),
                              **self._details(details))
@@ -329,6 +359,12 @@ class SystemHealth:
                 "VALUES(?,?,?,?,?,?)", (observation_id, component, provider, observation["at"], payload,
                                         hashlib.sha256(payload.encode("utf-8")).hexdigest()))
             record = self._apply(self._read(component, provider), observation)
+            if kind == "ERROR" and observation["error_type"] in ProviderErrorType.__members__:
+                evidence = observation.get("details") or {}
+                LOG.warning("component=system_health event=PROVIDER_FAILURE health_component=%s provider=%s "
+                            "http_status=%s error_code=%s error_type=%s", component, provider or "-",
+                            evidence.get("http_status") or "-", evidence.get("error_code") or "-",
+                            observation["error_type"])
             self.store.db.execute(
                 "INSERT INTO component_health(component,provider,payload) VALUES(?,?,?) "
                 "ON CONFLICT(component,provider) DO UPDATE SET payload=excluded.payload",

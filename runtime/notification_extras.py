@@ -5,13 +5,15 @@
   ``Store.capture_notifications``, so they reach the sink and the email/Slack alerts exactly once.
 - ``with_trade``: attaches the durable order/position block (entry, SL, TP, quantity, R:R, risk %, times) to
   order/position notifications. Python formats R:R and risk once here; absent durable data stays absent (NO_DATA).
+- ``with_provider_failure``: attaches provider name, HTTP status and provider error code to provider failure
+  notifications (sanitized tokens only; never a body or key).
 Delivery never controls trading: both functions only read PAPER state.
 """
 from dataclasses import replace
 import json
 import uuid
 
-from runtime.notifications import NotificationEvent
+from runtime.notifications import PROVIDER_FAILURE_EVENTS, NotificationEvent, provider_failure_execution
 from runtime.scheduler import session_names
 from storage.codec import paper_decode, parse_utc, safe_json, utc
 
@@ -124,4 +126,24 @@ def with_trade(store, events):
     return out
 
 
-__all__ = ["AI_REVIEW_EVENTS", "capture_ai_review_health", "order_setup_id", "trade_block", "with_trade"]
+def with_provider_failure(store, events):
+    """``events`` with provider name, HTTP status and provider error code (from the journal row's sanitized payload)
+    attached to provider failure notifications as ``execution.reason``, which the Slack payload and alert summary
+    show. A payload without those fields leaves the event unchanged."""
+    out = []
+    for event in events:
+        if event.type in PROVIDER_FAILURE_EVENTS and not event.execution:
+            try:
+                row = store.db.execute("SELECT j.payload FROM notification_events n JOIN journal j "
+                                       "ON j.id=n.journal_id WHERE n.event_id=?", (event.event_id,)).fetchone()
+                execution = None if row is None else provider_failure_execution(json.loads(row["payload"] or "{}"))
+            except Exception:  # noqa: BLE001 - the plain alert is still delivered
+                execution = None
+            if execution is not None:
+                event = replace(event, execution=execution)
+        out.append(event)
+    return out
+
+
+__all__ = ["AI_REVIEW_EVENTS", "capture_ai_review_health", "order_setup_id", "trade_block", "with_provider_failure",
+           "with_trade"]

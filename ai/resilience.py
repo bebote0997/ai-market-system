@@ -16,7 +16,8 @@ execution eligibility, never add it. No deterministic calculation reads the guar
 """
 import time
 
-from ai.outcomes import AI_TIME_BUDGET_EXHAUSTED, NON_TRANSIENT, OK, SHORT_CIRCUITED, classify_exception
+from ai.outcomes import (AI_TIME_BUDGET_EXHAUSTED, NON_TRANSIENT, OK, SHORT_CIRCUITED, classify_exception,
+                         provider_error_detail, provider_name)
 
 
 class AIGuardError(RuntimeError):
@@ -59,11 +60,11 @@ class GuardedProvider:
     def name(self):
         return getattr(self.provider, "name", "unknown")
 
-    def _observe(self, outcome, request):
+    def _observe(self, outcome, request, detail=None):
         if self.health is None:
             return None, None
         at = self.clock() if self.clock is not None else request.as_of
-        return self.health.observe(outcome, at=at, run_id=request.run_id)
+        return self.health.observe(outcome, at=at, run_id=request.run_id, detail=detail)
 
     def generate(self, request):
         before = None if self.health is None else self.health.state
@@ -83,7 +84,8 @@ class GuardedProvider:
             outcome = classify_exception(error)
             if outcome in NON_TRANSIENT:
                 self.guard.tripped = outcome
-            _, after = self._observe(outcome, request)
+            _, after = self._observe(outcome, request,
+                                     provider_error_detail(error, provider_name(self)))
             self._capture(before, after)
             raise
         finally:

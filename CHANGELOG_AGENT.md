@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-02 — Observabilidad del motor: setup en RUN_COMPLETED, ciclo de la orden límite y detalle del proveedor (borrador)
+
+- `event=RUN_COMPLETED` añade `setup_status=`, `side=LONG|SHORT|-` y `setup_warnings=a,b|-` (avisos del Setup Validator).
+- Router OANDA demo: `LIMIT_SENT` (orden enmascarada `***NNN`, precio, vencimiento GTD en UTC), `LIMIT_FILLED` (trade enmascarado, precio de llenado), y `LIMIT_PENDING` / `LIMIT_EXPIRED` / `LIMIT_CANCELLED` con los mismos campos tras `trade_id=… reason=…`. Solo log: eventos guardados, alertas y órdenes no cambian.
+- `PROVIDER_FAILURE`: proveedor (`openai`), estado HTTP y código de error del proveedor (`insufficient_quota`, `rate_limit_exceeded`) en el diario, la línea de log, la razón de la alerta (Slack / catálogo), `AI_PROVIDER_FAILED` y los `details` de SYSTEM HEALTH. Solo tokens saneados; nunca cuerpo, URL, cabecera ni clave. `storage/database.py` (hash congelado) no se toca: el detalle se añade en `runtime/notification_extras.py`.
+- Sin cambios de lógica, umbrales, gates, órdenes, Render ni secretos. Sin push, sin merge y sin deploy.
+
 ## 2026-11-01 — Menú más fino, iconos centrados, sin buscador (borrador)
 
 - La pastilla cerrada pasa de 76 px a 56 px. Cada icono queda centrado en su círculo. La flecha de abrir/cerrar ocupa el sitio de la lupa; el campo «Buscar páginas» desaparece, cerrado y abierto.

@@ -277,10 +277,43 @@ def _log_reason(reason):
     return "EMERGENCY" if str(reason).startswith("EMERGENCY") else "OTHER"
 
 
-def _log_action(kind, trade_id, reason):
+def _log_action(kind, trade_id, reason, extra=""):
     level = logging.INFO if kind in _ACTION_LOG_OK else logging.WARNING
-    LOG.log(level, "component=broker_demo event=%s trade_id=%s reason=%s", kind, _log_token(trade_id),
-            _log_reason(reason))
+    LOG.log(level, "component=broker_demo event=%s trade_id=%s reason=%s%s", kind, _log_token(trade_id),
+            _log_reason(reason), extra)
+
+
+# LIMIT order lifecycle (log only; LIMIT_SENT / LIMIT_FILLED are not store events or alerts). Broker order and trade
+# numbers are masked to their last 3 characters; prices and the GTD expiry (UTC) are plain tokens.
+LIMIT_LOG_KINDS = frozenset({"LIMIT_PENDING", "LIMIT_EXPIRED", "LIMIT_CANCELLED"})
+
+
+def _mask_id(value):
+    if value is None or value == "":
+        return "-"
+    return "***" + _log_token(str(value)[-3:])
+
+
+def _log_utc(value):
+    parsed = _parse_time(value)
+    return "-" if parsed is None else parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _limit_fields(detail):
+    """`` order_id=… symbol=… side=… price=… expires_at=…`` appended to a LIMIT lifecycle line."""
+    return (f" order_id={_mask_id(detail.get('order_id'))} symbol={_log_token(detail.get('symbol'))}"
+            f" side={_log_token(detail.get('side'))} price={_log_token(detail.get('limit_price'))}"
+            f" expires_at={_log_utc(detail.get('expires_at'))}")
+
+
+def _log_limit(kind, **detail):
+    """One INFO line for LIMIT_SENT / LIMIT_FILLED; never the account id, token or client id. Never raises."""
+    try:
+        trade = f" trade_id={_mask_id(detail['trade_id'])}" if "trade_id" in detail else ""
+        fill = f" fill_price={_log_token(detail['fill_price'])}" if "fill_price" in detail else ""
+        LOG.info("component=broker_demo event=%s%s%s%s", kind, _limit_fields(detail), trade, fill)
+    except Exception as exc:  # noqa: BLE001 - a log line never changes the order flow
+        LOG.warning("component=broker_demo event=LIMIT_LOG_FAILED kind=%s error_type=%s", kind, type(exc).__name__)
 
 
 def _pips(value):
@@ -325,14 +358,19 @@ class BrokerDemoRouter:
     __str__ = __repr__
 
     # -- helpers ---------------------------------------------------------------------------------------------------
-    def _event(self, kind, client_id=None, *, log_trade_id=None, **detail):
+    def _event(self, kind, client_id=None, *, log_trade_id=None, log_row=None, **detail):
         try:
             self._store.event(kind, client_id, detail or None)
         except Exception as exc:  # noqa: BLE001 - audit is best effort; decisions use the trade rows
             LOG.warning("component=broker_demo event=EVENT_WRITE_FAILED kind=%s error_type=%s", kind,
                         type(exc).__name__)
         if kind in ACTION_LOG_KINDS:
-            _log_action(kind, detail.get("trade_id", log_trade_id), detail.get("reason"))
+            try:
+                _log_action(kind, detail.get("trade_id", log_trade_id), detail.get("reason"),
+                            _limit_fields({**(log_row or {}), **detail}) if kind in LIMIT_LOG_KINDS else "")
+            except Exception as exc:  # noqa: BLE001 - a log line never changes the event/alert flow
+                LOG.warning("component=broker_demo event=ACTION_LOG_FAILED kind=%s error_type=%s", kind,
+                            type(exc).__name__)
         self._alert(kind, detail)
 
     def _alert(self, kind, detail):
@@ -739,6 +777,10 @@ class BrokerDemoRouter:
             self._store.update(client_id, status=UNKNOWN, closed_reason=type(exc).__name__)
             self._event("UNKNOWN", client_id, reason=type(exc).__name__)
             return UNKNOWN, type(exc).__name__
+        if limit_order is not None and isinstance(result, LimitResult) and result.status in ("RESTING", ACCEPTED):
+            _log_limit("LIMIT_SENT", order_id=result.broker_ref if result.status == "RESTING" else None,
+                       symbol=row["symbol"], side=row["side"], limit_price=row.get("limit_price"),
+                       expires_at=row.get("expires_at"))
         if isinstance(result, LimitResult) and result.status == "RESTING":
             self._store.update(client_id, status=PENDING_LIMIT, order_id=result.broker_ref, closed_reason=None)
             self._event("LIMIT_PENDING", client_id, order_id=result.broker_ref, side=row["side"], units=row["units"],
@@ -749,6 +791,9 @@ class BrokerDemoRouter:
             self._mark_open(client_id, result.broker_ref, at)
             self._event("ACCEPTED", client_id, trade_id=result.broker_ref, reason=result.reason)
             if row.get("order_kind") == "LIMIT":
+                _log_limit("LIMIT_FILLED", order_id=None, symbol=row["symbol"], side=row["side"],
+                           limit_price=row.get("limit_price"), expires_at=row.get("expires_at"),
+                           trade_id=result.broker_ref)
                 self._verify_limit_fill(client_id, order_plan.symbol, order_plan.side, row.get("limit_price"),
                                         row["stop"], row["target"])
             else:
@@ -879,6 +924,9 @@ class BrokerDemoRouter:
             self._event("RESOLVED", client_id, trade_id=trade.trade_id, status=OPEN, order_kind="LIMIT")
             self._event("ACCEPTED", client_id, trade_id=trade.trade_id, symbol=row["symbol"], side=row["side"],
                         units=row["units"], reason="limit_filled")
+            _log_limit("LIMIT_FILLED", order_id=row.get("order_id"), symbol=row["symbol"], side=row["side"],
+                       limit_price=row.get("limit_price"), expires_at=row.get("expires_at"),
+                       trade_id=trade.trade_id, fill_price=trade.price)
             self._verify_limit_fill(client_id, row["symbol"], row["side"], row.get("limit_price"), row["stop"],
                                     row["target"])
             return trade.trade_id
@@ -905,7 +953,7 @@ class BrokerDemoRouter:
         reason = "LIMIT_EXPIRED"
         self._store.update(client_id, status=CANCELLED, closed_reason=reason, pending_action=None, action_status=None)
         self._event("LIMIT_EXPIRED", client_id, symbol=row["symbol"], side=row["side"], reason=reason,
-                    limit_price=row.get("limit_price"))
+                    limit_price=row.get("limit_price"), log_row=row)
         return None
 
     def _cancel_limit(self, row, reason):
@@ -915,7 +963,8 @@ class BrokerDemoRouter:
         if not order_id:
             self._store.update(client_id, status=CANCELLED, closed_reason=reason, pending_action=None,
                                action_status=None)
-            self._event("LIMIT_CANCELLED", client_id, symbol=row["symbol"], side=row["side"], reason=reason)
+            self._event("LIMIT_CANCELLED", client_id, symbol=row["symbol"], side=row["side"], reason=reason,
+                        log_row=row)
             return "LIMIT_CANCELLED"
         try:
             result = self._broker.cancel_order(str(order_id), client_id=f"{client_id}-cancel")
@@ -933,7 +982,7 @@ class BrokerDemoRouter:
                                action_status=None)
             kind = "LIMIT_EXPIRED" if reason in ("LIMIT_EXPIRED", "WEEKEND_ENTRY_BLOCK") else "LIMIT_CANCELLED"
             self._event(kind, client_id, symbol=row["symbol"], side=row["side"], reason=reason,
-                        order_id=order_id, limit_price=row.get("limit_price"))
+                        order_id=order_id, limit_price=row.get("limit_price"), log_row=row)
             return kind
         if result.status == REJECTED:
             self._event("LIMIT_CANCEL_FAILED", client_id, reason=result.reason)
