@@ -1,4 +1,5 @@
-"""EURUSD H1 limit pullback: ATR/EMA, limit price, expiry, partials, breakeven, trail, and the fill-anchor rule.
+"""EURUSD H1 limit pullback: ATR/EMA, limit price, SL/TP from the limit (DEC-FX-SL-2), expiry, partials, breakeven,
+trail, and the fill-anchor rule.
 
 The router cases use the fake OANDA transport. Existing market-order tests keep the flag at 0; these turn it on.
 """
@@ -7,11 +8,17 @@ from decimal import Decimal as D
 import sqlite3
 import unittest
 
+from unittest.mock import patch
+
+from core import fx_policy
+from core.rr_contract import geometry
+from execution import broker_demo_router as bdr
 from execution import trade_duration as td
 from execution.broker_demo_state import CANCELLED, DemoStateStore, PENDING_LIMIT
+from execution.broker_port import approval_problem
 from execution.eurusd_pullback import (ATR_PERIOD, EMA_PERIOD, STRATEGY, anchor_outcome, ema, limit_expiry,
-                                       management_steps, plan_pullback, pullback_flag, round_fx, trail_stop,
-                                       true_ranges, wilder_atr)
+                                       limit_levels, management_steps, plan_pullback, pullback_flag, round_fx,
+                                       trail_stop, true_ranges, wilder_atr)
 from execution.oanda_client import round_price
 from test_broker_demo_router import A, CID, NOW, OPEN_TRADES, ORDERS, PRICING, RouterBase, context, open_trade, trades
 from test_broker_oanda import pricing
@@ -81,7 +88,9 @@ class LimitPlanTests(unittest.TestCase):
         long = plan_pullback("LONG", D("1.09000"), D("1.08000"), D("1.12000"), bars)
         self.assertEqual(long.limit, D("1.08800"))
         self.assertEqual(long.atr, D("0.00200"))
-        self.assertEqual(long.risk, D("0.01000"))
+        # DEC-FX-SL-2: the 80 pip stop (from the limit) is narrowed to 25 pips; R is measured from the limit.
+        self.assertEqual((long.stop, long.target, long.sl_clamp, long.risk),
+                         (D("1.08550"), D("1.09300"), fx_policy.NARROWED, D("0.00250")))
         self.assertGreater(long.price, long.ema)
         short = plan_pullback("SHORT", D("1.09000"), D("1.10000"), D("1.07000"), fall())
         self.assertEqual(short.limit, D("1.09200"))
@@ -95,6 +104,88 @@ class LimitPlanTests(unittest.TestCase):
         # ATR 0.002 pulls a 1.09000 buy through a stop that is only 0.001 away.
         reason = plan_pullback("LONG", D("1.09000"), D("1.08900"), D("1.12000"), ramp())
         self.assertEqual(reason, "limit_through_stop")
+        # The structural stop decides, not the engine's stop widened from the signal: 1.08850 is above the 1.08800 buy.
+        reason = plan_pullback("LONG", D("1.09000"), D("1.08750"), D("1.09500"), ramp(), structural=D("1.08850"))
+        self.assertEqual(reason, "limit_through_stop")
+        reason = plan_pullback("SHORT", D("1.09000"), D("1.09250"), D("1.08500"), fall(), structural=D("1.09150"))
+        self.assertEqual(reason, "limit_through_stop")
+        self.assertEqual(limit_levels("LONG", D("1.08800"), D("1.08800")), "limit_through_stop")  # stop at the limit
+        self.assertEqual(limit_levels("SHORT", D("1.09200"), D("1.09200")), "limit_through_stop")
+
+
+class LimitRelativeLevelsTests(unittest.TestCase):
+    """DEC-FX-SL-2: SL = structural distance from the LIMIT clamped into [20, 25] pips, TP = limit +/- 2R."""
+
+    def plan(self, side, structural):
+        if side == "LONG":  # signal 1.09000, ATR 20 pips -> buy limit 1.08800; engine levels clamped from the signal
+            return plan_pullback("LONG", D("1.09000"), D("1.08750"), D("1.09500"), ramp(), structural=D(structural))
+        return plan_pullback("SHORT", D("1.09000"), D("1.09250"), D("1.08500"), fall(), structural=D(structural))
+
+    def assert_two_r_from_the_limit(self, plan):
+        self.assertEqual(plan.risk, abs(plan.limit - plan.stop))
+        self.assertEqual(abs(plan.target - plan.limit), fx_policy.FX_TP_RR * plan.risk)
+        side = "LONG" if plan.target > plan.limit else "SHORT"
+        self.assertEqual(geometry(side, plan.limit, plan.stop, plan.target)[0].rr, D(2))
+        self.assertTrue(fx_policy.FX_SL_MIN_PIPS <= plan.risk / PIP <= fx_policy.FX_SL_MAX_PIPS)
+
+    def test_long_and_short_inside_the_band_keep_the_structural_stop(self):
+        long = self.plan("LONG", "1.08580")  # 22 pips under the 1.08800 limit (42 from the signal)
+        self.assertEqual((long.limit, long.stop, long.target, long.sl_clamp, long.structural_pips),
+                         (D("1.08800"), D("1.08580"), D("1.09240"), fx_policy.UNCHANGED, D(22)))
+        short = self.plan("SHORT", "1.09430")  # 23 pips over the 1.09200 sell limit
+        self.assertEqual((short.limit, short.stop, short.target, short.sl_clamp),
+                         (D("1.09200"), D("1.09430"), D("1.08740"), fx_policy.UNCHANGED))
+        for plan in (long, short):
+            self.assert_two_r_from_the_limit(plan)
+
+    def test_widened_below_the_minimum(self):
+        long = self.plan("LONG", "1.08700")  # 10 pips -> 20
+        self.assertEqual((long.stop, long.target, long.sl_clamp, long.risk),
+                         (D("1.08600"), D("1.09200"), fx_policy.WIDENED, D("0.00200")))
+        short = self.plan("SHORT", "1.09300")
+        self.assertEqual((short.stop, short.target, short.sl_clamp, short.risk),
+                         (D("1.09400"), D("1.08800"), fx_policy.WIDENED, D("0.00200")))
+        for plan in (long, short):
+            self.assert_two_r_from_the_limit(plan)
+
+    def test_narrowed_above_the_maximum(self):
+        long = self.plan("LONG", "1.08000")  # 80 pips -> 25
+        self.assertEqual((long.stop, long.target, long.sl_clamp, long.risk),
+                         (D("1.08550"), D("1.09300"), fx_policy.NARROWED, D("0.00250")))
+        short = self.plan("SHORT", "1.10000")
+        self.assertEqual((short.stop, short.target, short.sl_clamp, short.risk),
+                         (D("1.09450"), D("1.08700"), fx_policy.NARROWED, D("0.00250")))
+        for plan in (long, short):
+            self.assert_two_r_from_the_limit(plan)
+
+    def test_band_edges_are_unchanged(self):
+        for structural, pips in (("1.08600", 20), ("1.08550", 25)):
+            with self.subTest(structural=structural):
+                plan = self.plan("LONG", structural)
+                self.assertEqual((plan.stop, plan.sl_clamp, plan.risk / PIP),
+                                 (D(structural), fx_policy.UNCHANGED, pips))
+
+    def test_r_for_partials_is_measured_from_the_limit(self):
+        plan = self.plan("LONG", "1.08000")
+        self.assertNotEqual(plan.risk, D("1.09000") - plan.stop)  # not the signal's risk
+        # Filled at the limit: +0.5R is 12.5 pips over 1.08800, +1R (and breakeven) at 1.09050, trail 1R behind.
+        steps = management_steps(side="LONG", fill=plan.limit, risk=plan.risk, units=9, stage="NONE",
+                                 remaining=None, price=D("1.08925"), stop=plan.stop)
+        self.assertEqual([(s.kind, s.label) for s in steps], [("PARTIAL", "0.5R")])
+        self.assertEqual(management_steps(side="LONG", fill=plan.limit, risk=plan.risk, units=9, stage="NONE",
+                                          remaining=None, price=D("1.08924"), stop=plan.stop), ())
+        steps = management_steps(side="LONG", fill=plan.limit, risk=plan.risk, units=9, stage="HALF",
+                                 remaining=6, price=D("1.09050"), stop=plan.stop)
+        self.assertEqual([(s.kind, s.label, s.stop) for s in steps],
+                         [("PARTIAL", "1R", None), ("STOP", "BE", D("1.08800"))])
+        short = self.plan("SHORT", "1.10000")
+        steps = management_steps(side="SHORT", fill=short.limit, risk=short.risk, units=9, stage="NONE",
+                                 remaining=None, price=D("1.09075"), stop=short.stop)  # 1.09200 - 0.5 x 25 pips
+        self.assertEqual([(s.kind, s.label) for s in steps], [("PARTIAL", "0.5R")])
+
+    def test_engine_stop_is_the_structural_stop_when_none_is_given(self):
+        plan = plan_pullback("LONG", D("1.09000"), D("1.08580"), D("1.09840"), ramp())
+        self.assertEqual((plan.stop, plan.target, plan.sl_clamp), (D("1.08580"), D("1.09240"), fx_policy.UNCHANGED))
 
     def test_expiry_is_24h_and_stops_at_the_friday_entry_ban(self):
         monday = datetime(2026, 10, 12, 14, 0, tzinfo=timezone.utc)
@@ -198,7 +289,7 @@ class RouterPullbackTests(RouterBase):
     def resting(self):
         return (201, {"orderCreateTransaction": {"id": "200", "type": "LIMIT_ORDER", "price": "1.08800"}})
 
-    def test_limit_keeps_plan_sl_tp_when_the_market_gap_would_refuse_a_market_order(self):
+    def test_limit_sl_tp_from_the_limit_when_the_market_gap_would_refuse_a_market_order(self):
         router = self.router(AI_FLOOR_EURUSD_LIMIT_PULLBACK="1")
         alerts = []
         router.on_alert = lambda kind, detail=None: alerts.append(kind)
@@ -211,11 +302,12 @@ class RouterPullbackTests(RouterBase):
         self.assertEqual(order["type"], "LIMIT")
         self.assertEqual(order["timeInForce"], "GTD")
         self.assertTrue(order["gtdTime"].endswith("Z"))
+        # DEC-FX-SL-2: the engine's 1.08000 stop is 80 pips from the limit -> 25 pips; TP 2R from the limit.
         self.assertEqual((order["price"], order["stopLossOnFill"]["price"], order["takeProfitOnFill"]["price"]),
-                         ("1.08800", "1.08000", "1.12000"))
+                         ("1.08800", "1.08550", "1.09300"))
         row = self.rows()[0]
         self.assertEqual((row["status"], row["strategy"], row["stop"], row["target"]),
-                         (PENDING_LIMIT, STRATEGY, "1.08000", "1.12000"))
+                         (PENDING_LIMIT, STRATEGY, "1.08550", "1.09300"))
         self.assertFalse(self.events("FILL_ANCHOR_REFUSED"))
         self.assertFalse(self.events("FILL_OUT_OF_POLICY"))
         self.assertEqual(alerts, ["LIMIT_PENDING"])
@@ -257,16 +349,85 @@ class RouterPullbackTests(RouterBase):
         self.ready(order=self.resting())
         self.server.routes[("GET", PRICING)] = [pricing(bid="1.08830", ask="1.08840")]
         router.on_cycle(context(), "PLAN_READY", NOW, h1_bars=self.bars())
-        filled = open_trade(ext=CID, price="1.08800", sl="1.08000")
-        filled["takeProfitOrder"] = {"id": "2", "price": "1.12000"}
+        filled = open_trade(ext=CID, price="1.08800", sl="1.08550")
+        filled["takeProfitOrder"] = {"id": "2", "price": "1.09300"}
         self.server.routes[("GET", OPEN_TRADES)] = [trades(filled)]
         self.server.routes[("GET", PENDING)] = [(200, {"orders": []})]
         router.reconcile()
         row = self.rows()[0]
         self.assertEqual((row["status"], row["fill_price"], row["stop"], row["target"]),
-                         ("OPEN", "1.08800", "1.08000", "1.12000"))
+                         ("OPEN", "1.08800", "1.08550", "1.09300"))
         self.assertTrue(self.events("FILL_VERIFIED"))
         self.assertFalse(self.events("FILL_OUT_OF_POLICY"))
+
+    def route_limit(self, ctx, bars, nav="10000"):
+        router = self.router(AI_FLOOR_EURUSD_LIMIT_PULLBACK="1")
+        self.ready(nav=nav, order=self.resting())
+        spy = patch.object(router._broker, "submit_limit", wraps=router._broker.submit_limit).start()
+        self.addCleanup(patch.stopall)
+        outcome = router.on_cycle(ctx, "PLAN_READY", NOW, h1_bars=bars)
+        return router, outcome, spy
+
+    def test_units_and_approval_use_the_limit_relative_risk(self):
+        ctx = context()
+        router, outcome, spy = self.route_limit(ctx, self.bars())
+        self.assertEqual(outcome, (PENDING_LIMIT, "200"))
+        plan, approval = spy.call_args.args
+        self.assertIsNone(approval_problem(plan, approval))
+        self.assertEqual((plan.planned_entry, plan.stop, plan.target), (D("1.08800"), D("1.08550"), D("1.09300")))
+        self.assertEqual((approval.entry, approval.stop, approval.target), (D("1.08800"), D("1.08550"), D("1.09300")))
+        self.assertEqual(geometry("LONG", plan.planned_entry, plan.stop, plan.target)[0].rr, D(2))
+        decision = ctx["deterministic"].risk_decision
+        units = bdr.broker_units(D("10000"), decision, D("1.08800"), D("1.08550"), router.max_units)
+        self.assertEqual((units, plan.quantity), (40000, D(units)))  # 1 % of 10 000 over 25 pips
+        self.assertNotEqual(units, bdr.broker_units(D("10000"), decision, D("1.09000"), D("1.08000"), router.max_units))
+        row = self.rows()[0]
+        self.assertEqual((row["units"], D(row["risk_distance"]), D(row["signal_entry"])),
+                         (units, D("0.00250"), D("1.09")))
+        [(_k, _c, detail)] = self.events("PULLBACK_PLAN")
+        self.assertEqual((detail["stop"], detail["target"], detail["sl_clamp"], detail["sl_pips"], detail["tp_pips"]),
+                         ("1.08550", "1.09300", fx_policy.NARROWED, "25", "50"))
+
+    def test_structural_stop_from_the_planner_record_is_measured_from_the_limit(self):
+        ctx = context(stop=1.0875, target=1.095)  # engine: 25 pips from the 1.09000 signal (narrowed)
+        ctx["deterministic"].target_decision = {"stop": "1.08750", "structural_stop": "1.08700"}
+        _router, outcome, spy = self.route_limit(ctx, self.bars())
+        self.assertEqual(outcome, (PENDING_LIMIT, "200"))
+        plan, _approval = spy.call_args.args  # 10 pips under the limit -> widened to 20, TP 40 pips
+        self.assertEqual((plan.planned_entry, plan.stop, plan.target), (D("1.08800"), D("1.08600"), D("1.09200")))
+        # A record for another stop is ignored: the engine's stop (5 pips under the limit) is widened instead.
+        self.setUp()
+        ctx = context(stop=1.0875, target=1.095)
+        ctx["deterministic"].target_decision = {"stop": "1.08000", "structural_stop": "1.08300"}
+        _router, _outcome, spy = self.route_limit(ctx, self.bars())
+        self.assertEqual(spy.call_args.args[0].stop, D("1.08600"))
+
+    def test_short_limit_sl_tp_and_units_from_the_limit(self):
+        ctx = context(side="SHORT", entry=1.09, stop=1.0925, target=1.085)
+        ctx["deterministic"].target_decision = {"stop": "1.09250", "structural_stop": "1.09430"}
+        router, outcome, spy = self.route_limit(ctx, fall())
+        self.assertEqual(outcome, (PENDING_LIMIT, "200"))
+        plan, approval = spy.call_args.args  # sell limit 1.09200; structural 23 pips over it -> unchanged
+        self.assertIsNone(approval_problem(plan, approval))
+        self.assertEqual((plan.planned_entry, plan.stop, plan.target), (D("1.09200"), D("1.09430"), D("1.08740")))
+        self.assertEqual(geometry("SHORT", plan.planned_entry, plan.stop, plan.target)[0].rr, D(2))
+        units = bdr.broker_units(D("10000"), ctx["deterministic"].risk_decision, D("1.09200"), D("1.09430"),
+                                 router.max_units)
+        self.assertEqual(plan.quantity, D(units))
+        order = [b for m, p, _h, b in self.server.calls if (m, p) == ("POST", ORDERS)][0]["order"]
+        self.assertEqual((order["units"], order["stopLossOnFill"]["price"], order["takeProfitOnFill"]["price"]),
+                         (str(-units), "1.09430", "1.08740"))
+
+    def test_structural_stop_through_the_limit_is_refused(self):
+        ctx = context(stop=1.0875, target=1.095)
+        ctx["deterministic"].target_decision = {"stop": "1.08750", "structural_stop": "1.08850"}
+        router = self.router(AI_FLOOR_EURUSD_LIMIT_PULLBACK="1")
+        self.ready(order=self.resting())
+        self.assertEqual(router.on_cycle(ctx, "PLAN_READY", NOW, h1_bars=self.bars()),
+                         ("NOT_ROUTED", "limit_through_stop"))
+        self.assertEqual(self.rows(), [])
+        self.assertFalse([c for c in self.server.calls if c[0] == "POST"])
+        self.assertEqual(self.events("PULLBACK_SKIPPED")[0][2]["reason"], "limit_through_stop")
 
     def test_partials_breakeven_and_trail_and_an_older_position_is_left_alone(self):
         router = self.router(AI_FLOOR_EURUSD_LIMIT_PULLBACK="1")

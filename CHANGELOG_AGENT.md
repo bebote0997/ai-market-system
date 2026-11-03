@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-11-03 — DEC-FX-SL-2: SL de EURUSD 20–25 pips y SL/TP de la LIMIT medidos desde el precio límite (borrador)
+
+- Orden del owner (Jeferson, 3 nov): SL 20–25 pips. `core/fx_policy.py`: `DEFAULT_SL_MIN_PIPS=20`, `DEFAULT_SL_MAX_PIPS=25`; `FX_TP_RR=2.0` sin cambio ⇒ TP 40–50 pips. DEC-FX-SL-1 (45–60) queda sustituida.
+- LIMIT de retroceso EURUSD (`execution/eurusd_pullback.py`, `execution/broker_demo_router.py`): nuevo `limit_levels`; SL = invalidación estructural (`target_decision.structural_stop`, o el SL del motor) medida desde la LIMIT y ajustada con `fx_policy.clamp_stop`; TP = LIMIT ± 2R; comprobación explícita con `core.rr_contract` (exactamente 2R, si no `limit_rr_invalid`). El plan de retroceso se calcula (puro, sin red) antes del dimensionado: unidades, límite de pérdida diaria, `RiskApproval` y `OrderPlan` usan LIMIT/SL/TP; `risk_distance` (R de parciales/BE/trailing) = |LIMIT − SL|. `PULLBACK_PLAN` añade `stop`, `target`, `sl_clamp`, `structural_pips`, `sl_pips`, `tp_pips`. Invalidación en/tras la LIMIT ⇒ `limit_through_stop` (como antes).
+- Revisión Codex (MAJOR): un plan de retroceso inválido (p. ej. `limit_through_stop`, `h1_no_data`) se rechaza ahora antes del dimensionado y del cierre por reversión: sin cierre, sin envío, evento `PULLBACK_SKIPPED` + `NOT_ROUTED` con el motivo (antes caía al dimensionado por la señal y cerraba la operación rentable antes de rechazar). Test de regresión en `test_reversal.py`.
+- Ruta MARKET (DEC-FILL-ANCHOR-1/2) sin cambios de lógica; textos de alerta/comentarios con 20–25.
+- Tests: `test_fx_sl_clamp`, `test_fill_anchor`, `test_broker_alerts` pasan a la geometría 20–25; `test_eurusd_pullback` añade SL/TP desde la LIMIT (LONG/SHORT, ensanchar/estrechar/bordes, TP 2R, R desde la LIMIT, unidades y aprobación, registro estructural del planificador, rechazo por invalidación tras la LIMIT).
+- Sin cambios en `ui/`, env, Render ni flags; REAL sigue bloqueado. Sin commit, sin push, sin merge y sin deploy.
+
 ## 2026-11-02 — Observabilidad del motor: setup en RUN_COMPLETED, ciclo de la orden límite y detalle del proveedor (borrador)
 
 - `event=RUN_COMPLETED` añade `setup_status=`, `side=LONG|SHORT|-` y `setup_warnings=a,b|-` (avisos del Setup Validator).
