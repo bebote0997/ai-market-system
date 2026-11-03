@@ -15,7 +15,7 @@ def run(snapshot, as_of, symbol, provider, instrumento, configuracion_riesgo, eq
         planner_policy=POLICY_V1):
     """``planner_policy`` POLICY_V1 (default, frozen V1), POLICY_V2_F3 (DEC-4.6 fixed 3R) or POLICY_V2_D (research);
     Phase 4 policies are tests/replay only (no runtime path). DEC-FX-SL-1: for an FX symbol, V1 and V2_F3 both plan
-    with ``plan_fx_fixed_rr`` (SL clamped to 20-25 pips, TP fixed at 2R); Policy D (research) is unchanged."""
+    with ``plan_fx_fixed_rr`` (SL fixed at 25 pips, TP fixed at 2R = 50 pips); Policy D (research) is unchanged."""
     if planner_policy not in (POLICY_V1, POLICY_V2_D, POLICY_V2_F3):
         raise ValueError("unknown planner policy")
     run_id = run_id or str(uuid.uuid4())

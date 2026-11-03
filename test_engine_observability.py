@@ -116,8 +116,8 @@ class LimitLifecycleLogTests(RouterBase):
     def setUp(self):
         super().setUp()
         self.router_ = self.router(AI_FLOOR_EURUSD_LIMIT_PULLBACK="1")
-        self.ready(order=(201, {"orderCreateTransaction": {"id": "123200", "type": "LIMIT_ORDER", "price": "1.08800"}}))
-        self.server.routes[("GET", PRICING)] = [pricing(bid="1.08830", ask="1.08840")]
+        self.ready(order=(201, {"orderCreateTransaction": {"id": "123200", "type": "LIMIT_ORDER", "price": "1.08875"}}))
+        self.server.routes[("GET", PRICING)] = [pricing(bid="1.08880", ask="1.08890")]
 
     def lines(self, logs, event):
         return [r.getMessage() for r in logs.records if f"event={event} " in r.getMessage()]
@@ -138,17 +138,17 @@ class LimitLifecycleLogTests(RouterBase):
         logs = self.send()
         expires = bdr._parse_time(self.rows()[0]["expires_at"]).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.assertEqual(self.lines(logs, "LIMIT_SENT"), [
-            f"component=broker_demo event=LIMIT_SENT order_id=***200 symbol=EURUSD side=LONG price=1.08800 "
+            f"component=broker_demo event=LIMIT_SENT order_id=***200 symbol=EURUSD side=LONG price=1.08875 "
             f"expires_at={expires}"])
         self.assertEqual(self.lines(logs, "LIMIT_PENDING"), [
             f"component=broker_demo event=LIMIT_PENDING trade_id=- reason=- order_id=***200 symbol=EURUSD side=LONG "
-            f"price=1.08800 expires_at={expires}"])
+            f"price=1.08875 expires_at={expires}"])
         self.assertTrue(expires.endswith("Z"))
         self.assert_safe(logs)
 
     def test_filled_line_on_reconcile(self):
         self.send()
-        filled = open_trade(trade_id="776397", ext=CID, price="1.08800", sl="1.08000")
+        filled = open_trade(trade_id="776397", ext=CID, price="1.08875", sl="1.08625")
         filled["takeProfitOrder"] = {"id": "2", "price": "1.12000"}
         self.server.routes[("GET", OPEN_TRADES)] = [trades(filled)]
         self.server.routes[("GET", PENDING)] = [(200, {"orders": []})]
@@ -156,7 +156,7 @@ class LimitLifecycleLogTests(RouterBase):
             self.router_.reconcile()
         [line] = self.lines(logs, "LIMIT_FILLED")
         self.assertRegex(line, r"^component=broker_demo event=LIMIT_FILLED order_id=\*\*\*200 symbol=EURUSD side=LONG "
-                               r"price=1\.08800 expires_at=\S+Z trade_id=\*\*\*397 fill_price=1\.08800$")
+                               r"price=1\.08875 expires_at=\S+Z trade_id=\*\*\*397 fill_price=1\.08875$")
         self.assertEqual(self.rows()[0]["status"], "OPEN")
         self.assert_safe(logs)
         self.assertNotIn("776397", line)
@@ -173,7 +173,7 @@ class LimitLifecycleLogTests(RouterBase):
             self.assertEqual(self.router_.manage(self.now)[CID], "LIMIT_EXPIRED")
         [line] = self.lines(logs, "LIMIT_EXPIRED")
         self.assertRegex(line, r"^component=broker_demo event=LIMIT_EXPIRED trade_id=- reason=LIMIT_EXPIRED "
-                               r"order_id=\*\*\*200 symbol=EURUSD side=LONG price=1\.08800 expires_at=\S+Z$")
+                               r"order_id=\*\*\*200 symbol=EURUSD side=LONG price=1\.08875 expires_at=\S+Z$")
         self.assert_safe(logs)
 
     def test_expired_line_when_the_broker_dropped_it(self):
@@ -184,7 +184,7 @@ class LimitLifecycleLogTests(RouterBase):
         with self.assertLogs(ROUTER_LOG, "INFO") as logs:
             self.router_.reconcile()
         [line] = self.lines(logs, "LIMIT_EXPIRED")
-        self.assertIn(" reason=LIMIT_EXPIRED order_id=***200 symbol=EURUSD side=LONG price=1.08800 expires_at=", line)
+        self.assertIn(" reason=LIMIT_EXPIRED order_id=***200 symbol=EURUSD side=LONG price=1.08875 expires_at=", line)
         self.assertEqual(self.rows()[0]["status"], CANCELLED)
         self.assert_safe(logs)
 
@@ -196,7 +196,7 @@ class LimitLifecycleLogTests(RouterBase):
             self.router_.emergency_close_all(reason="drill")
         [line] = self.lines(logs, "LIMIT_CANCELLED")
         self.assertRegex(line, r"^component=broker_demo event=LIMIT_CANCELLED trade_id=- reason=EMERGENCY\S* "
-                               r"order_id=\*\*\*200 symbol=EURUSD side=LONG price=1\.08800 expires_at=\S+Z$")
+                               r"order_id=\*\*\*200 symbol=EURUSD side=LONG price=1\.08875 expires_at=\S+Z$")
         self.assert_safe(logs)
 
     def test_event_store_payload_and_alerts_are_unchanged(self):

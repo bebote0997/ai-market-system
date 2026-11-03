@@ -244,8 +244,8 @@ class RouterReversalTests(RouterBase):
         self.opened()  # live LONG 1.09000 in profit below; the pullback router sees the opposite SHORT plan
         router = self.router(AI_FLOOR_EURUSD_LIMIT_PULLBACK="1")
         self.reversal_routes("10050")
-        ctx = context(run_id="run-2", **SHORT)  # sell limit 1.09700; structural stop under it -> limit_through_stop
-        ctx["deterministic"].target_decision = {"stop": "1.10000", "structural_stop": "1.09650"}
+        ctx = context(run_id="run-2", **SHORT)  # sell limit 1.09625; structural stop under it -> limit_through_stop
+        ctx["deterministic"].target_decision = {"stop": "1.10000", "structural_stop": "1.09600"}
         self.assertEqual(router.on_cycle(ctx, "PLAN_READY", NOW + timedelta(hours=1), h1_bars=fall()),
                          ("NOT_ROUTED", "limit_through_stop"))
         self.assertEqual(self.puts(), [])  # the profitable trade is kept

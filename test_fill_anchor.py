@@ -1,5 +1,5 @@
 """DEC-FILL-ANCHOR-1/2: the router translates entry / SL / TP of an FX plan onto the expected MARKET fill (ask for LONG,
-bid for SHORT), so the SL/TP pips and R stay exactly the policy's (DEC-FX-SL-2: 20-25 pips, 2R). DEC-FILL-ANCHOR-2:
+bid for SHORT), so the SL/TP pips and R stay exactly the policy's (DEC-FX-SL-3: 25 pips, 2R = 50 pips). DEC-FILL-ANCHOR-2:
 this also holds above the 5 pip tolerance, up to 10 pips; a larger gap REFUSES the entry. Without a valid quote /
 non-FX: unchanged. After the fill the router verifies the real SL/TP distances (FILL_VERIFIED / FILL_OUT_OF_POLICY).
 Fake transport only."""
@@ -17,7 +17,7 @@ from test_reversal import NEW_CID, NEW_FILL
 from test_reversal import SHORT as REV_SHORT
 
 PIP = D("0.0001")
-# Oct 27 04:30 EURUSD SHORT planned at the candle close 1.11552, re-cut to DEC-FX-SL-2 (clamped to the 25 pip maximum).
+# Oct 27 04:30 EURUSD SHORT planned at the candle close 1.11552, re-cut to DEC-FX-SL-3 (fixed 25 pip SL).
 SHORT = {"side": "SHORT", "entry": 1.11552, "stop": 1.11802, "target": 1.11052}
 LONG = {"side": "LONG", "entry": 1.09, "stop": 1.0875, "target": 1.095}
 
@@ -92,16 +92,16 @@ class FillAnchorTests(RouterBase):
         self.assertIsNone(approval_problem(*spy.call_args.args))
 
     def test_trade_40_oct_28_long_filled_6_2_pips_below_the_plan(self):
-        # EURUSD LONG planned at the 5m close 1.11331 (re-cut to DEC-FX-SL-2: SL 20 pips = 1.11131, TP 40 pips =
-        # 1.11731); the ask was 1.11269. Without the anchor (6.2 > 5): SL 13.8 pips, TP 46.2 pips. Now: 20 pips and 2R.
-        plan = {"side": "LONG", "entry": 1.11331, "stop": 1.11131, "target": 1.11731}
+        # EURUSD LONG planned at the 5m close 1.11331 (re-cut to DEC-FX-SL-3: SL 25 pips = 1.11081, TP 50 pips =
+        # 1.11831); the ask was 1.11269. Without the anchor (6.2 > 5): SL 18.8 pips, TP 56.2 pips. Now: 25 pips and 2R.
+        plan = {"side": "LONG", "entry": 1.11331, "stop": 1.11081, "target": 1.11831}
         outcome, spy = self.route(plan, pricing(bid="1.11259", ask="1.11269"))
         self.assertEqual(outcome[0], "ACCEPTED")
         entry, stop, target = self.prices()
-        self.assertEqual((entry, stop, target), (D("1.11269"), D("1.11069"), D("1.11669")))
-        self.assert_policy_distances(entry, stop, target, sl_pips=D(20))
+        self.assertEqual((entry, stop, target), (D("1.11269"), D("1.11019"), D("1.11769")))
+        self.assert_policy_distances(entry, stop, target)
         order = self.order()
-        self.assertEqual((order["stopLossOnFill"]["price"], order["takeProfitOnFill"]["price"]), ("1.11069", "1.11669"))
+        self.assertEqual((order["stopLossOnFill"]["price"], order["takeProfitOnFill"]["price"]), ("1.11019", "1.11769"))
         self.assertEqual(self.events("FILL_ANCHOR_SKIPPED"), [])
         self.assertEqual(self.events("FILL_ANCHORED")[0][2]["delta_pips"], "-6.2")
         self.assertIsNone(approval_problem(*spy.call_args.args))
@@ -127,28 +127,28 @@ class FillAnchorTests(RouterBase):
         self.assertEqual(self.rows(), [])
 
     def test_post_fill_check_verified_when_the_real_distances_match_the_policy(self):
-        plan = {"side": "LONG", "entry": 1.11331, "stop": 1.11131, "target": 1.11731}
+        plan = {"side": "LONG", "entry": 1.11331, "stop": 1.11081, "target": 1.11831}
         router = self.router()
-        self.ready(nav="100000", after=[open_trade(price="1.11270", sl="1.11069")])  # 0.1 pip of slippage
+        self.ready(nav="100000", after=[open_trade(price="1.11270", sl="1.11019")])  # 0.1 pip of slippage
         self.server.routes[("GET", PRICING)] = [pricing(bid="1.11259", ask="1.11269")]
         self.assertEqual(router.on_cycle(context(**plan), "PLAN_READY", self.now)[0], "ACCEPTED")
         [(_k, cid, detail)] = self.events("FILL_VERIFIED")
-        self.assertEqual((cid, detail["sl_pips"], detail["tp_pips"], detail["rr"]), (CID, "20.1", "39.9", "1.99"))
+        self.assertEqual((cid, detail["sl_pips"], detail["tp_pips"], detail["rr"]), (CID, "25.1", "49.9", "1.99"))
         self.assertEqual(self.events("FILL_OUT_OF_POLICY"), [])
 
     def test_post_fill_check_alerts_when_the_real_distances_leave_the_policy(self):
-        plan = {"side": "LONG", "entry": 1.11331, "stop": 1.11131, "target": 1.11731}
+        plan = {"side": "LONG", "entry": 1.11331, "stop": 1.11081, "target": 1.11831}
         alerts = []
         router = self.router()
         router.on_alert = lambda kind, detail: alerts.append((kind, detail))
-        # The broker fills 6.2 pips below the anchored price (a fast market): SL 13.8 pips / TP 46.2 pips = 3.35R.
-        self.ready(nav="100000", after=[open_trade(price="1.11207", sl="1.11069")])
+        # The broker fills 6.2 pips below the anchored price (a fast market): SL 18.8 pips / TP 56.2 pips = 2.99R.
+        self.ready(nav="100000", after=[open_trade(price="1.11207", sl="1.11019")])
         self.server.routes[("GET", PRICING)] = [pricing(bid="1.11259", ask="1.11269")]
         with self.assertLogs("ai_floor.broker", "WARNING") as logs:
             self.assertEqual(router.on_cycle(context(**plan), "PLAN_READY", self.now)[0], "ACCEPTED")
         [(_k, _c, detail)] = self.events("FILL_OUT_OF_POLICY")
-        self.assertEqual((detail["sl_pips"], detail["tp_pips"], detail["rr"]), ("13.8", "46.2", "3.35"))
-        self.assertEqual(detail["reasons"], ["sl_13.8_pips", "rr_3.35"])
+        self.assertEqual((detail["sl_pips"], detail["tp_pips"], detail["rr"]), ("18.8", "56.2", "2.99"))
+        self.assertEqual(detail["reasons"], ["sl_18.8_pips", "rr_2.99"])
         self.assertEqual(self.events("FILL_VERIFIED"), [])
         self.assertEqual([k for k, _d in alerts if k == "FILL_OUT_OF_POLICY"], ["FILL_OUT_OF_POLICY"])
         self.assertTrue(any("FILL_OUT_OF_POLICY" in line for line in logs.output))
@@ -168,9 +168,9 @@ class FillAnchorTests(RouterBase):
         self.assertEqual(self.events()[-1][0], "FILL_OUT_OF_POLICY")
         router._store.update(CID, fill_price="1.11536")
         fill = D("1.11536")
-        # SL slack (TP kept at 2R of that SL): 18.0 and 27.0 pips still verified, 17.9 and 27.1 not.
+        # SL slack (TP kept at 2R of that SL): 23.0 and 27.0 pips still verified, 22.9 and 27.1 not.
         for sl_pips, kind in ((D(27), "FILL_VERIFIED"), (D("27.1"), "FILL_OUT_OF_POLICY"),
-                              (D(18), "FILL_VERIFIED"), (D("17.9"), "FILL_OUT_OF_POLICY")):
+                              (D(23), "FILL_VERIFIED"), (D("22.9"), "FILL_OUT_OF_POLICY")):
             with self.subTest(sl_pips=sl_pips):
                 router._verify_fill(CID, "EURUSD", "SHORT", fill + sl_pips * PIP, fill - 2 * sl_pips * PIP)
                 self.assertEqual(self.events()[-1][0], kind)

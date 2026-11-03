@@ -1,5 +1,16 @@
 # Agent Changelog
 
+## 2026-11-03 — DEC-FX-SL-3: LIMIT EURUSD a 12,5 pips fijos, SL 25 / TP 50 pips fijos (borrador)
+
+- Orden del owner (Jeferson, 3 nov): «Vamos a establecer la mitad fija para todos y de la misma manera que esta, desde la entrada después de pasar el atr se recalcula todo para que quede 25 sl y 50 tp». Sustituye a DEC-FX-SL-2.
+- `execution/eurusd_pullback.py`: LIMIT = señal ∓ `LIMIT_OFFSET_PIPS` (12,5 pips fijos, sin env) para todos los setups; eliminados `ATR_PERIOD`, `true_ranges`, `wilder_atr` y `PullbackPlan.atr` (el ATR solo servía para la distancia de la LIMIT). EMA(200) H1 sin cambios.
+- `core/fx_policy.py`: `DEFAULT_SL_MIN_PIPS = DEFAULT_SL_MAX_PIPS = 25` ⇒ SL exactamente 25 pips y TP exactamente 50 pips (2R) desde la LIMIT o desde la entrada MARKET (fill-anchor conserva 25/50). Parciales/BE/trailing en R (0,5R = 12,5 pips, 1R = 25 pips). Comprobación post-fill: SL 23–27 pips.
+- `limit_through_stop`: solo si la LIMIT ya está en o más allá de la invalidación estructural (LONG: LIMIT ≤ stop estructural; SHORT: LIMIT ≥). Rechazo antes del cierre por reversión sin cambios.
+- `PULLBACK_PLAN`: `atr=` sustituido por `offset_pips=12.5`. Textos de alerta Slack (`FILL_OUT_OF_POLICY`, `LIMIT_PENDING`) y comentarios actualizados.
+- Tests: ejemplo del owner (LONG 1.10650 ⇒ 1.10525 / 1.10275 / 1.11025) y espejo SHORT; LIMIT fija con distinta volatilidad H1; 25/50 para cualquier distancia estructural; borde de `limit_through_stop` (en la LIMIT ⇒ descarta; 0,5 pip más allá ⇒ envía). `test_fx_sl_clamp`, `test_fill_anchor`, `test_engine_observability`, `test_reversal` a la geometría nueva.
+- Revisión Codex (2 MAJOR): (1) escalado +0,5R / +1R / BE / trailing anclado al precio LIMIT (`limit_price` de la fila; `entry` como respaldo), no al fill real; `management_steps` / `trail_stop` reciben `anchor` en vez de `fill`; BE = precio LIMIT. Regresión: LONG LIMIT 1.10525 con fill 1.10500 ⇒ 0,5R en 1.10650, 1R y BE (stop 1.10525) en 1.10775; SHORT espejo; test de router a tres ticks. (2) 25/50 ya no es configurable: `core/fx_policy.py` deja de leer `AI_FLOOR_FX_SL_MIN_PIPS` / `AI_FLOOR_FX_SL_MAX_PIPS` / `AI_FLOOR_FX_TP_RR`; si alguna está presente ⇒ warning `FX_SL_OVERRIDE_IGNORED` (solo nombres) y 25/25/2,0. Regresión unitaria y en intérprete nuevo con las tres claves fijadas.
+- Sin cambios en `ui/`, env, Render ni flags; REAL sigue bloqueado. Sin commit, sin push, sin merge y sin deploy.
+
 ## 2026-11-03 — DEC-FX-SL-2: SL de EURUSD 20–25 pips y SL/TP de la LIMIT medidos desde el precio límite (borrador)
 
 - Orden del owner (Jeferson, 3 nov): SL 20–25 pips. `core/fx_policy.py`: `DEFAULT_SL_MIN_PIPS=20`, `DEFAULT_SL_MAX_PIPS=25`; `FX_TP_RR=2.0` sin cambio ⇒ TP 40–50 pips. DEC-FX-SL-1 (45–60) queda sustituida.

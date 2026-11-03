@@ -1,4 +1,4 @@
-"""DEC-FX-SL-2: FX SL clamped into [20, 25] pips, TP fixed at FX_TP_RR (2R) of the clamped SL; non-FX untouched."""
+"""DEC-FX-SL-3: FX SL fixed at 25 pips (min == max), TP fixed at FX_TP_RR (2R) = 50 pips; non-FX untouched."""
 import json
 import os
 import subprocess
@@ -43,27 +43,39 @@ def pips(a, b):
 class ConfigTests(unittest.TestCase):
     def test_defaults(self):
         self.assertEqual((fx_policy.FX_SL_MIN_PIPS, fx_policy.FX_SL_MAX_PIPS, fx_policy.FX_TP_RR),
-                         (Decimal(20), Decimal(25), Decimal("2.0")))
+                         (Decimal(25), Decimal(25), Decimal("2.0")))
         self.assertEqual((POLICY_FX, LIMITS[POLICY_FX], FILL_LIMITS[POLICY_FX][0]),
                          ("V2_FX_SL_CLAMP_2R", (Decimal(2), Decimal(2)), Decimal("1.5")))
 
-    def test_env_override_per_key_and_fail_closed(self):
-        self.assertEqual(fx_policy._load({}), (Decimal(20), Decimal(25), Decimal("2.0")))
-        self.assertEqual(fx_policy._load({fx_policy.MIN_PIPS_ENV: "15", fx_policy.TP_RR_ENV: "2.5"}),
-                         (Decimal(15), Decimal(25), Decimal("2.5")))
-        for bad in ({fx_policy.MIN_PIPS_ENV: "70"}, {fx_policy.MAX_PIPS_ENV: "x"}, {fx_policy.MIN_PIPS_ENV: "0"},
-                    {fx_policy.TP_RR_ENV: "1"}, {fx_policy.TP_RR_ENV: "nan"}):
-            with self.subTest(bad=bad), self.assertLogs("ai_floor.runtime", "WARNING"):
-                self.assertEqual(fx_policy._load(bad), (Decimal(20), Decimal(25), Decimal("2.0")))
+    def test_retired_env_overrides_are_ignored_with_a_warning(self):
+        fixed = (Decimal(25), Decimal(25), Decimal("2.0"))
+        with self.assertNoLogs("ai_floor.runtime", "WARNING"):
+            self.assertEqual(fx_policy._load({}), fixed)
+        for env in ({fx_policy.MIN_PIPS_ENV: "15"}, {fx_policy.MAX_PIPS_ENV: "60"}, {fx_policy.TP_RR_ENV: "3.0"},
+                    {fx_policy.TP_RR_ENV: ""}, {fx_policy.MIN_PIPS_ENV: "x", fx_policy.MAX_PIPS_ENV: "70",
+                                                fx_policy.TP_RR_ENV: "2.5"}):
+            with self.subTest(env=env), self.assertLogs("ai_floor.runtime", "WARNING") as logs:
+                self.assertEqual(fx_policy._load(env), fixed)
+            line = "\n".join(logs.output)
+            self.assertIn("FX_SL_OVERRIDE_IGNORED", line)
+            for name, value in env.items():
+                self.assertIn(name, line)
+                if value:
+                    self.assertNotIn(f"={value}", line)
+                    self.assertNotIn(f" {value};", line)
 
-    def test_tp_rr_configurable_end_to_end(self):
-        """A fresh interpreter with AI_FLOOR_FX_TP_RR=2.5: TP = 2.5 x the clamped SL, under its own identity."""
+    def test_env_overrides_cannot_change_the_policy_end_to_end(self):
+        """A fresh interpreter with all three retired keys set: still SL 25 / TP 2R, identity 2R, names-only warning."""
         code = ("import json; from test_fx_sl_clamp import fx_plan; p, d = fx_plan('LONG', 1.085, 1.084);"
                 "print(json.dumps([p.stop, p.target, p.risk_reward, p.policy_version]))")
-        env = {**os.environ, fx_policy.TP_RR_ENV: "2.5", "PYTHONDONTWRITEBYTECODE": "1"}
-        out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True,
-                             check=True).stdout.strip().splitlines()[-1]
-        self.assertEqual(json.loads(out), [1.083, 1.09, 2.5, "V2_FX_SL_CLAMP_2.5R"])
+        env = {**os.environ, fx_policy.MIN_PIPS_ENV: "15", fx_policy.MAX_PIPS_ENV: "60", fx_policy.TP_RR_ENV: "3.5",
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        run = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True,
+                             check=True)
+        self.assertEqual(json.loads(run.stdout.strip().splitlines()[-1]), [1.0825, 1.09, 2.0, "V2_FX_SL_CLAMP_2R"])
+        self.assertIn("FX_SL_OVERRIDE_IGNORED", run.stderr)
+        self.assertIn(fx_policy.TP_RR_ENV, run.stderr)
+        self.assertNotIn("3.5", run.stderr)
 
     def test_fx_symbols(self):
         self.assertTrue(fx_policy.is_fx("EURUSD"))
@@ -77,20 +89,28 @@ class ConfigTests(unittest.TestCase):
 
 
 class ClampTests(unittest.TestCase):
-    def test_clamp_long_short(self):
+    def test_default_stop_is_fixed_at_25_pips(self):
         cases = [  # side, entry, stop, expected stop, action
-            ("LONG", "1.08500", "1.08400", "1.08300", fx_policy.WIDENED),     # 10 pips -> 20
+            ("LONG", "1.08500", "1.08400", "1.08250", fx_policy.WIDENED),     # 10 pips -> 25
+            ("LONG", "1.08500", "1.08280", "1.08250", fx_policy.WIDENED),     # 22 pips -> 25
             ("LONG", "1.08500", "1.08000", "1.08250", fx_policy.NARROWED),    # 50 pips -> 25
-            ("LONG", "1.08500", "1.08280", "1.08280", fx_policy.UNCHANGED),   # 22 pips
-            ("LONG", "1.08500", "1.08300", "1.08300", fx_policy.UNCHANGED),   # exactly 20
             ("LONG", "1.08500", "1.08250", "1.08250", fx_policy.UNCHANGED),   # exactly 25
-            ("SHORT", "1.08500", "1.08600", "1.08700", fx_policy.WIDENED),
+            ("SHORT", "1.08500", "1.08600", "1.08750", fx_policy.WIDENED),
             ("SHORT", "1.08500", "1.09500", "1.08750", fx_policy.NARROWED),
-            ("SHORT", "1.08500", "1.08720", "1.08720", fx_policy.UNCHANGED),
+            ("SHORT", "1.08500", "1.08750", "1.08750", fx_policy.UNCHANGED),
         ]
         for side, entry, stop, expected, action in cases:
             with self.subTest(side=side, stop=stop):
                 got, how, _ = fx_policy.clamp_stop("EURUSD", side, Decimal(entry), Decimal(stop))
+                self.assertEqual((got, how), (Decimal(expected), action))
+
+    def test_explicit_band_still_clamps(self):
+        for stop, expected, action in (("1.08400", "1.08300", fx_policy.WIDENED),
+                                       ("1.08000", "1.08250", fx_policy.NARROWED),
+                                       ("1.08280", "1.08280", fx_policy.UNCHANGED)):
+            with self.subTest(stop=stop):
+                got, how, _ = fx_policy.clamp_stop("EURUSD", "LONG", Decimal("1.08500"), Decimal(stop),
+                                                   low=Decimal(20), high=Decimal(25))
                 self.assertEqual((got, how), (Decimal(expected), action))
 
     def test_wrong_side_rejected(self):
@@ -99,33 +119,35 @@ class ClampTests(unittest.TestCase):
 
 
 class PlannerTests(unittest.TestCase):
-    def test_below_min_widened_tp_follows(self):
-        for side, stop, want_stop, want_tp in (("LONG", 1.084, 1.083, 1.089), ("SHORT", 1.086, 1.087, 1.081)):
+    def test_below_25_widened_tp_follows(self):
+        for side, stop, want_stop, want_tp in (("LONG", 1.084, 1.0825, 1.09), ("SHORT", 1.086, 1.0875, 1.08)):
             with self.subTest(side=side):
                 plan, d = fx_plan(side, 1.085, stop)
                 self.assertEqual((d["status"], d["sl_clamp"], plan.stop, plan.target, plan.risk_reward,
                                   plan.policy_version), ("PLAN_READY", "WIDENED", want_stop, want_tp, 2.0, POLICY_FX))
-                self.assertEqual((pips(plan.entry, plan.stop), pips(plan.entry, plan.target)), (20, 40))
+                self.assertEqual((pips(plan.entry, plan.stop), pips(plan.entry, plan.target)), (25, 50))
                 self.assertEqual(d["structural_stop"], f"{stop:.5f}")
 
-    def test_above_max_narrowed_tp_follows(self):
+    def test_above_25_narrowed_tp_follows(self):
         for side, stop, want_stop, want_tp in (("LONG", 1.075, 1.0825, 1.09), ("SHORT", 1.095, 1.0875, 1.08)):
             with self.subTest(side=side):
                 plan, d = fx_plan(side, 1.085, stop)
                 self.assertEqual((d["sl_clamp"], plan.stop, plan.target), ("NARROWED", want_stop, want_tp))
                 self.assertEqual((pips(plan.entry, plan.stop), pips(plan.entry, plan.target)), (25, 50))
 
-    def test_in_range_unchanged_tp_is_2r(self):
-        for side, stop, want_tp in (("LONG", 1.0828, 1.0894), ("SHORT", 1.0873, 1.0804)):
-            with self.subTest(side=side):
+    def test_any_structural_distance_gives_exactly_25_and_50(self):
+        for side, stop, action in (("LONG", 1.0828, "WIDENED"), ("LONG", 1.0825, "UNCHANGED"),
+                                   ("SHORT", 1.0873, "WIDENED"), ("SHORT", 1.0875, "UNCHANGED")):
+            with self.subTest(side=side, stop=stop):
                 plan, d = fx_plan(side, 1.085, stop)
-                self.assertEqual((d["sl_clamp"], plan.stop, plan.target), ("UNCHANGED", stop, want_tp))
+                self.assertEqual(d["sl_clamp"], action)
+                self.assertEqual((pips(plan.entry, plan.stop), pips(plan.entry, plan.target)), (25, 50))
                 self.assertEqual(geometry(side, plan.entry, plan.stop, plan.target)[0].rr, Decimal(2))
                 self.assertEqual(pips(plan.entry, plan.target), 2 * pips(plan.entry, plan.stop))
 
     def test_off_grid_structural_stop_clamped_on_grid(self):
-        plan, d = fx_plan("LONG", 1.0850049, 1.0849)  # entry rounds up to 1.08501; 1 pip SL -> 20
-        self.assertEqual((d["entry"], d["stop"], d["target"]), ("1.08501", "1.08301", "1.08901"))
+        plan, d = fx_plan("LONG", 1.0850049, 1.0849)  # entry rounds up to 1.08501; 1 pip SL -> 25
+        self.assertEqual((d["entry"], d["stop"], d["target"]), ("1.08501", "1.08251", "1.09001"))
 
     def test_invalid_geometry_still_fails_closed(self):
         for entry, stop in ((1.085, 1.085), (1.085, 1.086), (float("nan"), 1.08)):
@@ -153,7 +175,7 @@ class OrchestratorTests(unittest.TestCase):
 
     def test_fx_under_v1_and_f3(self):
         for policy in (POLICY_V1, POLICY_V2_F3):
-            for side, stop, want in (("LONG", 1.084, (1.083, 1.089)), ("SHORT", 1.095, (1.0875, 1.08))):
+            for side, stop, want in (("LONG", 1.084, (1.0825, 1.09)), ("SHORT", 1.095, (1.0875, 1.08))):
                 with self.subTest(policy=policy, side=side):
                     report = self.run_floor("EURUSD", side, 1.085, stop, policy)
                     self.assertEqual(report.final_status, "PLAN_READY", report.risk_decision)

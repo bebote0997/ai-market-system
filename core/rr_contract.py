@@ -18,7 +18,7 @@ from core import fx_policy as _fx
 POLICY_V1 = "V1_FIXED_3R"
 POLICY_V2_D = "V2_P4_D_FIRST_OBSTACLE_2R_5R"
 POLICY_V2_F3 = "V2_P4_FIXED_3R"  # DEC-4.6: the selected V2 planning policy.
-# DEC-FX-SL-2 (supersedes DEC-FX-SL-1): FX symbols, SL clamped to [20, 25] pips and TP fixed at FX_TP_RR (2R) of it
+# DEC-FX-SL-3 (supersedes DEC-FX-SL-2): FX symbols, SL fixed at 25 pips and TP fixed at FX_TP_RR (2R) of it
 # (core/fx_policy.py).
 POLICY_FX = _fx.POLICY_FX
 # policy -> (floor, ceiling) for PLANNED geometry; both inclusive. V1 has no ceiling; fixed 3R is exactly 3.
