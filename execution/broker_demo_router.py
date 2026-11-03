@@ -16,12 +16,14 @@ translated onto the ask/bid up to 10 pips, refused beyond that) -> write-ahead i
 ``OandaBroker.submit_plan`` -> ACCEPTED (OPEN) / REJECTED / UNKNOWN (blocks routing until reconcile proves the outcome).
 
 EURUSD H1 limit pullback (default ON in ``router_from_env``; exact ``AI_FLOOR_EURUSD_LIMIT_PULLBACK=0`` restores the
-market order). The engine's side is unchanged. The order is a LIMIT GTD at the signal pulled back by one H1 ATR(14),
-only in the direction of the H1 EMA(200). DEC-FX-SL-2: its stop is the structural invalidation measured from the limit
-and clamped into [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS], its target is FX_TP_RR x that distance from the limit, and units,
-the risk approval and R (``abs(limit - stop)``) use those limit-relative prices. Stop and target prices are not moved
+market order). The engine's side is unchanged. The order is a LIMIT GTD at the signal pulled back by a fixed 12.5 pips
+(DEC-FX-SL-3, all setups), only in the direction of the H1 EMA(200). Its stop is exactly 25 pips from the limit and its
+target FX_TP_RR x that (50 pips) from the limit; the structural invalidation only refuses the setup when the limit is
+at or past it (``limit_through_stop``). Units, the risk approval and R (``abs(limit - stop)``) use those limit-relative
+prices. Stop and target prices are not moved
 onto the fill. A resting limit is ``PENDING_LIMIT`` (not a bad fill). After the fill: close 1/3 at +0.5R, 1/3 at +1R
-and move the stop to breakeven, then trail the rest at 1R. Only rows tagged with that strategy are managed this way, so a
+and move the stop to breakeven, then trail the rest at 1R; those levels and breakeven are measured from the limit price
+(the entry SL/TP were set from), not the actual fill. Only rows tagged with that strategy are managed this way, so a
 deploy does not change a position that is already open. The high-impact news filter stays in the setup validator, before
 this router ever sees a plan.
 
@@ -79,8 +81,9 @@ from execution.broker_demo_state import (CANCELLED, CLOSED, CLOSED_AT_BROKER, DR
                                          MODE_FLAG, OPEN, OUTBOX_FAILED, OUTBOX_SENT, PENDING_LIMIT, PENDING_SEND,
                                          REJECTED, UNKNOWN, UNRESOLVED_STATUSES, DemoStateStore, dry_run_flag,
                                          max_units_setting, routing_flag, summarize_status)
-from execution.eurusd_pullback import (STRATEGY, PullbackPlan, gtd_timestamp, limit_expiry, limit_fill_verdict,
-                                       management_steps, market_anchor, plan_pullback, pullback_flag)
+from execution.eurusd_pullback import (LIMIT_OFFSET_PIPS, STRATEGY, PullbackPlan, gtd_timestamp, limit_expiry,
+                                       limit_fill_verdict, management_steps, market_anchor, plan_pullback,
+                                       pullback_flag)
 from execution.broker_port import (ACCEPTED, APPROVED, BrokerAuthError, BrokerGuardError, BrokerMalformedResponse,
                                    BrokerRateLimited, OrderPlan, RiskApproval)
 from execution.demo_epoch import demo_start_equity
@@ -161,7 +164,7 @@ def _structural_stop(context, stop):
 
 
 def _plan_pullback(side, entry, stop, target, h1_bars, structural):
-    """``plan_pullback`` with SL/TP measured from the limit (DEC-FX-SL-2). Pure; bad data is ``h1_no_data``."""
+    """``plan_pullback`` with SL/TP measured from the limit (DEC-FX-SL-3). Pure; bad data is ``h1_no_data``."""
     try:
         return plan_pullback(side, entry, stop, target, h1_bars, structural=structural)
     except (ValueError, ArithmeticError, TypeError):
@@ -540,7 +543,7 @@ class BrokerDemoRouter:
                 return self._refuse(client_id, reason)
         entry, stop, target = (_dec(getattr(decision, n)) for n in ("entry", "stop", "target"))
         pullback = None
-        if self.pullback and symbol == "EURUSD":  # pure (no network): DEC-FX-SL-2 sizes on the limit-relative risk
+        if self.pullback and symbol == "EURUSD":  # pure (no network): DEC-FX-SL-3 sizes on the limit-relative risk
             pullback = self._prepare_pullback(client_id, decision.side, _plan_pullback(
                 decision.side, entry, stop, target, h1_bars, _structural_stop(context, stop)))
             if not isinstance(pullback, PullbackPlan):  # rejected before sizing: no reversal close, no submission
@@ -570,7 +573,7 @@ class BrokerDemoRouter:
                 return refused
         limit_order = None
         if pullback is not None:
-            # DEC-FX-SL-2: the units were sized on limit/stop; SL/TP are measured from the limit, not re-anchored.
+            # DEC-FX-SL-3: the units were sized on limit/stop; SL/TP are measured from the limit, not re-anchored.
             prepared = pullback
             order_entry, order_stop, order_target = prepared.limit, prepared.stop, prepared.target
             expiry = limit_expiry(at)
@@ -584,7 +587,7 @@ class BrokerDemoRouter:
                 return self._refuse(client_id, "fill_gap_too_large")
             order_entry, order_stop, order_target = anchored
         try:  # A re-sized approval derived from the APPROVED decision. Market: prices translated onto the expected
-            # fill. Limit: the limit is the entry; SL/TP are measured from the limit (DEC-FX-SL-2).
+            # fill. Limit: the limit is the entry; SL/TP are measured from the limit (DEC-FX-SL-3).
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), order_entry, order_stop, order_target,
                                    client_id=client_id, source_run_id=run_id,
                                    risk_policy_version=getattr(plan, "policy_version", None))
@@ -649,7 +652,7 @@ class BrokerDemoRouter:
         if isinstance(prepared, PullbackPlan):
             pip = fx_policy.pip_size("EURUSD")
             self._event("PULLBACK_PLAN", client_id, side=side, limit=str(prepared.limit),
-                        atr=str(prepared.atr), ema=str(prepared.ema), price=str(prepared.price),
+                        offset_pips=_pips(LIMIT_OFFSET_PIPS), ema=str(prepared.ema), price=str(prepared.price),
                         risk=str(prepared.risk), stop=str(prepared.stop), target=str(prepared.target),
                         sl_clamp=prepared.sl_clamp, structural_pips=_pips(prepared.structural_pips),
                         sl_pips=_pips(prepared.risk / pip), tp_pips=_pips(abs(prepared.target - prepared.limit) / pip))
@@ -1214,14 +1217,15 @@ class BrokerDemoRouter:
             action = duration_action(row, at, price)
             if action is not None and action[0] == "CLOSE":
                 return self._close(row, action[1], f"{row['client_id']}-close")
-        fill = _dec(row.get("fill_price")) or _dec(row["entry"])
+        # DEC-FX-SL-3: +0.5R / +1R / breakeven / trail are anchored to the limit (the entry SL/TP were set from),
+        # never to the actual fill. ``entry`` is the limit too for these rows; it covers a row without ``limit_price``.
+        anchor = _dec(row.get("limit_price")) or _dec(row["entry"])
         risk = _dec(row.get("risk_distance"))
         if risk is None:
-            signal = _dec(row.get("signal_entry")) or fill
-            risk = abs(signal - (_dec(row.get("initial_stop")) or _dec(row["stop"])))
+            risk = abs(anchor - (_dec(row.get("initial_stop")) or _dec(row["stop"])))
         remaining = row.get("units_remaining")
         remaining = int(remaining) if remaining not in (None, "") else None
-        steps = management_steps(side=row["side"], fill=fill, risk=risk, units=int(row["units"]),
+        steps = management_steps(side=row["side"], anchor=anchor, risk=risk, units=int(row["units"]),
                                  stage=row.get("scale_stage"), remaining=remaining, price=price,
                                  stop=_dec(row["stop"]))
         outcome = "KEEP"

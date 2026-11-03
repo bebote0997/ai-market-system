@@ -1,27 +1,29 @@
-"""FX stop-loss clamp and fixed take-profit (DEC-FX-SL-2, supersedes DEC-FX-SL-1). Pure values and functions; no
-wall clock, no I/O.
+"""FX stop-loss and fixed take-profit (DEC-FX-SL-3, supersedes DEC-FX-SL-2 / DEC-FX-SL-1). Pure values and
+functions; no wall clock, no I/O.
 
-For every FX symbol the engine trades (a pair of two fiat currencies, e.g. EURUSD; never XAUUSD or indices) the
-planner keeps the structural invalidation as SL only if its distance from the entry is inside
-[FX_SL_MIN_PIPS, FX_SL_MAX_PIPS]; otherwise the SL is moved to the nearest bound (widened below the minimum, narrowed
-above the maximum). TP is then FIXED at FX_TP_RR x the (clamped) SL distance (owner: 2R, i.e. 40-50 pips for a
-20-25 pip SL; DEC-FX-SL-1 used 45-60 / 90-120), replacing the fixed 3R target for FX symbols. Non-FX symbols are
-untouched. The EURUSD pullback limit (execution/eurusd_pullback.py) applies the same clamp and 2R measured from the
-limit price.
+For every FX symbol the engine trades (a pair of two fiat currencies, e.g. EURUSD; never XAUUSD or indices) the SL is
+FIXED at exactly 25 pips from the entry (owner, 2026-11-03: "25 sl y 50 tp"): the defaults set FX_SL_MIN_PIPS =
+FX_SL_MAX_PIPS = 25, so ``clamp_stop`` moves any structural invalidation onto entry -/+ 25 pips (WIDENED when it was
+closer, NARROWED when it was farther, UNCHANGED when it already was 25). TP is FIXED at FX_TP_RR x that distance (2R,
+i.e. 50 pips), replacing the fixed 3R target for FX symbols. Non-FX symbols are untouched. The EURUSD pullback limit
+(execution/eurusd_pullback.py) applies the same 25 / 50 pips measured from the limit price.
 
-Configuration: code defaults below, optionally overridden per key by the process environment (the same mechanism as
-every other ``AI_FLOOR_*`` setting; no key is required). Values are read once at import; an invalid value fails
-closed to ALL defaults with a warning, so a typo can never produce a half-applied policy. The values are not part of
-``RuntimeConfig.fingerprint``: changing them is a strategy change that needs a flat account (see DEC-FX-SL-2).
+Configuration: FIXED in code (DEC-FX-SL-3). The former per-key overrides ``AI_FLOOR_FX_SL_MIN_PIPS`` /
+``AI_FLOOR_FX_SL_MAX_PIPS`` / ``AI_FLOOR_FX_TP_RR`` are no longer read: if any of them is present in the process
+environment it is ignored with one warning ``FX_SL_OVERRIDE_IGNORED`` (variable names only, never values) and the
+policy stays 25 / 25 pips, 2.0R. The values are not part of ``RuntimeConfig.fingerprint``: changing them is a code
+change and a strategy change that needs a flat account (see DEC-FX-SL-3).
 """
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import logging
 import os
 
+# Retired overrides (DEC-FX-SL-3): only their presence is checked, to warn that they are ignored.
 MIN_PIPS_ENV = "AI_FLOOR_FX_SL_MIN_PIPS"
 MAX_PIPS_ENV = "AI_FLOOR_FX_SL_MAX_PIPS"
 TP_RR_ENV = "AI_FLOOR_FX_TP_RR"
-DEFAULT_SL_MIN_PIPS = Decimal(20)  # DEC-FX-SL-2 (owner, 2026-11-03): EURUSD SL 20-25 pips
+# DEC-FX-SL-3 (owner, 2026-11-03): EURUSD SL fixed at 25 pips (min == max: no structural range), TP 2R = 50 pips.
+DEFAULT_SL_MIN_PIPS = Decimal(25)
 DEFAULT_SL_MAX_PIPS = Decimal(25)
 DEFAULT_TP_RR = Decimal("2.0")
 # Fill-time execution tolerance, same absolute width as DEC-4.7 (fixed 3R plan -> 2.5R fill floor): 0.5R.
@@ -33,21 +35,13 @@ WIDENED, NARROWED, UNCHANGED = "WIDENED", "NARROWED", "UNCHANGED"
 
 
 def _load(environ):
-    def read(name, default):
-        raw = environ.get(name)
-        return default if raw is None or raw == "" else Decimal(str(raw).strip())
-    try:
-        low, high, rr = read(MIN_PIPS_ENV, DEFAULT_SL_MIN_PIPS), read(MAX_PIPS_ENV, DEFAULT_SL_MAX_PIPS), \
-            read(TP_RR_ENV, DEFAULT_TP_RR)
-        if not (low.is_finite() and high.is_finite() and rr.is_finite()) or not (0 < low <= high) \
-                or rr - FILL_TOLERANCE_R < 1:
-            raise ValueError("FX SL/TP configuration out of range")
-    except (InvalidOperation, ValueError):
+    """The fixed policy; any retired override key present in ``environ`` is ignored with a warning (names only)."""
+    ignored = [name for name in (MIN_PIPS_ENV, MAX_PIPS_ENV, TP_RR_ENV) if name in environ]
+    if ignored:
         logging.getLogger("ai_floor.runtime").warning(
-            "FX_SL_POLICY_INVALID: fail closed to defaults (%s-%s pips, %sR)",
+            "FX_SL_OVERRIDE_IGNORED: %s; fixed policy %s-%s pips, %sR", ",".join(ignored),
             DEFAULT_SL_MIN_PIPS, DEFAULT_SL_MAX_PIPS, DEFAULT_TP_RR)
-        return DEFAULT_SL_MIN_PIPS, DEFAULT_SL_MAX_PIPS, DEFAULT_TP_RR
-    return low, high, rr
+    return DEFAULT_SL_MIN_PIPS, DEFAULT_SL_MAX_PIPS, DEFAULT_TP_RR
 
 
 FX_SL_MIN_PIPS, FX_SL_MAX_PIPS, FX_TP_RR = _load(os.environ)

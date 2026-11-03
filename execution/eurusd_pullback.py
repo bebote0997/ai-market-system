@@ -3,17 +3,18 @@
 The engine still chooses the side and the structural invalidation. This module only decides:
 
 * whether that side agrees with the closed H1 EMA(200),
-* the limit price (signal ± one Wilder ATR(14) on closed H1 bars),
-* the stop and target of the limit (DEC-FX-SL-2): the structural invalidation measured from the LIMIT price, clamped
-  into [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS] with ``fx_policy.clamp_stop``, and TP = limit ± FX_TP_RR × that distance,
+* the limit price (DEC-FX-SL-3: signal ± a FIXED 12.5 pips, half the 25-pip SL, for every setup; no ATR),
+* the stop and target of the limit (DEC-FX-SL-3): exactly FX_SL_MAX_PIPS (25) pips from the LIMIT price
+  (``fx_policy.clamp_stop`` with min == max) and TP = limit ± FX_TP_RR × that distance (50 pips). The structural
+  invalidation only decides whether the setup is still valid: a limit at or through it is ``limit_through_stop``,
 * when the unfilled limit expires,
 * how a filled position is scaled out (1/3 at +0.5R, 1/3 at +1R with the stop to breakeven, then a 1R trail).
 
-R is ``abs(limit − stop)``, the risk the position has once the limit fills. Profit levels are measured from the
-fill, because that is the price the position actually has. Stop and target prices are never moved onto the fill.
+R is ``abs(limit − stop)``, the risk the position has once the limit fills. Profit levels (+0.5R, +1R), breakeven
+and the trail are measured from the LIMIT price, the entry the SL/TP were set from (DEC-FX-SL-3), not from the actual
+fill. Stop and target prices are never moved onto the fill.
 
-Wilder ATR is the usual ATR(14): the first value is the simple average of the first 14 true ranges, then
-``(previous × 13 + true range) / 14``. EMA(200) is seeded with the simple average of the first 200 closes.
+EMA(200) is seeded with the simple average of the first 200 closes.
 
 A row is managed by these steps only when the router tagged it with ``STRATEGY``. Rows opened before that tag
 exist keep the previous manager, so a deploy does not touch an open position.
@@ -30,8 +31,10 @@ from execution import trade_duration as td
 STRATEGY = "EURUSD_H1_PULLBACK"
 SYMBOL = "EURUSD"
 PULLBACK_ENV = "AI_FLOOR_EURUSD_LIMIT_PULLBACK"
-ATR_PERIOD = 14
 EMA_PERIOD = 200
+# DEC-FX-SL-3 (owner, 2026-11-03): the limit sits a fixed half of the 25-pip SL away from the signal, for all setups.
+LIMIT_OFFSET_PIPS = Decimal("12.5")
+LIMIT_OFFSET = LIMIT_OFFSET_PIPS * fx_policy.pip_size(SYMBOL)
 LIMIT_TTL = timedelta(hours=24)
 HALF_R = Decimal("0.5")
 ONE_R = Decimal("1")
@@ -109,31 +112,6 @@ def ema(closes, period=EMA_PERIOD):
     return value
 
 
-def true_ranges(bars):
-    """True range of each bar after the first (needs the previous close). Oldest first."""
-    ranges = []
-    previous = None
-    for high, low, close in bars:
-        if previous is None:
-            previous = close
-            continue
-        ranges.append(max(high - low, abs(high - previous), abs(low - previous)))
-        previous = close
-    return ranges
-
-
-def wilder_atr(bars, period=ATR_PERIOD):
-    """Wilder ATR. ``None`` until ``period`` true ranges exist (``period + 1`` bars)."""
-    ranges = true_ranges(bars)
-    if len(ranges) < period or period < 1:
-        return None
-    value = sum(ranges[:period], Decimal(0)) / Decimal(period)
-    smooth = Decimal(period - 1)
-    for true_range in ranges[period:]:
-        value = (value * smooth + true_range) / Decimal(period)
-    return value
-
-
 def trend_side(price, ema_value):
     """``LONG`` when price is strictly above the EMA, ``SHORT`` when strictly below, else ``None``."""
     if price > ema_value:
@@ -143,12 +121,12 @@ def trend_side(price, ema_value):
     return None
 
 
-def limit_price(side, signal, atr_value):
-    """Buy limit below the signal, sell limit above it, by one ATR."""
+def limit_price(side, signal, offset=LIMIT_OFFSET):
+    """Buy limit below the signal, sell limit above it, by ``offset`` (default the fixed 12.5 pips)."""
     if side == "LONG":
-        return signal - atr_value
+        return signal - offset
     if side == "SHORT":
-        return signal + atr_value
+        return signal + offset
     raise ValueError("side must be LONG or SHORT")
 
 
@@ -184,9 +162,8 @@ def gtd_timestamp(at):
 
 @dataclass(frozen=True)
 class PullbackPlan:
-    """``stop`` / ``target`` are measured from ``limit`` (DEC-FX-SL-2); ``risk`` = ``abs(limit - stop)``."""
+    """``stop`` / ``target`` are measured from ``limit`` (DEC-FX-SL-3); ``risk`` = ``abs(limit - stop)``."""
     limit: Decimal
-    atr: Decimal
     ema: Decimal
     price: Decimal
     risk: Decimal
@@ -199,9 +176,11 @@ class PullbackPlan:
 def limit_levels(side, limit, structural, *, symbol=SYMBOL, rounder=round_fx):
     """``(stop, target, sl_clamp, structural_pips)`` for a limit entry, or a reason string.
 
-    The structural invalidation's distance from the limit is clamped into [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS]
-    (``fx_policy.clamp_stop``) and TP = limit ± FX_TP_RR × the clamped distance, so the order is exactly FX_TP_RR R
-    from the limit. A structural stop at or through the limit is ``limit_through_stop`` (nothing is sent).
+    DEC-FX-SL-3: the stop is the fixed FX SL distance from the limit (``fx_policy.clamp_stop``; 25 pips with the
+    default min == max) and TP = limit ± FX_TP_RR × that distance, so the order is exactly FX_TP_RR R from the limit.
+    ``structural`` (the setup's invalidation) never sets the stop; it only rejects the setup when the limit would
+    already be at or past it (LONG: limit <= structural, SHORT: limit >= structural) -> ``limit_through_stop``,
+    nothing is sent. Otherwise the setup is never skipped for its structure.
     """
     if (side == "LONG" and not structural < limit) or (side == "SHORT" and not structural > limit):
         return "limit_through_stop"
@@ -239,8 +218,7 @@ def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=
         return "h1_no_data"
     closes = tuple(bar[2] for bar in parsed)
     ema_value = ema(closes)
-    atr_value = wilder_atr(parsed)
-    if ema_value is None or atr_value is None or atr_value <= 0:
+    if ema_value is None:
         return "h1_no_data"
     price = closes[-1]
     allowed = trend_side(price, ema_value)
@@ -248,7 +226,7 @@ def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=
         return "trend_flat"
     if allowed != side:
         return "trend_filter"
-    raw = limit_price(side, signal, atr_value)
+    raw = limit_price(side, signal)
     try:
         limit = rounder(raw)
     except (ValueError, ArithmeticError, TypeError):
@@ -262,28 +240,28 @@ def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=
     new_stop, new_target, action, pips = levels
     if not geometry_ok(side, limit, new_stop, new_target):
         return "limit_through_stop"
-    return PullbackPlan(limit, atr_value, ema_value, price, abs(limit - new_stop), new_stop, new_target, action, pips)
+    return PullbackPlan(limit, ema_value, price, abs(limit - new_stop), new_stop, new_target, action, pips)
 
 
 def _is_bars(value):
     return isinstance(value, tuple) and bool(value) and isinstance(value[0], tuple) and len(value[0]) == 3
 
 
-def _level(side, fill, risk, multiple):
+def _level(side, anchor, risk, multiple):
     delta = risk * multiple
-    return fill + delta if side == "LONG" else fill - delta
+    return anchor + delta if side == "LONG" else anchor - delta
 
 
 def _reached(side, price, level):
     return price >= level if side == "LONG" else price <= level
 
 
-def trail_stop(side, fill, risk, price):
-    """Stop one R behind ``price``, never worse than breakeven (the fill)."""
+def trail_stop(side, anchor, risk, price):
+    """Stop one R behind ``price``, never worse than breakeven (``anchor``, the limit price)."""
     if side == "LONG":
-        return max(price - risk, fill)
+        return max(price - risk, anchor)
     if side == "SHORT":
-        return min(price + risk, fill)
+        return min(price + risk, anchor)
     raise ValueError("side must be LONG or SHORT")
 
 
@@ -315,25 +293,26 @@ def _can_partial(units, remaining):
     return qty >= 1 and remaining - qty >= 1, qty
 
 
-def management_steps(*, side, fill, risk, units, stage, remaining, price, stop):
+def management_steps(*, side, anchor, risk, units, stage, remaining, price, stop):
     """Ordered partial / breakeven / trail steps for the current stage and price. Empty when nothing is due.
 
     A price that gaps through both +0.5R and +1R returns both partials, then the stop, in that order. The caller
-    applies them until one fails and calls again from the stage it managed to save.
+    applies them until one fails and calls again from the stage it managed to save. ``anchor`` is the limit price
+    (DEC-FX-SL-3): the levels are ``anchor`` ± 0.5R / 1R and breakeven is ``anchor``, whatever the actual fill.
     """
-    if (side not in ("LONG", "SHORT") or not isinstance(fill, Decimal) or not isinstance(risk, Decimal)
+    if (side not in ("LONG", "SHORT") or not isinstance(anchor, Decimal) or not isinstance(risk, Decimal)
             or not isinstance(price, Decimal) or risk <= 0 or type(units) is not int or units < 1):
         return ()
     stage = stage or "NONE"
     if stage == "TRAIL":
-        new_stop = trail_stop(side, fill, risk, price)
+        new_stop = trail_stop(side, anchor, risk, price)
         if _tighter(side, new_stop, stop):
             return (ManageStep("STOP", "TRAIL", "TRAIL", ("TRAIL",), remaining=remaining, stop=new_stop),)
         return ()
     left = units if remaining is None else int(remaining)
     steps = []
-    half = _level(side, fill, risk, HALF_R)
-    one = _level(side, fill, risk, ONE_R)
+    half = _level(side, anchor, risk, HALF_R)
+    one = _level(side, anchor, risk, ONE_R)
     if stage == "NONE" and _reached(side, price, half):
         ok, qty = _can_partial(units, left)
         if ok:
@@ -351,8 +330,8 @@ def management_steps(*, side, fill, risk, units, stage, remaining, price, stop):
         or (stage == "HALF" and not _can_partial(units, left)[0]))
     if not ready:
         return tuple(steps)
-    new_stop = trail_stop(side, fill, risk, price)
-    beyond = new_stop != fill and ((side == "LONG" and new_stop > fill) or (side == "SHORT" and new_stop < fill))
+    new_stop = trail_stop(side, anchor, risk, price)
+    beyond = new_stop != anchor and ((side == "LONG" and new_stop > anchor) or (side == "SHORT" and new_stop < anchor))
     journals = ("BREAKEVEN", "TRAIL") if beyond else ("BREAKEVEN",)
     kind = "STOP" if _tighter(side, new_stop, stop) else "MARK"
     steps.append(ManageStep(kind, "TRAIL", "BE", journals, remaining=left, stop=new_stop if kind == "STOP" else None))
@@ -389,7 +368,7 @@ def anchor_outcome(*, kind, pending, side, entry, stop, target, quote_fill, limi
     """How the fill-anchor rule treats one order.
 
     Market orders keep the translation and the max-pip refusal. Limit orders keep the stop and target sent with the
-    limit (already measured from the limit, DEC-FX-SL-2).
+    limit (already measured from the limit, DEC-FX-SL-3).
     A pending limit is ``pending``, not a refusal and not an out-of-policy fill. A limit fill at the intended
     level (or better) is ``accepted``.
     """
