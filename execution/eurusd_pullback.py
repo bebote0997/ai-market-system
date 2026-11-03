@@ -1,14 +1,16 @@
 """EURUSD H1 pullback limit (OANDA practice demo only). Pure functions: no network, no clock read, no broker.
 
-The engine still chooses the side, the stop and the target. This module only decides:
+The engine still chooses the side and the structural invalidation. This module only decides:
 
 * whether that side agrees with the closed H1 EMA(200),
 * the limit price (signal ± one Wilder ATR(14) on closed H1 bars),
+* the stop and target of the limit (DEC-FX-SL-2): the structural invalidation measured from the LIMIT price, clamped
+  into [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS] with ``fx_policy.clamp_stop``, and TP = limit ± FX_TP_RR × that distance,
 * when the unfilled limit expires,
 * how a filled position is scaled out (1/3 at +0.5R, 1/3 at +1R with the stop to breakeven, then a 1R trail).
 
-R is the engine's risk, ``abs(signal − stop)``. Profit levels are measured from the fill, because that is the
-price the position actually has. Stop and target prices are never moved onto the fill.
+R is ``abs(limit − stop)``, the risk the position has once the limit fills. Profit levels are measured from the
+fill, because that is the price the position actually has. Stop and target prices are never moved onto the fill.
 
 Wilder ATR is the usual ATR(14): the first value is the simple average of the first 14 true ranges, then
 ``(previous × 13 + true range) / 14``. EMA(200) is seeded with the simple average of the first 200 closes.
@@ -20,6 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
+from core import fx_policy
+from core.rr_contract import POLICY_FX, WITHIN_POLICY, classify, geometry
 from execution import trade_duration as td
 
 
@@ -149,7 +153,7 @@ def limit_price(side, signal, atr_value):
 
 
 def geometry_ok(side, limit, stop, target):
-    """The limit has to sit strictly between the engine's stop and target. Otherwise the order is not sent."""
+    """The limit has to sit strictly between the stop and the target. Otherwise the order is not sent."""
     if side == "LONG":
         return stop < limit < target
     if side == "SHORT":
@@ -180,18 +184,54 @@ def gtd_timestamp(at):
 
 @dataclass(frozen=True)
 class PullbackPlan:
+    """``stop`` / ``target`` are measured from ``limit`` (DEC-FX-SL-2); ``risk`` = ``abs(limit - stop)``."""
     limit: Decimal
     atr: Decimal
     ema: Decimal
     price: Decimal
     risk: Decimal
+    stop: Decimal = None
+    target: Decimal = None
+    sl_clamp: str = None
+    structural_pips: Decimal = None
 
 
-def plan_pullback(side, signal, stop, target, bars, *, rounder=round_fx):
-    """``PullbackPlan`` or a short reason string. Never raises on bad market data (that reason is ``h1_no_data``)."""
+def limit_levels(side, limit, structural, *, symbol=SYMBOL, rounder=round_fx):
+    """``(stop, target, sl_clamp, structural_pips)`` for a limit entry, or a reason string.
+
+    The structural invalidation's distance from the limit is clamped into [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS]
+    (``fx_policy.clamp_stop``) and TP = limit ± FX_TP_RR × the clamped distance, so the order is exactly FX_TP_RR R
+    from the limit. A structural stop at or through the limit is ``limit_through_stop`` (nothing is sent).
+    """
+    if (side == "LONG" and not structural < limit) or (side == "SHORT" and not structural > limit):
+        return "limit_through_stop"
+    stop, action, pips = fx_policy.clamp_stop(symbol, side, limit, structural)
+    stop = rounder(stop)
+    risk = abs(limit - stop)
+    if risk <= 0 or (side == "LONG" and not stop < limit) or (side == "SHORT" and not stop > limit):
+        return "limit_through_stop"
+    raw = limit + fx_policy.FX_TP_RR * risk if side == "LONG" else limit - fx_policy.FX_TP_RR * risk
+    if raw <= 0:
+        return "target_invalid"
+    target = rounder(raw)
+    if target != raw:
+        return "target_not_on_price_grid"  # only a non-grid FX_TP_RR multiple can do this
+    shape, _why = geometry(side, limit, stop, target)
+    if shape is None or classify(shape.rr, POLICY_FX) != WITHIN_POLICY:
+        return "limit_rr_invalid"
+    return stop, target, action, pips
+
+
+def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=round_fx):
+    """``PullbackPlan`` or a short reason string. Never raises on bad market data (that reason is ``h1_no_data``).
+
+    ``stop`` / ``target`` are the engine's signal-based levels; ``structural`` is the structural invalidation (the
+    engine's stop when not given). The plan's stop and target are re-derived from the limit (``limit_levels``).
+    """
     if side not in ("LONG", "SHORT"):
         return "side_invalid"
-    for name, value in (("signal", signal), ("stop", stop), ("target", target)):
+    structural = stop if structural is None else structural
+    for name, value in (("signal", signal), ("stop", stop), ("target", target), ("structural", structural)):
         if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
             return f"{name}_invalid"
     parsed = _triples(bars) if _is_bars(bars) else bars_from_frame(bars)
@@ -213,9 +253,16 @@ def plan_pullback(side, signal, stop, target, bars, *, rounder=round_fx):
         limit = rounder(raw)
     except (ValueError, ArithmeticError, TypeError):
         return "limit_invalid"
-    if not geometry_ok(side, limit, stop, target):
+    try:
+        levels = limit_levels(side, limit, structural, rounder=rounder)
+    except (ValueError, ArithmeticError, TypeError):
+        return "limit_invalid"
+    if isinstance(levels, str):
+        return levels
+    new_stop, new_target, action, pips = levels
+    if not geometry_ok(side, limit, new_stop, new_target):
         return "limit_through_stop"
-    return PullbackPlan(limit, atr_value, ema_value, price, abs(signal - stop))
+    return PullbackPlan(limit, atr_value, ema_value, price, abs(limit - new_stop), new_stop, new_target, action, pips)
 
 
 def _is_bars(value):
@@ -341,7 +388,8 @@ def market_anchor(entry, stop, target, quote_fill, *, pip, max_pips, rounder):
 def anchor_outcome(*, kind, pending, side, entry, stop, target, quote_fill, limit, fill, pip, max_pips, rounder):
     """How the fill-anchor rule treats one order.
 
-    Market orders keep the translation and the max-pip refusal. Limit orders keep the engine's stop and target.
+    Market orders keep the translation and the max-pip refusal. Limit orders keep the stop and target sent with the
+    limit (already measured from the limit, DEC-FX-SL-2).
     A pending limit is ``pending``, not a refusal and not an out-of-policy fill. A limit fill at the intended
     level (or better) is ``accepted``.
     """

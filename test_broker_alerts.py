@@ -276,8 +276,8 @@ class RouterFlowTests(RouterBase):
         transport = FakeTransport()
         router.on_alert = ba.broker_alert_sink_from_env(ENV, transport=transport)
         self.ready()
-        # A policy-conformant geometry (60 pip SL, 2R): the post-fill check (DEC-FILL-ANCHOR-2) stays silent.
-        self.assertEqual(router.on_cycle(context(stop=1.084, target=1.102), "PLAN_READY", NOW), ("ACCEPTED", "6397"))
+        # A policy-conformant geometry (25 pip SL, 2R): the post-fill check (DEC-FILL-ANCHOR-2) stays silent.
+        self.assertEqual(router.on_cycle(context(stop=1.0875, target=1.095), "PLAN_READY", NOW), ("ACCEPTED", "6397"))
         self.assertEqual(len(transport.texts), 1)
         self.assertTrue(transport.texts[0].startswith("[OANDA demo] Orden enviada · trade …6397"))
         for secret in (FAKE_TOKEN, FAKE_ACCOUNT, self.env["OANDA_PRACTICE_TOKEN"], self.env["OANDA_ACCOUNT_ID"],

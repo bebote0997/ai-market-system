@@ -1,15 +1,18 @@
-"""FX stop-loss clamp and fixed take-profit (DEC-FX-SL-1). Pure values and functions; no wall clock, no I/O.
+"""FX stop-loss clamp and fixed take-profit (DEC-FX-SL-2, supersedes DEC-FX-SL-1). Pure values and functions; no
+wall clock, no I/O.
 
 For every FX symbol the engine trades (a pair of two fiat currencies, e.g. EURUSD; never XAUUSD or indices) the
 planner keeps the structural invalidation as SL only if its distance from the entry is inside
 [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS]; otherwise the SL is moved to the nearest bound (widened below the minimum, narrowed
-above the maximum). TP is then FIXED at FX_TP_RR x the (clamped) SL distance (owner: 2R, i.e. 90-120 pips for a
-45-60 pip SL), replacing the fixed 3R target for FX symbols. Non-FX symbols are untouched.
+above the maximum). TP is then FIXED at FX_TP_RR x the (clamped) SL distance (owner: 2R, i.e. 40-50 pips for a
+20-25 pip SL; DEC-FX-SL-1 used 45-60 / 90-120), replacing the fixed 3R target for FX symbols. Non-FX symbols are
+untouched. The EURUSD pullback limit (execution/eurusd_pullback.py) applies the same clamp and 2R measured from the
+limit price.
 
 Configuration: code defaults below, optionally overridden per key by the process environment (the same mechanism as
 every other ``AI_FLOOR_*`` setting; no key is required). Values are read once at import; an invalid value fails
 closed to ALL defaults with a warning, so a typo can never produce a half-applied policy. The values are not part of
-``RuntimeConfig.fingerprint``: changing them is a strategy change that needs a flat account (see DEC-FX-SL-1).
+``RuntimeConfig.fingerprint``: changing them is a strategy change that needs a flat account (see DEC-FX-SL-2).
 """
 from decimal import Decimal, InvalidOperation
 import logging
@@ -18,8 +21,8 @@ import os
 MIN_PIPS_ENV = "AI_FLOOR_FX_SL_MIN_PIPS"
 MAX_PIPS_ENV = "AI_FLOOR_FX_SL_MAX_PIPS"
 TP_RR_ENV = "AI_FLOOR_FX_TP_RR"
-DEFAULT_SL_MIN_PIPS = Decimal(45)
-DEFAULT_SL_MAX_PIPS = Decimal(60)
+DEFAULT_SL_MIN_PIPS = Decimal(20)  # DEC-FX-SL-2 (owner, 2026-11-03): EURUSD SL 20-25 pips
+DEFAULT_SL_MAX_PIPS = Decimal(25)
 DEFAULT_TP_RR = Decimal("2.0")
 # Fill-time execution tolerance, same absolute width as DEC-4.7 (fixed 3R plan -> 2.5R fill floor): 0.5R.
 FILL_TOLERANCE_R = Decimal("0.5")

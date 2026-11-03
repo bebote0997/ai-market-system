@@ -23,6 +23,7 @@ from test_broker_demo_router import (A, CID, NOW, OPEN_TRADES, PRICING, RouterBa
 from test_broker_demo_router import summary
 from test_broker_oanda import ORDERS
 from test_dec14_opposite_policy import reports, snapshot
+from test_eurusd_pullback import fall
 from test_demo_runner import T
 from test_phase5_risk_engine import INS, account, position
 
@@ -238,6 +239,22 @@ class RouterReversalTests(RouterBase):
         self.assertEqual((set(rows), rows[CID]["status"]), ({CID}, "CLOSED"))
         [(_kind, cid, detail)] = self.events("REVERSAL_FLAT")
         self.assertEqual((cid, detail), (NEW_CID, {"closed_client_id": CID, "reason": "daily_loss_halted"}))
+
+    def test_invalid_pullback_is_refused_before_the_reversal_close(self):
+        self.opened()  # live LONG 1.09000 in profit below; the pullback router sees the opposite SHORT plan
+        router = self.router(AI_FLOOR_EURUSD_LIMIT_PULLBACK="1")
+        self.reversal_routes("10050")
+        ctx = context(run_id="run-2", **SHORT)  # sell limit 1.09700; structural stop under it -> limit_through_stop
+        ctx["deterministic"].target_decision = {"stop": "1.10000", "structural_stop": "1.09650"}
+        self.assertEqual(router.on_cycle(ctx, "PLAN_READY", NOW + timedelta(hours=1), h1_bars=fall()),
+                         ("NOT_ROUTED", "limit_through_stop"))
+        self.assertEqual(self.puts(), [])  # the profitable trade is kept
+        self.assertEqual([p for m, p in self.writes() if m == "POST"], [ORDERS])  # only the original entry
+        self.assertEqual([(r["client_id"], r["status"]) for r in self.rows()], [(CID, "OPEN")])
+        self.assertEqual((self.events(bdr.REVERSAL), self.events("REVERSAL_FLAT")), ([], []))
+        self.assertEqual(self.events("PULLBACK_SKIPPED")[0][2]["reason"], "limit_through_stop")
+        self.assertEqual([(c, d["reason"]) for _k, c, d in self.events("NOT_ROUTED")],
+                         [(NEW_CID, "limit_through_stop")])
 
     def test_reversal_off_by_env(self):
         router = self.opened(AI_FLOOR_DEMO_REVERSAL="0")

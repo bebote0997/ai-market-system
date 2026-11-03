@@ -61,7 +61,7 @@ MESSAGES = {
     "MANUAL_CLOSE": "Cierre manual del owner (botón «Cerrar operación»)",
     "MANUAL_CLOSE_FAILED": "Cierre manual rechazado por el broker (la operación sigue abierta)",
     "FILL_ANCHOR_REFUSED": "Entrada rechazada: el precio se alejó demasiado del plan (no se abrió operación)",
-    "FILL_OUT_OF_POLICY": "Operación abierta con SL/TP fuera de la política (SL 45-60 pips, 1:2): revisar",
+    "FILL_OUT_OF_POLICY": "Operación abierta con SL/TP fuera de la política (SL 20-25 pips, 1:2): revisar",
     "LIMIT_PENDING": "Orden límite pendiente (retroceso de 1 ATR, válida 24 h)",
     "LIMIT_EXPIRED": "Orden límite cancelada: no se ejecutó a tiempo",
     "LIMIT_CANCELLED": "Orden límite cancelada",

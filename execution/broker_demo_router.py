@@ -16,11 +16,13 @@ translated onto the ask/bid up to 10 pips, refused beyond that) -> write-ahead i
 ``OandaBroker.submit_plan`` -> ACCEPTED (OPEN) / REJECTED / UNKNOWN (blocks routing until reconcile proves the outcome).
 
 EURUSD H1 limit pullback (default ON in ``router_from_env``; exact ``AI_FLOOR_EURUSD_LIMIT_PULLBACK=0`` restores the
-market order). The engine's side, stop and target are unchanged. The order is a LIMIT GTD at the signal pulled back
-by one H1 ATR(14), only in the direction of the H1 EMA(200). Stop and target prices are not moved onto the fill.
-A resting limit is ``PENDING_LIMIT`` (not a bad fill). After the fill: close 1/3 at +0.5R, 1/3 at +1R and move the
-stop to breakeven, then trail the rest at 1R. Only rows tagged with that strategy are managed this way, so a deploy
-does not change a position that is already open. The high-impact news filter stays in the setup validator, before
+market order). The engine's side is unchanged. The order is a LIMIT GTD at the signal pulled back by one H1 ATR(14),
+only in the direction of the H1 EMA(200). DEC-FX-SL-2: its stop is the structural invalidation measured from the limit
+and clamped into [FX_SL_MIN_PIPS, FX_SL_MAX_PIPS], its target is FX_TP_RR x that distance from the limit, and units,
+the risk approval and R (``abs(limit - stop)``) use those limit-relative prices. Stop and target prices are not moved
+onto the fill. A resting limit is ``PENDING_LIMIT`` (not a bad fill). After the fill: close 1/3 at +0.5R, 1/3 at +1R
+and move the stop to breakeven, then trail the rest at 1R. Only rows tagged with that strategy are managed this way, so a
+deploy does not change a position that is already open. The high-impact news filter stays in the setup validator, before
 this router ever sees a plan.
 
 Dry-run (``AI_FLOOR_BROKER_DEMO_DRY_RUN=1``, opt-in) records the exact order JSON (event DRY_RUN) and never POSTs/PUTs;
@@ -146,6 +148,24 @@ def _dec(value):
     except ArithmeticError:
         return None
     return out if out.is_finite() else None
+
+
+def _structural_stop(context, stop):
+    """The FX planner's structural invalidation (``target_decision['structural_stop']``) when that record belongs to
+    this plan (same ``stop``); otherwise the engine's stop."""
+    record = getattr(context.get("deterministic"), "target_decision", None) if isinstance(context, dict) else None
+    if not isinstance(record, dict) or _dec(record.get("stop")) != stop:
+        return stop
+    structural = _dec(record.get("structural_stop"))
+    return stop if structural is None or structural <= 0 else structural
+
+
+def _plan_pullback(side, entry, stop, target, h1_bars, structural):
+    """``plan_pullback`` with SL/TP measured from the limit (DEC-FX-SL-2). Pure; bad data is ``h1_no_data``."""
+    try:
+        return plan_pullback(side, entry, stop, target, h1_bars, structural=structural)
+    except (ValueError, ArithmeticError, TypeError):
+        return "h1_no_data"
 
 
 def _parse_time(value):
@@ -519,7 +539,14 @@ class BrokerDemoRouter:
             if reversing is None:
                 return self._refuse(client_id, reason)
         entry, stop, target = (_dec(getattr(decision, n)) for n in ("entry", "stop", "target"))
-        units, refused = self._sized(client_id, run_id, decision, entry, stop, at)
+        pullback = None
+        if self.pullback and symbol == "EURUSD":  # pure (no network): DEC-FX-SL-2 sizes on the limit-relative risk
+            pullback = self._prepare_pullback(client_id, decision.side, _plan_pullback(
+                decision.side, entry, stop, target, h1_bars, _structural_stop(context, stop)))
+            if not isinstance(pullback, PullbackPlan):  # rejected before sizing: no reversal close, no submission
+                return self._refuse(client_id, pullback)
+        size_entry, size_stop = (pullback.limit, pullback.stop) if pullback is not None else (entry, stop)
+        units, refused = self._sized(client_id, run_id, decision, size_entry, size_stop, at)
         if refused is not None:
             return refused
         if reversing is not None and self.dry_run:  # dry-run: never close nor send, only record what would happen
@@ -536,20 +563,16 @@ class BrokerDemoRouter:
                     or any(t.instrument == INSTRUMENTS[symbol] for t in report)):
                 return self._refuse(client_id, "reversal_not_flat")
             # The close realised PnL and freed margin: re-read NAV, re-size and re-run the loss/risk gates on it.
-            units, refused = self._sized(client_id, run_id, decision, entry, stop, at)
+            units, refused = self._sized(client_id, run_id, decision, size_entry, size_stop, at)
             if refused is not None:  # stays flat: the opposite trade is closed and nothing new is opened
                 self._event("REVERSAL_FLAT", client_id, closed_client_id=reversing["client_id"],
                             reason=refused[1] if refused[0] == "NOT_ROUTED" else refused[0])
                 return refused
         limit_order = None
-        if self.pullback and symbol == "EURUSD":
-            # Signal entry/stop already sized the units. The limit keeps those SL/TP prices; it does not re-anchor.
-            prepared = self._prepare_pullback(client_id, decision.side, entry, stop, target, h1_bars)
-            if not isinstance(prepared, PullbackPlan):
-                if reversing is not None:
-                    self._event("REVERSAL_FLAT", client_id, closed_client_id=reversing["client_id"], reason=prepared)
-                return self._refuse(client_id, prepared)
-            order_entry, order_stop, order_target = prepared.limit, stop, target
+        if pullback is not None:
+            # DEC-FX-SL-2: the units were sized on limit/stop; SL/TP are measured from the limit, not re-anchored.
+            prepared = pullback
+            order_entry, order_stop, order_target = prepared.limit, prepared.stop, prepared.target
             expiry = limit_expiry(at)
             limit_order = (prepared.limit, gtd_timestamp(expiry), prepared, expiry)
         else:
@@ -561,7 +584,7 @@ class BrokerDemoRouter:
                 return self._refuse(client_id, "fill_gap_too_large")
             order_entry, order_stop, order_target = anchored
         try:  # A re-sized approval derived from the APPROVED decision. Market: prices translated onto the expected
-            # fill. Limit: the limit is the entry; SL/TP stay the engine's prices.
+            # fill. Limit: the limit is the entry; SL/TP are measured from the limit (DEC-FX-SL-2).
             order_plan = OrderPlan(symbol, decision.side, Decimal(units), order_entry, order_stop, order_target,
                                    client_id=client_id, source_run_id=run_id,
                                    risk_policy_version=getattr(plan, "policy_version", None))
@@ -621,16 +644,15 @@ class BrokerDemoRouter:
                     wide=abs(delta_pips) > FILL_ANCHOR_TOLERANCE_PIPS)
         return anchored
 
-    def _prepare_pullback(self, client_id, side, entry, stop, target, h1_bars):
-        """``PullbackPlan`` or a NOT_ROUTED reason. Does not read the quote and does not move SL/TP."""
-        try:
-            prepared = plan_pullback(side, entry, stop, target, h1_bars)
-        except (ValueError, ArithmeticError, TypeError):
-            prepared = "h1_no_data"
+    def _prepare_pullback(self, client_id, side, prepared):
+        """Journal the ``_plan_pullback`` result and return it (``PullbackPlan`` or a NOT_ROUTED reason)."""
         if isinstance(prepared, PullbackPlan):
+            pip = fx_policy.pip_size("EURUSD")
             self._event("PULLBACK_PLAN", client_id, side=side, limit=str(prepared.limit),
                         atr=str(prepared.atr), ema=str(prepared.ema), price=str(prepared.price),
-                        risk=str(prepared.risk))
+                        risk=str(prepared.risk), stop=str(prepared.stop), target=str(prepared.target),
+                        sl_clamp=prepared.sl_clamp, structural_pips=_pips(prepared.structural_pips),
+                        sl_pips=_pips(prepared.risk / pip), tp_pips=_pips(abs(prepared.target - prepared.limit) / pip))
             return prepared
         self._event("PULLBACK_SKIPPED", client_id, reason=prepared, side=side)
         return prepared
