@@ -7,6 +7,7 @@
 - EMA: cruce M15 al cierre (shift 0), filtro de la última H1 cerrada, espera 15 minutos, mercado, sin parciales ni trail. El SL/TP salen con la cotización para que el fill no quede desnudo; cuando llega el fill real se reemplazan a 20/40 desde ese fill. Si el stop queda a más de 20,5 pips y el reemplazo falla, o si el precio ya cruzó ese stop, se cierra (`EMA_RISK_UNCORRECTED` / `EMA_PRICE_THROUGH_STOP`). Un stop más ajustado se conserva si el reemplazo falla. Ventana UTC [12, 15). Noticias, sesión y viernes 16:45 NY se mantienen (ver `docs/ema_cross.md`). `AI_FLOOR_EMA_CROSS` es un nombre nuevo: no se activa mientras el conjunto de 42 claves de Render no cambie.
 - La cifra «OOS 2024–2026» del candidato es evaluación retrospectiva sobre años ya usados al elegir la variante. No es un holdout intacto ni una promesa de beneficio.
 - Tests: `test_ema_cross.py` (cruce, filtro, espera, slot perdido, cruce opuesto, frontera de sesión, noticias, libro ocupado, reinicio, etiqueta, sin trail ni reversión cruzada).
+- `test_phase8_p4b`: el freeze de Fase 6 sigue admitiendo solo los mismos archivos. El diff debe nombrar DEC-FX-SL-1, DEC-FX-SL-2 o DEC-FX-SL-3 (la cadena que sustituye el texto viejo). El contrato vivo queda afirmado: SL 25, TP 50, límite 12,5.
 
 ## 2026-11-03 — DEC-FX-SL-3: LIMIT EURUSD a 12,5 pips fijos, SL 25 / TP 50 pips fijos (borrador)
 

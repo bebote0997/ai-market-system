@@ -598,14 +598,24 @@ class CompatibilityTests(unittest.TestCase):
                    "execution/risk_reservation.py", "riesgo.py", "runtime/paper_contracts.py", "core/")
         if done.returncode != 0:  # e.g. a shallow CI checkout without the P3 base: not checked, never a vacuous pass
             self.skipTest("the P3 base commit is not available in this checkout")
-        # Phase 6 engine, risk and adapter untouched since P3, except the owner-authorized DEC-FX-SL-1 amendment
-        # (FX SL clamp + fixed 2R policy identity), whose every amended file carries the decision tag.
+        # Phase 6 engine, risk and adapter untouched since P3, except the owner-authorized FX stop lineage
+        # DEC-FX-SL-1 (45–60, 2R), superseded by DEC-FX-SL-2 (20–25) and DEC-FX-SL-3 (fixed 25 / 50).
+        # The allowed file set is unchanged. Every amended diff must still name that lineage.
+        # The live contract is the DEC-FX-SL-3 pullback: SL 25, TP 50, limit offset 12.5.
+        from decimal import Decimal
+        from core import fx_policy
+        from execution.eurusd_pullback import LIMIT_OFFSET_PIPS
         amended = {"core/fx_policy.py", "core/risk_policy.py", "core/rr_contract.py", "execution/conflict_path.py",
                    "execution/risk_reservation.py", "riesgo.py"}
         changed = set(done.stdout.split())
         self.assertLessEqual(changed, amended)
+        lineage = ("DEC-FX-SL-1", "DEC-FX-SL-2", "DEC-FX-SL-3")
         for path in changed:
-            self.assertIn("DEC-FX-SL-1", git("diff", "979e1e6", "HEAD", "--", path).stdout, path)
+            diff = git("diff", "979e1e6", "HEAD", "--", path).stdout
+            self.assertTrue(any(tag in diff for tag in lineage), path)
+        self.assertEqual((fx_policy.FX_SL_MIN_PIPS, fx_policy.FX_SL_MAX_PIPS, fx_policy.FX_TP_RR),
+                         (Decimal(25), Decimal(25), Decimal("2.0")))
+        self.assertEqual(LIMIT_OFFSET_PIPS, Decimal("12.5"))
         frozen = subprocess.run([freeze_amendment._git(), "-C", str(ROOT), "show",
                                  "979e1e6:execution/paper_broker.py"], capture_output=True, text=True, check=True).stdout
         # DEC-14.1 permits only this explicit PAPER exit; every other broker byte remains frozen.
