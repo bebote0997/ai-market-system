@@ -56,6 +56,14 @@ A selected xAI call that is missing a key, over budget, timed out, rate-limited 
 
 `XAI_API_KEY` is a **new name**. It is not in the current 42-key set (name hash `27efb336cec1008d`). Cloud preflight marks `xai` without that key as not ready, so the process would not start. The optional names `XAI_MODEL`, `XAI_BASE_URL`, `XAI_TIMEOUT_SECONDS`, `XAI_RETRIES`, `XAI_MAX_INPUT_TOKENS`, `XAI_MAX_OUTPUT_TOKENS`, and `XAI_MAX_TOTAL_TOKENS` also have code defaults, so they are not required for a later activation if those defaults are accepted. This PR does not add or edit any Render key. xAI cannot be turned on while the 42-key name set stays the same, because the key does not exist there. Proposed owner-approved delta, later and not now: add `XAI_API_KEY`, then set the existing `AI_FLOOR_AI_PROVIDER` to `xai`, and accept the fingerprint change on a flat account.
 
+## Resuming the current experiment
+
+The provider mode stays inside `RuntimeConfig.fingerprint`. Preflight does not drop that field, does not rewrite `run_metadata`, and does not turn `experiment_resumable` off as a policy. With no migration row, a different fingerprint still fails exactly as before.
+
+`runtime/provider_transition.py` can append one immutable row only when an operator supplies the from and to payloads, a note, and `open_positions == 0`. The only allowed difference is `ai_provider_mode`, and only among `deterministic`, `openai`, and `xai`. Startup and preflight never write that row. A bad row, a second field, a fingerprint that is not on the recorded chain, or a missing pre-transition fingerprint does not resume. Reversal is a second explicit row back to the previous payload, not an edit of the first. No such row has been written. This is not approval to migrate the running demo.
+
+If that record is never written, the compatible alternative is a new experiment: keep the current database as history, start the next one only when the owner says so, and do not delete the old account. That start is not performed here.
+
 ## Rollback
 
 Set `AI_FLOOR_AI_PROVIDER` back to `openai` (or `deterministic`) and deploy that config. `ai/openai_provider.py` is unchanged. Unset `XAI_API_KEY` if it should not remain available. No order path changes in this PR.

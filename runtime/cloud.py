@@ -226,18 +226,29 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
                     # Activation callers temporarily disable the scheduler for
                     # preflight; durable run metadata describes the active config.
                     freeze = env.get("AI_FLOOR_GIT_COMMIT")
-                    fingerprint = replace(config, scheduler_enabled=True).fingerprint()
+                    active = replace(config, scheduler_enabled=True)
+                    fingerprint = active.fingerprint()
                     metadata = store.db.execute(
                         "SELECT DISTINCT git_commit, config_fingerprint, starting_equity FROM run_metadata"
                     ).fetchall()
-                    checks["experiment_resumable"] = bool(
-                        freeze and store.get_state("experiment_freeze_sha") == freeze
-                        and store.get_state("experiment_started_at_utc")
-                        and store.db.execute("SELECT 1 FROM paper_accounts WHERE account_id=?",
-                                             (config.account_id,)).fetchone()
-                        and all(tuple(row) == (freeze, fingerprint, config.starting_equity)
-                                for row in metadata)
-                    )
+                    freeze_ok = store.get_state("experiment_freeze_sha") == freeze
+                    started = bool(store.get_state("experiment_started_at_utc"))
+                    account_present = bool(store.db.execute(
+                        "SELECT 1 FROM paper_accounts WHERE account_id=?", (config.account_id,)).fetchone())
+                    unchanged = bool(
+                        freeze and freeze_ok and started and account_present
+                        and all(tuple(row) == (freeze, fingerprint, config.starting_equity) for row in metadata))
+                    from runtime.provider_transition import load_transitions, transition_resumes
+                    records = load_transitions(store.db)
+                    if not records:
+                        checks["experiment_resumable"] = unchanged
+                    else:
+                        # A recorded transition does not excuse any other mismatch, and a bad record
+                        # does not fall back to the unchanged path.
+                        checks["experiment_resumable"] = transition_resumes(
+                            metadata, freeze=freeze, freeze_ok=freeze_ok, started=started,
+                            account_present=account_present, current_payload=active.fingerprint_content(),
+                            starting_equity=config.starting_equity, records=records)
             finally:
                 store.close()
         except (OSError, RuntimeError, ValueError, sqlite3.Error):
