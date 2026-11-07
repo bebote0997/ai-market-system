@@ -6,7 +6,7 @@
 - `AI_FLOOR_AI_PROVIDER=xai` construye `XAIProvider` (`POST https://api.x.ai/v1/responses`, modelo `grok-4.7`, `store: false`, sin tools, esquema JSON estricto, tope de tokens, reintentos solo en 429/5xx). Un fallo no llama a OpenAI. El adaptador de OpenAI queda para volver atrás.
 - El modo por defecto no cambia. Sin clave `XAI_API_KEY` el preflight de cloud no queda listo si el modo ya es `xai`. La certificación en vivo es solo `--only xai`.
 - No hay adaptador de X: este repo no lee posts, y un post no sustituye a Twelve Data ni a OANDA.
-- Sin merge, sin deploy, sin cambio de Render ni de órdenes. REAL sigue bloqueado.
+- Sin merge, sin deploy, sin cambio de Render ni de órdenes. REAL sigue bloqueado. `XAI_API_KEY` es un nombre nuevo: no forma parte de las 42 claves actuales, así que xAI no se puede activar sin que el owner apruebe ese alta. La llamada en vivo y el derecho de la cuenta a `grok-4.7` no se probaron.
 
 ## 2026-11-03 — DEC-FX-SL-3: LIMIT EURUSD a 12,5 pips fijos, SL 25 / TP 50 pips fijos (borrador)
 

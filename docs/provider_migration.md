@@ -36,11 +36,25 @@ Checked against the xAI docs on 2026-11-07:
 | `XAI_MAX_OUTPUT_TOKENS` | `800` |
 | `XAI_MAX_TOTAL_TOKENS` | `8000` (a larger reported total fails closed) |
 
-The request sets `store: false`, `reasoning.effort: low`, and a strict JSON schema. It does not send `tools`. Logs keep the kind, HTTP status, and token counts. They do not keep the key, the prompt, or the body. `grok-4.7` can return encrypted reasoning; that content is not copied into the decision or the log.
+The request sets `store: false`, `reasoning.effort` to `low`, and `text.format` `json_schema` with `strict: true`. It does not send `tools`. Logs keep the kind, HTTP status, and token counts. They do not keep the key, the prompt, or the body. A test feeds a body that contains a fake key and checks that the exception text and `last_call` do not. `grok-4.7` can return encrypted reasoning; that content is not copied into the decision or the log.
 
-`python -m runtime.certify_providers --only xai` is the optional live check. The default `all` certification does not call xAI.
+Official pages checked 2026-11-07 (no live call, no account entitlement check):
 
-Selecting `xai` changes `RuntimeConfig.fingerprint` because the provider mode is already part of it. On the current demo database that can fail `experiment_resumable`. Do not flip the mode on the running service until that is an approved deploy, with `XAI_API_KEY` present. Cloud preflight treats a selected xAI mode without that key as not ready, so the process does not start half-configured.
+* Model `grok-4.7`, structured outputs, reasoning efforts `low` / `medium` / `high` / `xhigh`, default `high`: https://docs.x.ai/developers/models/grok-4.7
+* Responses API `reasoning.effort`, including `low`, and that it cannot be turned off: https://docs.x.ai/developers/model-capabilities/text/reasoning
+* Responses example `text.format.type = json_schema` and `strict: true` on `grok-4.7`: https://docs.x.ai/developers/model-capabilities/text/structured-outputs
+* Responses API is the current API; Chat Completions is legacy: https://docs.x.ai/developers/model-capabilities/text/best-practices
+* `store: false` on `POST /v1/responses`: https://docs.x.ai/developers/model-capabilities/text/generate-text
+
+The structured-outputs page also describes `response_format` for the older chat shape. This adapter uses the Responses `text.format` example, not Chat Completions. Whether this account can call `grok-4.7` was not tested. `python -m runtime.certify_providers --only xai` is the optional live check and was not run. The default `all` certification does not call xAI.
+
+## Fail closed, fingerprint, and the 42-key set
+
+A selected xAI call that is missing a key, over budget, timed out, rate-limited past the retry cap, quota-exhausted, incomplete, or off-schema raises and the cycle does not trade. The runtime does not construct `OpenAIProvider` in that mode. Tests cover those paths with a fake transport.
+
+`AI_FLOOR_AI_PROVIDER` is an existing name, and it is already inside `RuntimeConfig.fingerprint`. Changing its value to `xai` changes the fingerprint, so `experiment_resumable` on the current demo database would not match. That is a coordinator-approved value change of an existing key, not something this PR does.
+
+`XAI_API_KEY` is a **new name**. It is not in the current 42-key set (name hash `27efb336cec1008d`). Cloud preflight marks `xai` without that key as not ready, so the process would not start. The optional names `XAI_MODEL`, `XAI_BASE_URL`, `XAI_TIMEOUT_SECONDS`, `XAI_RETRIES`, `XAI_MAX_INPUT_TOKENS`, `XAI_MAX_OUTPUT_TOKENS`, and `XAI_MAX_TOTAL_TOKENS` also have code defaults, so they are not required for a later activation if those defaults are accepted. This PR does not add or edit any Render key. xAI cannot be turned on while the 42-key name set stays the same, because the key does not exist there. Proposed owner-approved delta, later and not now: add `XAI_API_KEY`, then set the existing `AI_FLOOR_AI_PROVIDER` to `xai`, and accept the fingerprint change on a flat account.
 
 ## Rollback
 
