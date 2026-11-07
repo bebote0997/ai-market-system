@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-03 (America/New_York; rama `feat/fx-sl-fixed-25`, DEC-FX-SL-3 aprobada por el owner (sustituye a DEC-FX-SL-2): LIMIT de retroceso EURUSD a 12,5 pips fijos de la señal (sin ATR); SL fijo 25 pips y TP fijo 50 pips (2R) desde la LIMIT/entrada; `limit_through_stop` solo si la LIMIT queda en/tras la invalidación estructural. Sin commit, sin merge, sin deploy; sin cambios de UI, env ni Render. REAL sigue bloqueado. Ver `CHANGELOG_AGENT.md`)._
+_Última actualización: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96`). Soporte preparado para seleccionar xAI Grok (`AI_FLOOR_AI_PROVIDER=xai`) sin cambiar el proveedor por defecto y sin llamada de red. Si se elige xAI, un fallo no vuelve a OpenAI. Sin merge, sin deploy, sin cambio de Render, de estrategia ni de órdenes. REAL sigue bloqueado. Ver `docs/provider_migration.md`._
+
+_Anterior: 2026-11-03 (America/New_York; rama `feat/fx-sl-fixed-25`, DEC-FX-SL-3 aprobada por el owner (sustituye a DEC-FX-SL-2): LIMIT de retroceso EURUSD a 12,5 pips fijos de la señal (sin ATR); SL fijo 25 pips y TP fijo 50 pips (2R) desde la LIMIT/entrada; `limit_through_stop` solo si la LIMIT queda en/tras la invalidación estructural. Sin commit, sin merge, sin deploy; sin cambios de UI, env ni Render. REAL sigue bloqueado. Ver `CHANGELOG_AGENT.md`)._
 
 _Anterior: 2026-11-03 (America/New_York; rama `feat/fx-sl-20-25`, DEC-FX-SL-2 aprobada por el owner: SL FX/EURUSD 20–25 pips, TP 2R (40–50); la LIMIT de retroceso EURUSD mide SL/TP y R desde el precio límite. Sin commit, sin merge, sin deploy; sin cambios de UI, env ni Render. REAL sigue bloqueado. Ver `CHANGELOG_AGENT.md`)._
 

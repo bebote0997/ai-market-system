@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-07 — DEC-XAI-1: proveedor xAI Grok preparado, apagado (sin activar)
+
+- Inventario: la IA de consejo es OpenAI o el eco determinista; los precios son Twelve Data (o Massive); las noticias son Finnhub / híbrido oficial / FXMacroData; las órdenes de práctica son OANDA. No hay cliente de X ni de Exa.
+- `AI_FLOOR_AI_PROVIDER=xai` construye `XAIProvider` (`POST https://api.x.ai/v1/responses`, modelo `grok-4.7`, `store: false`, sin tools, esquema JSON estricto, tope de tokens, reintentos solo en 429/5xx). Un fallo no llama a OpenAI. El adaptador de OpenAI queda para volver atrás.
+- El modo por defecto no cambia. Sin clave `XAI_API_KEY` el preflight de cloud no queda listo si el modo ya es `xai`. La certificación en vivo es solo `--only xai`.
+- No hay adaptador de X: este repo no lee posts, y un post no sustituye a Twelve Data ni a OANDA.
+- Sin merge, sin deploy, sin cambio de Render ni de órdenes. REAL sigue bloqueado.
+
 ## 2026-11-03 — DEC-FX-SL-3: LIMIT EURUSD a 12,5 pips fijos, SL 25 / TP 50 pips fijos (borrador)
 
 - Orden del owner (Jeferson, 3 nov): «Vamos a establecer la mitad fija para todos y de la misma manera que esta, desde la entrada después de pasar el atr se recalcula todo para que quede 25 sl y 50 tp». Sustituye a DEC-FX-SL-2.

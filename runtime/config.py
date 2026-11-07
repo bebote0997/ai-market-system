@@ -6,6 +6,7 @@ import logging
 import os
 import re
 
+from ai.provider_policy import MODES
 from ui.adapters import MARKETS
 
 SUPPORTED_SYMBOLS = MARKETS
@@ -106,7 +107,7 @@ class RuntimeConfig:
             raise ValueError(f"enabled_symbols must not include hard-blocked symbols {BLOCKED_SYMBOLS}")
         if not set(self.sessions) <= {"LONDON", "NEW_YORK"} or self.starting_equity <= 0:
             raise ValueError("invalid sessions or equity")
-        if self.market_provider_mode not in {"none", "massive", "twelve_data"} or self.ai_provider_mode not in {"deterministic", "openai"}:
+        if self.market_provider_mode not in {"none", "massive", "twelve_data"} or self.ai_provider_mode not in MODES:
             raise ValueError("invalid provider mode")
         if self.macro_provider_mode not in {"none", "finnhub", "official_hybrid", "fxmacrodata"}:
             raise ValueError("invalid macro provider mode")

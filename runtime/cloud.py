@@ -185,7 +185,9 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "paper_only": not REAL_EXECUTION_ENABLED,
         "enabled_symbols": tuple(config.enabled_symbols) == ("XAUUSD", "EURUSD"),
         "market_provider": config.market_provider_mode == "twelve_data",
-        "ai_provider": config.ai_provider_mode == "openai" and env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
+        "ai_provider": (
+            (config.ai_provider_mode == "openai" and env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra")
+            or (config.ai_provider_mode == "xai" and env.get("XAI_MODEL", "grok-4.7") == "grok-4.7")),
         "macro_provider_disabled": macro_disabled,
         "macro_provider_valid": macro_disabled or macro_certified,
         "macro_provider_certified": macro_certified,
@@ -194,7 +196,8 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "durable_path": path.is_absolute() and (path == mount or mount in path.parents),
         "durable_mount": bool(disk_mounted),
         "dashboard_auth": password_strong_enough(env.get("AI_FLOOR_DASHBOARD_PASSWORD")),
-        "openai_credential": bool(env.get("OPENAI_API_KEY")),
+        "openai_credential": config.ai_provider_mode != "openai" or bool(env.get("OPENAI_API_KEY")),
+        "xai_credential": config.ai_provider_mode != "xai" or bool(env.get("XAI_API_KEY")),
         "twelve_data_credential": bool(env.get("TWELVE_DATA_API_KEY")),
         "slack_configured": bool(env.get("SLACK_WEBHOOK_URL")),
         "db_writable_schema": False,
@@ -248,11 +251,11 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "paper_only", "enabled_symbols", "market_provider", "ai_provider",
         "macro_provider_valid", "scheduler_single_authority", "scheduler_not_started",
         "durable_path", "durable_mount", "dashboard_auth", "db_writable_schema",
-        "experiment_state_compatible", *catch_up_checks, *sealed_checks,
+        "experiment_state_compatible", "xai_credential", *catch_up_checks, *sealed_checks,
     )
     infra_ready = all(checks[name] for name in infrastructure)
     experiment_ready = infra_ready and all(checks[name] for name in (
-        "macro_provider_certified", "openai_credential", "twelve_data_credential",
+        "macro_provider_certified", "openai_credential", "xai_credential", "twelve_data_credential",
         "slack_configured",
     ))
     return CloudPreflight("INFRA_READY" if infra_ready else "NOT_READY", checks,

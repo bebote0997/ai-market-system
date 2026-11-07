@@ -60,6 +60,39 @@ def _fx_market_state(provider, now):
         return "UNKNOWN"
 
 
+def certify_xai():
+    """Opt-in. Not part of ``certify(..., only='all')``. A missing key is NOT_CONFIGURED, not an OpenAI call."""
+    from ai.xai_provider import XAIProvider, XAIProviderError
+    provider = XAIProvider(timeout=float(os.environ.get("XAI_TIMEOUT_SECONDS", "30")), retries=0)
+    result = {"provider": "xai", "model": provider.model, "base_url": provider.base_url, "status": "NOT_CONFIGURED"}
+    if not provider.api_key:
+        return result
+    now = datetime.now(timezone.utc)
+    request = AIRequest(
+        "1.0", "certification-only", now, "XAUUSD", "structure_ai",
+        "structure_specialist", {}, ({"evidence_id": "cert_evidence", "bias": "UNKNOWN"},),
+        ("interpret_structure",), {"no_execution": True}, "1.0",
+    )
+    try:
+        response = provider.generate(request)
+        valid, reason = validate_ai_response(response, request)
+        usage = provider.last_usage
+        usage_valid = (isinstance(usage, dict) and
+                       isinstance(usage.get("total_tokens"), int) and usage["total_tokens"] > 0)
+        result["response_status"] = response.status
+        result["status"] = ("PASS" if valid and usage_valid and response.status in {"OK", "PARTIAL", "NO_DATA"}
+                            else "FAIL")
+        result["contract"] = reason
+        result["usage"] = usage
+    except XAIProviderError as exc:
+        result["status"] = "FAIL"
+        result["reason"] = exc.kind
+        result["http_status"] = exc.http_status
+        result["error_type"] = exc.error_type
+        result["error_code"] = exc.error_code
+    return result
+
+
 def certify_massive(enabled_symbols):
     provider = MassiveMarketDataProvider(timeout=float(os.environ.get("MASSIVE_TIMEOUT_SECONDS", "15")),
                                          retries=1)
@@ -227,10 +260,13 @@ def certify(env_file=".env.local", only="all"):
                              "supported_symbols": SUPPORTED_SYMBOLS}
     if only in {"all", "openai"}:
         result["openai"] = certify_openai()
+    if only == "xai":
+        result["xai"] = certify_xai()
     if only in {"all", "twelve_data"}:
         result["twelve_data"] = certify_twelve_data(config.enabled_symbols)
     active_names = (("massive",) if only == "massive" else
                     ("openai",) if only == "openai" else
+                    ("xai",) if only == "xai" else
                     ("twelve_data",) if only == "twelve_data" else
                     ("openai", "twelve_data"))
     statuses = {result[name]["status"] for name in active_names}
@@ -243,8 +279,8 @@ def main():
     parser.add_argument("--json", action="store_true", help="machine-readable result")
     parser.add_argument("--env-file", default=".env.local",
                         help="local env file to load without printing secret values")
-    parser.add_argument("--only", choices=("all", "twelve_data", "massive", "openai"), default="all",
-                        help="certify one provider without contacting the other")
+    parser.add_argument("--only", choices=("all", "twelve_data", "massive", "openai", "xai"), default="all",
+                        help="certify one provider without contacting the other; xai is opt-in and not part of all")
     args = parser.parse_args()
     result = certify(args.env_file, args.only)
     if args.json:

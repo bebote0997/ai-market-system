@@ -114,6 +114,10 @@ class OperationalRuntime:
         if ai_provider is None and self.config.ai_provider_mode == "openai":
             from ai.openai_provider import OpenAIProvider
             ai_provider = OpenAIProvider(timeout=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "30")))
+        if ai_provider is None and self.config.ai_provider_mode == "xai":
+            # Exclusive: a failed xAI call is not replaced with OpenAI. Rollback is the openai mode.
+            from ai.provider_policy import build_provider
+            ai_provider = build_provider("xai")
         self.market_provider = market_provider
         self.ai_provider = ai_provider or DeterministicAIProvider()
         if macro_provider is None and self.config.macro_provider_mode == "finnhub":

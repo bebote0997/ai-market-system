@@ -4,6 +4,7 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 
 | ID | Fecha | Estado | Resumen |
 |---|---|---|---|
+| DEC-XAI-1 | 2026-11-07 | **PREPARED** (not activated) | Optional xAI Grok adapter. `AI_FLOOR_AI_PROVIDER=xai`, `XAI_API_KEY`, `XAI_MODEL=grok-4.7`, `XAI_BASE_URL=https://api.x.ai/v1`, `POST /v1/responses`. Default mode unchanged. No fallback to OpenAI after xAI is selected. OpenAI adapter kept for rollback. No X/Twitter client: social posts are not a market source. Detail: `docs/provider_migration.md`. |
 | DEC-006 | 2026-10-02 | APPROVED | Fase 0 CERTIFIED |
 | DEC-007 | 2026-10-02 | APPROVED | Requisitos V2 conservados; inicio Fase 1 pendiente |
 | DEC-008…012 | 2026-10-05 | APPROVED | Cierre Fase 1; sidecar; transferencias; activación SYSTEM HEALTH bloqueada (DEC-011) |
