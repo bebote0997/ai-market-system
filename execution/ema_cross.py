@@ -119,8 +119,39 @@ def levels_from_fill(side, fill):
     return fill, round_fx(stop), round_fx(target)
 
 
+def anchor_plan(side, fill, stop, target, *, bid=None, ask=None):
+    """How to make SL/TP 20/40 from the **actual** fill, not from the quote used at send time.
+
+    Returns ``(action, stop, target, reason)``.
+
+    * ``OK`` — the prices already sit on 20/40 within half a pip. Nothing is sent.
+    * ``REPLACE`` — send those exact prices. ``risk_above_20`` means the current stop is farther than
+      20.5 pips from the fill (or is not protective). A failed replace of that case must close.
+      ``restore_20_40`` means the stop is tighter than 20; a failed replace must keep it (risk stays under the cap).
+    * ``CLOSE`` — the live bid/ask is already through the 20-pip stop measured from the fill. No modify is sent.
+    * ``WAIT`` — the fill is not known. The quote-based stop stays in place and is retried later.
+    """
+    fill_d, stop_d, target_d = _decimal(fill), _decimal(stop), _decimal(target)
+    if side not in ("LONG", "SHORT") or fill_d is None or stop_d is None or target_d is None:
+        return ("WAIT", None, None, "fill_unknown")
+    pip = fx_policy.pip_size(SYMBOL)
+    if side == "LONG":
+        sl_pips, tp_pips = (fill_d - stop_d) / pip, (target_d - fill_d) / pip
+    else:
+        sl_pips, tp_pips = (stop_d - fill_d) / pip, (fill_d - target_d) / pip
+    if not distance_problems(sl_pips, tp_pips):
+        return ("OK", stop_d, target_d, "already_20_40")
+    _fill, new_stop, new_target = levels_from_fill(side, fill_d)
+    bid_d, ask_d = _decimal(bid), _decimal(ask)
+    if (side == "LONG" and bid_d is not None and bid_d <= new_stop) or (
+            side == "SHORT" and ask_d is not None and ask_d >= new_stop):
+        return ("CLOSE", new_stop, new_target, "price_through_stop")
+    reason = "risk_above_20" if sl_pips <= 0 or sl_pips > SL_PIPS + Decimal("0.5") else "restore_20_40"
+    return ("REPLACE", new_stop, new_target, reason)
+
+
 def distance_problems(sl_pips, tp_pips):
-    """Observation-only. Empty when the sent distances are 20 and 40 pips (half-pip slack) and 2R."""
+    """Empty when the distances are 20 and 40 pips (half-pip slack) and 2R."""
     if sl_pips is None or tp_pips is None or sl_pips <= 0:
         return ["distance_invalid"]
     problems = []
@@ -367,5 +398,6 @@ def _arm(at, m15_bars, h1_bars, session_open, terminal_ids):
 
 
 __all__ = ["ENTRY_HOUR_END", "ENTRY_HOUR_START", "FAST", "FLAG", "SL_PIPS", "SLOW", "SLOT", "STRATEGY",
+           "anchor_plan",
            "SYMBOL", "TP_PIPS", "WAIT", "Signal", "Step", "client_id_for", "closes_from_frame", "distance_problems",
            "ema", "ema_flag", "in_entry_window", "levels_from_fill", "news_gate", "round_fx", "signal_id_for", "step"]

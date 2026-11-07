@@ -81,8 +81,8 @@ from execution.broker_demo_state import (CANCELLED, CLOSED, CLOSED_AT_BROKER, DR
                                          MODE_FLAG, OPEN, OUTBOX_FAILED, OUTBOX_SENT, PENDING_LIMIT, PENDING_SEND,
                                          REJECTED, UNKNOWN, UNRESOLVED_STATUSES, DemoStateStore, dry_run_flag,
                                          max_units_setting, routing_flag, summarize_status)
-from execution.ema_cross import (STRATEGY as EMA_STRATEGY, SYMBOL as EMA_SYMBOL, client_id_for, context_news_reason,
-                                distance_problems, ema_flag, levels_from_fill, session_is_open, step as ema_step)
+from execution.ema_cross import (STRATEGY as EMA_STRATEGY, SYMBOL as EMA_SYMBOL, anchor_plan, client_id_for,
+                                context_news_reason, ema_flag, levels_from_fill, session_is_open, step as ema_step)
 from execution.ema_cross_state import EmaSignalStore, signal_from_row
 from execution.eurusd_pullback import (LIMIT_OFFSET_PIPS, STRATEGY, PullbackPlan, gtd_timestamp, limit_expiry,
                                        limit_fill_verdict, management_steps, market_anchor, plan_pullback,
@@ -747,23 +747,72 @@ class BrokerDemoRouter:
             LOG.warning("component=broker_demo event=FILL_CHECK_FAILED error_type=%s", type(exc).__name__)
 
     def _verify_ema_fill(self, client_id, symbol, side, fill, stop, target):
-        """Observation only for an EMA row: 20 pip stop and 40 pip target from the actual fill. Never moves them."""
-        pip = fx_policy.pip_size(symbol)
-        if fill is None or stop is None or target is None:
+        """Move an EMA position onto 20/40 from the actual fill once that fill is known. See ``_reanchor_ema``."""
+        row = self._store.trade(client_id)
+        if row is None or row.get("strategy") != EMA_STRATEGY:
+            return
+        if self._reanchor_ema(row, {}, None) == "WAIT":
             self._event("FILL_CHECK_UNAVAILABLE", client_id, reason="fill_price_unknown", strategy=EMA_STRATEGY)
-            return
-        sl_pips = (fill - stop if side == "LONG" else stop - fill) / pip
-        tp_pips = (target - fill if side == "LONG" else fill - target) / pip
-        problems = distance_problems(sl_pips, tp_pips)
-        detail = {"symbol": symbol, "side": side, "strategy": EMA_STRATEGY,
-                  "sl_pips": _pips(sl_pips.quantize(Decimal("0.1"))),
-                  "tp_pips": _pips(tp_pips.quantize(Decimal("0.1")))}
-        if not problems:
-            self._event("FILL_VERIFIED", client_id, **detail)
-            return
-        LOG.warning("component=broker_demo event=FILL_OUT_OF_POLICY symbol=%s side=%s strategy=%s",
-                    symbol, side, EMA_STRATEGY)
-        self._event("FILL_OUT_OF_POLICY", client_id, reasons=problems, **detail)
+
+    def _reanchor_ema(self, row, quotes, price_provider):
+        """Best-effort replace of SL and TP onto the actual fill. An oversized stop that cannot be replaced is closed.
+
+        The order is never sent naked: the quote-based SL/TP are attached at submission. This runs only after the
+        broker reports a fill price. Exact 20/40 is guaranteed only when that replace is accepted. A tighter stop
+        is kept if the replace fails. A stop farther than 20.5 pips, or a market already through the corrected
+        stop, closes the trade (``EMA_RISK_UNCORRECTED`` / ``EMA_PRICE_THROUGH_STOP``).
+        """
+        if row.get("scale_stage") in ("ANCHORED", "KEPT"):
+            return "KEEP"
+        fill = _dec(row.get("fill_price"))
+        if fill is None:
+            return "WAIT"
+        if row["symbol"] not in quotes:
+            quotes[row["symbol"]] = self._quote(row["symbol"], price_provider)
+        quote, problem = quotes[row["symbol"]]
+        bid = ask = None
+        if problem is None:
+            _tradeable, bid, ask = quote
+        action, stop, target, reason = anchor_plan(row["side"], fill, _dec(row.get("stop")), _dec(row.get("target")),
+                                                   bid=bid, ask=ask)
+        client_id = row["client_id"]
+        if action == "WAIT":
+            return "WAIT"
+        if action == "OK":
+            self._store.update(client_id, scale_stage="ANCHORED", entry=round_price(fill))
+            self._event("FILL_VERIFIED", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(round_price(fill)))
+            return "KEEP"
+        if action == "CLOSE":
+            self._event("EMA_PRICE_THROUGH_STOP", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(fill))
+            return self._close(row, "EMA_PRICE_THROUGH_STOP", f"{client_id}-fill")
+        replaced = self._replace_ema_protection(row, stop, target)
+        if replaced == "ACCEPTED":
+            self._store.update(client_id, stop=round_price(stop), target=round_price(target),
+                               initial_stop=round_price(stop), entry=round_price(fill),
+                               risk_distance=abs(fill - stop), scale_stage="ANCHORED")
+            self._event("EMA_FILL_ANCHORED", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(round_price(fill)),
+                        stop=str(round_price(stop)), target=str(round_price(target)))
+            return "ANCHORED"
+        if reason == "risk_above_20":
+            self._event("EMA_RISK_UNCORRECTED", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
+            return self._close(row, "EMA_RISK_UNCORRECTED", f"{client_id}-fill")
+        self._store.update(client_id, scale_stage="KEPT")
+        self._event("EMA_FILL_KEPT", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
+        return "KEPT"
+
+    def _replace_ema_protection(self, row, stop, target):
+        """``ACCEPTED`` or a short failure reason. Missing method is a failure, not a silent success."""
+        replace = getattr(self._broker, "replace_protection", None)
+        if replace is None:
+            return "replace_unavailable"
+        try:
+            result = replace(row.get("trade_id"), stop, target, client_id=f"{row['client_id']}-anchor")
+        except Exception as exc:  # noqa: BLE001 - outcome unknown: the caller applies the fail policy
+            return type(exc).__name__
+        status = getattr(result, "status", None)
+        if status == "ACCEPTED":
+            return "ACCEPTED"
+        return getattr(result, "reason", None) or status or "replace_failed"
 
     def _sized(self, client_id, run_id, decision, entry, stop, at):
         """``(units, None)`` sized on a fresh NAV read with the daily-loss gate passed, else ``(None, outcome)``."""
@@ -1332,10 +1381,16 @@ class BrokerDemoRouter:
                     sl_pips="20", tp_pips="40")
 
     def _manage_ema(self, row, at, quotes, price_provider):
-        """Friday 16:45 NY / max-hold close only. The stop and target stay the 20/40 prices sent at the fill.
+        """Re-anchor SL/TP to the actual fill, then Friday 16:45 NY / max-hold close only.
 
-        The optional Day-1 breakeven and the pullback partials/trail never run for this strategy.
+        Partials, the pullback trail, and the optional Day-1 breakeven never run for this strategy.
         """
+        anchored = self._reanchor_ema(row, quotes, price_provider)
+        if anchored in ("CLOSED", "EMA_PRICE_THROUGH_STOP", "EMA_RISK_UNCORRECTED"):
+            return anchored
+        row = self._store.trade(row["client_id"]) or row
+        if row.get("status") != OPEN:
+            return anchored if anchored not in ("KEEP", "ANCHORED", "KEPT", "WAIT") else "CLOSED"
         try:
             opened = position_view(row).opened_at
             hold, reason = td.hold_boundary(opened)

@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 from execution.broker_demo_router import BrokerDemoRouter
 from execution.broker_demo_state import OPEN, DemoStateStore
-from execution.ema_cross import (SL_PIPS, STRATEGY, TP_PIPS, client_id_for, ema, ema_flag, in_entry_window,
-                                levels_from_fill, news_gate, signal_id_for, step)
+from execution.ema_cross import (SL_PIPS, STRATEGY, TP_PIPS, anchor_plan, client_id_for, ema, ema_flag,
+                                in_entry_window, levels_from_fill, news_gate, signal_id_for, step)
 from execution.ema_cross_state import EmaSignalStore, signal_from_row
 from execution.eurusd_pullback import STRATEGY as PULLBACK
 from execution import trade_duration as td
@@ -72,6 +72,19 @@ class RuleTests(unittest.TestCase):
         self.assertIsNone(ema(closes[:-1], 10))
         weight = D(2) / D(11)
         self.assertEqual(ema(closes + (D(3),), 10), D(3) * weight + D(1) * (1 - weight))
+
+    def test_slippage_is_measured_from_the_actual_fill(self):
+        # Quote was 1.09000, so the order carried stop 1.08800 / target 1.09400. The fill was 1.09020.
+        action, stop, target, reason = anchor_plan(
+            "LONG", D("1.09020"), D("1.08800"), D("1.09400"), bid=D("1.09010"), ask=D("1.09020"))
+        self.assertEqual((action, reason, stop, target), ("REPLACE", "risk_above_20", D("1.08820"), D("1.09420")))
+        favorable = anchor_plan("LONG", D("1.08980"), D("1.08800"), D("1.09400"), bid=D("1.08970"), ask=D("1.08980"))
+        self.assertEqual(favorable[0], "REPLACE")
+        self.assertEqual(favorable[3], "restore_20_40")
+        self.assertEqual(anchor_plan("LONG", D("1.09000"), D("1.08800"), D("1.09400"))[:2], ("OK", D("1.08800")))
+        through = anchor_plan("LONG", D("1.09020"), D("1.08800"), D("1.09400"), bid=D("1.08820"), ask=D("1.08830"))
+        self.assertEqual(through[0], "CLOSE")
+        self.assertEqual(anchor_plan("LONG", None, D("1.08800"), D("1.09400"))[0], "WAIT")
 
     def test_levels_are_20_and_40_pips_from_the_fill(self):
         self.assertEqual((SL_PIPS, TP_PIPS), (D(20), D(40)))
@@ -303,6 +316,67 @@ class RouterTests(unittest.TestCase):
                                             lambda _symbol: (True, D("1.09000"), D("1.09010"))), "CLOSED")
         self.assertEqual(closed, [reason])
         self.assertEqual(partials, [])
+
+    def _open_ema(self):
+        router = self.router()
+        later = m15_long() + [(READY, m15_long()[-1][1])]
+        router.on_cycle(macro(), "NO_SETUP", CONFIRM, m15_bars=m15_long(), h1_closes=h1_up())
+        router.on_cycle(macro(), "NO_SETUP", READY, m15_bars=later, h1_closes=h1_up())
+        row = self.store.trades((OPEN,))[0]
+        return router, row
+
+    def test_actual_fill_slippage_replaces_stop_and_target(self):
+        router, row = self._open_ema()
+        self.broker.replacements = []
+
+        def replace_protection(trade_id, stop, target, *, client_id):
+            self.broker.replacements.append((trade_id, stop, target, client_id))
+            return SimpleNamespace(status="ACCEPTED", reason=None)
+
+        self.broker.replace_protection = replace_protection
+        # Sent from ask 1.09000. Actual fill 2 pips worse: the attached stop is 22 pips away.
+        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397")
+        self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "ANCHORED")
+        self.assertEqual(self.broker.replacements[0][1:3], (D("1.08820"), D("1.09420")))
+        saved = self.store.trade(row["client_id"])
+        self.assertEqual((saved["stop"], saved["target"], saved["entry"], saved["scale_stage"]),
+                         ("1.08820", "1.09420", "1.09020", "ANCHORED"))
+        self.broker.replacements.clear()
+        self.assertEqual(router._reanchor_ema(saved, {}, None), "KEEP")
+        self.assertEqual(self.broker.replacements, [])
+
+    def test_oversized_stop_is_closed_when_the_replace_fails(self):
+        router, row = self._open_ema()
+        self.broker.replace_protection = lambda *args, **kwargs: SimpleNamespace(status="REJECTED", reason="broker_rejected")
+        closed = []
+        router._close = lambda current, reason, _cid: closed.append(reason) or "CLOSED"
+        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397")
+        self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "CLOSED")
+        self.assertEqual(closed, ["EMA_RISK_UNCORRECTED"])
+
+    def test_a_tighter_stop_is_kept_when_the_replace_fails(self):
+        router, row = self._open_ema()
+        self.broker.replace_protection = lambda *args, **kwargs: SimpleNamespace(status="REJECTED", reason="broker_rejected")
+        closed = []
+        router._close = lambda *args, **kwargs: closed.append(args) or "CLOSED"
+        # Fill 2 pips better than the ask: the attached stop is only 18 pips from the fill.
+        self.store.update(row["client_id"], fill_price="1.08980", trade_id="6397")
+        self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "KEPT")
+        self.assertEqual(closed, [])
+        self.assertEqual(self.store.trade(row["client_id"])["stop"], row["stop"])
+        self.assertEqual(self.store.trade(row["client_id"])["scale_stage"], "KEPT")
+
+    def test_price_already_through_the_fill_stop_closes_without_a_replace(self):
+        router, row = self._open_ema()
+        called = []
+        self.broker.replace_protection = lambda *args, **kwargs: called.append(args)
+        closed = []
+        router._close = lambda current, reason, _cid: closed.append(reason) or "CLOSED"
+        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397")
+        quotes = {"EURUSD": ((True, D("1.08800"), D("1.08810")), None)}
+        self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), quotes, None), "CLOSED")
+        self.assertEqual(called, [])
+        self.assertEqual(closed, ["EMA_PRICE_THROUGH_STOP"])
 
 
 if __name__ == "__main__":
