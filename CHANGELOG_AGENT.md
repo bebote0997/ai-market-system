@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-07 — DEC-EMA-1: EMA 10/21 EURUSD, demo, flag OFF (preparado, sin activar)
+
+- Autorización del owner (Jeferson, 7 nov) para preparar el PR. No merge, no deploy, no cambio de Render, no órdenes.
+- Nuevo camino aditivo en `execution/ema_cross.py` y estado durable `ema_cross_signals` (solo si `AI_FLOOR_EMA_CROSS` es exactamente `1`). El retroceso DEC-FX-SL-3 sigue igual: LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail solo en filas `EURUSD_H1_PULLBACK`.
+- EMA: cruce M15 al cierre (shift 0), filtro de la última H1 cerrada, espera 15 minutos, mercado, SL 20 / TP 40 desde la cotización, sin parciales ni trail. Ventana UTC [12, 15) en el cruce y en la entrada. Noticias de alto impacto, sesión Londres/Nueva York, viernes 16:45 NY y una sola posición compartida se mantienen (más estrictos que la simulación histórica; ver `docs/ema_cross.md`).
+- La cifra «OOS 2024–2026» del candidato es evaluación retrospectiva sobre años ya usados al elegir la variante. No es un holdout intacto ni una promesa de beneficio.
+- Tests: `test_ema_cross.py` (cruce, filtro, espera, slot perdido, cruce opuesto, frontera de sesión, noticias, libro ocupado, reinicio, etiqueta, sin trail ni reversión cruzada).
+
 ## 2026-11-03 — DEC-FX-SL-3: LIMIT EURUSD a 12,5 pips fijos, SL 25 / TP 50 pips fijos (borrador)
 
 - Orden del owner (Jeferson, 3 nov): «Vamos a establecer la mitad fija para todos y de la misma manera que esta, desde la entrada después de pasar el atr se recalcula todo para que quede 25 sl y 50 tp». Sustituye a DEC-FX-SL-2.

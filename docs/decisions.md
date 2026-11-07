@@ -4,6 +4,7 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 
 | ID | Fecha | Estado | Resumen |
 |---|---|---|---|
+| DEC-EMA-1 | 2026-11-07 | **PREPARED** (not activated) | EURUSD EMA 10/21 cross as a second demo strategy. Flag `AI_FLOOR_EMA_CROSS` exact `1` only; default OFF. Market entry 15 minutes after a closed M15 cross, last completed H1 EMA10 vs EMA21 filter, UTC entry window [12, 15), SL 20 / TP 40 from the quote, no partials or trail. DEC-FX-SL-3 pullback (12.5 pip limit, SL 25 / TP 50, partials and trail) is unchanged. Shared one-position gate and 1% NAV sizing. The 2024–2026 figures in the frozen note are a retrospective reused-data evaluation, not an untouched holdout. No profitability claim and no real-money use. Detail: `docs/ema_cross.md`. |
 | DEC-006 | 2026-10-02 | APPROVED | Fase 0 CERTIFIED |
 | DEC-007 | 2026-10-02 | APPROVED | Requisitos V2 conservados; inicio Fase 1 pendiente |
 | DEC-008…012 | 2026-10-05 | APPROVED | Cierre Fase 1; sidecar; transferencias; activación SYSTEM HEALTH bloqueada (DEC-011) |
