@@ -651,6 +651,43 @@ class OandaBroker:
             return CloseResult(UNKNOWN, client_id, reason="trade_state_inconsistent")
         return CloseResult(REJECTED, client_id, reason="no_open_position")
 
+    def replace_protection(self, position_ref, stop, target, *, client_id: str):
+        """Put SL and TP on one open trade. Does not apply the pullback ``would_widen_stop`` rule.
+
+        Returns ``ACCEPTED`` only when both replacement transactions carry the requested prices. Anything else is
+        ``REJECTED`` or ``UNKNOWN`` and the caller decides. A close-only broker refuses.
+        """
+        if self.close_only:
+            raise BrokerGuardError("close-only broker: modify refused")
+        if (not isinstance(stop, Decimal) or not isinstance(target, Decimal) or not stop.is_finite()
+                or not target.is_finite() or stop <= 0 or target <= 0 or stop == target):
+            return ModifyResult(REJECTED, client_id, reason="invalid_protection")
+        if not isinstance(position_ref, str) or not _TRADE_ID_RE.match(position_ref):
+            return ModifyResult(REJECTED, client_id, reason="invalid_position_ref")
+        stop, target = round_price(stop), round_price(target)
+        with self._lock:
+            self._ensure_open_allowed()
+            try:
+                with self._guarded_sends():
+                    payload = self._client.replace_stop_and_target(position_ref, stop, target)
+            except BrokerRejected as error:
+                return ModifyResult(REJECTED, client_id, reason=reason_code(error.code, f"broker_rejected:{error.status}"))
+            except BrokerUnavailable as error:
+                return ModifyResult(UNKNOWN, client_id, reason=type(error).__name__)
+            except BrokerError as error:
+                return ModifyResult(REJECTED, client_id, reason=f"replace_failed:{type(error).__name__}")
+        if not isinstance(payload, dict):
+            return ModifyResult(UNKNOWN, client_id, reason="no_acceptance_evidence")
+        stop_tx = payload.get("stopLossOrderTransaction")
+        target_tx = payload.get("takeProfitOrderTransaction")
+        if (isinstance(stop_tx, dict) and isinstance(target_tx, dict)
+                and stop_tx.get("type") == "STOP_LOSS" and target_tx.get("type") == "TAKE_PROFIT"
+                and _dec(stop_tx.get("price")) == stop and _dec(target_tx.get("price")) == target):
+            return ModifyResult(ACCEPTED, client_id, broker_ref=_transaction_id(stop_tx))
+        if "stopLossOrderRejectTransaction" in payload or "takeProfitOrderRejectTransaction" in payload:
+            return ModifyResult(REJECTED, client_id, reason="protection_rejected")
+        return ModifyResult(UNKNOWN, client_id, reason="no_acceptance_evidence")
+
     def modify_stop(self, position_ref, new_stop: Decimal, *, client_id: str) -> ModifyResult:
         if self.close_only:
             raise BrokerGuardError("close-only broker: modify refused")

@@ -7,6 +7,17 @@
 - El modo por defecto no cambia. Sin clave `XAI_API_KEY` el preflight de cloud no queda listo si el modo ya es `xai`. La certificación en vivo es solo `--only xai`.
 - No hay adaptador de X: este repo no lee posts, y un post no sustituye a Twelve Data ni a OANDA.
 - Sin merge, sin deploy, sin cambio de Render ni de órdenes. REAL sigue bloqueado. `XAI_API_KEY` es un nombre nuevo: no forma parte de las 42 claves actuales, así que xAI no se puede activar sin que el owner apruebe ese alta. La llamada en vivo y el derecho de la cuenta a `grok-4.7` no se probaron.
+- Esta rama está apilada sobre `cursor/ema-cross-demo-9b96` (PR #73). No está mergeada.
+- Transición de proveedor: `runtime/provider_transition.py` no la aplica al arrancar. Sin fila, el fingerprint distinto sigue bloqueado. Una fila solo se añade a mano, con cuenta plana y un único campo `ai_provider_mode`. No reescribe el historial. Ninguna fila se escribió. No es una migración aprobada.
+
+## 2026-11-07 — DEC-EMA-1: EMA 10/21 EURUSD, demo, flag OFF (preparado, sin activar)
+
+- Autorización del owner (Jeferson, 7 nov) para preparar el PR. No merge, no deploy, no cambio de Render, no órdenes.
+- Nuevo camino aditivo en `execution/ema_cross.py` y estado durable `ema_cross_signals` (solo si `AI_FLOOR_EMA_CROSS` es exactamente `1`). El retroceso DEC-FX-SL-3 sigue igual: LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail solo en filas `EURUSD_H1_PULLBACK`.
+- EMA: cruce M15 al cierre (shift 0), filtro de la última H1 cerrada, espera 15 minutos, mercado, sin parciales ni trail. El SL/TP salen con la cotización para que el fill no quede desnudo; cuando llega el fill real se reemplazan a 20/40 desde ese fill. Si el stop queda a más de 20,5 pips y el reemplazo falla, o si el precio ya cruzó ese stop, se cierra (`EMA_RISK_UNCORRECTED` / `EMA_PRICE_THROUGH_STOP`). Un stop más ajustado se conserva si el reemplazo falla. Ventana UTC [12, 15). Noticias, sesión y viernes 16:45 NY se mantienen (ver `docs/ema_cross.md`). `AI_FLOOR_EMA_CROSS` es un nombre nuevo: no se activa mientras el conjunto de 42 claves de Render no cambie.
+- La cifra «OOS 2024–2026» del candidato es evaluación retrospectiva sobre años ya usados al elegir la variante. No es un holdout intacto ni una promesa de beneficio.
+- Tests: `test_ema_cross.py` (cruce, filtro, espera, slot perdido, cruce opuesto, frontera de sesión, noticias, libro ocupado, reinicio, etiqueta, sin trail ni reversión cruzada).
+- `test_phase8_p4b`: el freeze de Fase 6 sigue admitiendo solo los mismos archivos. El diff debe nombrar DEC-FX-SL-1, DEC-FX-SL-2 o DEC-FX-SL-3 (la cadena que sustituye el texto viejo). El contrato vivo queda afirmado: SL 25, TP 50, límite 12,5.
 
 ## 2026-11-03 — DEC-FX-SL-3: LIMIT EURUSD a 12,5 pips fijos, SL 25 / TP 50 pips fijos (borrador)
 

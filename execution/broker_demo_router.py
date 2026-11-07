@@ -81,6 +81,9 @@ from execution.broker_demo_state import (CANCELLED, CLOSED, CLOSED_AT_BROKER, DR
                                          MODE_FLAG, OPEN, OUTBOX_FAILED, OUTBOX_SENT, PENDING_LIMIT, PENDING_SEND,
                                          REJECTED, UNKNOWN, UNRESOLVED_STATUSES, DemoStateStore, dry_run_flag,
                                          max_units_setting, routing_flag, summarize_status)
+from execution.ema_cross import (STRATEGY as EMA_STRATEGY, SYMBOL as EMA_SYMBOL, anchor_plan, client_id_for,
+                                context_news_reason, ema_flag, levels_from_fill, session_is_open, step as ema_step)
+from execution.ema_cross_state import EmaSignalStore, signal_from_row
 from execution.eurusd_pullback import (LIMIT_OFFSET_PIPS, STRATEGY, PullbackPlan, gtd_timestamp, limit_expiry,
                                        limit_fill_verdict, management_steps, market_anchor, plan_pullback,
                                        pullback_flag)
@@ -350,7 +353,8 @@ def _not_routed(reason):
 
 class BrokerDemoRouter:
     def __init__(self, broker, store, *, registry, dry_run, max_units, clock=None, loss_limit=None,
-                 friday_minutes=None, closing_only=False, on_alert=None, env=None, reversal=True, pullback=False):
+                 friday_minutes=None, closing_only=False, on_alert=None, env=None, reversal=True, pullback=False,
+                 ema_cross=False):
         self._broker = broker
         self._env = env  # demo_start_equity source (None: os.environ)
         self.closing_only = bool(closing_only)  # emergency restart: closes routed trades, never opens
@@ -361,6 +365,13 @@ class BrokerDemoRouter:
         # EURUSD H1 limit pullback. Default False on a hand-built router; ``router_from_env`` turns it ON unless
         # ``AI_FLOOR_EURUSD_LIMIT_PULLBACK`` is exactly ``0``. Only rows tagged ``STRATEGY`` are scaled out.
         self.pullback = bool(pullback)
+        # EURUSD EMA 10/21 cross. OFF unless constructed with the flag. The table is not created while OFF.
+        # Rows tagged ``EMA_STRATEGY`` are never scaled or trailed by the pullback manager.
+        self.ema_cross = bool(ema_cross)
+        self._ema_store = None
+        if self.ema_cross:
+            self._ema_store = EmaSignalStore(store.path)
+            self._ema_store.initialize()
         self._flatten_ticks = 0
         self._manual_ticks = 0
         self.on_alert = on_alert  # optional callable(kind, detail dict | message str); see ALERT_KINDS
@@ -460,10 +471,12 @@ class BrokerDemoRouter:
             return False
 
     # -- routing ---------------------------------------------------------------------------------------------------
-    def on_cycle(self, context, status, at, h1_bars=None):
+    def on_cycle(self, context, status, at, h1_bars=None, m15_bars=None, h1_closes=None):
         """Called post-cycle by the runtime. Returns ``(outcome, reason)``; never changes the paper cycle.
 
-        ``h1_bars`` is the cycle's closed H1 frame (or triples). It is not part of the recorded cycle context.
+        ``h1_bars`` is the cycle's closed H1 frame (or triples) for the pullback limit. It is not part of the
+        recorded cycle context. ``m15_bars`` / ``h1_closes`` are close series for the EMA cross and are ignored
+        unless that flag is on.
         """
         with self._lock:
             self._heartbeat()
@@ -476,7 +489,13 @@ class BrokerDemoRouter:
                 flattened = {**flattened, **self._friday_tick(at)}
             if not self.dry_run and self._store.trades((OPEN, PENDING_LIMIT)):
                 reconciled = self._manage_locked(at, skip=flattened, report=reconciled)
-            return self._route(context, status, at, reconciled, h1_bars)
+            routed = self._route(context, status, at, reconciled, h1_bars)
+            if self.ema_cross:
+                try:
+                    self._evaluate_ema(context, at, m15_bars, h1_closes)
+                except Exception as exc:  # noqa: BLE001 - the pullback result is already decided
+                    LOG.warning("component=broker_demo event=EMA_EVAL_FAILED error_type=%s", type(exc).__name__)
+            return routed
 
     def _candidate(self, context, status):
         """(plan, decision, symbol, run_id) or a NOT_ROUTED tuple. No network."""
@@ -699,6 +718,9 @@ class BrokerDemoRouter:
             row = self._store.trade(client_id) or {}
             fill = _dec(row.get("fill_price"))
             stop, target = _dec(stop), _dec(target)
+            if row.get("strategy") == EMA_STRATEGY:
+                self._verify_ema_fill(client_id, symbol, side, fill, stop, target)
+                return
             if fill is None or stop is None or target is None:
                 self._event("FILL_CHECK_UNAVAILABLE", client_id, reason="fill_price_unknown")
                 return
@@ -723,6 +745,74 @@ class BrokerDemoRouter:
             self._event("FILL_OUT_OF_POLICY", client_id, reasons=problems, **detail)
         except Exception as exc:  # noqa: BLE001 - verification is observation only
             LOG.warning("component=broker_demo event=FILL_CHECK_FAILED error_type=%s", type(exc).__name__)
+
+    def _verify_ema_fill(self, client_id, symbol, side, fill, stop, target):
+        """Move an EMA position onto 20/40 from the actual fill once that fill is known. See ``_reanchor_ema``."""
+        row = self._store.trade(client_id)
+        if row is None or row.get("strategy") != EMA_STRATEGY:
+            return
+        if self._reanchor_ema(row, {}, None) == "WAIT":
+            self._event("FILL_CHECK_UNAVAILABLE", client_id, reason="fill_price_unknown", strategy=EMA_STRATEGY)
+
+    def _reanchor_ema(self, row, quotes, price_provider):
+        """Best-effort replace of SL and TP onto the actual fill. An oversized stop that cannot be replaced is closed.
+
+        The order is never sent naked: the quote-based SL/TP are attached at submission. This runs only after the
+        broker reports a fill price. Exact 20/40 is guaranteed only when that replace is accepted. A tighter stop
+        is kept if the replace fails. A stop farther than 20.5 pips, or a market already through the corrected
+        stop, closes the trade (``EMA_RISK_UNCORRECTED`` / ``EMA_PRICE_THROUGH_STOP``).
+        """
+        if row.get("scale_stage") in ("ANCHORED", "KEPT"):
+            return "KEEP"
+        fill = _dec(row.get("fill_price"))
+        if fill is None:
+            return "WAIT"
+        if row["symbol"] not in quotes:
+            quotes[row["symbol"]] = self._quote(row["symbol"], price_provider)
+        quote, problem = quotes[row["symbol"]]
+        bid = ask = None
+        if problem is None:
+            _tradeable, bid, ask = quote
+        action, stop, target, reason = anchor_plan(row["side"], fill, _dec(row.get("stop")), _dec(row.get("target")),
+                                                   bid=bid, ask=ask)
+        client_id = row["client_id"]
+        if action == "WAIT":
+            return "WAIT"
+        if action == "OK":
+            self._store.update(client_id, scale_stage="ANCHORED", entry=round_price(fill))
+            self._event("FILL_VERIFIED", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(round_price(fill)))
+            return "KEEP"
+        if action == "CLOSE":
+            self._event("EMA_PRICE_THROUGH_STOP", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(fill))
+            return self._close(row, "EMA_PRICE_THROUGH_STOP", f"{client_id}-fill")
+        replaced = self._replace_ema_protection(row, stop, target)
+        if replaced == "ACCEPTED":
+            self._store.update(client_id, stop=round_price(stop), target=round_price(target),
+                               initial_stop=round_price(stop), entry=round_price(fill),
+                               risk_distance=abs(fill - stop), scale_stage="ANCHORED")
+            self._event("EMA_FILL_ANCHORED", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(round_price(fill)),
+                        stop=str(round_price(stop)), target=str(round_price(target)))
+            return "ANCHORED"
+        if reason == "risk_above_20":
+            self._event("EMA_RISK_UNCORRECTED", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
+            return self._close(row, "EMA_RISK_UNCORRECTED", f"{client_id}-fill")
+        self._store.update(client_id, scale_stage="KEPT")
+        self._event("EMA_FILL_KEPT", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
+        return "KEPT"
+
+    def _replace_ema_protection(self, row, stop, target):
+        """``ACCEPTED`` or a short failure reason. Missing method is a failure, not a silent success."""
+        replace = getattr(self._broker, "replace_protection", None)
+        if replace is None:
+            return "replace_unavailable"
+        try:
+            result = replace(row.get("trade_id"), stop, target, client_id=f"{row['client_id']}-anchor")
+        except Exception as exc:  # noqa: BLE001 - outcome unknown: the caller applies the fail policy
+            return type(exc).__name__
+        status = getattr(result, "status", None)
+        if status == "ACCEPTED":
+            return "ACCEPTED"
+        return getattr(result, "reason", None) or status or "replace_failed"
 
     def _sized(self, client_id, run_id, decision, entry, stop, at):
         """``(units, None)`` sized on a fresh NAV read with the daily-loss gate passed, else ``(None, outcome)``."""
@@ -753,6 +843,9 @@ class BrokerDemoRouter:
         if not self.reversal or len(live) != 1:
             return None, "position_already_open"
         row = live[0]
+        if row.get("strategy") == EMA_STRATEGY:
+            # An EMA position is not a pullback trade. Reversal must not close it or move its stop.
+            return None, "position_already_open"
         broker = [t for t in report if t.instrument == INSTRUMENTS[symbol]]
         if (row["status"] != OPEN or row["symbol"] != symbol or row.get("action_status") or row["side"] == decision.side
                 or len(broker) != 1 or len(report) != 1 or str(broker[0].trade_id) != str(row.get("trade_id"))):
@@ -1169,6 +1262,8 @@ class BrokerDemoRouter:
     def _manage_row(self, row, at, quotes, price_provider):
         if row.get("strategy") == STRATEGY:
             return self._manage_pullback(row, at, quotes, price_provider)
+        if row.get("strategy") == EMA_STRATEGY:
+            return self._manage_ema(row, at, quotes, price_provider)
         try:
             due = at >= td.next_boundary(position_view(row))
         except ValueError:
@@ -1193,6 +1288,122 @@ class BrokerDemoRouter:
         if kind == "CLOSE":
             return self._close(row, reason, f"{row['client_id']}-close")
         return self._breakeven(row)
+
+    def _evaluate_ema(self, context, at, m15_bars, h1_closes):
+        """EMA 10/21 cross. Runs only when the flag is on, after the pullback route, and never changes that result.
+
+        A missing quote, a failed broker read, news, a session block, or an open position does not send. The delayed
+        signal row is the idempotency key across restarts.
+        """
+        if self.closing_only or self._ema_store is None:
+            return
+        symbol = context.get("symbol") if isinstance(context, dict) else None
+        if symbol != EMA_SYMBOL:
+            return
+        report = self.reconcile()
+        read_failed = report is None
+        occupied = False if read_failed else bool(
+            self._store.trades(LIVE_STATUSES)
+            or any(getattr(trade, "instrument", None) == INSTRUMENTS[EMA_SYMBOL] for trade in report))
+        pending = signal_from_row(self._ema_store.pending(EMA_SYMBOL))
+        decision = ema_step(
+            pending, at=at, m15=m15_bars, h1=h1_closes,
+            news_reason=None if read_failed else context_news_reason(context),
+            session_open=session_is_open(at, context), flat=not occupied,
+            terminal_ids=self._ema_store.terminal_ids(EMA_SYMBOL))
+        if read_failed and decision.action == "ENTER":
+            decision = type(decision)("HOLD", "broker_read_failed", decision.signal)
+        signal = decision.signal
+        if decision.action in ("ARM", "CANCEL", "EXPIRE") and signal is not None:
+            self._ema_store.save(signal, now=at)
+            self._event("EMA_" + decision.action, signal.client_id, reason=decision.reason, side=signal.side,
+                        strategy=EMA_STRATEGY)
+            return
+        if decision.action != "ENTER" or signal is None:
+            if decision.reason in {"high_impact_active_window", "macro_error", "macro_unavailable", "macro_lineage",
+                                   "position_open", "broker_read_failed", "no_data"}:
+                client_id = None if signal is None else signal.client_id
+                self._event("EMA_HOLD", client_id, reason=decision.reason, strategy=EMA_STRATEGY)
+            return
+        self._enter_ema(signal, at)
+
+    def _enter_ema(self, signal, at):
+        """Market order for one armed signal. The client id is stable, so a restart cannot send it twice."""
+        from types import SimpleNamespace
+        client_id = signal.client_id or client_id_for(signal.signal_id)
+        if self._store.trade(client_id) is not None:
+            self._ema_store.save(replace(signal, status="SUBMITTED", reason="already_routed", client_id=client_id),
+                                 now=at)
+            return
+        if self._friday_minutes is not None and fc.friday_window(at, self._friday_minutes) != fc.OPEN:
+            self._event("EMA_HOLD", client_id, reason="friday_close_window", strategy=EMA_STRATEGY)
+            return
+        if td.entries_blocked(at) or self.blocked_reason or self._store.trades(UNRESOLVED_STATUSES):
+            reason = "friday_close_window" if td.entries_blocked(at) else (
+                f"blocked:{self.blocked_reason}" if self.blocked_reason else "unresolved_submission")
+            self._event("EMA_HOLD", client_id, reason=reason, strategy=EMA_STRATEGY)
+            return
+        if self._store.trades(LIVE_STATUSES):
+            self._event("EMA_HOLD", client_id, reason="position_open", strategy=EMA_STRATEGY)
+            return
+        if not self.dry_run and not self._open_allowed():
+            self._event("EMA_HOLD", client_id, reason="broker_demo_not_allowed", strategy=EMA_STRATEGY)
+            return
+        quote, problem = self._quote(EMA_SYMBOL, None)
+        if problem is not None:
+            self._event("EMA_HOLD", client_id, reason=problem, strategy=EMA_STRATEGY)
+            return
+        _tradeable, bid, ask = quote
+        fill, stop, target = levels_from_fill(signal.side, ask if signal.side == "LONG" else bid)
+        sized = SimpleNamespace(status=APPROVED, symbol=EMA_SYMBOL, side=signal.side, risk_fraction=RISK_FRACTION_CAP,
+                                quantity=Decimal(1), entry=fill, stop=stop, target=target)
+        units, refused = self._sized(client_id, signal.signal_id, sized, fill, stop, at)
+        if refused is not None:
+            self._event("EMA_HOLD", client_id, reason=refused[1] if refused[0] == "NOT_ROUTED" else refused[0],
+                        strategy=EMA_STRATEGY)
+            return
+        try:
+            order_plan = OrderPlan(EMA_SYMBOL, signal.side, Decimal(units), fill, stop, target, client_id=client_id,
+                                   source_run_id=signal.signal_id)
+            approval = RiskApproval(APPROVED, signal.signal_id, EMA_SYMBOL, signal.side, Decimal(units), fill, stop,
+                                    target)
+        except (TypeError, ValueError, ArithmeticError):
+            self._event("EMA_HOLD", client_id, reason="approval_invalid", strategy=EMA_STRATEGY)
+            return
+        row = {"client_id": client_id, "run_id": signal.signal_id, "symbol": EMA_SYMBOL, "side": signal.side,
+               "units": units, "entry": round_price(fill), "stop": round_price(stop), "target": round_price(target),
+               "initial_stop": round_price(stop), "order_kind": "MARKET", "strategy": EMA_STRATEGY,
+               "scale_stage": "NONE", "units_remaining": units, "risk_distance": abs(fill - stop)}
+        outcome = self._dry_run(order_plan, units, row) if self.dry_run else self._send(order_plan, approval, row, at)
+        status = "REJECTED" if outcome[0] == REJECTED else "SUBMITTED"
+        self._ema_store.save(replace(signal, status=status, reason=outcome[0], client_id=client_id), now=at)
+        self._event("EMA_ENTRY", client_id, outcome=outcome[0], side=signal.side, strategy=EMA_STRATEGY,
+                    sl_pips="20", tp_pips="40")
+
+    def _manage_ema(self, row, at, quotes, price_provider):
+        """Re-anchor SL/TP to the actual fill, then Friday 16:45 NY / max-hold close only.
+
+        Partials, the pullback trail, and the optional Day-1 breakeven never run for this strategy.
+        """
+        anchored = self._reanchor_ema(row, quotes, price_provider)
+        if anchored in ("CLOSED", "EMA_PRICE_THROUGH_STOP", "EMA_RISK_UNCORRECTED"):
+            return anchored
+        row = self._store.trade(row["client_id"]) or row
+        if row.get("status") != OPEN:
+            return anchored if anchored not in ("KEEP", "ANCHORED", "KEPT", "WAIT") else "CLOSED"
+        try:
+            opened = position_view(row).opened_at
+            hold, reason = td.hold_boundary(opened)
+        except ValueError:
+            return "NO_OPEN_TIME"
+        if at < hold:
+            return "KEEP"
+        if row["symbol"] not in quotes:
+            quotes[row["symbol"]] = self._quote(row["symbol"], price_provider)
+        quote, problem = quotes[row["symbol"]]
+        if problem is not None:
+            return "MARKET_CLOSED" if problem == "not_tradeable" else "NO_PRICE"
+        return self._close(row, reason, f"{row['client_id']}-close")
 
     def _manage_pullback(self, row, at, quotes, price_provider):
         """Scale-out for a trade opened by this strategy. The week flatten still closes the whole trade.
@@ -1758,7 +1969,8 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     router = BrokerDemoRouter(broker, store, registry=registry, dry_run=dry_run_flag(env),
                               max_units=max_units_setting(env), clock=now, loss_limit=loss_limit,
                               friday_minutes=fc.minutes_from_env(env), closing_only=closing_only, env=env,
-                              reversal=reversal_flag(env), pullback=pullback_flag(env))
+                              reversal=reversal_flag(env), pullback=pullback_flag(env),
+                              ema_cross=ema_flag(env))
     router._heartbeat()
     if closing_only:
         LOG.warning("component=broker_demo event=ROUTER_CLOSING_ONLY reason=emergency_stop")
@@ -1769,4 +1981,5 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
         LOG.info("component=broker_demo event=FRIDAY_PREFLATTEN_ON minutes=%d", router._friday_minutes)
     LOG.info("component=broker_demo event=REVERSAL_%s", "ON" if router.reversal else "OFF")
     LOG.info("component=broker_demo event=EURUSD_PULLBACK_%s", "ON" if router.pullback else "OFF")
+    LOG.info("component=broker_demo event=EURUSD_EMA_CROSS_%s", "ON" if router.ema_cross else "OFF")
     return router

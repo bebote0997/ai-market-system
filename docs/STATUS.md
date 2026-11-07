@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96`). Soporte preparado para seleccionar xAI Grok (`AI_FLOOR_AI_PROVIDER=xai`) sin cambiar el proveedor por defecto y sin llamada de red. Si se elige xAI, un fallo no vuelve a OpenAI. Sin merge, sin deploy, sin cambio de Render, de estrategia ni de órdenes. REAL sigue bloqueado. Ver `docs/provider_migration.md`._
+_Última actualización: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96` apilada sobre `cursor/ema-cross-demo-9b96`). xAI preparado y apagado; EMA 10/21 preparado y apagado. Ninguno está mergeado ni desplegado. REAL sigue bloqueado. Ver `docs/provider_migration.md` y `docs/ema_cross.md`._
+
+_Anterior en esta pila: 2026-11-07 (DEC-EMA-1). Estrategia EMA 10/21 EURUSD, flag `AI_FLOOR_EMA_CROSS` apagado. DEC-FX-SL-3 (LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail) no cambia._
 
 _Anterior: 2026-11-03 (America/New_York; rama `feat/fx-sl-fixed-25`, DEC-FX-SL-3 aprobada por el owner (sustituye a DEC-FX-SL-2): LIMIT de retroceso EURUSD a 12,5 pips fijos de la señal (sin ATR); SL fijo 25 pips y TP fijo 50 pips (2R) desde la LIMIT/entrada; `limit_through_stop` solo si la LIMIT queda en/tras la invalidación estructural. Sin commit, sin merge, sin deploy; sin cambios de UI, env ni Render. REAL sigue bloqueado. Ver `CHANGELOG_AGENT.md`)._
 

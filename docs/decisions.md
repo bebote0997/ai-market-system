@@ -4,7 +4,8 @@ Registro resumido. Fuente: Libro Maestro v1.9 (histórico) y documentos de fase 
 
 | ID | Fecha | Estado | Resumen |
 |---|---|---|---|
-| DEC-XAI-1 | 2026-11-07 | **PREPARED** (not activated) | Optional xAI Grok adapter. `AI_FLOOR_AI_PROVIDER=xai`, `XAI_API_KEY`, `XAI_MODEL=grok-4.7`, `XAI_BASE_URL=https://api.x.ai/v1`, `POST /v1/responses`. Default mode unchanged. No fallback to OpenAI after xAI is selected. OpenAI adapter kept for rollback. No X/Twitter client: social posts are not a market source. Detail: `docs/provider_migration.md`. |
+| DEC-XAI-1 | 2026-11-07 | **PREPARED** (not activated) | Optional xAI Grok adapter. `AI_FLOOR_AI_PROVIDER=xai`, `XAI_API_KEY`, `XAI_MODEL=grok-4.7`, `XAI_BASE_URL=https://api.x.ai/v1`, `POST /v1/responses`. Default mode unchanged. No fallback to OpenAI after xAI is selected. OpenAI adapter kept for rollback. No X/Twitter client: social posts are not a market source. A provider change is not resumed unless an explicit single-field migration record says so. Detail: `docs/provider_migration.md`. |
+| DEC-EMA-1 | 2026-11-07 | **PREPARED** (not activated) | EURUSD EMA 10/21 cross as a second demo strategy. Flag `AI_FLOOR_EMA_CROSS` exact `1` only; default OFF. Market entry 15 minutes after a closed M15 cross, last completed H1 EMA10 vs EMA21 filter, UTC entry window [12, 15), SL 20 / TP 40 from the actual fill, no partials or trail. DEC-FX-SL-3 pullback (12.5 pip limit, SL 25 / TP 50, partials and trail) is unchanged. Shared one-position gate and 1% NAV sizing. The 2024–2026 figures in the frozen note are a retrospective reused-data evaluation, not an untouched holdout. No profitability claim and no real-money use. Detail: `docs/ema_cross.md`. |
 | DEC-006 | 2026-10-02 | APPROVED | Fase 0 CERTIFIED |
 | DEC-007 | 2026-10-02 | APPROVED | Requisitos V2 conservados; inicio Fase 1 pendiente |
 | DEC-008…012 | 2026-10-05 | APPROVED | Cierre Fase 1; sidecar; transferencias; activación SYSTEM HEALTH bloqueada (DEC-011) |

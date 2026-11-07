@@ -4,7 +4,9 @@
 
 Demo iniciado con GO del owner sobre la DB actual (sin DB nueva ni sealed genesis); ver DEC-13.1 y el runbook.
 
-2026-11-07, DEC-XAI-1, solo preparado: se puede seleccionar xAI más adelante con `AI_FLOOR_AI_PROVIDER=xai` y una clave. El proveedor en marcha no cambia. Ver `docs/provider_migration.md`.
+2026-11-07, DEC-EMA-1, solo preparado: el cruce EMA 10/21 puede añadirse al demo con `AI_FLOOR_EMA_CROSS=1` y no está activado. El demo en curso y DEC-FX-SL-3 no cambian. Ver `docs/ema_cross.md`.
+
+2026-11-07, DEC-XAI-1, solo preparado y apilado encima: xAI no cambia el proveedor en marcha. Ver `docs/provider_migration.md`.
 
 PR #39, gold options 1 y 4 autorizadas por el owner (2026-10-13): fix de continuidad macro en refrescos
 de 6 h, sin backdating de fetched_at/known_at; auditoría SQLite por ciclo, acotada a 30 días / 10 000 filas,
