@@ -1644,6 +1644,15 @@ class BrokerDemoRouter:
             LOG.error("component=broker_demo event=FLATTEN_REQUEST_ERROR error_type=%s", type(exc).__name__)
             return {}, None
 
+    def consume_provider_transition(self, store, config, env, at):
+        """Apply one queued provider step using this router's state file. Does not send an order. Never raises."""
+        try:
+            from execution.operator_actions import consume_provider_transition
+            return consume_provider_transition(store, config, env=env, broker_db_path=self._store.path, now=at)
+        except Exception as exc:  # noqa: BLE001 - a bad mailbox is retried on the next poll
+            LOG.warning("component=broker_demo event=PROVIDER_TRANSITION_FAILED error_type=%s", type(exc).__name__)
+            return None
+
     def process_operator_requests(self, at):
         """Between-cycle poll of the dashboard requests (runner loop, every few seconds): ONE flag read and nothing else
         while neither ``flatten_request`` nor ``manual_close_request`` is stored; otherwise exactly the request part of

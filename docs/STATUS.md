@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96` apilada sobre `cursor/ema-cross-demo-9b96`). xAI preparado y apagado; EMA 10/21 preparado y apagado. Ninguno está mergeado ni desplegado. REAL sigue bloqueado. Ver `docs/provider_migration.md` y `docs/ema_cross.md`._
+_Última actualización: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96` apilada sobre `cursor/ema-cross-demo-9b96`). xAI preparado y apagado; el cambio de proveedor solo lo anota el runner después de una confirmación del owner en el panel, con la cuenta plana, y no al arrancar. EMA 10/21 preparado y apagado. Ninguno está mergeado ni desplegado. REAL sigue bloqueado. Ver `docs/provider_migration.md` y `docs/ema_cross.md`._
 
 _Anterior en esta pila: 2026-11-07 (DEC-EMA-1). Estrategia EMA 10/21 EURUSD, flag `AI_FLOOR_EMA_CROSS` apagado. DEC-FX-SL-3 (LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail) no cambia._
 

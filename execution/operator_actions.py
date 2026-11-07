@@ -29,6 +29,8 @@ FLATTEN_REQUEST_FLAG = "flatten_request"
 DRIFT_CLEAR_REQUEST_FLAG = "drift_clear_request"
 DRIFT_EPISODE_FLAG = "drift_episode"
 MANUAL_CLOSE_REQUEST_FLAG = "manual_close_request"  # same key as execution/broker_demo_router.py
+PROVIDER_TRANSITION_FLAG = "provider_transition_request"  # same key as runtime/provider_transition.py
+PROVIDER_DESTINATIONS = frozenset({"openai", "xai"})
 MANUAL_CLOSE = "MANUAL_CLOSE"
 DEMO_SYMBOL = "EURUSD"
 BLOCKED_FLAG = "blocked_reason"
@@ -215,6 +217,159 @@ def request_manual_close(actor, reason, *, client_id, request_id, path=None, env
         return {"ok": False, "reason": "write_failed"}
     if isinstance(pending, dict) and pending.get("request_id") == request_id:
         return {"ok": True, "reason": "duplicate"}
+    return {"ok": False, "reason": "already_pending"}
+
+
+def observe_flat(store, account_id, broker_db_path):
+    """Paper OPEN positions, non-terminal paper orders, and broker-demo live rows (including pending limits).
+
+    A missing or unreadable broker file is an error. The caller must not treat that as flat."""
+    from execution.broker_demo_state import LIVE_STATUSES
+    account, orders, _fills = store.load_paper(account_id)
+    if account is None:
+        raise LookupError("paper account missing")
+    terminal = {"FILLED", "CANCELLED", "REJECTED"}
+    paper_open = len(account.open_positions or {})
+    paper_pending = sum(1 for order in orders.values() if getattr(order, "status", None) not in terminal)
+    path = Path(broker_db_path)
+    if not path.is_file():
+        raise LookupError("broker book unreadable")
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)) as con:
+            row = con.execute(
+                f"SELECT COUNT(*) FROM broker_demo_trades WHERE status IN ({','.join('?' * len(LIVE_STATUSES))})",
+                LIVE_STATUSES).fetchone()
+    except sqlite3.Error as exc:
+        raise LookupError("broker book unreadable") from exc
+    return {"paper_open": int(paper_open), "paper_pending": int(paper_pending), "broker_live": int(row[0])}
+
+
+def _finish_transition(flags, raw, kind, detail):
+    flags.consume_flag(PROVIDER_TRANSITION_FLAG, raw, event=(kind, None, detail))
+
+
+def consume_provider_transition(store, config, *, env, broker_db_path, recorded_at=None, now=None):
+    """Apply one queued request. None when there is nothing queued.
+
+    The destination is only ``openai`` or ``xai``. Payloads are built from the live config, so the request
+    cannot change any other fingerprint field. A freeze mismatch leaves the request queued. Any other refusal
+    consumes it, so a later flat book does not migrate by itself. Never raises for a missing file."""
+    path = Path(broker_db_path)
+    if not path.is_file():
+        return None
+    flags = _store(path)
+    try:
+        raw = flags.flag(PROVIDER_TRANSITION_FLAG)
+    except sqlite3.Error:
+        LOG.warning("component=operator event=PROVIDER_TRANSITION_UNREADABLE")
+        return None
+    if not raw:
+        return None
+    try:
+        request = json.loads(raw)
+    except (TypeError, ValueError):
+        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "bad_request"})
+        return {"ok": False, "reason": "bad_request"}
+    if not isinstance(request, dict):
+        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "bad_request"})
+        return {"ok": False, "reason": "bad_request"}
+    to_mode = request.get("to_mode")
+    note = request.get("reason") if isinstance(request.get("reason"), str) else ""
+    actor = request.get("actor") if isinstance(request.get("actor"), str) else ""
+    if to_mode not in PROVIDER_DESTINATIONS or not note.strip() or not actor.strip():
+        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "bad_request"})
+        return {"ok": False, "reason": "bad_request"}
+    try:
+        from execution.dxtrade_broker import real_execution_enabled
+        if real_execution_enabled() is not False:
+            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "real_execution_enabled"})
+            return {"ok": False, "reason": "real_execution_enabled"}
+        from runtime.provider_transition import FIELD, FLAT_KEYS, record_provider_transition
+        freeze = store.get_state("experiment_freeze_sha")
+        if not isinstance(freeze, str) or env.get("AI_FLOOR_GIT_COMMIT") != freeze:
+            LOG.warning("component=operator event=PROVIDER_TRANSITION_FREEZE_MISMATCH")
+            return {"ok": False, "reason": "freeze_mismatch"}
+        try:
+            counts = observe_flat(store, config.account_id, path)
+        except LookupError:
+            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "book_unreadable"})
+            return {"ok": False, "reason": "book_unreadable"}
+        if any(counts[key] != 0 for key in FLAT_KEYS):
+            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "not_flat", **counts})
+            return {"ok": False, "reason": "not_flat", **counts}
+        from dataclasses import replace
+        origin = replace(config, scheduler_enabled=True).fingerprint_content()
+        if origin.get(FIELD) == to_mode:
+            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "unchanged"})
+            return {"ok": False, "reason": "unchanged"}
+        dest = dict(origin)
+        dest[FIELD] = to_mode
+        result = record_provider_transition(
+            store.db, from_payload=origin, to_payload=dest, flat_counts=counts, operator_note=note,
+            git_commit=freeze, starting_equity=config.starting_equity, actor=actor, recorded_at=recorded_at)
+    except (ValueError, sqlite3.Error):
+        LOG.warning("component=operator event=PROVIDER_TRANSITION_RECORD_REFUSED")
+        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "refused"})
+        return {"ok": False, "reason": "refused"}
+    detail = {"reason": result["status"], "from_value": origin.get(FIELD), "to_value": to_mode,
+              "from_fingerprint": result["from_fingerprint"], "to_fingerprint": result["to_fingerprint"],
+              "actor": actor.strip()[:64], **counts}
+    _finish_transition(flags, raw, "PROVIDER_TRANSITION_RECORDED", detail)
+    try:
+        store.event(now or datetime.now(timezone.utc), None, None, "operator", "PROVIDER_TRANSITION_RECORDED",
+                    "INFO", detail)
+    except (OSError, sqlite3.Error, RuntimeError):
+        LOG.warning("component=operator event=PROVIDER_TRANSITION_JOURNAL_FAILED")
+    return {"ok": True, "reason": result["status"], **counts}
+
+
+def request_provider_transition(actor, note, *, to_mode, request_id, path=None, env=None,
+                                trading_db=None, account_id="paper-main"):
+    """Queue one provider-mode step for the runner. Does not write the trading transition and does not change
+    ``AI_FLOOR_AI_PROVIDER``.
+
+    Refuses unless ``to_mode`` is ``openai`` or ``xai``, REAL execution is off, and a read-only look at the paper
+    book and the broker-demo book shows no open position, no non-terminal paper order, and no live or pending
+    broker-demo row. The runner checks the same books again before it appends the row. Never raises."""
+    env = _env(env)
+    if to_mode not in PROVIDER_DESTINATIONS:
+        return {"ok": False, "reason": "bad_request"}
+    request_id = _text(request_id, MAX_REQUEST_ID)
+    note = _text(note, MAX_REASON).strip()
+    actor = _text(actor, MAX_ACTOR) or SOURCE
+    if not request_id or not note:
+        return {"ok": False, "reason": "bad_request"}
+    try:
+        from execution.dxtrade_broker import real_execution_enabled
+        if real_execution_enabled() is not False:
+            return {"ok": False, "reason": "real_execution_enabled"}
+        if trading_db is None:
+            from runtime.config import RuntimeConfig
+            config = RuntimeConfig.from_env()
+            trading_db, account_id = config.db_path, config.account_id
+        broker_path = _state_path(path, env)
+        from storage.database import Store
+        with closing(Store(trading_db, readonly=True)) as store:
+            counts = observe_flat(store, account_id, broker_path)
+    except Exception as exc:  # noqa: BLE001 - unreadable book is a refusal, never a guess
+        LOG.error("component=operator event=PROVIDER_TRANSITION_REQUEST_FAILED error_type=%s", type(exc).__name__)
+        return {"ok": False, "reason": "book_unreadable"}
+    if any(counts[key] != 0 for key in ("paper_open", "paper_pending", "broker_live")):
+        return {"ok": False, "reason": "not_flat", **counts}
+    value = _request(actor, note, to_mode=to_mode, request_id=request_id)
+    detail = {"actor": actor, "reason": note, "source": SOURCE, "request_id": request_id, "to_mode": to_mode,
+              **counts}
+    try:
+        store = _store(broker_path)
+        if store.set_flag_if_absent(PROVIDER_TRANSITION_FLAG, value,
+                                    event=("PROVIDER_TRANSITION_REQUESTED", None, detail)):
+            return {"ok": True, "reason": "requested", **counts}
+        pending = json.loads(store.flag(PROVIDER_TRANSITION_FLAG) or "null")
+    except Exception as exc:  # noqa: BLE001
+        LOG.error("component=operator event=PROVIDER_TRANSITION_REQUEST_FAILED error_type=%s", type(exc).__name__)
+        return {"ok": False, "reason": "write_failed"}
+    if isinstance(pending, dict) and pending.get("request_id") == request_id:
+        return {"ok": True, "reason": "duplicate", **counts}
     return {"ok": False, "reason": "already_pending"}
 
 

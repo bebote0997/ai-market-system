@@ -243,8 +243,9 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
                     if not records:
                         checks["experiment_resumable"] = unchanged
                     else:
-                        # A recorded transition does not excuse any other mismatch, and a bad record
-                        # does not fall back to the unchanged path.
+                        # A valid chain resumes on the recorded start as well as the recorded end, so the
+                        # operator can write the row before the provider env changes and a restart in
+                        # between still resumes. A bad record does not fall back to the unchanged path.
                         checks["experiment_resumable"] = transition_resumes(
                             metadata, freeze=freeze, freeze_ok=freeze_ok, started=started,
                             account_present=account_present, current_payload=active.fingerprint_content(),

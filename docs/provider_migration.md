@@ -58,12 +58,26 @@ A selected xAI call that is missing a key, over budget, timed out, rate-limited 
 
 ## Resuming the current experiment
 
-The provider mode stays inside `RuntimeConfig.fingerprint`. Preflight does not drop that field, does not rewrite `run_metadata`, and does not turn `experiment_resumable` off as a policy. With no migration row, a different fingerprint still fails exactly as before.
+The provider mode stays inside `RuntimeConfig.fingerprint`. Preflight does not drop that field, does not rewrite `run_metadata`, and does not create a new experiment. With no migration row, a different fingerprint still fails exactly as before. Startup does not write a row.
 
-`runtime/provider_transition.py` can append one immutable row only when an operator supplies the from and to payloads, a note, and `open_positions == 0`. The only allowed difference is `ai_provider_mode`, and only among `deterministic`, `openai`, and `xai`. Startup and preflight never write that row. A bad row, a second field, a fingerprint that is not on the recorded chain, or a missing pre-transition fingerprint does not resume. Reversal is a second explicit row back to the previous payload, not an edit of the first. No such row has been written. This is not approval to migrate the running demo.
+The only writer is the runner, and only after the owner queues a request from the dashboard. The dashboard already requires `AI_FLOOR_DASHBOARD_PASSWORD`. No new secret and no new env name are added for this step. The request is one flag in the broker-state DB, the same mailbox emergency-stop and manual close already use. It is not a command endpoint and it is not SQL.
 
-If that record is never written, the compatible alternative is a new experiment: keep the current database as history, start the next one only when the owner says so, and do not delete the old account. That start is not performed here.
+On the Control page, an owner session can press **Registrar paso a xAI** and type `CAMBIAR A XAI`, or **Registrar vuelta a OpenAI** and type `VOLVER A OPENAI`. The dashboard queues the flag only when a read-only check sees no paper OPEN position, no paper order other than FILLED, CANCELLED, or REJECTED, and no broker-demo row in PENDING_SEND, OPEN, UNKNOWN, or PENDING_LIMIT. The runner, on its existing few-second poll, checks those books again. Only then does it append one row. The request names `openai` or `xai` only. The from/to payloads are built from the live config. A request cannot change any other fingerprint field.
+
+The row stores the three zero counts, the freeze SHA, the starting equity, the actor, and the note. The table rejects UPDATE and DELETE. Repeating the same step does not add a second row. A step that does not continue the chain is rejected. Two writers take one write lock. A bad row does not fall back to the old resume rule.
+
+A valid chain resumes when the live config is the start of the chain or any later node. Recording openai to xai while the process is still on openai does not break the next restart. After `AI_FLOOR_AI_PROVIDER` becomes `xai`, that same chain resumes. `AI_FLOOR_GIT_COMMIT` must stay equal to the freeze SHA already stored in the database. No row has been written against the running database.
+
+## Order of activation
+
+The deployed service is still the previous revision. A code deploy restarts the process once. That interruption is the usual one for this persistent disk. `autoDeploy` stays off. Nothing here restarts or edits Render.
+
+1. Deploy this code with `AI_FLOOR_GIT_COMMIT` unchanged and `AI_FLOOR_AI_PROVIDER` still the current value. Leave `AI_FLOOR_EMA_CROSS` unset. `XAI_API_KEY` can be present; it does not switch the provider. There is no transition row yet, so resume uses the unchanged rule.
+2. With the service up and the account flat, including pending orders, the owner confirms `CAMBIAR A XAI` on the Control page. The runner appends one openai to xai row. The live provider is still the old one. A restart here still resumes.
+3. Set the existing `AI_FLOOR_AI_PROVIDER` to `xai` and restart. The freeze SHA stays the same. Resume uses the recorded chain. `XAI_API_KEY` must be set or preflight is not ready. This restart is not `python -m runtime.certify_providers --only xai`.
+
+If step 3 happens before step 2, preflight is not ready and the service does not start, so the dashboard cannot record the row. Put `AI_FLOOR_AI_PROVIDER` back to the previous value and restart. Do not delete or replace the database.
 
 ## Rollback
 
-Set `AI_FLOOR_AI_PROVIDER` back to `openai` (or `deterministic`) and deploy that config. `ai/openai_provider.py` is unchanged. Unset `XAI_API_KEY` if it should not remain available. No order path changes in this PR.
+While the service is running on xai, and the account is flat, the owner confirms `VOLVER A OPENAI`. The runner appends a second row. A restart before the env change still resumes, because xai is on the chain. Then set `AI_FLOOR_AI_PROVIDER` back to `openai` and restart. The freeze SHA stays the same. `ai/openai_provider.py` is unchanged. Unset `XAI_API_KEY` only if it should not remain available. Do not edit or delete the first row.

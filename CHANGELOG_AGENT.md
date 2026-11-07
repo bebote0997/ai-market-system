@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-07 — DEC-XAI-1: el cambio de proveedor lo confirma el owner y lo anota el runner
+
+- El panel de control (sesión del owner, la misma contraseña de siempre) encola una bandera. No es un endpoint de SQL ni de comandos, y no añade ninguna variable de entorno.
+- El runner, en el sondeo que ya hace, vuelve a contar posiciones abiertas de práctica, órdenes de práctica no terminadas y filas vivas del broker demo (incluye límites pendientes y UNKNOWN). Solo si las tres cuentas son cero anota un paso `openai` o `xai`. El arranque no anota nada.
+- Una cadena válida deja reanudar el experimento tanto en el modo de origen como en el de destino, así el reinicio de en medio no se rompe. Una fila alterada no vuelve al camino antiguo. El SHA de freeze no cambia. No se crea otro experimento.
+- Sigue apagado: ninguna fila se escribió en la base real. REAL sigue bloqueado. El retroceso DEC-FX-SL-3 no se tocó.
+
 ## 2026-11-07 — DEC-XAI-1: proveedor xAI Grok preparado, apagado (sin activar)
 
 - Inventario: la IA de consejo es OpenAI o el eco determinista; los precios son Twelve Data (o Massive); las noticias son Finnhub / híbrido oficial / FXMacroData; las órdenes de práctica son OANDA. No hay cliente de X ni de Exa.
