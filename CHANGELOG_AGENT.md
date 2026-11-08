@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte
+
+- El control ya no dice que el proveedor «no cambió» solo porque el paso está anotado. Muestra el paso con su hora, el proveedor configurado en el proceso, el proveedor del último ciclo guardado y la valla leída del registro (o UNKNOWN). No usa el bloqueo del router ni el nombre del entorno para dar la valla por cerrada.
+- La salud, si no hay observaciones de componentes fechadas, dice «no comprobado» y la antigüedad del último ciclo y del latido. «Esperando el primer ciclo» queda para cuando no hay ninguno de los dos. La sesión vacía sale del calendario real del programador. No se calcula el próximo ciclo.
+- En pantallas de hasta 480 px el historial muestra fichas y oculta la tabla ancha; los filtros quedan plegados. La leyenda del Floor se lee en horizontal. Una ficha de agente con hora y sin estado lo dice así, sin inventar la causa.
+
 ## 2026-11-08 — DEC-XAI-1: la transición mira el libro real y deja constancia
 
 - El runner lee, bajo su candado, las operaciones abiertas y las órdenes pendientes del broker. Una lectura fallida no anota y deja la solicitud en cola. Un bloqueo, una operación o una orden pendiente rechaza la solicitud. El libro local se comprueba además.

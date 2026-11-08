@@ -403,6 +403,56 @@ def _transition_text(result):
     return "No se registró el cambio."
 
 
+def provider_observation(env=None):
+    """Read-only facts for the control receipt. Any failed read becomes UNKNOWN. Never prints a secret."""
+    import os
+    import sqlite3
+    from ui.i18n_es import cycle_label, short_datetime_et
+    from ui.observability import transition_status_lines
+    env = os.environ if env is None else env
+    configured = env.get("AI_FLOOR_AI_PROVIDER")
+    recorded = cycle = None
+    fence = "UNKNOWN"
+    try:
+        import json
+        from contextlib import closing
+        from datetime import datetime
+        from runtime.config import RuntimeConfig
+        from runtime.provider_transition import entry_fence_required, load_transitions
+        from storage.database import Store
+        with closing(Store(RuntimeConfig.from_env().db_path, readonly=True)) as store:
+            rows = load_transitions(store.db)
+            if rows:
+                last = rows[-1]
+                stamp = last.get("recorded_at")
+                parsed = None
+                if isinstance(stamp, str):
+                    try:
+                        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                    except ValueError:
+                        parsed = None
+                recorded = {"from": last.get("from_value"), "to": last.get("to_value"),
+                            "at": short_datetime_et(parsed) if parsed is not None else None}
+            try:
+                fence = "on" if entry_fence_required(store.db) else "off"
+            except (OSError, RuntimeError, ValueError, TypeError):
+                fence = "UNKNOWN"
+            run = store.db.execute(
+                "SELECT as_of, provider_metadata FROM runs ORDER BY as_of DESC LIMIT 1").fetchone()
+            if run is not None:
+                meta = run[1]
+                if isinstance(meta, str):
+                    try:
+                        meta = json.loads(meta)
+                    except ValueError:
+                        meta = None
+                mode = meta.get("provider") if isinstance(meta, dict) else None
+                cycle = {"mode": mode, "at": cycle_label(run[0])}
+    except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error):
+        fence = "UNKNOWN"
+    return transition_status_lines(recorded=recorded, configured=configured, cycle=cycle, fence=fence)
+
+
 def render_provider_transition(st, api):
     """Owner-only, two-step request. Hidden for every other session. The click only queues a flag."""
     from ui.auth import owner_authenticated
@@ -410,16 +460,12 @@ def render_provider_transition(st, api):
     if not owner_authenticated(st) or not isinstance(api, dict) or not callable(api.get("transition")):
         return
     state = st.session_state
-    receipt = api.get("state") if isinstance(api.get("state"), dict) else {}
-    receipt_state = receipt.get("provider_transition_state")
-    receipt_reason = receipt.get("provider_transition_reason") if isinstance(
-        receipt.get("provider_transition_reason"), str) else ""
-    receipt_text = {"recorded": "Anotado. El proveedor activo no cambió; un reinicio anterior al cambio de la variable sigue reanudando.",
-                    "refused": f"Rechazado ({escape(receipt_reason or 'refused')}). No se anotó el cambio.",
-                    "pending": f"Pendiente ({escape(receipt_reason or 'requested')}). Todavía no se anotó el cambio."
-                    }.get(receipt_state)
-    if receipt_text:
-        html(st, f'<div class="small">{receipt_text}</div>')
+    try:
+        lines = provider_observation()
+    except Exception:  # noqa: BLE001 - the screen stays usable without the trading database
+        from ui.observability import transition_status_lines
+        lines = transition_status_lines(recorded=None, configured=None, cycle=None, fence="UNKNOWN")
+    html(st, '<div class="small">' + "<br>".join(escape(line) for line in lines) + "</div>")
     html(st, '<h3 style="margin:12px 0 4px">Cambio de proveedor de IA</h3>'
              '<div class="small">Esto no cambia el proveedor activo. Pide anotar un único paso (openai o xai) '
              'cuando la cuenta de práctica y el broker demo no tienen posiciones ni órdenes pendientes. '

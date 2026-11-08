@@ -1,6 +1,7 @@
 """Read-only Command Center views of published evidence, never runtime actions."""
 from ui.tables import dataframe
 from datetime import datetime, timezone
+from html import escape
 import json
 import os
 import sqlite3
@@ -348,19 +349,51 @@ def render(st, page):
                     risks = [{k: v for k, v in row.items() if k not in PAPER_SIZING_KEYS} for row in risks]
                 table(st, risks, wait)
             elif page == "HEALTH":
+                from datetime import datetime, timezone
+                from ui.observability import health_gap_note, not_checked_suffix, stamped
                 st.subheader(tr("System Health observations"))
                 trading_path = Path(os.environ.get("AI_FLOOR_DB_PATH", "data/runtime/trading_floor.db"))
                 health_path = os.environ.get("AI_FLOOR_HEALTH_DB_PATH", str(trading_path.with_name("system_health.db")))
+                now = datetime.now(timezone.utc)
                 with dashboard_database(health_path) as health_db:
-                    table(st, since_epoch(payloads(health_db, "component_health"), since,
-                                           ("last_checked_at", "observed_at")), wait)
-                st.caption(tr("Persisted component observations; no probes or health policy changes are performed."))
+                    observations = since_epoch(payloads(health_db, "component_health"), since,
+                                                ("last_checked_at", "observed_at"))
                 states = current_states({row["key"]: row["value"] for row in records(db, "system_state")}, since)
-                table(st, [{es.column("service"): es.service_label(key), es.column("status"): states.get(key, es.NO_DATA)} for key in
-                           ("scheduler", "heartbeat", "scheduler_slot", "market_data_provider",
+                sessions_open = None
+                try:
+                    from runtime.scheduler import session_names
+                    sessions_open = bool(session_names(now))
+                except (TypeError, ValueError):
+                    sessions_open = None
+                def shown_stamp(key):
+                    raw = states.get(key)
+                    if not isinstance(raw, str) or raw == FIRST_CYCLE_WAIT:
+                        return None
+                    return stamped(es.readable(raw), raw, now)
+
+                note = health_gap_note(observations=observations, heartbeat=shown_stamp("heartbeat"),
+                                       last_cycle=shown_stamp("last_run"), now=now,
+                                       sessions_open=sessions_open)
+                if observations:
+                    table(st, observations)
+                else:
+                    st.info(note or wait or es.NO_DATA)
+                st.caption(tr("Persisted component observations; no probes or health policy changes are performed."))
+                timed = {"heartbeat", "scheduler_slot", "last_run", "last_success"}
+                rows = []
+                for key in ("scheduler", "heartbeat", "scheduler_slot", "market_data_provider",
                             "market_provider_mode", "ai_provider", "macro_provider", "api_status",
-                            "last_run", "last_success", "phase7_readiness")])
-                st.caption(tr("Provider configuration is not proof of API health. Statuses are persisted observations."))
+                            "last_run", "last_success", "phase7_readiness"):
+                    raw = states.get(key, es.NO_DATA)
+                    shown = es.readable(raw) if isinstance(raw, str) else raw
+                    if key in timed and raw != FIRST_CYCLE_WAIT:
+                        shown = stamped(shown, raw, now)
+                    if isinstance(raw, str):
+                        shown = f"{shown}{not_checked_suffix(raw)}"
+                    rows.append({es.column("service"): es.service_label(key), es.column("status"): shown})
+                table(st, rows)
+                st.caption("«Sin datos» y «Sin comprobar» quieren decir que no hay una comprobación guardada. "
+                           "No quieren decir que una llamada haya fallado. La antigüedad es respecto de esta vista.")
                 st.subheader(tr("Provider / API run evidence"))
                 table(st, [{key: row.get(key) for key in
                             ("run_id", "symbol", "as_of", "status", "provider_metadata", "error")}
@@ -377,19 +410,46 @@ def render(st, page):
                 rows = notification_rows(db, since)
                 table(st, sorted(rows, key=lambda row: row["attempted_at"], reverse=True)[:50], wait)
             elif page == "HISTORY":
-                run_id = st.text_input(tr("Run ID"), key="history_run_id").strip()
-                setup_id = st.text_input(tr("Setup ID"), key="history_setup_id").strip()
-                page_number = st.number_input(tr("History page"), min_value=1, value=1, step=1,
-                                              key="history_page")
-                st.caption(tr("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first."))
+                from ui.observability import history_card, mode_label
+                with st.expander("Filtros del historial", expanded=False):
+                    run_id = st.text_input(tr("Run ID"), key="history_run_id").strip()
+                    setup_id = st.text_input(tr("Setup ID"), key="history_setup_id").strip()
+                    page_number = st.number_input(tr("History page"), min_value=1, value=1, step=1,
+                                                  key="history_page")
+                    st.caption(tr("Exact persisted IDs; both fields combine with AND. Up to 200 rows per table/page, newest first."))
                 rows = history(db, run_id, setup_id, offset=(page_number - 1) * ROW_LIMIT, since=since)
                 if hidden:
                     rows = hide_paper_results(rows)
                 if not rows:
                     st.info(wait or es.NO_DATA)
-                for record_type, group in groupby(rows, key=lambda row: row["record"]):
-                    st.subheader(HISTORY_LABELS.get(record_type, record_type))
-                    table(st, list(group))
+                cards = []
+                for row in rows:
+                    if row.get("record") != "runs":
+                        continue
+                    meta = row.get("provider_metadata")
+                    if isinstance(meta, str):
+                        try:
+                            meta = json.loads(meta)
+                        except ValueError:
+                            meta = None
+                    provider = meta.get("provider") if isinstance(meta, dict) else None
+                    when = es.cycle_label(row.get("as_of"))
+                    cards.append(history_card({"symbol": row.get("symbol"), "when": when,
+                                               "status": es.readable(row.get("status") or row.get("final_status")),
+                                               "provider": provider if mode_label(provider) else None}))
+                    if len(cards) == 12:
+                        break
+                if cards:
+                    from ui.views.luxury import html
+                    body = "".join(
+                        f'<article><b>{escape(card["title"])}</b>'
+                        + "".join(f'<span>{escape(line)}</span>' for line in card["lines"]) + "</article>"
+                        for card in cards)
+                    html(st, f'<div class="aif-history-narrow">{body}</div>')
+                with st.container(key="history-wide"):
+                    for record_type, group in groupby(rows, key=lambda row: row["record"]):
+                        st.subheader(HISTORY_LABELS.get(record_type, record_type))
+                        table(st, list(group))
             elif page == "ERRORS":
                 st.subheader(tr("Failed runs"))
                 table(st, since_epoch(records(db, "runs", failed=True), since))
