@@ -2,9 +2,9 @@
 
 ## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte
 
-- El control ya no dice que el proveedor «no cambió» solo porque el paso está anotado. Muestra el paso con su hora, el proveedor configurado en el proceso, el proveedor del último ciclo guardado y la valla leída del registro (o UNKNOWN). No usa el bloqueo del router ni el nombre del entorno para dar la valla por cerrada.
-- La salud, si no hay observaciones de componentes fechadas, dice «no comprobado» y la antigüedad del último ciclo y del latido. «Esperando el primer ciclo» queda para cuando no hay ninguno de los dos. La sesión vacía sale del calendario real del programador. No se calcula el próximo ciclo.
-- En pantallas de hasta 480 px el historial muestra fichas y oculta la tabla ancha; los filtros quedan plegados. La leyenda del Floor se lee en horizontal. Una ficha de agente con hora y sin estado lo dice así, sin inventar la causa.
+- El control separa la solicitud en curso (pendiente, anotada o rechazada, con su hora) del último paso inmutable. La bandera de valla solo sale de `provider_transition_fence`: `1` activa, `0` no activa, y si falta o no se puede leer queda UNKNOWN. Un cálculo sobre los pasos se rotula aparte y no es esa bandera.
+- La salud, si no hay observaciones de componentes fechadas, dice que esa ausencia no demuestra que no haya un fallo. Un error guardado se muestra aunque el calendario esté cerrado. «Sin datos» es «sin comprobación guardada», no un «no es un fallo».
+- En pantallas estrechas el historial sigue mostrando todas las filas de la página (ciclos, setups, órdenes, informes, diario) y la tabla ancha no se oculta. El contenido deja libre el carril de 56 px. La leyenda del Floor se lee en horizontal. Una ficha de agente con hora y sin estado lo dice así, sin inventar la causa.
 
 ## 2026-11-08 — DEC-XAI-1: la transición mira el libro real y deja constancia
 

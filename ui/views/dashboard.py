@@ -371,9 +371,14 @@ def render(st, page):
                         return None
                     return stamped(es.readable(raw), raw, now)
 
+                errors = []
+                for key in ("ai_provider", "market_data_provider", "api_status"):
+                    raw = states.get(key)
+                    if isinstance(raw, str) and raw.strip().upper() in {"ERROR", "FAILED"}:
+                        errors.append(f"{es.service_label(key)}: {es.readable(raw)}")
                 note = health_gap_note(observations=observations, heartbeat=shown_stamp("heartbeat"),
                                        last_cycle=shown_stamp("last_run"), now=now,
-                                       sessions_open=sessions_open)
+                                       sessions_open=sessions_open, errors=errors)
                 if observations:
                     table(st, observations)
                 else:
@@ -393,7 +398,8 @@ def render(st, page):
                     rows.append({es.column("service"): es.service_label(key), es.column("status"): shown})
                 table(st, rows)
                 st.caption("«Sin datos» y «Sin comprobar» quieren decir que no hay una comprobación guardada. "
-                           "No quieren decir que una llamada haya fallado. La antigüedad es respecto de esta vista.")
+                           "No afirman que una llamada haya salido bien. Un error guardado se muestra aparte. "
+                           "La antigüedad es respecto de esta vista.")
                 st.subheader(tr("Provider / API run evidence"))
                 table(st, [{key: row.get(key) for key in
                             ("run_id", "symbol", "as_of", "status", "provider_metadata", "error")}
@@ -410,7 +416,7 @@ def render(st, page):
                 rows = notification_rows(db, since)
                 table(st, sorted(rows, key=lambda row: row["attempted_at"], reverse=True)[:50], wait)
             elif page == "HISTORY":
-                from ui.observability import history_card, mode_label
+                from ui.observability import mode_label
                 with st.expander("Filtros del historial", expanded=False):
                     run_id = st.text_input(tr("Run ID"), key="history_run_id").strip()
                     setup_id = st.text_input(tr("Setup ID"), key="history_setup_id").strip()
@@ -422,32 +428,34 @@ def render(st, page):
                     rows = hide_paper_results(rows)
                 if not rows:
                     st.info(wait or es.NO_DATA)
-                cards = []
-                for row in rows:
-                    if row.get("record") != "runs":
-                        continue
-                    meta = row.get("provider_metadata")
-                    if isinstance(meta, str):
-                        try:
-                            meta = json.loads(meta)
-                        except ValueError:
-                            meta = None
-                    provider = meta.get("provider") if isinstance(meta, dict) else None
-                    when = es.cycle_label(row.get("as_of"))
-                    cards.append(history_card({"symbol": row.get("symbol"), "when": when,
-                                               "status": es.readable(row.get("status") or row.get("final_status")),
-                                               "provider": provider if mode_label(provider) else None}))
-                    if len(cards) == 12:
-                        break
-                if cards:
+                from ui.observability import history_record_card
+                grouped = [(record_type, list(group))
+                           for record_type, group in groupby(rows, key=lambda row: row["record"])]
+                if grouped:
                     from ui.views.luxury import html
-                    body = "".join(
-                        f'<article><b>{escape(card["title"])}</b>'
-                        + "".join(f'<span>{escape(line)}</span>' for line in card["lines"]) + "</article>"
-                        for card in cards)
-                    html(st, f'<div class="aif-history-narrow">{body}</div>')
+                    parts = []
+                    for record_type, group in grouped:
+                        label = HISTORY_LABELS.get(record_type, record_type)
+                        parts.append(f'<h4>{escape(label)}</h4>')
+                        for row in group:
+                            meta = row.get("provider_metadata")
+                            if isinstance(meta, str):
+                                try:
+                                    meta = json.loads(meta)
+                                except ValueError:
+                                    meta = None
+                            provider = meta.get("provider") if isinstance(meta, dict) else None
+                            when = row.get("as_of") or row.get("timestamp") or row.get("opened_at")
+                            card = history_record_card(
+                                {**row, "provider": provider if mode_label(provider) else None,
+                                 "status": es.readable(row.get("status") or row.get("final_status") or "")},
+                                label, es.cycle_label(when) if when else "")
+                            parts.append('<article><b>' + escape(card["title"]) + "</b>"
+                                         + "".join(f'<span>{escape(line)}</span>' for line in card["lines"])
+                                         + "</article>")
+                    html(st, '<div class="aif-history-narrow">' + "".join(parts) + "</div>")
                 with st.container(key="history-wide"):
-                    for record_type, group in groupby(rows, key=lambda row: row["record"]):
+                    for record_type, group in grouped:
                         st.subheader(HISTORY_LABELS.get(record_type, record_type))
                         table(st, list(group))
             elif page == "ERRORS":

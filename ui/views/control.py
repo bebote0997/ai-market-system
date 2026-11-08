@@ -403,40 +403,100 @@ def _transition_text(result):
     return "No se registró el cambio."
 
 
-def provider_observation(env=None):
-    """Read-only facts for the control receipt. Any failed read becomes UNKNOWN. Never prints a secret."""
+def _stamp(value):
+    from datetime import datetime
+    from ui.i18n_es import short_datetime_et
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    shown = short_datetime_et(parsed)
+    return None if shown == "—" else shown
+
+
+def _broker_flag_rows(path):
+    """``{key: {value, at}}`` after a successful read, or None when the file or the table cannot be read."""
+    import sqlite3
+    from pathlib import Path
+    target = Path(path)
+    if not target.is_file():
+        return None
+    try:
+        from execution.operator_actions import _read_ro
+        rows = _read_ro(target, "SELECT key, value, updated_at FROM broker_demo_flags")
+    except (OSError, sqlite3.Error):
+        return None
+    return {row[0]: {"value": row[1], "at": row[2]} for row in rows}
+
+
+def _receipt_from_flags(flags):
+    """Current request, distinct from the immutable step table. None means the flags could not be read."""
+    import json
+    from execution.operator_actions import PROVIDER_TRANSITION_FLAG, PROVIDER_TRANSITION_RECEIPT
+    if flags is None:
+        return None
+    queued = flags.get(PROVIDER_TRANSITION_FLAG)
+    stored = flags.get(PROVIDER_TRANSITION_RECEIPT)
+    if stored is None and queued is None:
+        return {"present": False}
+    parsed = {}
+    if stored is not None:
+        try:
+            loaded = json.loads(stored["value"] or "null")
+            parsed = loaded if isinstance(loaded, dict) else {}
+        except (TypeError, ValueError):
+            return {"present": True, "state": None}
+    state = parsed.get("state") if isinstance(parsed.get("state"), str) else None
+    when = _stamp(queued["at"]) if queued is not None else None
+    if when is None and stored is not None:
+        when = _stamp(stored["at"])
+    if queued is not None:
+        state = "pending"
+    reason = parsed.get("reason") if isinstance(parsed.get("reason"), str) else None
+    return {"present": True, "state": state, "reason": reason, "at": when}
+
+
+def provider_observation(env=None, *, broker_path=None):
+    """Read-only facts for the control receipt. A failed read stays UNKNOWN. Never prints a secret.
+
+    The fence line is only the broker flag ``provider_transition_fence``. A calculation from the
+    step table is a separate line and is not that flag.
+    """
     import os
     import sqlite3
-    from ui.i18n_es import cycle_label, short_datetime_et
-    from ui.observability import transition_status_lines
+    from ui.i18n_es import cycle_label
+    from ui.observability import parse_fence_flag, transition_status_lines
     env = os.environ if env is None else env
     configured = env.get("AI_FLOOR_AI_PROVIDER")
     recorded = cycle = None
+    expectation = None
     fence = "UNKNOWN"
+    receipt = None
     try:
         import json
         from contextlib import closing
-        from datetime import datetime
         from runtime.config import RuntimeConfig
         from runtime.provider_transition import entry_fence_required, load_transitions
         from storage.database import Store
         with closing(Store(RuntimeConfig.from_env().db_path, readonly=True)) as store:
-            rows = load_transitions(store.db)
-            if rows:
-                last = rows[-1]
-                stamp = last.get("recorded_at")
-                parsed = None
-                if isinstance(stamp, str):
-                    try:
-                        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-                    except ValueError:
-                        parsed = None
-                recorded = {"from": last.get("from_value"), "to": last.get("to_value"),
-                            "at": short_datetime_et(parsed) if parsed is not None else None}
             try:
-                fence = "on" if entry_fence_required(store.db) else "off"
-            except (OSError, RuntimeError, ValueError, TypeError):
-                fence = "UNKNOWN"
+                rows = load_transitions(store.db)
+            except (OSError, sqlite3.Error, TypeError, ValueError):
+                rows = None
+            if rows is None:
+                recorded = None
+            elif not rows:
+                recorded = {}
+            else:
+                last = rows[-1]
+                recorded = {"from": last.get("from_value"), "to": last.get("to_value"),
+                            "at": _stamp(last.get("recorded_at"))}
+            try:
+                expectation = bool(entry_fence_required(store.db))
+            except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error):
+                expectation = None
             run = store.db.execute(
                 "SELECT as_of, provider_metadata FROM runs ORDER BY as_of DESC LIMIT 1").fetchone()
             if run is not None:
@@ -449,8 +509,19 @@ def provider_observation(env=None):
                 mode = meta.get("provider") if isinstance(meta, dict) else None
                 cycle = {"mode": mode, "at": cycle_label(run[0])}
     except (OSError, RuntimeError, ValueError, TypeError, sqlite3.Error):
-        fence = "UNKNOWN"
-    return transition_status_lines(recorded=recorded, configured=configured, cycle=cycle, fence=fence)
+        recorded = None
+        expectation = None
+    if broker_path is None:
+        broker_path = env.get("AI_FLOOR_BROKER_STATE_DB_PATH")
+    flags = _broker_flag_rows(broker_path) if broker_path else None
+    if flags is None:
+        fence, receipt = "UNKNOWN", None
+    else:
+        found = flags.get("provider_transition_fence")
+        fence = parse_fence_flag(None if found is None else found.get("value"))
+        receipt = _receipt_from_flags(flags)
+    return transition_status_lines(recorded=recorded, configured=configured, cycle=cycle, fence=fence,
+                                   receipt=receipt, expectation=expectation)
 
 
 def render_provider_transition(st, api):
@@ -464,7 +535,8 @@ def render_provider_transition(st, api):
         lines = provider_observation()
     except Exception:  # noqa: BLE001 - the screen stays usable without the trading database
         from ui.observability import transition_status_lines
-        lines = transition_status_lines(recorded=None, configured=None, cycle=None, fence="UNKNOWN")
+        lines = transition_status_lines(recorded=None, configured=None, cycle=None, fence="UNKNOWN",
+                                        receipt=None, expectation=None)
     html(st, '<div class="small">' + "<br>".join(escape(line) for line in lines) + "</div>")
     html(st, '<h3 style="margin:12px 0 4px">Cambio de proveedor de IA</h3>'
              '<div class="small">Esto no cambia el proveedor activo. Pide anotar un único paso (openai o xai) '

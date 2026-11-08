@@ -61,49 +61,87 @@ def stamped(shown, value, now):
 
 
 def not_checked_suffix(value):
-    """``NO_DATA`` and ``NOT_CHECKED`` are the absence of a check, not a failed call."""
+    """``NO_DATA`` and ``NOT_CHECKED`` mean no stored check. They do not say a call succeeded."""
     if isinstance(value, str) and value.strip() in NOT_CHECKED:
-        return " · no comprobado (no es un fallo)"
+        return " · sin comprobación guardada"
     return ""
 
 
-def health_gap_note(*, observations, heartbeat, last_cycle, now, sessions_open):
+def parse_fence_flag(value):
+    """The broker flag only. ``1`` is on and ``0`` is off. Anything else, including absence, is UNKNOWN."""
+    if value == "1":
+        return "on"
+    if value == "0":
+        return "off"
+    return "UNKNOWN"
+
+
+def health_gap_note(*, observations, heartbeat, last_cycle, now, sessions_open, errors=()):
     """What to say when the component table has no dated rows in this window.
 
-    ``sessions_open`` False uses the scheduler calendar the caller already evaluated.
-    None means that calendar was not consulted. This function does not name a next slot.
+    Missing rows are missing evidence. They do not prove that nothing failed. A closed session
+    does not erase an error that is already stored. This function does not name a next slot.
     """
     if observations:
         return None
-    if heartbeat is None and last_cycle is None:
+    stored_errors = [item for item in errors if isinstance(item, str) and item.strip()]
+    if heartbeat is None and last_cycle is None and not stored_errors:
         return "Esperando el primer ciclo"
     parts = ["No hay observaciones de componentes con fecha en este periodo. "
-             "Eso es «no comprobado», no un fallo de una llamada."]
+             "Esa ausencia no demuestra que no haya un fallo."]
+    if stored_errors:
+        parts.append("Hay error guardado: " + "; ".join(stored_errors) + ".")
     if last_cycle is not None:
         parts.append(f"Último ciclo guardado: {last_cycle}.")
     if heartbeat is not None:
         parts.append(f"Última señal de vida guardada: {heartbeat}.")
     if sessions_open is False:
-        parts.append("El calendario del programador (Londres y Nueva York, días laborables de 8 a 17, "
-                     "hora local de cada plaza) no tiene una sesión abierta en este momento.")
+        parts.append("El calendario del programador no tiene una sesión abierta ahora. "
+                     "Eso no anula un error guardado.")
     return " ".join(parts)
 
 
-def transition_status_lines(*, recorded, configured, cycle, fence):
-    """Owner lines. ``recorded`` is {from, to, at} or None. ``cycle`` is {mode, at} or None.
+def transition_status_lines(*, recorded, configured, cycle, fence, receipt, expectation=None):
+    """Owner lines. ``recorded`` is the last immutable step. ``receipt`` is the current request.
 
-    ``fence`` is ``on``, ``off``, or anything else, which is shown as UNKNOWN.
-    The routing block chip is not an input: a clear book does not mean the fence is off.
+    ``fence`` is already parsed from the broker flag: ``on``, ``off``, or ``UNKNOWN``.
+    ``expectation`` True/False is a calculation from the step table and is labeled as not the flag.
+    ``receipt`` None means the receipt could not be read. An empty dict means the read succeeded
+    and there is no receipt row.
     """
     lines = []
+    if receipt is None:
+        lines.append("Solicitud en curso: UNKNOWN")
+    elif not receipt.get("present"):
+        lines.append("Solicitud en curso: ninguna")
+    else:
+        state = receipt.get("state")
+        label = {"pending": "pendiente", "recorded": "anotada", "refused": "rechazada"}.get(state)
+        when = receipt.get("at") if isinstance(receipt.get("at"), str) and receipt.get("at").strip() else None
+        reason = receipt.get("reason") if isinstance(receipt.get("reason"), str) and receipt.get("reason").strip() else None
+        if label is None:
+            lines.append("Solicitud en curso: UNKNOWN")
+        else:
+            extra = ""
+            if reason:
+                extra += f" · {reason}"
+            if when:
+                extra += f" · {when}"
+            lines.append(f"Solicitud en curso: {label}{extra}")
+            if state == "refused":
+                lines.append("Ese recibo no añadió un paso.")
     recorded_to = mode_label((recorded or {}).get("to"))
     recorded_from = mode_label((recorded or {}).get("from"))
-    if recorded_from and recorded_to:
+    if recorded is None:
+        lines.append("Último paso inmutable: UNKNOWN")
+    elif not recorded:
+        lines.append("Último paso inmutable: ninguno")
+    elif recorded_from and recorded_to:
         when = (recorded or {}).get("at")
-        lines.append("Paso anotado: " + recorded_from + " → " + recorded_to
+        lines.append("Último paso inmutable: " + recorded_from + " → " + recorded_to
                      + (f" · {when}" if isinstance(when, str) and when.strip() else " · hora del paso: UNKNOWN"))
     else:
-        lines.append("Paso anotado: UNKNOWN")
+        lines.append("Último paso inmutable: UNKNOWN")
     configured_label = mode_label(configured)
     lines.append("Proveedor configurado en este proceso: " + (configured_label or "UNKNOWN"))
     if recorded_to and configured_label:
@@ -120,12 +158,35 @@ def transition_status_lines(*, recorded, configured, cycle, fence):
     else:
         lines.append("Proveedor del último ciclo guardado: UNKNOWN")
     if fence == "on":
-        lines.append("Valla de entradas: activa (leída del registro).")
+        lines.append("Bandera de valla: activa.")
     elif fence == "off":
-        lines.append("Valla de entradas: no activa (leída del registro).")
+        lines.append("Bandera de valla: no activa.")
     else:
-        lines.append("Valla de entradas: UNKNOWN")
+        lines.append("Bandera de valla: UNKNOWN")
+    if expectation is True:
+        lines.append("Cálculo por los pasos anotados (no es la bandera): haría falta una valla.")
+    elif expectation is False:
+        lines.append("Cálculo por los pasos anotados (no es la bandera): los pasos no piden valla.")
     return lines
+
+
+def history_record_card(row, label, when):
+    """One row of any history table. ``label`` is the section name. Nothing is dropped for being past the first runs."""
+    kind = label if isinstance(label, str) and label.strip() else "Registro"
+    symbol = row.get("symbol") if isinstance(row.get("symbol"), str) and row.get("symbol").strip() else ""
+    moment = when if isinstance(when, str) and when.strip() else "hora UNKNOWN"
+    title = f"{kind} · {symbol} · {moment}" if symbol else f"{kind} · {moment}"
+    lines = []
+    status = row.get("status") if isinstance(row.get("status"), str) and row.get("status").strip() else None
+    if status:
+        lines.append(f"Estado: {status}")
+    event = row.get("event_type") if isinstance(row.get("event_type"), str) and row.get("event_type").strip() else None
+    if event:
+        lines.append(f"Evento: {event}")
+    provider = mode_label(row.get("provider"))
+    lines.append("Proveedor de ese ciclo: " + provider if provider else "Proveedor de ese ciclo: UNKNOWN")
+    lines.append("Fila de esta página.")
+    return {"title": title, "lines": lines}
 
 
 def history_card(row):
