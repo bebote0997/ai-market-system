@@ -305,7 +305,8 @@ class CloseTests(PauseCase):
         Scheduler(runtime, lambda: SLOT + timedelta(minutes=15)).tick()  # EURUSD cycle: the router sees EURUSD only
         self.assertEqual(self.paper()[3], ["EURUSD"])
         self.assertEqual(router.on_cycle.call_count, 1)
-        self.assertEqual({c[0] for c in router.mock_calls} - {"on_cycle", "drawdown_basis"}, set())
+        self.assertEqual({c[0] for c in router.mock_calls}
+                         - {"on_cycle", "drawdown_basis", "sync_transition_fence"}, set())
 
 
 if __name__ == "__main__":

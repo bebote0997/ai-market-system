@@ -336,10 +336,14 @@ class ControlBrokerViewTests(unittest.TestCase):
         content = self.content(app)
         self.assertIn('Real · solo lectura (operar bloqueado)', content)
         self.assertIn('sin token', content)  # no OANDA_LIVE_TOKEN
-        # No order control anywhere: the only button is the (now wired, enabled by default) emergency stop, which
-        # asks for a typed confirmation before doing anything.
-        self.assertEqual([b.key for b in app.button], ['control-emergency-stop'])
-        self.assertTrue(all(b.disabled for b in app.button if b.key != 'control-emergency-stop'))
+        # No order control. The emergency stop asks for a typed confirmation. An owner session may also show the
+        # two provider-step buttons; they only queue a flag after their own phrase and never send an order.
+        keys = [b.key for b in app.button]
+        self.assertIn('control-emergency-stop', keys)
+        self.assertTrue(set(keys) <= {'control-emergency-stop', 'control-provider-xai', 'control-provider-openai'})
+        labels = ' '.join(getattr(b, 'label', '') for b in app.button).lower()
+        self.assertNotIn('comprar', labels)
+        self.assertNotIn('vender', labels)
         toggles = [t for t in app.toggle if t.key and t.key.startswith('control-')]
         self.assertTrue(all(t.disabled and t.value is False for t in toggles))
 

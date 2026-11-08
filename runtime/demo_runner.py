@@ -43,14 +43,16 @@ def preflight(config, *, env=None):
     checks = {
         "enabled_symbols": tuple(config.enabled_symbols) == ("XAUUSD", "EURUSD"),
         "market_provider": config.market_provider_mode == "twelve_data",
-        "ai_provider": config.ai_provider_mode == "openai",
+        "ai_provider": config.ai_provider_mode in {"openai", "xai"},
         "scheduler_configured": config.cadence_minutes == 15 and not config.scheduler_enabled,
         "paper_mode": True,
         "real_execution_disabled": not REAL_EXECUTION_ENABLED,
         "experiment_not_started": True,
         "twelve_data_credential": bool(env.get("TWELVE_DATA_API_KEY")),
-        "openai_credential": bool(env.get("OPENAI_API_KEY")),
-        "openai_model": env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
+        "openai_credential": config.ai_provider_mode != "openai" or bool(env.get("OPENAI_API_KEY")),
+        "openai_model": config.ai_provider_mode != "openai" or env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
+        "xai_credential": config.ai_provider_mode != "xai" or bool(env.get("XAI_API_KEY")),
+        "xai_model": config.ai_provider_mode != "xai" or env.get("XAI_MODEL", "grok-4.7") == "grok-4.7",
     }
     from runtime.config import catch_up_scope_checks, catch_up_storage_checks, persistent_write_probe
     checks.update(catch_up_storage_checks(config, mount=None, disk_mounted=True))  # V2 P8.4 R2; {} while OFF

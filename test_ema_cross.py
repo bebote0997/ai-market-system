@@ -431,6 +431,18 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(saved["status"], "OPEN")
         self.assertNotIn(saved["scale_stage"], ("ANCHORED", "KEPT"))
 
+    def test_a_pending_provider_transition_blocks_pullback_and_ema_entries(self):
+        from execution.operator_actions import PROVIDER_TRANSITION_FENCE
+        router = self.router()
+        self.store.set_flag(PROVIDER_TRANSITION_FENCE, "1")
+        router._candidate = lambda *_args, **_kwargs: ("plan", "decision", "EURUSD", "run-1")
+        self.assertEqual(router._route({"symbol": "EURUSD"}, "PLAN_READY", READY, None)[1],
+                         "provider_transition_pending")
+        later = m15_long() + [(READY, m15_long()[-1][1])]
+        router.on_cycle(macro(), "NO_SETUP", CONFIRM, m15_bars=m15_long(), h1_closes=h1_up())
+        router.on_cycle(macro(), "NO_SETUP", READY, m15_bars=later, h1_closes=h1_up())
+        self.assertEqual(self.broker.plans, [])
+
     def test_daily_loss_gate_blocks_the_ema_order(self):
         router = self.router()
         router._loss_limit = object()

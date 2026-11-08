@@ -6,6 +6,7 @@ import logging
 import os
 import re
 
+from ai.provider_policy import MODES
 from ui.adapters import MARKETS
 
 SUPPORTED_SYMBOLS = MARKETS
@@ -106,7 +107,7 @@ class RuntimeConfig:
             raise ValueError(f"enabled_symbols must not include hard-blocked symbols {BLOCKED_SYMBOLS}")
         if not set(self.sessions) <= {"LONDON", "NEW_YORK"} or self.starting_equity <= 0:
             raise ValueError("invalid sessions or equity")
-        if self.market_provider_mode not in {"none", "massive", "twelve_data"} or self.ai_provider_mode not in {"deterministic", "openai"}:
+        if self.market_provider_mode not in {"none", "massive", "twelve_data"} or self.ai_provider_mode not in MODES:
             raise ValueError("invalid provider mode")
         if self.macro_provider_mode not in {"none", "finnhub", "official_hybrid", "fxmacrodata"}:
             raise ValueError("invalid macro provider mode")
@@ -138,11 +139,12 @@ class RuntimeConfig:
         if scope and parse_catch_up_symbols(",".join(scope), tuple(self.enabled_symbols)) != scope:
             raise ValueError("v2_position_catch_up_symbols must be canonical (enabled_symbols order)")
 
-    def fingerprint(self):
-        content = {"cadence_minutes": self.cadence_minutes, "enabled_symbols": self.enabled_symbols,
-                   "supported_symbols": SUPPORTED_SYMBOLS,
-                   "sessions": self.sessions, "scheduler_enabled": self.scheduler_enabled,
-                   "max_age_seconds": self.max_age_seconds, "paper_mode": True,
+    def fingerprint_content(self):
+        """The exact object hashed by ``fingerprint``. ``ai_provider_mode`` stays in it."""
+        content = {"cadence_minutes": self.cadence_minutes, "enabled_symbols": list(self.enabled_symbols),
+                   "supported_symbols": list(SUPPORTED_SYMBOLS),
+                   "sessions": list(self.sessions), "scheduler_enabled": self.scheduler_enabled,
+                   "max_age_seconds": list(self.max_age_seconds), "paper_mode": True,
                    "market_provider_mode": self.market_provider_mode,
                    "ai_provider_mode": self.ai_provider_mode,
                    "macro_provider_mode": self.macro_provider_mode}
@@ -163,7 +165,10 @@ class RuntimeConfig:
             content["v2_sealed_genesis"] = True
         if self.v2_opposite_setup_policy != "BLOCK":
             content["v2_opposite_setup_policy"] = self.v2_opposite_setup_policy
-        return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
+        return content
+
+    def fingerprint(self):
+        return hashlib.sha256(json.dumps(self.fingerprint_content(), sort_keys=True).encode()).hexdigest()
 
     def catch_up_applies(self, symbol):
         """P1-B: True only for a symbol inside the ON catch-up scope; every other symbol keeps the legacy path."""

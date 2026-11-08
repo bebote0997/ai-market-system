@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-07 (America/New_York; rama de preparación `cursor/ema-cross-demo-9b96`, DEC-EMA-1). Estrategia EMA 10/21 EURUSD añadida, solo demo, flag `AI_FLOOR_EMA_CROSS` apagado por defecto. DEC-FX-SL-3 (LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail) no cambia. Sin merge, sin deploy, sin cambios de UI, env de Render ni órdenes en vivo. REAL sigue bloqueado. La nota de validación 2024–2026 del candidato es evaluación retrospectiva sobre datos ya usados, no un holdout intacto. Ver `docs/ema_cross.md`._
+_Última actualización: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96` apilada sobre `cursor/ema-cross-demo-9b96`). xAI preparado y apagado; el cambio de proveedor solo lo anota el runner después de una confirmación del owner en el panel, con la cuenta plana, y no al arrancar. EMA 10/21 preparado y apagado. Ninguno está mergeado ni desplegado. REAL sigue bloqueado. Ver `docs/provider_migration.md` y `docs/ema_cross.md`._
+
+_Anterior en esta pila: 2026-11-07 (DEC-EMA-1). Estrategia EMA 10/21 EURUSD, flag `AI_FLOOR_EMA_CROSS` apagado. DEC-FX-SL-3 (LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail) no cambia._
 
 _Anterior: 2026-11-03 (America/New_York; rama `feat/fx-sl-fixed-25`, DEC-FX-SL-3 aprobada por el owner (sustituye a DEC-FX-SL-2): LIMIT de retroceso EURUSD a 12,5 pips fijos de la señal (sin ATR); SL fijo 25 pips y TP fijo 50 pips (2R) desde la LIMIT/entrada; `limit_through_stop` solo si la LIMIT queda en/tras la invalidación estructural. Sin commit, sin merge, sin deploy; sin cambios de UI, env ni Render. REAL sigue bloqueado. Ver `CHANGELOG_AGENT.md`)._
 

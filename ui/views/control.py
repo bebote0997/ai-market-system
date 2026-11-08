@@ -14,6 +14,7 @@ local files, never OANDA trades). Every lazy import failure => "apagado" / "—"
 from datetime import datetime, timezone
 from decimal import Decimal
 from html import escape
+from uuid import uuid4
 
 from ui.i18n_es import status_text
 
@@ -39,6 +40,9 @@ HISTORY_TITLE = "📚 Historial (referencia) · no son operaciones de OANDA"
 HISTORY_CHIP = "Referencia · no son operaciones de OANDA"
 HISTORY_EMPTY = "sin datos todavía (se cargará con la exportación)"
 EMERGENCY_PHRASE, DRIFT_PHRASE = "PARAR TODO", "LIMPIAR DRIFT"
+XAI_PHRASE, OPENAI_PHRASE = "CAMBIAR A XAI", "VOLVER A OPENAI"
+TRANSITION_SENT = ("Solicitud enviada: el proceso la comprobará otra vez y solo entonces anota el cambio. "
+                   "El proveedor activo no cambia en este paso.")
 DRIFT_SENT = ("Solicitud enviada: el sistema la verificará en el próximo ciclo; se limpia solo si las posiciones del "
               "broker y el estado local coinciden")
 
@@ -287,13 +291,15 @@ def operator_api():
     """Lazy operator actions + their read-only state; None when unavailable (=> emergency button disabled, no drift
     button). Never raises."""
     try:
-        from execution.operator_actions import button_flags, operator_state, request_drift_clear, request_emergency_stop
+        from execution.operator_actions import (button_flags, operator_state, request_drift_clear,
+                                                request_emergency_stop, request_provider_transition)
         flags, state = button_flags(), operator_state()
     except Exception:  # The actions are optional: unavailable => nothing can be requested from here.
         return None
     if not isinstance(flags, dict) or not isinstance(state, dict):
         return None
-    return {"flags": flags, "state": state, "stop": request_emergency_stop, "drift_clear": request_drift_clear}
+    return {"flags": flags, "state": state, "stop": request_emergency_stop, "drift_clear": request_drift_clear,
+            "transition": request_provider_transition}
 
 
 def _ok(result):
@@ -386,6 +392,64 @@ def render_history(st):
              f'{"".join(cards)}</div>')
 
 
+def _transition_text(result):
+    reason = result.get("reason") if isinstance(result, dict) else None
+    if reason in ("requested", "duplicate"):
+        return TRANSITION_SENT
+    if reason == "not_flat":
+        return ("La cuenta no está plana: hay una posición abierta o una orden pendiente. No se registró nada.")
+    if reason == "already_pending":
+        return "Ya hay un cambio de proveedor pendiente. No se registró otro."
+    return "No se registró el cambio."
+
+
+def render_provider_transition(st, api):
+    """Owner-only, two-step request. Hidden for every other session. The click only queues a flag."""
+    from ui.auth import owner_authenticated
+    from ui.views.luxury import html
+    if not owner_authenticated(st) or not isinstance(api, dict) or not callable(api.get("transition")):
+        return
+    state = st.session_state
+    receipt = api.get("state") if isinstance(api.get("state"), dict) else {}
+    receipt_state = receipt.get("provider_transition_state")
+    receipt_reason = receipt.get("provider_transition_reason") if isinstance(
+        receipt.get("provider_transition_reason"), str) else ""
+    receipt_text = {"recorded": "Anotado. El proveedor activo no cambió; un reinicio anterior al cambio de la variable sigue reanudando.",
+                    "refused": f"Rechazado ({escape(receipt_reason or 'refused')}). No se anotó el cambio.",
+                    "pending": f"Pendiente ({escape(receipt_reason or 'requested')}). Todavía no se anotó el cambio."
+                    }.get(receipt_state)
+    if receipt_text:
+        html(st, f'<div class="small">{receipt_text}</div>')
+    html(st, '<h3 style="margin:12px 0 4px">Cambio de proveedor de IA</h3>'
+             '<div class="small">Esto no cambia el proveedor activo. Pide anotar un único paso (openai o xai) '
+             'cuando la cuenta de práctica y el broker demo no tienen posiciones ni órdenes pendientes. '
+             'El proceso lo comprueba otra vez antes de anotarlo.</div>')
+    if st.button("Registrar paso a xAI", key="control-provider-xai"):
+        state["control-provider-confirming"] = "xai"
+        state["control-provider-request"] = uuid4().hex
+        state["control-provider-result"] = None
+    if st.button("Registrar vuelta a OpenAI", key="control-provider-openai"):
+        state["control-provider-confirming"] = "openai"
+        state["control-provider-request"] = uuid4().hex
+        state["control-provider-result"] = None
+    choice = state.get("control-provider-confirming")
+    phrase = XAI_PHRASE if choice == "xai" else OPENAI_PHRASE if choice == "openai" else None
+    if phrase is not None:
+        html(st, f'<div class="small">Para confirmar escribe exactamente <b>{phrase}</b>.</div>')
+        typed = st.text_input("Frase de confirmación del proveedor", key="control-provider-phrase")
+        if st.button("Confirmar cambio de proveedor", key="control-provider-confirm"):
+            if typed == phrase and state.get("control-provider-request"):
+                result = api["transition"](actor="dashboard", note=phrase, to_mode=choice,
+                                           request_id=state["control-provider-request"])
+                state["control-provider-result"] = result if isinstance(result, dict) else {"ok": False}
+                state["control-provider-confirming"] = None
+            else:
+                html(st, '<div class="small">La frase no coincide: no se hizo nada.</div>')
+    result = state.get("control-provider-result")
+    if isinstance(result, dict):
+        html(st, f'<div class="small">{escape(_transition_text(result))}</div>')
+
+
 def render(st, snapshot=None):
     from ui.views.luxury import html
     snapshot = snapshot or control_snapshot()
@@ -423,6 +487,7 @@ def render(st, snapshot=None):
         html(st, '<h3 style="margin:4px 0">Parada de emergencia</h3>')
         render_emergency(st, snapshot, api)
     render_drift(st, api)
+    render_provider_transition(st, api)
     html(st, '<h3 style="margin:12px 0 4px">🔀 Enrutado a broker demo</h3>')
     render_router(st, routing, since)
     render_accounts_view(st)

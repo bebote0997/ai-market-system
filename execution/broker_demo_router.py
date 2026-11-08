@@ -540,6 +540,8 @@ class BrokerDemoRouter:
         client_id = f"aif-{run_id}"
         if self.closing_only:  # emergency restart: never opens (the close-only broker refuses submits too)
             return self._refuse(client_id, "emergency_active")
+        if self._entries_fenced():
+            return self._refuse(client_id, "provider_transition_pending")
         if self._store.trade(client_id) is not None:
             return "ALREADY_ROUTED", client_id
         if self._friday_minutes is not None and fc.friday_window(at, self._friday_minutes) != fc.OPEN:
@@ -1389,6 +1391,9 @@ class BrokerDemoRouter:
             self._ema_store.save(replace(signal, status="SUBMITTED", reason="already_routed", client_id=client_id),
                                  now=at)
             return
+        if self._entries_fenced():
+            self._event("EMA_HOLD", client_id, reason="provider_transition_pending", strategy=EMA_STRATEGY)
+            return
         if self._friday_minutes is not None and fc.friday_window(at, self._friday_minutes) != fc.OPEN:
             self._event("EMA_HOLD", client_id, reason="friday_close_window", strategy=EMA_STRATEGY)
             return
@@ -1697,6 +1702,53 @@ class BrokerDemoRouter:
         except Exception as exc:  # noqa: BLE001 - never breaks the cycle; retried next tick
             LOG.error("component=broker_demo event=FLATTEN_REQUEST_ERROR error_type=%s", type(exc).__name__)
             return {}, None
+
+    def _fresh_broker_book(self):
+        """Open trades and pending orders from the broker, under the caller's lock. An error is not an empty book."""
+        if self.blocked_reason:
+            return {"ok": False, "reason": "blocked", "blocked_reason": str(self.blocked_reason),
+                    "open_trades": None, "pending_orders": None}
+        try:
+            trades = self._broker.open_trades()
+            orders = self._broker.pending_orders()
+        except Exception as exc:  # noqa: BLE001 - no append on a failed read
+            return {"ok": False, "reason": "broker_unread", "error": type(exc).__name__,
+                    "open_trades": None, "pending_orders": None}
+        if not isinstance(trades, (list, tuple)) or not isinstance(orders, (list, tuple)):
+            return {"ok": False, "reason": "broker_unread", "open_trades": None, "pending_orders": None}
+        return {"ok": True, "reason": None, "blocked_reason": None,
+                "open_trades": len(trades), "pending_orders": len(orders)}
+
+    def sync_transition_fence(self, store):
+        """Block new pullback and EMA entries while the latest provider step has not been used by a run."""
+        from runtime.provider_transition import entry_fence_required
+        from execution.operator_actions import PROVIDER_TRANSITION_FENCE
+        required = entry_fence_required(store.db)
+        current = self._store.flag(PROVIDER_TRANSITION_FENCE)
+        if required and current != "1":
+            self._store.set_flag(PROVIDER_TRANSITION_FENCE, "1")
+        elif not required and current:
+            self._store.clear_flag(PROVIDER_TRANSITION_FENCE)
+
+    def _entries_fenced(self):
+        from execution.operator_actions import PROVIDER_TRANSITION_FENCE
+        return self._store.flag(PROVIDER_TRANSITION_FENCE) == "1"
+
+    def consume_provider_transition(self, store, config, env, at):
+        """Apply one queued provider step. The broker read happens under the router lock. Never raises."""
+        try:
+            from execution.operator_actions import PROVIDER_TRANSITION_FLAG, consume_provider_transition
+            if not self._store.flag(PROVIDER_TRANSITION_FLAG):
+                return None
+            with self._lock:
+                evidence = self._fresh_broker_book()
+                result = consume_provider_transition(
+                    store, config, env=env, broker_db_path=self._store.path, broker_evidence=evidence, now=at)
+                self.sync_transition_fence(store)
+                return result
+        except Exception as exc:  # noqa: BLE001 - a bad mailbox is retried on the next poll
+            LOG.warning("component=broker_demo event=PROVIDER_TRANSITION_FAILED error_type=%s", type(exc).__name__)
+            return None
 
     def process_operator_requests(self, at):
         """Between-cycle poll of the dashboard requests (runner loop, every few seconds): ONE flag read and nothing else

@@ -185,7 +185,9 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "paper_only": not REAL_EXECUTION_ENABLED,
         "enabled_symbols": tuple(config.enabled_symbols) == ("XAUUSD", "EURUSD"),
         "market_provider": config.market_provider_mode == "twelve_data",
-        "ai_provider": config.ai_provider_mode == "openai" and env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra",
+        "ai_provider": (
+            (config.ai_provider_mode == "openai" and env.get("OPENAI_MODEL", "gpt-5.6-terra") == "gpt-5.6-terra")
+            or (config.ai_provider_mode == "xai" and env.get("XAI_MODEL", "grok-4.7") == "grok-4.7")),
         "macro_provider_disabled": macro_disabled,
         "macro_provider_valid": macro_disabled or macro_certified,
         "macro_provider_certified": macro_certified,
@@ -194,7 +196,8 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "durable_path": path.is_absolute() and (path == mount or mount in path.parents),
         "durable_mount": bool(disk_mounted),
         "dashboard_auth": password_strong_enough(env.get("AI_FLOOR_DASHBOARD_PASSWORD")),
-        "openai_credential": bool(env.get("OPENAI_API_KEY")),
+        "openai_credential": config.ai_provider_mode != "openai" or bool(env.get("OPENAI_API_KEY")),
+        "xai_credential": config.ai_provider_mode != "xai" or bool(env.get("XAI_API_KEY")),
         "twelve_data_credential": bool(env.get("TWELVE_DATA_API_KEY")),
         "slack_configured": bool(env.get("SLACK_WEBHOOK_URL")),
         "db_writable_schema": False,
@@ -223,18 +226,31 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
                     # Activation callers temporarily disable the scheduler for
                     # preflight; durable run metadata describes the active config.
                     freeze = env.get("AI_FLOOR_GIT_COMMIT")
-                    fingerprint = replace(config, scheduler_enabled=True).fingerprint()
+                    active = replace(config, scheduler_enabled=True)
+                    fingerprint = active.fingerprint()
                     metadata = store.db.execute(
-                        "SELECT DISTINCT git_commit, config_fingerprint, starting_equity FROM run_metadata"
+                        "SELECT m.git_commit, m.config_fingerprint, m.starting_equity, r.started_at "
+                        "FROM run_metadata m LEFT JOIN runs r ON r.slot_key = m.slot_key"
                     ).fetchall()
-                    checks["experiment_resumable"] = bool(
-                        freeze and store.get_state("experiment_freeze_sha") == freeze
-                        and store.get_state("experiment_started_at_utc")
-                        and store.db.execute("SELECT 1 FROM paper_accounts WHERE account_id=?",
-                                             (config.account_id,)).fetchone()
-                        and all(tuple(row) == (freeze, fingerprint, config.starting_equity)
-                                for row in metadata)
-                    )
+                    identity = [(row[0], row[1], row[2]) for row in metadata]
+                    freeze_ok = store.get_state("experiment_freeze_sha") == freeze
+                    started = bool(store.get_state("experiment_started_at_utc"))
+                    account_present = bool(store.db.execute(
+                        "SELECT 1 FROM paper_accounts WHERE account_id=?", (config.account_id,)).fetchone())
+                    unchanged = bool(
+                        freeze and freeze_ok and started and account_present
+                        and all(tuple(row) == (freeze, fingerprint, config.starting_equity) for row in identity))
+                    from runtime.provider_transition import load_transitions, transition_resumes
+                    records = load_transitions(store.db)
+                    if not records:
+                        checks["experiment_resumable"] = unchanged
+                    else:
+                        # The predecessor resumes only until a run is stored on the new fingerprint.
+                        # After that, only the tail resumes. A bad record does not fall back.
+                        checks["experiment_resumable"] = transition_resumes(
+                            metadata, freeze=freeze, freeze_ok=freeze_ok, started=started,
+                            account_present=account_present, current_payload=active.fingerprint_content(),
+                            starting_equity=config.starting_equity, records=records)
             finally:
                 store.close()
         except (OSError, RuntimeError, ValueError, sqlite3.Error):
@@ -248,11 +264,11 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
         "paper_only", "enabled_symbols", "market_provider", "ai_provider",
         "macro_provider_valid", "scheduler_single_authority", "scheduler_not_started",
         "durable_path", "durable_mount", "dashboard_auth", "db_writable_schema",
-        "experiment_state_compatible", *catch_up_checks, *sealed_checks,
+        "experiment_state_compatible", "xai_credential", *catch_up_checks, *sealed_checks,
     )
     infra_ready = all(checks[name] for name in infrastructure)
     experiment_ready = infra_ready and all(checks[name] for name in (
-        "macro_provider_certified", "openai_credential", "twelve_data_credential",
+        "macro_provider_certified", "openai_credential", "xai_credential", "twelve_data_credential",
         "slack_configured",
     ))
     return CloudPreflight("INFRA_READY" if infra_ready else "NOT_READY", checks,

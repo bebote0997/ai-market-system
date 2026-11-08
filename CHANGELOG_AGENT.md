@@ -1,10 +1,33 @@
 # Agent Changelog
 
+## 2026-11-08 — DEC-XAI-1: la transición mira el libro real y deja constancia
+
+- El runner lee, bajo su candado, las operaciones abiertas y las órdenes pendientes del broker. Una lectura fallida no anota y deja la solicitud en cola. Un bloqueo, una operación o una orden pendiente rechaza la solicitud. El libro local se comprueba además.
+- El panel muestra si el paso está pendiente, anotado o rechazado. Hasta que un ciclo queda guardado con la huella nueva, no entran operaciones nuevas del retroceso ni de EMA. Hasta ese ciclo el modo anterior sigue reanudando; después solo reanuda el extremo de la cadena. Volver atrás es otra fila explícita.
+- Sigue apagado. Ninguna fila se escribió en la base real. REAL sigue bloqueado.
+
 ## 2026-11-08 — DEC-EMA-1: la protección de EMA se comprueba en el broker
 
 - `ANCHORED` solo se guarda cuando una lectura nueva de la operación abierta muestra stop y target. El stop local de la cotización no cuenta como protección.
 - Si el broker no trae stop o target, se reemplazan a 20/40 desde el fill del broker. Si el reemplazo falla, se cierra. Si el cierre no queda aceptado, la fila sigue abierta y el siguiente ciclo lo reintenta. Una lectura fallida no ancla y no cierra a ciegas.
 - La entrada EMA sigue usando el mismo `_sized` del router que el retroceso: tope del 1%, tope de unidades y límite de pérdida diaria cuando está activo, más noticias, sesión, viernes y una sola posición. El motor de riesgo del libro de práctica interna no gobierna la cuenta de OANDA. La pausa de símbolo sigue siendo solo XAUUSD en el libro interno. El modelo de la señal no cambia.
+
+## 2026-11-07 — DEC-XAI-1: el cambio de proveedor lo confirma el owner y lo anota el runner
+
+- El panel de control (sesión del owner, la misma contraseña de siempre) encola una bandera. No es un endpoint de SQL ni de comandos, y no añade ninguna variable de entorno.
+- El runner, en el sondeo que ya hace, vuelve a contar posiciones abiertas de práctica, órdenes de práctica no terminadas y filas vivas del broker demo (incluye límites pendientes y UNKNOWN). Solo si las tres cuentas son cero anota un paso `openai` o `xai`. El arranque no anota nada.
+- Una cadena válida deja reanudar el experimento tanto en el modo de origen como en el de destino, así el reinicio de en medio no se rompe. Una fila alterada no vuelve al camino antiguo. El SHA de freeze no cambia. No se crea otro experimento.
+- Sigue apagado: ninguna fila se escribió en la base real. REAL sigue bloqueado. El retroceso DEC-FX-SL-3 no se tocó.
+
+## 2026-11-07 — DEC-XAI-1: proveedor xAI Grok preparado, apagado (sin activar)
+
+- Inventario: la IA de consejo es OpenAI o el eco determinista; los precios son Twelve Data (o Massive); las noticias son Finnhub / híbrido oficial / FXMacroData; las órdenes de práctica son OANDA. No hay cliente de X ni de Exa.
+- `AI_FLOOR_AI_PROVIDER=xai` construye `XAIProvider` (`POST https://api.x.ai/v1/responses`, modelo `grok-4.7`, `store: false`, sin tools, esquema JSON estricto, tope de tokens, reintentos solo en 429/5xx). Un fallo no llama a OpenAI. El adaptador de OpenAI queda para volver atrás.
+- El modo por defecto no cambia. Sin clave `XAI_API_KEY` el preflight de cloud no queda listo si el modo ya es `xai`. La certificación en vivo es solo `--only xai`.
+- No hay adaptador de X: este repo no lee posts, y un post no sustituye a Twelve Data ni a OANDA.
+- Sin merge, sin deploy, sin cambio de Render ni de órdenes. REAL sigue bloqueado. `XAI_API_KEY` es un nombre nuevo: no forma parte de las 42 claves actuales, así que xAI no se puede activar sin que el owner apruebe ese alta. La llamada en vivo y el derecho de la cuenta a `grok-4.7` no se probaron.
+- Esta rama está apilada sobre `cursor/ema-cross-demo-9b96` (PR #73). No está mergeada.
+- Transición de proveedor: `runtime/provider_transition.py` no la aplica al arrancar. Sin fila, el fingerprint distinto sigue bloqueado. Una fila solo se añade a mano, con cuenta plana y un único campo `ai_provider_mode`. No reescribe el historial. Ninguna fila se escribió. No es una migración aprobada.
 
 ## 2026-11-07 — DEC-EMA-1: EMA 10/21 EURUSD, demo, flag OFF (preparado, sin activar)
 

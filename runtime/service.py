@@ -121,6 +121,10 @@ class OperationalRuntime:
         if ai_provider is None and self.config.ai_provider_mode == "openai":
             from ai.openai_provider import OpenAIProvider
             ai_provider = OpenAIProvider(timeout=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "30")))
+        if ai_provider is None and self.config.ai_provider_mode == "xai":
+            # Exclusive: a failed xAI call is not replaced with OpenAI. Rollback is the openai mode.
+            from ai.provider_policy import build_provider
+            ai_provider = build_provider("xai")
         self.market_provider = market_provider
         self.ai_provider = ai_provider or DeterministicAIProvider()
         if macro_provider is None and self.config.macro_provider_mode == "finnhub":
@@ -692,9 +696,12 @@ class OperationalRuntime:
         return results
 
     def process_operator_requests(self, at):
-        """Dashboard requests (Floor «Cerrar operación», emergency flatten) between cycles: an in-session tick inside an
-        already claimed slot is DUPLICATE and never reaches ``router.on_cycle``. Same gates as the manage pass (router
-        configured, no halt); never raises. Returns {client_id: outcome}."""
+        """Dashboard requests (Floor «Cerrar operación», emergency flatten, provider transition) between cycles.
+
+        The provider step uses the router that already polls this mailbox. It never sends an order, including when
+        the halt latch is set. An in-session tick inside an already claimed slot is DUPLICATE and never reaches
+        ``router.on_cycle``. Never raises. Returns {client_id: outcome}."""
+        self._consume_provider_transition(at)
         if self.broker_router is None or (self.halt_gate is not None and self.halt_gate.halted):
             return {}
         try:
@@ -702,6 +709,15 @@ class OperationalRuntime:
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=broker_demo event=OPERATOR_POLL_FAILED error_type=%s", type(exc).__name__)
             return {}
+
+    def _consume_provider_transition(self, at):
+        """One queued dashboard request, through the router that already owns the state mailbox. Never raises."""
+        if self.broker_router is None:
+            return
+        try:
+            self.broker_router.consume_provider_transition(self.store, self.config, os.environ, at)
+        except Exception as exc:  # noqa: BLE001 - the next poll retries a still-queued request
+            LOG.warning("component=provider_transition event=CONSUME_FAILED error_type=%s", type(exc).__name__)
 
     def close_paused_symbols(self, at):
         """DEC-XAU-OFF-1: flatten every paused enabled symbol in PAPER (simulated; never the broker router), called by
@@ -1003,6 +1019,11 @@ class OperationalRuntime:
             if (router is not None and cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}
                     and not (self.halt_gate is not None and self.halt_gate.halted)):
                 def call_router():
+                    try:
+                        router.sync_transition_fence(self.store)
+                    except Exception as exc:  # noqa: BLE001 - a failed sync leaves the previous fence in place
+                        LOG.warning("component=provider_transition event=FENCE_SYNC_FAILED error_type=%s",
+                                    type(exc).__name__)
                     if _ema_cross_enabled(router):
                         return router.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars,
                                                m15_bars=ema_m15, h1_closes=ema_h1)
