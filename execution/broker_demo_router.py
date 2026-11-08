@@ -747,58 +747,112 @@ class BrokerDemoRouter:
             LOG.warning("component=broker_demo event=FILL_CHECK_FAILED error_type=%s", type(exc).__name__)
 
     def _verify_ema_fill(self, client_id, symbol, side, fill, stop, target):
-        """Move an EMA position onto 20/40 from the actual fill once that fill is known. See ``_reanchor_ema``."""
+        """Move an EMA position onto 20/40 from the actual fill once the broker trade shows its protection."""
         row = self._store.trade(client_id)
         if row is None or row.get("strategy") != EMA_STRATEGY:
             return
         if self._reanchor_ema(row, {}, None) == "WAIT":
-            self._event("FILL_CHECK_UNAVAILABLE", client_id, reason="fill_price_unknown", strategy=EMA_STRATEGY)
+            self._event("FILL_CHECK_UNAVAILABLE", client_id, reason="protection_unverified", strategy=EMA_STRATEGY)
+
+    def _ema_broker_trade(self, trade_id):
+        """A fresh broker trade, or ``(None, reason)``. The local row's stop and target are not evidence."""
+        if not trade_id:
+            return None, "missing_trade_id"
+        try:
+            trades = self._broker.open_trades()
+        except Exception as exc:  # noqa: BLE001 - unread is not flat and not protected
+            return None, type(exc).__name__
+        if not isinstance(trades, (list, tuple)):
+            return None, "broker_unread"
+        found = [trade for trade in trades if str(getattr(trade, "trade_id", "")) == str(trade_id)]
+        if len(found) != 1:
+            return None, "trade_not_open"
+        return found[0], None
+
+    def _ema_protection_verified(self, trade_id, stop, target):
+        trade, problem = self._ema_broker_trade(trade_id)
+        if trade is None:
+            return False, problem
+        if getattr(trade, "stop", None) is None or getattr(trade, "target", None) is None:
+            return False, "protection_missing"
+        if round_price(trade.stop) != round_price(stop) or round_price(trade.target) != round_price(target):
+            return False, "protection_mismatch"
+        return True, None
 
     def _reanchor_ema(self, row, quotes, price_provider):
-        """Best-effort replace of SL and TP onto the actual fill. An oversized stop that cannot be replaced is closed.
+        """Put SL and TP on 20/40 from the broker's fill, using the broker's stop and target as the only evidence.
 
-        The order is never sent naked: the quote-based SL/TP are attached at submission. This runs only after the
-        broker reports a fill price. Exact 20/40 is guaranteed only when that replace is accepted. A tighter stop
-        is kept if the replace fails. A stop farther than 20.5 pips, or a market already through the corrected
-        stop, closes the trade (``EMA_RISK_UNCORRECTED`` / ``EMA_PRICE_THROUGH_STOP``).
+        The quote-based SL/TP are still attached at submission so the order is not sent naked. They are not treated
+        as present on the trade. A missing read is retried. A missing or non-protective stop is replaced, and a
+        failed replace closes. ``ANCHORED`` is stored only after a fresh read shows both prices. A tighter broker
+        stop is kept when the replace fails. A failed close is not marked done, so the next pass retries it.
         """
         if row.get("scale_stage") in ("ANCHORED", "KEPT"):
             return "KEEP"
-        fill = _dec(row.get("fill_price"))
+        client_id = row["client_id"]
+        trade, problem = self._ema_broker_trade(row.get("trade_id"))
+        if trade is None:
+            self._event("EMA_PROTECTION_UNVERIFIED", client_id, strategy=EMA_STRATEGY, reason=problem)
+            return "WAIT"
+        fill = _dec(getattr(trade, "price", None)) or _dec(row.get("fill_price"))
         if fill is None:
+            self._event("EMA_PROTECTION_UNVERIFIED", client_id, strategy=EMA_STRATEGY, reason="fill_unknown")
             return "WAIT"
         if row["symbol"] not in quotes:
             quotes[row["symbol"]] = self._quote(row["symbol"], price_provider)
-        quote, problem = quotes[row["symbol"]]
+        quote, quote_problem = quotes[row["symbol"]]
         bid = ask = None
-        if problem is None:
+        if quote_problem is None:
             _tradeable, bid, ask = quote
-        action, stop, target, reason = anchor_plan(row["side"], fill, _dec(row.get("stop")), _dec(row.get("target")),
-                                                   bid=bid, ask=ask)
-        client_id = row["client_id"]
+        broker_stop, broker_target = getattr(trade, "stop", None), getattr(trade, "target", None)
+        if broker_stop is None or broker_target is None:
+            _fill, stop, target = levels_from_fill(row["side"], fill)
+            if (row["side"] == "LONG" and bid is not None and bid <= stop) or (
+                    row["side"] == "SHORT" and ask is not None and ask >= stop):
+                self._event("EMA_PRICE_THROUGH_STOP", client_id, strategy=EMA_STRATEGY, reason="protection_missing",
+                            fill=str(fill))
+                return self._close_ema_unprotected(row, "EMA_PRICE_THROUGH_STOP")
+            return self._install_ema_protection(row, fill, stop, target, "protection_missing")
+        action, stop, target, reason = anchor_plan(row["side"], fill, broker_stop, broker_target, bid=bid, ask=ask)
         if action == "WAIT":
             return "WAIT"
         if action == "OK":
-            self._store.update(client_id, scale_stage="ANCHORED", entry=round_price(fill))
+            self._store.update(client_id, stop=round_price(broker_stop), target=round_price(broker_target),
+                               entry=round_price(fill), scale_stage="ANCHORED")
             self._event("FILL_VERIFIED", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(round_price(fill)))
             return "KEEP"
         if action == "CLOSE":
             self._event("EMA_PRICE_THROUGH_STOP", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(fill))
-            return self._close(row, "EMA_PRICE_THROUGH_STOP", f"{client_id}-fill")
+            return self._close_ema_unprotected(row, "EMA_PRICE_THROUGH_STOP")
+        return self._install_ema_protection(row, fill, stop, target, reason)
+
+    def _install_ema_protection(self, row, fill, stop, target, reason):
+        client_id = row["client_id"]
         replaced = self._replace_ema_protection(row, stop, target)
         if replaced == "ACCEPTED":
-            self._store.update(client_id, stop=round_price(stop), target=round_price(target),
-                               initial_stop=round_price(stop), entry=round_price(fill),
-                               risk_distance=abs(fill - stop), scale_stage="ANCHORED")
-            self._event("EMA_FILL_ANCHORED", client_id, strategy=EMA_STRATEGY, reason=reason, fill=str(round_price(fill)),
-                        stop=str(round_price(stop)), target=str(round_price(target)))
-            return "ANCHORED"
-        if reason == "risk_above_20":
-            self._event("EMA_RISK_UNCORRECTED", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
-            return self._close(row, "EMA_RISK_UNCORRECTED", f"{client_id}-fill")
-        self._store.update(client_id, scale_stage="KEPT")
-        self._event("EMA_FILL_KEPT", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
-        return "KEPT"
+            verified, why = self._ema_protection_verified(row.get("trade_id"), stop, target)
+            if verified:
+                self._store.update(client_id, stop=round_price(stop), target=round_price(target),
+                                   initial_stop=round_price(stop), entry=round_price(fill),
+                                   risk_distance=abs(fill - stop), scale_stage="ANCHORED")
+                self._event("EMA_FILL_ANCHORED", client_id, strategy=EMA_STRATEGY, reason=reason,
+                            fill=str(round_price(fill)), stop=str(round_price(stop)), target=str(round_price(target)))
+                return "ANCHORED"
+            self._event("EMA_PROTECTION_UNVERIFIED", client_id, strategy=EMA_STRATEGY, reason=why)
+            return "WAIT"
+        if reason == "restore_20_40":
+            self._store.update(client_id, scale_stage="KEPT")
+            self._event("EMA_FILL_KEPT", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
+            return "KEPT"
+        self._event("EMA_RISK_UNCORRECTED", client_id, strategy=EMA_STRATEGY, reason=replaced, fill=str(fill))
+        return self._close_ema_unprotected(row, "EMA_RISK_UNCORRECTED")
+
+    def _close_ema_unprotected(self, row, reason):
+        """Close, and leave the row retryable when the close is not accepted."""
+        outcome = self._close(row, reason, f"{row['client_id']}-fill")
+        if outcome not in ("CLOSED", CLOSED_AT_BROKER):
+            self._event("EMA_PROTECTION_UNVERIFIED", row["client_id"], strategy=EMA_STRATEGY, reason=outcome)
+        return outcome
 
     def _replace_ema_protection(self, row, stop, target):
         """``ACCEPTED`` or a short failure reason. Missing method is a failure, not a silent success."""

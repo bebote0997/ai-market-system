@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-08 — DEC-EMA-1: la protección de EMA se comprueba en el broker
+
+- `ANCHORED` solo se guarda cuando una lectura nueva de la operación abierta muestra stop y target. El stop local de la cotización no cuenta como protección.
+- Si el broker no trae stop o target, se reemplazan a 20/40 desde el fill del broker. Si el reemplazo falla, se cierra. Si el cierre no queda aceptado, la fila sigue abierta y el siguiente ciclo lo reintenta. Una lectura fallida no ancla y no cierra a ciegas.
+- La entrada EMA sigue usando el mismo `_sized` del router que el retroceso: tope del 1%, tope de unidades y límite de pérdida diaria cuando está activo, más noticias, sesión, viernes y una sola posición. El motor de riesgo del libro de práctica interna no gobierna la cuenta de OANDA. La pausa de símbolo sigue siendo solo XAUUSD en el libro interno. El modelo de la señal no cambia.
+
 ## 2026-11-07 — DEC-EMA-1: EMA 10/21 EURUSD, demo, flag OFF (preparado, sin activar)
 
 - Autorización del owner (Jeferson, 7 nov) para preparar el PR. No merge, no deploy, no cambio de Render, no órdenes.
