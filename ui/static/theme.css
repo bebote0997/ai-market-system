@@ -442,6 +442,15 @@ header[data-testid="stHeader"]{display:none!important}
 .stApp .block-container{padding-top:18px!important;padding-left:80px!important;box-sizing:border-box;max-width:100%}
 @media(min-width:900px){.stApp.aif-nav-open .block-container{padding-left:328px!important}}
 @media(max-width:899px){.stApp .block-container{padding-right:14px!important}}
+/* The fixed 56px rail sits 12px from the left edge. Content starts clear of it. The wide history
+   table stays in the page at every width; the cards are an extra narrow reading of the same rows. */
+@media(max-width:480px){
+ .stApp .block-container{padding-left:84px!important;padding-right:14px!important}
+}
+@media(min-width:481px){.aif-history-narrow{display:none!important}}
+.aif-history-narrow{display:flex;flex-direction:column;gap:8px}
+.aif-history-narrow article{border:1px solid rgba(34,211,238,.35);border-radius:12px;padding:10px 12px;min-width:0}
+.aif-history-narrow b,.aif-history-narrow span{display:block;overflow-wrap:anywhere}
 .aif-backdrop{display:none}
 @media(max-width:899px){body:has(.stApp.aif-nav-open) .aif-backdrop{display:block;position:fixed;inset:0;z-index:1000001;background:rgba(0,0,0,.34)}}
 .aif-chrome{position:relative;width:100%}

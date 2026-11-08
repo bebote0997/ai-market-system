@@ -27,7 +27,7 @@ main{position:relative;flex:1;min-height:0;overflow:hidden}header,footer{flex:no
 #stage{position:absolute;left:0;top:0;bottom:0;right:0;display:flex;flex-direction:column;transition:right .5s cubic-bezier(.2,.8,.2,1),bottom .5s}
 canvas{flex:1 1 0;min-height:0;width:100%;display:block;cursor:default}
 /* narrow stage (body.mob, set in fit()): the desk status boxes become this HTML strip under the canvas */
-#legend{display:none;flex:none;flex-wrap:wrap;gap:2px 16px;padding:8px 14px 10px;border-top:1px solid var(--line);font-size:11px;line-height:1.5;letter-spacing:.04em;color:var(--mute)}
+#legend{display:flex;flex:none;flex-wrap:wrap;gap:4px 16px;padding:8px 14px 10px;border-top:1px solid var(--line);font-size:13px;line-height:1.45;letter-spacing:.02em;color:var(--mute)}
 #legend b{color:var(--gold2);font-weight:600;letter-spacing:.08em}#legend .on{color:#3ddc84}#legend .pa{color:#ffb020}#legend [onclick]{cursor:pointer}
 body.mob #legend{display:flex}body.mob .note{position:static;flex:none;padding:6px 14px;line-height:1.4}body.mob .hint{display:none}
 body.open #stage{right:440px}

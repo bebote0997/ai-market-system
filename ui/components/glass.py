@@ -56,7 +56,15 @@ def agent_card(agent_id, view, *, waiting_text=None, example=False):
     status = view.get("status")
     status_html = f'<span class="gl-status">{esc(status)}</span>' if status else ''
     # The long analysis lives in the Floor drawer history, not on the card.
-    bubble = '' if status else f'<div class="gl-bubble gl-muted">{esc(NO_DATA_TITLE)}</div>'
+    # A dated card with no status is an absent observation for that cycle, not a guessed cause.
+    when = view.get("as_of") if isinstance(view.get("as_of"), str) and view.get("as_of").strip() else None
+    if status:
+        bubble = ''
+    elif when:
+        bubble = (f'<div class="gl-bubble gl-muted">Sin estado guardado en el ciclo del {esc(when)}. '
+                  'No hay una observación de estado para este agente.</div>')
+    else:
+        bubble = f'<div class="gl-bubble gl-muted">{esc(NO_DATA_TITLE)}</div>'
     facts = []
     bias = view.get("bias")
     if bias in ("LONG", "SHORT"):

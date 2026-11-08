@@ -102,7 +102,9 @@ class AgentCardTests(unittest.TestCase):
         self.assertIn("gl-empty", card)
         for fake in ("LONG", "SHORT", "gl-conf", "gl-time", "EJEMPLO"):
             self.assertNotIn(fake, card)
-        self.assertIn("Sin datos aún", glass.agent_card("Risk", view(analysis=None, status=None)))
+        dated = glass.agent_card("Risk", view(analysis=None, status=None))
+        self.assertIn("Sin estado guardado en el ciclo del 20 oct 08:00 ET", dated)
+        self.assertNotIn("Sin datos aún", dated)
 
     def test_card_shows_status_not_the_long_analysis(self):
         text = "palabra " * 80
@@ -110,7 +112,8 @@ class AgentCardTests(unittest.TestCase):
         self.assertNotIn("palabra palabra", card)
         self.assertIn("Bien · Alcista", card)
         self.assertNotIn("gl-bubble", card)
-        self.assertIn("Sin datos aún", glass.agent_card("Structure", view(analysis=text, status=None)))
+        self.assertIn("Sin estado guardado en el ciclo del 20 oct 08:00 ET",
+                      glass.agent_card("Structure", view(analysis=text, status=None)))
         self.assertEqual(glass.truncate("corto"), "corto")
         self.assertEqual(len(glass.truncate("x" * 500)), glass.ANALYSIS_LIMIT)
         self.assertEqual(glass.truncate(None), "")
