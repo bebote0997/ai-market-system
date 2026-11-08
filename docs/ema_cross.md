@@ -9,7 +9,7 @@ Exact `AI_FLOOR_EMA_CROSS=1` on a process that already has OANDA practice routin
 * M15 close, shift 0: EMA10 crossing up through EMA21 is LONG; crossing down is SHORT.
 * Last completed H1 only: LONG needs EMA10 > EMA21, SHORT needs EMA10 < EMA21. A bar that has not closed yet is ignored.
 * The cross is stored. The market order is eligible 15 minutes later, and only on the first evaluation inside the following 15 minutes.
-* The market order is sent with SL 20 / TP 40 attached to the quote (ask for LONG, bid for SHORT) so the fill is never naked. Once the broker reports the **actual fill**, those prices are replaced so both distances are measured from that fill. See below.
+* The market order is sent with SL 20 / TP 40 attached to the quote (ask for LONG, bid for SHORT) so the order is not sent naked. After the fill, the broker's own stop and target are read. `ANCHORED` is stored only when that read shows both prices at 20/40 from the broker fill. A missing read is retried. A missing or non-protective price is replaced, and a failed replace closes. A failed close stays open and is retried. The local quote prices are not treated as the broker's protection.
 * No partial, no breakeven, no trail. Friday 16:45 America/New_York and the one-week max hold still close the position.
 * The order is tagged `EURUSD_EMA_CROSS`. The pullback manager only touches `EURUSD_H1_PULLBACK`. Reversal will not close an EMA position to open a pullback.
 * One routed position or resting order blocks the other strategy. EMA does not reverse the pullback.

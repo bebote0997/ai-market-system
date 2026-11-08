@@ -325,17 +325,26 @@ class RouterTests(unittest.TestCase):
         row = self.store.trades((OPEN,))[0]
         return router, row
 
+    def _show_broker(self, row, price, stop, target):
+        self.broker.trades = [SimpleNamespace(trade_id=row.get("trade_id") or "6397", price=D(price),
+                                              stop=None if stop is None else D(stop),
+                                              target=None if target is None else D(target), instrument="EUR_USD")]
+
     def test_actual_fill_slippage_replaces_stop_and_target(self):
         router, row = self._open_ema()
         self.broker.replacements = []
 
         def replace_protection(trade_id, stop, target, *, client_id):
             self.broker.replacements.append((trade_id, stop, target, client_id))
+            self.broker.trades[0].stop = stop
+            self.broker.trades[0].target = target
             return SimpleNamespace(status="ACCEPTED", reason=None)
 
         self.broker.replace_protection = replace_protection
-        # Sent from ask 1.09000. Actual fill 2 pips worse: the attached stop is 22 pips away.
-        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397")
+        # Sent from ask 1.09000. The broker fill is 2 pips worse, so the attached stop is 22 pips away.
+        # The local row is given a fake 20/40 so a local-only check would look done. The broker prices govern.
+        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397", stop="1.08820", target="1.09420")
+        self._show_broker(self.store.trade(row["client_id"]), "1.09020", "1.08800", "1.09400")
         self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "ANCHORED")
         self.assertEqual(self.broker.replacements[0][1:3], (D("1.08820"), D("1.09420")))
         saved = self.store.trade(row["client_id"])
@@ -350,7 +359,8 @@ class RouterTests(unittest.TestCase):
         self.broker.replace_protection = lambda *args, **kwargs: SimpleNamespace(status="REJECTED", reason="broker_rejected")
         closed = []
         router._close = lambda current, reason, _cid: closed.append(reason) or "CLOSED"
-        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397")
+        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397", stop="1.08820", target="1.09420")
+        self._show_broker(self.store.trade(row["client_id"]), "1.09020", "1.08800", "1.09400")
         self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "CLOSED")
         self.assertEqual(closed, ["EMA_RISK_UNCORRECTED"])
 
@@ -359,8 +369,9 @@ class RouterTests(unittest.TestCase):
         self.broker.replace_protection = lambda *args, **kwargs: SimpleNamespace(status="REJECTED", reason="broker_rejected")
         closed = []
         router._close = lambda *args, **kwargs: closed.append(args) or "CLOSED"
-        # Fill 2 pips better than the ask: the attached stop is only 18 pips from the fill.
+        # Fill 2 pips better than the ask: the broker stop is only 18 pips from the fill.
         self.store.update(row["client_id"], fill_price="1.08980", trade_id="6397")
+        self._show_broker(self.store.trade(row["client_id"]), "1.08980", row["stop"], row["target"])
         self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "KEPT")
         self.assertEqual(closed, [])
         self.assertEqual(self.store.trade(row["client_id"])["stop"], row["stop"])
@@ -373,10 +384,62 @@ class RouterTests(unittest.TestCase):
         closed = []
         router._close = lambda current, reason, _cid: closed.append(reason) or "CLOSED"
         self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397")
+        self._show_broker(self.store.trade(row["client_id"]), "1.09020", row["stop"], row["target"])
         quotes = {"EURUSD": ((True, D("1.08800"), D("1.08810")), None)}
         self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), quotes, None), "CLOSED")
         self.assertEqual(called, [])
         self.assertEqual(closed, ["EMA_PRICE_THROUGH_STOP"])
+
+    def test_a_local_stop_is_not_protection_when_the_broker_trade_has_none(self):
+        router, row = self._open_ema()
+        calls = []
+
+        def replace_protection(trade_id, stop, target, *, client_id):
+            calls.append((stop, target))
+            return SimpleNamespace(status="REJECTED", reason="broker_rejected")
+
+        self.broker.replace_protection = replace_protection
+        closed = []
+        router._close = lambda current, reason, _cid: closed.append(reason) or "CLOSED"
+        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397", stop="1.08820", target="1.09420",
+                          scale_stage="NONE")
+        self._show_broker(self.store.trade(row["client_id"]), "1.09020", None, None)
+        self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "CLOSED")
+        self.assertEqual(calls, [(D("1.08820"), D("1.09420"))])
+        self.assertEqual(closed, ["EMA_RISK_UNCORRECTED"])
+        self.assertNotEqual(self.store.trade(row["client_id"])["scale_stage"], "ANCHORED")
+
+    def test_an_unreadable_broker_trade_is_not_marked_anchored(self):
+        router, row = self._open_ema()
+        self.store.update(row["client_id"], fill_price="1.09000", trade_id="6397", stop="1.08800", target="1.09400")
+
+        def unreadable():
+            raise RuntimeError("broker down")
+
+        self.broker.open_trades = unreadable
+        self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "WAIT")
+        self.assertEqual(self.store.trade(row["client_id"])["scale_stage"], "NONE")
+
+    def test_a_failed_protective_close_stays_retryable(self):
+        router, row = self._open_ema()
+        self.broker.replace_protection = lambda *args, **kwargs: SimpleNamespace(status="REJECTED", reason="broker_rejected")
+        router._close = lambda *_args, **_kwargs: "CLOSE_UNKNOWN"
+        self.store.update(row["client_id"], fill_price="1.09020", trade_id="6397")
+        self._show_broker(self.store.trade(row["client_id"]), "1.09020", None, "1.09420")
+        self.assertEqual(router._reanchor_ema(self.store.trade(row["client_id"]), {}, None), "CLOSE_UNKNOWN")
+        saved = self.store.trade(row["client_id"])
+        self.assertEqual(saved["status"], "OPEN")
+        self.assertNotIn(saved["scale_stage"], ("ANCHORED", "KEPT"))
+
+    def test_daily_loss_gate_blocks_the_ema_order(self):
+        router = self.router()
+        router._loss_limit = object()
+        router._loss_check = lambda *_args, **_kwargs: (
+            SimpleNamespace(entry_allowed=False, reason="daily_loss_halt", flatten_required=False), {})
+        later = m15_long() + [(READY, m15_long()[-1][1])]
+        router.on_cycle(macro(), "NO_SETUP", CONFIRM, m15_bars=m15_long(), h1_closes=h1_up())
+        router.on_cycle(macro(), "NO_SETUP", READY, m15_bars=later, h1_closes=h1_up())
+        self.assertEqual(self.broker.plans, [])
 
 
 if __name__ == "__main__":
