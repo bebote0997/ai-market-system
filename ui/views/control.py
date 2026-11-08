@@ -416,16 +416,24 @@ def _stamp(value):
     return None if shown == "—" else shown
 
 
+# Same keys as execution.operator_actions. Imported there only by the runner; this screen stays on the
+# existing allowlist and reads them with a mode=ro connection of its own.
+FENCE_FLAG = "provider_transition_fence"
+REQUEST_FLAG = "provider_transition_request"
+RECEIPT_FLAG = "provider_transition_receipt"
+
+
 def _broker_flag_rows(path):
     """``{key: {value, at}}`` after a successful read, or None when the file or the table cannot be read."""
     import sqlite3
+    from contextlib import closing
     from pathlib import Path
     target = Path(path)
     if not target.is_file():
         return None
     try:
-        from execution.operator_actions import _read_ro
-        rows = _read_ro(target, "SELECT key, value, updated_at FROM broker_demo_flags")
+        with closing(sqlite3.connect(target.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)) as con:
+            rows = con.execute("SELECT key, value, updated_at FROM broker_demo_flags").fetchall()
     except (OSError, sqlite3.Error):
         return None
     return {row[0]: {"value": row[1], "at": row[2]} for row in rows}
@@ -434,11 +442,10 @@ def _broker_flag_rows(path):
 def _receipt_from_flags(flags):
     """Current request, distinct from the immutable step table. None means the flags could not be read."""
     import json
-    from execution.operator_actions import PROVIDER_TRANSITION_FLAG, PROVIDER_TRANSITION_RECEIPT
     if flags is None:
         return None
-    queued = flags.get(PROVIDER_TRANSITION_FLAG)
-    stored = flags.get(PROVIDER_TRANSITION_RECEIPT)
+    queued = flags.get(REQUEST_FLAG)
+    stored = flags.get(RECEIPT_FLAG)
     if stored is None and queued is None:
         return {"present": False}
     parsed = {}
@@ -464,11 +471,10 @@ def provider_observation(env=None, *, broker_path=None):
     The fence line is only the broker flag ``provider_transition_fence``. A calculation from the
     step table is a separate line and is not that flag.
     """
-    import os
     import sqlite3
     from ui.i18n_es import cycle_label
-    from ui.observability import parse_fence_flag, transition_status_lines
-    env = os.environ if env is None else env
+    from ui.observability import parse_fence_flag, read_env, transition_status_lines
+    env = read_env(env)
     configured = env.get("AI_FLOOR_AI_PROVIDER")
     recorded = cycle = None
     expectation = None
@@ -517,7 +523,7 @@ def provider_observation(env=None, *, broker_path=None):
     if flags is None:
         fence, receipt = "UNKNOWN", None
     else:
-        found = flags.get("provider_transition_fence")
+        found = flags.get(FENCE_FLAG)
         fence = parse_fence_flag(None if found is None else found.get("value"))
         receipt = _receipt_from_flags(flags)
     return transition_status_lines(recorded=recorded, configured=configured, cycle=cycle, fence=fence,

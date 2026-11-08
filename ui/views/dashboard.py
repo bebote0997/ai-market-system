@@ -350,7 +350,7 @@ def render(st, page):
                 table(st, risks, wait)
             elif page == "HEALTH":
                 from datetime import datetime, timezone
-                from ui.observability import health_gap_note, not_checked_suffix, stamped
+                from ui.observability import health_gap_note, stamped
                 st.subheader(tr("System Health observations"))
                 trading_path = Path(os.environ.get("AI_FLOOR_DB_PATH", "data/runtime/trading_floor.db"))
                 health_path = os.environ.get("AI_FLOOR_HEALTH_DB_PATH", str(trading_path.with_name("system_health.db")))
@@ -390,11 +390,9 @@ def render(st, page):
                             "market_provider_mode", "ai_provider", "macro_provider", "api_status",
                             "last_run", "last_success", "phase7_readiness"):
                     raw = states.get(key, es.NO_DATA)
-                    shown = es.readable(raw) if isinstance(raw, str) else raw
-                    if key in timed and raw != FIRST_CYCLE_WAIT:
-                        shown = stamped(shown, raw, now)
-                    if isinstance(raw, str):
-                        shown = f"{shown}{not_checked_suffix(raw)}"
+                    shown = raw
+                    if key in timed and isinstance(raw, str) and raw != FIRST_CYCLE_WAIT:
+                        shown = stamped(raw, raw, now) or raw
                     rows.append({es.column("service"): es.service_label(key), es.column("status"): shown})
                 table(st, rows)
                 st.caption("«Sin datos» y «Sin comprobar» quieren decir que no hay una comprobación guardada. "

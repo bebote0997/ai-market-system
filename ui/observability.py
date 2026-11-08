@@ -76,6 +76,14 @@ def parse_fence_flag(value):
     return "UNKNOWN"
 
 
+def read_env(env):
+    """The mapping the caller supplied, or the process environment when the caller supplied none."""
+    if env is not None:
+        return env
+    import os
+    return os.environ
+
+
 def health_gap_note(*, observations, heartbeat, last_cycle, now, sessions_open, errors=()):
     """What to say when the component table has no dated rows in this window.
 

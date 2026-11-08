@@ -196,6 +196,14 @@ class ObservationRead(unittest.TestCase):
         self.assertNotIn("no cambió", text)
         self.assertNotIn("leída del registro", text)
 
+    def test_flag_names_match_the_operator_constants(self):
+        from execution.operator_actions import (PROVIDER_TRANSITION_FENCE, PROVIDER_TRANSITION_FLAG,
+                                                PROVIDER_TRANSITION_RECEIPT)
+        from ui.views import control
+        self.assertEqual(control.FENCE_FLAG, PROVIDER_TRANSITION_FENCE)
+        self.assertEqual(control.REQUEST_FLAG, PROVIDER_TRANSITION_FLAG)
+        self.assertEqual(control.RECEIPT_FLAG, PROVIDER_TRANSITION_RECEIPT)
+
     def test_missing_flag_is_unknown_and_a_refusal_is_not_a_saved_step(self):
         from ui.views.control import provider_observation
         missing = provider_observation({"AI_FLOOR_AI_PROVIDER": "xai", "AI_FLOOR_DB_PATH": "/tmp/does-not-exist-obs.db"},

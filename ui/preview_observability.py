@@ -2,6 +2,7 @@
 
 Run: ``streamlit run ui/preview_observability.py --server.address=127.0.0.1``.
 No dashboard password, no emergency button, no provider button, no broker call.
+Importing this module renders nothing and writes nothing.
 """
 import os
 import sqlite3
@@ -13,22 +14,26 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 ROOT = Path("/tmp/obs-preview-fixture")
-ROOT.mkdir(parents=True, exist_ok=True)
 TRADING = ROOT / "trading.db"
 BROKER = ROOT / "broker.db"
 HEALTH = ROOT / "health.db"
-os.environ["AI_FLOOR_DB_PATH"] = str(TRADING)
-os.environ["AI_FLOOR_BROKER_STATE_DB_PATH"] = str(BROKER)
-os.environ["AI_FLOOR_HEALTH_DB_PATH"] = str(HEALTH)
-os.environ["AI_FLOOR_AI_PROVIDER"] = "xai"
-os.environ["AI_FLOOR_BROKER_DEMO_ROUTING"] = "0"
-os.environ.pop("AI_FLOOR_DASHBOARD_PASSWORD", None)
 
-if not TRADING.exists():
-    from storage.database import Store
+
+def _example_files():
+    """Create the example databases once. They live under /tmp and are not the trading account."""
+    ROOT.mkdir(parents=True, exist_ok=True)
+    os.environ["AI_FLOOR_DB_PATH"] = str(TRADING)
+    os.environ["AI_FLOOR_BROKER_STATE_DB_PATH"] = str(BROKER)
+    os.environ["AI_FLOOR_HEALTH_DB_PATH"] = str(HEALTH)
+    os.environ["AI_FLOOR_AI_PROVIDER"] = "xai"
+    os.environ["AI_FLOOR_BROKER_DEMO_ROUTING"] = "0"
+    os.environ.pop("AI_FLOOR_DASHBOARD_PASSWORD", None)
+    if TRADING.exists():
+        return
+    from dataclasses import replace
     from runtime.config import RuntimeConfig
     from runtime.provider_transition import record_provider_transition
-    from dataclasses import replace
+    from storage.database import Store
     origin = replace(RuntimeConfig(db_path=TRADING, ai_provider_mode="openai"), scheduler_enabled=True)
     dest = replace(origin, ai_provider_mode="xai")
     with closing(Store(TRADING)) as store:
@@ -67,26 +72,33 @@ if not TRADING.exists():
                     ("provider_transition_receipt", '{"state":"pending","reason":"requested"}',
                      "2026-11-08T00:31:00+00:00"))
 
-import streamlit as st
-from ui.nav_menu import chrome, install
-from ui.views import dashboard, luxury
-from ui.views.control import provider_observation
 
-st.set_page_config(page_title="Ejemplo · observabilidad", layout="wide")
-luxury.apply(st)
-st.markdown("**DATOS DE EJEMPLO.** No es la cuenta en producción. No hay contraseña, ni parada, ni botón que escriba.")
-with st.sidebar:
-    luxury.html(st, chrome(None))
-    pages = ("Salud", "Historial", "Control")
-    wanted = st.query_params.get("vista", "Salud")
-    if wanted not in pages:
-        wanted = "Salud"
-    page = st.radio("Vista", pages, index=pages.index(wanted), key="preview-page")
-    install(st)
-if page == "Salud":
-    dashboard.render(st, "HEALTH")
-elif page == "Historial":
-    dashboard.render(st, "HISTORY")
-else:
-    for line in provider_observation(broker_path=BROKER):
-        st.write(line)
+def main():
+    import streamlit as st
+    from ui.nav_menu import chrome, install
+    from ui.views import dashboard, luxury
+    from ui.views.control import provider_observation
+    _example_files()
+    st.set_page_config(page_title="Ejemplo · observabilidad", layout="wide")
+    luxury.apply(st)
+    st.markdown("**DATOS DE EJEMPLO.** No es la cuenta en producción. "
+                "No hay contraseña, ni parada, ni botón que escriba.")
+    with st.sidebar:
+        luxury.html(st, chrome(None))
+        pages = ("Salud", "Historial", "Control")
+        wanted = st.query_params.get("vista", "Salud")
+        if wanted not in pages:
+            wanted = "Salud"
+        page = st.radio("Vista", pages, index=pages.index(wanted), key="preview-page")
+        install(st)
+    if page == "Salud":
+        dashboard.render(st, "HEALTH")
+    elif page == "Historial":
+        dashboard.render(st, "HISTORY")
+    else:
+        for line in provider_observation(broker_path=BROKER):
+            st.write(line)
+
+
+if __name__ == "__main__":
+    main()

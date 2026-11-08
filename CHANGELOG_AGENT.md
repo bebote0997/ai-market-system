@@ -3,7 +3,8 @@
 ## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte
 
 - El control separa la solicitud en curso (pendiente, anotada o rechazada, con su hora) del último paso inmutable. La bandera de valla solo sale de `provider_transition_fence`: `1` activa, `0` no activa, y si falta o no se puede leer queda UNKNOWN. Un cálculo sobre los pasos se rotula aparte y no es esa bandera.
-- La salud, si no hay observaciones de componentes fechadas, dice que esa ausencia no demuestra que no haya un fallo. Un error guardado se muestra aunque el calendario esté cerrado. «Sin datos» es «sin comprobación guardada», no un «no es un fallo».
+- La salud, si no hay observaciones de componentes fechadas, dice que esa ausencia no demuestra que no haya un fallo. Un error guardado se muestra aunque el calendario esté cerrado. «Sin datos» es «sin comprobación guardada», no un «no es un fallo». La tabla de servicios sigue mostrando el token guardado (`DISABLED`, `NO_DATA`, `ERROR`); la antigüedad se añade solo a las marcas de tiempo.
+- La lectura de banderas del control abre la base del broker en `mode=ro` y usa los mismos nombres que el runner, sin importar símbolos de más ni leer el entorno desde esa vista. El ejemplo de Streamlit no pinta nada al importarse.
 - En pantallas estrechas el historial sigue mostrando todas las filas de la página (ciclos, setups, órdenes, informes, diario) y la tabla ancha no se oculta. El contenido deja libre el carril de 56 px. La leyenda del Floor se lee en horizontal. Una ficha de agente con hora y sin estado lo dice así, sin inventar la causa.
 
 ## 2026-11-08 — DEC-XAI-1: la transición mira el libro real y deja constancia
