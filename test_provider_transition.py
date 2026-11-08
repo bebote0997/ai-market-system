@@ -1,5 +1,6 @@
 """Provider transition: one explicit field, verified flat book, no silent resume, history kept."""
 import inspect
+import json
 import sqlite3
 import threading
 import time
@@ -16,7 +17,8 @@ from core import fx_policy
 from execution.broker_demo_state import DemoStateStore
 from execution.contracts import PaperOrder
 from execution.eurusd_pullback import LIMIT_OFFSET_PIPS
-from execution.operator_actions import consume_provider_transition, request_provider_transition
+from execution.operator_actions import (EMPTY_BROKER_BOOK, consume_provider_transition,
+                                        request_provider_transition)
 from execution.paper_broker import PaperBroker
 from runtime.cloud import cloud_preflight
 from runtime.config import RuntimeConfig
@@ -151,6 +153,36 @@ class TransitionRules(unittest.TestCase):
             rows, freeze=FREEZE, freeze_ok=True, started=True, account_present=True,
             current_payload=self.origin, starting_equity=10000.0, records=(records[0], broken)))
 
+    def test_a_destination_run_retires_the_predecessor_until_a_new_rollback(self):
+        _record(self.db, self.origin, self.dest, recorded_at=WHEN)
+        records = load_transitions(self.db)
+        origin_fp = replace(RuntimeConfig(ai_provider_mode="openai"), scheduler_enabled=True).fingerprint()
+        dest_fp = replace(RuntimeConfig(ai_provider_mode="xai"), scheduler_enabled=True).fingerprint()
+        before = [(FREEZE, origin_fp, 10000.0, "2026-11-07T17:00:00+00:00")]
+        self.assertTrue(transition_resumes(
+            before, freeze=FREEZE, freeze_ok=True, started=True, account_present=True,
+            current_payload=self.origin, starting_equity=10000.0, records=records))
+        after = before + [(FREEZE, dest_fp, 10000.0, "2026-11-07T18:30:00+00:00")]
+        self.assertFalse(transition_resumes(
+            after, freeze=FREEZE, freeze_ok=True, started=True, account_present=True,
+            current_payload=self.origin, starting_equity=10000.0, records=records))
+        self.assertTrue(transition_resumes(
+            after, freeze=FREEZE, freeze_ok=True, started=True, account_present=True,
+            current_payload=self.dest, starting_equity=10000.0, records=records))
+        rollback_at = datetime(2026, 11, 7, 19, 0, tzinfo=timezone.utc)
+        _record(self.db, self.dest, self.origin, operator_note="rollback", recorded_at=rollback_at)
+        rolled = load_transitions(self.db)
+        self.assertTrue(transition_resumes(
+            after, freeze=FREEZE, freeze_ok=True, started=True, account_present=True,
+            current_payload=self.dest, starting_equity=10000.0, records=rolled))
+        committed = after + [(FREEZE, origin_fp, 10000.0, "2026-11-07T19:30:00+00:00")]
+        self.assertFalse(transition_resumes(
+            committed, freeze=FREEZE, freeze_ok=True, started=True, account_present=True,
+            current_payload=self.dest, starting_equity=10000.0, records=rolled))
+        self.assertTrue(transition_resumes(
+            committed, freeze=FREEZE, freeze_ok=True, started=True, account_present=True,
+            current_payload=self.origin, starting_equity=10000.0, records=rolled))
+
     def test_pullback_contract_is_unchanged(self):
         self.assertEqual(LIMIT_OFFSET_PIPS, Decimal("12.5"))
         self.assertEqual(fx_policy.FX_SL_MIN_PIPS, Decimal(25))
@@ -233,9 +265,13 @@ class ResumeIntegration(ExistingExperimentPreflight):
         self.assertEqual(queued["reason"], "requested")
         with closing(Store(self.path)) as store:
             applied = consume_provider_transition(
-                store, self.config, env=self.env, broker_db_path=broker, recorded_at=WHEN, now=WHEN)
+                store, self.config, env=self.env, broker_db_path=broker, broker_evidence=dict(EMPTY_BROKER_BOOK),
+                recorded_at=WHEN, now=WHEN)
         self.assertEqual(applied["reason"], "recorded")
         self.assertIsNone(DemoStateStore(broker).flag("provider_transition_request"))
+        receipt = json.loads(DemoStateStore(broker).flag("provider_transition_receipt"))
+        self.assertEqual(receipt["state"], "recorded")
+        self.assertEqual(DemoStateStore(broker).flag("provider_transition_fence"), "1")
         self.assertTrue(cloud_preflight(self.config, env=self.env, disk_mounted=True).checks["experiment_resumable"])
         drifted = replace(self.config, ai_provider_mode="xai")
         self.assertTrue(cloud_preflight(
@@ -260,7 +296,8 @@ class ResumeIntegration(ExistingExperimentPreflight):
             '{"actor":"dashboard","reason":"CAMBIAR A XAI","request_id":"forced","to_mode":"xai","ts":"t"}')
         with closing(Store(self.path)) as store:
             applied = consume_provider_transition(
-                store, self.config, env=self.env, broker_db_path=broker, now=WHEN)
+                store, self.config, env=self.env, broker_db_path=broker, broker_evidence=dict(EMPTY_BROKER_BOOK),
+                now=WHEN)
             self.assertEqual(applied["reason"], "not_flat")
             self.assertEqual(load_transitions(store.db), ())
         self.assertIsNone(DemoStateStore(broker).flag("provider_transition_request"))
@@ -274,7 +311,8 @@ class ResumeIntegration(ExistingExperimentPreflight):
         DemoStateStore(broker).set_flag("provider_transition_request", raw)
         with closing(Store(self.path)) as store:
             applied = consume_provider_transition(
-                store, self.config, env=self.env, broker_db_path=broker, recorded_at=WHEN, now=WHEN)
+                store, self.config, env=self.env, broker_db_path=broker, broker_evidence=dict(EMPTY_BROKER_BOOK),
+                recorded_at=WHEN, now=WHEN)
             row = load_transitions(store.db)[0]
         self.assertEqual(applied["reason"], "recorded")
         self.assertEqual(row["to_payload"]["sessions"], row["from_payload"]["sessions"])
@@ -289,10 +327,62 @@ class ResumeIntegration(ExistingExperimentPreflight):
         with closing(Store(self.path)) as store:
             applied = consume_provider_transition(
                 store, self.config, env={**self.env, "AI_FLOOR_GIT_COMMIT": "a" * 40},
-                broker_db_path=broker, now=WHEN)
+                broker_db_path=broker, broker_evidence=dict(EMPTY_BROKER_BOOK), now=WHEN)
             self.assertEqual(load_transitions(store.db), ())
         self.assertEqual(applied["reason"], "freeze_mismatch")
         self.assertIsNotNone(DemoStateStore(broker).flag("provider_transition_request"))
+
+    def test_orphan_live_orders_and_a_failed_broker_read_do_not_append(self):
+        from types import SimpleNamespace
+        from execution.broker_demo_router import BrokerDemoRouter
+        broker = self._flat_books()
+        book = SimpleNamespace(trades=[SimpleNamespace(trade_id="orphan")], orders=[], fail=False)
+
+        def open_trades():
+            if book.fail:
+                raise RuntimeError("broker down")
+            return list(book.trades)
+
+        def pending_orders():
+            if book.fail:
+                raise RuntimeError("broker down")
+            return list(book.orders)
+
+        book.open_trades, book.pending_orders = open_trades, pending_orders
+        router = BrokerDemoRouter(book, DemoStateStore(broker), registry=SimpleNamespace(
+            emergency_active=lambda: False, is_allowed=lambda _mode: True), dry_run=False, max_units=1)
+        raw = '{"actor":"dashboard","reason":"CAMBIAR A XAI","request_id":"orphan","to_mode":"xai","ts":"t"}'
+
+        def queue():
+            DemoStateStore(broker).set_flag("provider_transition_request", raw)
+
+        queue()
+        with closing(Store(self.path)) as store:
+            applied = router.consume_provider_transition(store, self.config, self.env, WHEN)
+            self.assertEqual(applied["reason"], "not_flat")
+            self.assertEqual(load_transitions(store.db), ())
+        self.assertEqual(json.loads(DemoStateStore(broker).flag("provider_transition_receipt"))["state"], "refused")
+        book.trades, book.orders = [], [SimpleNamespace(order_id="resting")]
+        queue()
+        with closing(Store(self.path)) as store:
+            self.assertEqual(router.consume_provider_transition(store, self.config, self.env, WHEN)["reason"],
+                             "not_flat")
+            self.assertEqual(load_transitions(store.db), ())
+        book.orders, book.fail = [], True
+        queue()
+        with closing(Store(self.path)) as store:
+            unread = router.consume_provider_transition(store, self.config, self.env, WHEN)
+            self.assertEqual(unread["reason"], "broker_unread")
+            self.assertEqual(load_transitions(store.db), ())
+        self.assertIsNotNone(DemoStateStore(broker).flag("provider_transition_request"))
+        self.assertEqual(json.loads(DemoStateStore(broker).flag("provider_transition_receipt"))["reason"],
+                         "broker_unread")
+        book.fail = False
+        router.blocked_reason = "drift"
+        with closing(Store(self.path)) as store:
+            blocked = router.consume_provider_transition(store, self.config, self.env, WHEN)
+            self.assertEqual(blocked["reason"], "blocked")
+            self.assertEqual(load_transitions(store.db), ())
 
     def test_wrong_phrase_does_not_queue(self):
         from ui.views import control

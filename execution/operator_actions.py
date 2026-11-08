@@ -29,8 +29,11 @@ FLATTEN_REQUEST_FLAG = "flatten_request"
 DRIFT_CLEAR_REQUEST_FLAG = "drift_clear_request"
 DRIFT_EPISODE_FLAG = "drift_episode"
 MANUAL_CLOSE_REQUEST_FLAG = "manual_close_request"  # same key as execution/broker_demo_router.py
-PROVIDER_TRANSITION_FLAG = "provider_transition_request"  # same key as runtime/provider_transition.py
+PROVIDER_TRANSITION_FLAG = "provider_transition_request"
+PROVIDER_TRANSITION_RECEIPT = "provider_transition_receipt"
+PROVIDER_TRANSITION_FENCE = "provider_transition_fence"
 PROVIDER_DESTINATIONS = frozenset({"openai", "xai"})
+EMPTY_BROKER_BOOK = {"ok": True, "open_trades": 0, "pending_orders": 0, "blocked_reason": None}
 MANUAL_CLOSE = "MANUAL_CLOSE"
 DEMO_SYMBOL = "EURUSD"
 BLOCKED_FLAG = "blocked_reason"
@@ -248,12 +251,22 @@ def _finish_transition(flags, raw, kind, detail):
     flags.consume_flag(PROVIDER_TRANSITION_FLAG, raw, event=(kind, None, detail))
 
 
-def consume_provider_transition(store, config, *, env, broker_db_path, recorded_at=None, now=None):
+def _receipt(flags, **detail):
+    """Owner-visible outcome. Codes and counts only; never a secret or an exception string."""
+    safe = {key: value for key, value in detail.items()
+            if type(value) in (str, int) and (type(value) is not str or len(value) <= 80)}
+    flags.set_flag(PROVIDER_TRANSITION_RECEIPT, json.dumps(safe, sort_keys=True))
+
+
+def consume_provider_transition(store, config, *, env, broker_db_path, broker_evidence, recorded_at=None,
+                                now=None):
     """Apply one queued request. None when there is nothing queued.
 
-    The destination is only ``openai`` or ``xai``. Payloads are built from the live config, so the request
-    cannot change any other fingerprint field. A freeze mismatch leaves the request queued. Any other refusal
-    consumes it, so a later flat book does not migrate by itself. Never raises for a missing file."""
+    ``broker_evidence`` is a fresh read taken under the router lock: ``open_trades`` and ``pending_orders``
+    counts, or ``ok`` false. A missing or failed read does not append and does not drop the request.
+    A blocked router, or any open trade or pending order, refuses and drops the request. The local paper
+    book is checked as well. Payloads come from the live config. A freeze mismatch leaves the request queued.
+    """
     path = Path(broker_db_path)
     if not path.is_file():
         return None
@@ -265,62 +278,91 @@ def consume_provider_transition(store, config, *, env, broker_db_path, recorded_
         return None
     if not raw:
         return None
+    def refuse(reason, **extra):
+        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": reason, **extra})
+        _receipt(flags, state="refused", reason=reason, **extra)
+        return {"ok": False, "reason": reason, **extra}
+
     try:
         request = json.loads(raw)
     except (TypeError, ValueError):
-        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "bad_request"})
-        return {"ok": False, "reason": "bad_request"}
+        return refuse("bad_request")
     if not isinstance(request, dict):
-        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "bad_request"})
-        return {"ok": False, "reason": "bad_request"}
+        return refuse("bad_request")
     to_mode = request.get("to_mode")
     note = request.get("reason") if isinstance(request.get("reason"), str) else ""
     actor = request.get("actor") if isinstance(request.get("actor"), str) else ""
     if to_mode not in PROVIDER_DESTINATIONS or not note.strip() or not actor.strip():
-        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "bad_request"})
-        return {"ok": False, "reason": "bad_request"}
+        return refuse("bad_request")
+    evidence = broker_evidence if isinstance(broker_evidence, dict) else {"ok": False, "reason": "broker_unread"}
+    if evidence.get("ok") is not True:
+        reason = evidence.get("reason") if evidence.get("reason") in ("broker_unread", "blocked") else "broker_unread"
+        if reason == "broker_unread":
+            _receipt(flags, state="pending", reason="broker_unread")
+            LOG.warning("component=operator event=PROVIDER_TRANSITION_BROKER_UNREAD")
+            return {"ok": False, "reason": "broker_unread"}
+        return refuse("blocked")
+    open_trades = evidence.get("open_trades")
+    pending_orders = evidence.get("pending_orders")
+    if type(open_trades) is not int or type(pending_orders) is not int or open_trades < 0 or pending_orders < 0:
+        _receipt(flags, state="pending", reason="broker_unread")
+        return {"ok": False, "reason": "broker_unread"}
+    if evidence.get("blocked_reason") or open_trades or pending_orders:
+        return refuse("not_flat", open_trades=open_trades, pending_orders=pending_orders)
     try:
         from execution.dxtrade_broker import real_execution_enabled
         if real_execution_enabled() is not False:
-            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "real_execution_enabled"})
-            return {"ok": False, "reason": "real_execution_enabled"}
-        from runtime.provider_transition import FIELD, FLAT_KEYS, record_provider_transition
+            return refuse("real_execution_enabled")
+        from runtime.provider_transition import (FIELD, FLAT_KEYS, destination_committed, load_transitions,
+                                                 record_provider_transition)
         freeze = store.get_state("experiment_freeze_sha")
         if not isinstance(freeze, str) or env.get("AI_FLOOR_GIT_COMMIT") != freeze:
             LOG.warning("component=operator event=PROVIDER_TRANSITION_FREEZE_MISMATCH")
+            _receipt(flags, state="pending", reason="freeze_mismatch")
             return {"ok": False, "reason": "freeze_mismatch"}
         try:
             counts = observe_flat(store, config.account_id, path)
         except LookupError:
-            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "book_unreadable"})
-            return {"ok": False, "reason": "book_unreadable"}
+            return refuse("book_unreadable")
         if any(counts[key] != 0 for key in FLAT_KEYS):
-            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "not_flat", **counts})
-            return {"ok": False, "reason": "not_flat", **counts}
+            return refuse("not_flat", **counts)
         from dataclasses import replace
-        origin = replace(config, scheduler_enabled=True).fingerprint_content()
-        if origin.get(FIELD) == to_mode:
-            _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "unchanged"})
-            return {"ok": False, "reason": "unchanged"}
-        dest = dict(origin)
-        dest[FIELD] = to_mode
+        live = replace(config, scheduler_enabled=True).fingerprint_content()
+        origin, dest = live, dict(live)
+        if live.get(FIELD) == to_mode:
+            prior = load_transitions(store.db)
+            withdrawal = (prior and prior[-1]["from_value"] == to_mode and prior[-1]["to_value"] != to_mode
+                          and not destination_committed(
+                              _metadata_rows(store), prior[-1]["to_payload"], prior[-1].get("recorded_at")))
+            if not withdrawal:
+                return refuse("unchanged")
+            origin, dest = prior[-1]["to_payload"], live
+        else:
+            dest[FIELD] = to_mode
         result = record_provider_transition(
             store.db, from_payload=origin, to_payload=dest, flat_counts=counts, operator_note=note,
             git_commit=freeze, starting_equity=config.starting_equity, actor=actor, recorded_at=recorded_at)
     except (ValueError, sqlite3.Error):
         LOG.warning("component=operator event=PROVIDER_TRANSITION_RECORD_REFUSED")
-        _finish_transition(flags, raw, "PROVIDER_TRANSITION_REFUSED", {"reason": "refused"})
-        return {"ok": False, "reason": "refused"}
-    detail = {"reason": result["status"], "from_value": origin.get(FIELD), "to_value": to_mode,
-              "from_fingerprint": result["from_fingerprint"], "to_fingerprint": result["to_fingerprint"],
-              "actor": actor.strip()[:64], **counts}
+        return refuse("refused")
+    detail = {"state": "recorded", "reason": result["status"], "from_value": origin.get(FIELD), "to_value": to_mode,
+              "actor": actor.strip()[:64], "open_trades": open_trades, "pending_orders": pending_orders}
     _finish_transition(flags, raw, "PROVIDER_TRANSITION_RECORDED", detail)
+    flags.set_flag(PROVIDER_TRANSITION_FENCE, "1")
+    _receipt(flags, **detail)
     try:
         store.event(now or datetime.now(timezone.utc), None, None, "operator", "PROVIDER_TRANSITION_RECORDED",
                     "INFO", detail)
     except (OSError, sqlite3.Error, RuntimeError):
         LOG.warning("component=operator event=PROVIDER_TRANSITION_JOURNAL_FAILED")
-    return {"ok": True, "reason": result["status"], **counts}
+    return {"ok": True, "reason": result["status"], **counts, "open_trades": open_trades,
+            "pending_orders": pending_orders}
+
+
+def _metadata_rows(store):
+    return [(row[0], row[1], row[2], row[3]) for row in store.db.execute(
+        "SELECT m.git_commit, m.config_fingerprint, m.starting_equity, r.started_at "
+        "FROM run_metadata m LEFT JOIN runs r ON r.slot_key = m.slot_key")]
 
 
 def request_provider_transition(actor, note, *, to_mode, request_id, path=None, env=None,
@@ -363,6 +405,7 @@ def request_provider_transition(actor, note, *, to_mode, request_id, path=None, 
         store = _store(broker_path)
         if store.set_flag_if_absent(PROVIDER_TRANSITION_FLAG, value,
                                     event=("PROVIDER_TRANSITION_REQUESTED", None, detail)):
+            _receipt(store, state="pending", reason="requested", to_mode=to_mode)
             return {"ok": True, "reason": "requested", **counts}
         pending = json.loads(store.flag(PROVIDER_TRANSITION_FLAG) or "null")
     except Exception as exc:  # noqa: BLE001
@@ -390,7 +433,8 @@ def operator_state(path=None, *, env=None):
     """Read-only (``mode=ro``, never creates the DB) view for the UI. Unknown values stay None (shown as unknown;
     the drift section only appears with a readable ``drift`` flag)."""
     out = {"readable": False, "emergency": None, "flatten_pending": None, "drift_clear_pending": None,
-           "manual_close_pending": None, "blocked_reason": None}
+           "manual_close_pending": None, "blocked_reason": None, "provider_transition_pending": None,
+           "provider_transition_state": None, "provider_transition_reason": None}
     try:
         target = _state_path(path, _env(env))
         if not target.is_file():
@@ -407,7 +451,18 @@ def operator_state(path=None, *, env=None):
     except Exception:  # noqa: BLE001 - missing table (router never ran) / locked / corrupt
         return out
     blocked = flags.get(BLOCKED_FLAG)
+    receipt = {}
+    try:
+        parsed = json.loads(flags.get(PROVIDER_TRANSITION_RECEIPT) or "null")
+        if isinstance(parsed, dict):
+            receipt = parsed
+    except (TypeError, ValueError):
+        receipt = {}
+    state = receipt.get("state") if isinstance(receipt.get("state"), str) else None
+    reason = receipt.get("reason") if isinstance(receipt.get("reason"), str) else None
     return {**out, "readable": True, "flatten_pending": bool(flags.get(FLATTEN_REQUEST_FLAG)),
             "drift_clear_pending": bool(flags.get(DRIFT_CLEAR_REQUEST_FLAG)),
             "manual_close_pending": bool(flags.get(MANUAL_CLOSE_REQUEST_FLAG)),
-            "blocked_reason": blocked if isinstance(blocked, str) and blocked else None}
+            "blocked_reason": blocked if isinstance(blocked, str) and blocked else None,
+            "provider_transition_pending": bool(flags.get(PROVIDER_TRANSITION_FLAG)),
+            "provider_transition_state": state, "provider_transition_reason": reason}

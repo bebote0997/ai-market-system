@@ -410,6 +410,16 @@ def render_provider_transition(st, api):
     if not owner_authenticated(st) or not isinstance(api, dict) or not callable(api.get("transition")):
         return
     state = st.session_state
+    receipt = api.get("state") if isinstance(api.get("state"), dict) else {}
+    receipt_state = receipt.get("provider_transition_state")
+    receipt_reason = receipt.get("provider_transition_reason") if isinstance(
+        receipt.get("provider_transition_reason"), str) else ""
+    receipt_text = {"recorded": "Anotado. El proveedor activo no cambió; un reinicio anterior al cambio de la variable sigue reanudando.",
+                    "refused": f"Rechazado ({escape(receipt_reason or 'refused')}). No se anotó el cambio.",
+                    "pending": f"Pendiente ({escape(receipt_reason or 'requested')}). Todavía no se anotó el cambio."
+                    }.get(receipt_state)
+    if receipt_text:
+        html(st, f'<div class="small">{receipt_text}</div>')
     html(st, '<h3 style="margin:12px 0 4px">Cambio de proveedor de IA</h3>'
              '<div class="small">Esto no cambia el proveedor activo. Pide anotar un único paso (openai o xai) '
              'cuando la cuenta de práctica y el broker demo no tienen posiciones ni órdenes pendientes. '

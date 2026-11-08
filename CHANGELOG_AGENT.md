@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-08 — DEC-XAI-1: la transición mira el libro real y deja constancia
+
+- El runner lee, bajo su candado, las operaciones abiertas y las órdenes pendientes del broker. Una lectura fallida no anota y deja la solicitud en cola. Un bloqueo, una operación o una orden pendiente rechaza la solicitud. El libro local se comprueba además.
+- El panel muestra si el paso está pendiente, anotado o rechazado. Hasta que un ciclo queda guardado con la huella nueva, no entran operaciones nuevas del retroceso ni de EMA. Hasta ese ciclo el modo anterior sigue reanudando; después solo reanuda el extremo de la cadena. Volver atrás es otra fila explícita.
+- Sigue apagado. Ninguna fila se escribió en la base real. REAL sigue bloqueado.
+
 ## 2026-11-08 — DEC-EMA-1: la protección de EMA se comprueba en el broker
 
 - `ANCHORED` solo se guarda cuando una lectura nueva de la operación abierta muestra stop y target. El stop local de la cotización no cuenta como protección.

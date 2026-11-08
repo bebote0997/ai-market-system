@@ -170,14 +170,46 @@ def load_transitions(connection):
     for row in connection.execute(
             "SELECT from_payload, to_payload, from_fingerprint, to_fingerprint, field, from_value, "
             "to_value, paper_open, paper_pending, broker_live, git_commit, starting_equity, actor, "
-            "operator_note FROM provider_transitions ORDER BY id"):
+            "operator_note, recorded_at FROM provider_transitions ORDER BY id"):
         found.append({
             "from_payload": json.loads(row[0]), "to_payload": json.loads(row[1]),
             "from_fingerprint": row[2], "to_fingerprint": row[3], "field": row[4],
             "from_value": row[5], "to_value": row[6], "paper_open": row[7], "paper_pending": row[8],
             "broker_live": row[9], "git_commit": row[10], "starting_equity": row[11], "actor": row[12],
-            "operator_note": row[13]})
+            "operator_note": row[13], "recorded_at": row[14]})
     return tuple(found)
+
+
+def _aware(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def destination_committed(rows, dest_payload, recorded_at):
+    """True when a run stored at or after ``recorded_at`` used the destination fingerprint.
+
+    Rows are ``(git, fingerprint, equity)`` or ``(git, fingerprint, equity, started_at)``. A row without
+    ``started_at`` cannot prove it happened after the step, so it does not commit the destination.
+    A missing ``recorded_at`` fails closed: the step is treated as already committed.
+    """
+    recorded = _aware(recorded_at)
+    if recorded is None:
+        return True
+    dest_fp = fingerprint_of(_canonical(dest_payload))
+    for row in rows:
+        if row[1] != dest_fp or len(row) < 4:
+            continue
+        started = _aware(row[3])
+        if started is not None and started >= recorded:
+            return True
+    return False
 
 
 def transition_resumes(rows, *, freeze, freeze_ok, started, account_present, current_payload,
@@ -197,12 +229,15 @@ def transition_resumes(rows, *, freeze, freeze_ok, started, account_present, cur
         if previous[1] != current[0]:
             return False
     current = _canonical(current_payload)
-    # The live config may still be the start of the chain (recorded, not yet activated) or any later node.
-    nodes = [steps[0][0]]
-    nodes.extend(right for _left, right in steps)
-    if current not in nodes:
+    # History may contain every fingerprint on the chain. The live config may be the tail, or the
+    # immediate predecessor only until a run has been stored on the tail after this step. An older
+    # node is not a silent rollback.
+    last_from, last_to = steps[-1]
+    committed = destination_committed(rows, last_to, records[-1].get("recorded_at"))
+    if current != last_to and not (current == last_from and not committed):
         return False
-    allowed = {fingerprint_of(node) for node in nodes}
+    allowed = {fingerprint_of(steps[0][0])}
+    allowed.update(fingerprint_of(right) for _left, right in steps)
     if fingerprint_of(steps[0][0]) not in {row[1] for row in rows}:
         return False  # the pre-transition history is still required
     if not rows:
@@ -210,7 +245,27 @@ def transition_resumes(rows, *, freeze, freeze_ok, started, account_present, cur
     for record in records:
         if record.get("git_commit") != freeze or record.get("starting_equity") != starting_equity:
             return False
-    for git_commit, fingerprint, equity in rows:
+    for row in rows:
+        git_commit, fingerprint, equity = row[0], row[1], row[2]
         if git_commit != freeze or fingerprint not in allowed or equity != starting_equity:
             return False
     return True
+
+
+def entry_fence_required(connection):
+    """True while the latest step's destination has not yet been used by a run. A bad chain stays fenced."""
+    records = load_transitions(connection)
+    if not records:
+        return False
+    try:
+        steps = [_check_step(record) for record in records]
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return True
+    for previous, current in zip(steps, steps[1:]):
+        if previous[1] != current[0]:
+            return True
+    found = connection.execute(
+        "SELECT m.config_fingerprint, r.started_at FROM run_metadata m "
+        "LEFT JOIN runs r ON r.slot_key = m.slot_key").fetchall()
+    rows = [(None, row[0], None, row[1]) for row in found]
+    return not destination_committed(rows, steps[-1][1], records[-1].get("recorded_at"))

@@ -229,23 +229,24 @@ def cloud_preflight(config, *, env=None, disk_mounted=None):
                     active = replace(config, scheduler_enabled=True)
                     fingerprint = active.fingerprint()
                     metadata = store.db.execute(
-                        "SELECT DISTINCT git_commit, config_fingerprint, starting_equity FROM run_metadata"
+                        "SELECT m.git_commit, m.config_fingerprint, m.starting_equity, r.started_at "
+                        "FROM run_metadata m LEFT JOIN runs r ON r.slot_key = m.slot_key"
                     ).fetchall()
+                    identity = [(row[0], row[1], row[2]) for row in metadata]
                     freeze_ok = store.get_state("experiment_freeze_sha") == freeze
                     started = bool(store.get_state("experiment_started_at_utc"))
                     account_present = bool(store.db.execute(
                         "SELECT 1 FROM paper_accounts WHERE account_id=?", (config.account_id,)).fetchone())
                     unchanged = bool(
                         freeze and freeze_ok and started and account_present
-                        and all(tuple(row) == (freeze, fingerprint, config.starting_equity) for row in metadata))
+                        and all(tuple(row) == (freeze, fingerprint, config.starting_equity) for row in identity))
                     from runtime.provider_transition import load_transitions, transition_resumes
                     records = load_transitions(store.db)
                     if not records:
                         checks["experiment_resumable"] = unchanged
                     else:
-                        # A valid chain resumes on the recorded start as well as the recorded end, so the
-                        # operator can write the row before the provider env changes and a restart in
-                        # between still resumes. A bad record does not fall back to the unchanged path.
+                        # The predecessor resumes only until a run is stored on the new fingerprint.
+                        # After that, only the tail resumes. A bad record does not fall back.
                         checks["experiment_resumable"] = transition_resumes(
                             metadata, freeze=freeze, freeze_ok=freeze_ok, started=started,
                             account_present=account_present, current_payload=active.fingerprint_content(),

@@ -1019,6 +1019,11 @@ class OperationalRuntime:
             if (router is not None and cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}
                     and not (self.halt_gate is not None and self.halt_gate.halted)):
                 def call_router():
+                    try:
+                        router.sync_transition_fence(self.store)
+                    except Exception as exc:  # noqa: BLE001 - a failed sync leaves the previous fence in place
+                        LOG.warning("component=provider_transition event=FENCE_SYNC_FAILED error_type=%s",
+                                    type(exc).__name__)
                     if _ema_cross_enabled(router):
                         return router.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars,
                                                m15_bars=ema_m15, h1_closes=ema_h1)
