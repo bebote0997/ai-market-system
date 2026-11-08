@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-11-08 — DEC-EMA-1: la protección de EMA se comprueba en el broker
+
+- `ANCHORED` solo se guarda cuando una lectura nueva de la operación abierta muestra stop y target. El stop local de la cotización no cuenta como protección.
+- Si el broker no trae stop o target, se reemplazan a 20/40 desde el fill del broker. Si el reemplazo falla, se cierra. Si el cierre no queda aceptado, la fila sigue abierta y el siguiente ciclo lo reintenta. Una lectura fallida no ancla y no cierra a ciegas.
+- La entrada EMA sigue usando el mismo `_sized` del router que el retroceso: tope del 1%, tope de unidades y límite de pérdida diaria cuando está activo, más noticias, sesión, viernes y una sola posición. El motor de riesgo del libro de práctica interna no gobierna la cuenta de OANDA. La pausa de símbolo sigue siendo solo XAUUSD en el libro interno. El modelo de la señal no cambia.
+
+## 2026-11-07 — DEC-EMA-1: EMA 10/21 EURUSD, demo, flag OFF (preparado, sin activar)
+
+- Autorización del owner (Jeferson, 7 nov) para preparar el PR. No merge, no deploy, no cambio de Render, no órdenes.
+- Nuevo camino aditivo en `execution/ema_cross.py` y estado durable `ema_cross_signals` (solo si `AI_FLOOR_EMA_CROSS` es exactamente `1`). El retroceso DEC-FX-SL-3 sigue igual: LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail solo en filas `EURUSD_H1_PULLBACK`.
+- EMA: cruce M15 al cierre (shift 0), filtro de la última H1 cerrada, espera 15 minutos, mercado, sin parciales ni trail. El SL/TP salen con la cotización para que el fill no quede desnudo; cuando llega el fill real se reemplazan a 20/40 desde ese fill. Si el stop queda a más de 20,5 pips y el reemplazo falla, o si el precio ya cruzó ese stop, se cierra (`EMA_RISK_UNCORRECTED` / `EMA_PRICE_THROUGH_STOP`). Un stop más ajustado se conserva si el reemplazo falla. Ventana UTC [12, 15). Noticias, sesión y viernes 16:45 NY se mantienen (ver `docs/ema_cross.md`). `AI_FLOOR_EMA_CROSS` es un nombre nuevo: no se activa mientras el conjunto de 42 claves de Render no cambie.
+- La cifra «OOS 2024–2026» del candidato es evaluación retrospectiva sobre años ya usados al elegir la variante. No es un holdout intacto ni una promesa de beneficio.
+- Tests: `test_ema_cross.py` (cruce, filtro, espera, slot perdido, cruce opuesto, frontera de sesión, noticias, libro ocupado, reinicio, etiqueta, sin trail ni reversión cruzada).
+- `test_phase8_p4b`: el freeze de Fase 6 sigue admitiendo solo los mismos archivos. El diff debe nombrar DEC-FX-SL-1, DEC-FX-SL-2 o DEC-FX-SL-3 (la cadena que sustituye el texto viejo). El contrato vivo queda afirmado: SL 25, TP 50, límite 12,5.
+
 ## 2026-11-03 — DEC-FX-SL-3: LIMIT EURUSD a 12,5 pips fijos, SL 25 / TP 50 pips fijos (borrador)
 
 - Orden del owner (Jeferson, 3 nov): «Vamos a establecer la mitad fija para todos y de la misma manera que esta, desde la entrada después de pasar el atr se recalcula todo para que quede 25 sl y 50 tp». Sustituye a DEC-FX-SL-2.

@@ -232,6 +232,12 @@ class OandaClient:
         body = {"stopLoss": {"price": format_price(price), "timeInForce": "GTC"}}
         return self._call(TRADING, "PUT", self._path(f"trades/{self._trade(specifier)}/orders"), body)
 
+    def replace_stop_and_target(self, specifier, stop, target):
+        """Replace the trade's stop and take-profit together. Used to measure both from an actual fill."""
+        body = {"stopLoss": {"price": format_price(stop), "timeInForce": "GTC"},
+                "takeProfit": {"price": format_price(target), "timeInForce": "GTC"}}
+        return self._call(TRADING, "PUT", self._path(f"trades/{self._trade(specifier)}/orders"), body)
+
     def close_trade(self, specifier, units="ALL"):
         """Close ``units`` of one trade. ``"ALL"`` closes the whole trade; a positive int closes that many units."""
         if units == "ALL":

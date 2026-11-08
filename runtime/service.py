@@ -71,6 +71,13 @@ def attach_broker_alerts(router, environ):
         LOG.warning("component=broker_demo event=ALERTS_UNAVAILABLE error_type=%s", type(exc).__name__)
 
 
+def _ema_cross_enabled(router):
+    """True only for the real demo router with the EMA flag on. A test double is not inspected."""
+    if router is None or type(router).__name__ != "BrokerDemoRouter":
+        return False
+    return router.ema_cross is True
+
+
 _AUTO = object()  # broker_router default: built from the environment (None unless AI_FLOOR_BROKER_DEMO_ROUTING=1)
 
 
@@ -983,6 +990,8 @@ class OperationalRuntime:
             returned = self._run_cycle(symbol, scheduled_at, rex_holder, cycle_context)
             off_observe = cycle_context.pop("_off_observe", None)
             h1_bars = cycle_context.pop("_h1_bars", None)  # not part of the recorded cycle (no candle payload)
+            ema_m15 = cycle_context.pop("_ema_m15", None)
+            ema_h1 = cycle_context.pop("_ema_h1", None)
             if off_observe is not None:  # the newest per symbol only: a missed flush never accumulates snapshots
                 self._off_observe_pending[symbol] = (*off_observe, cycle_context.get("run_id"))
             if cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}:
@@ -993,8 +1002,12 @@ class OperationalRuntime:
             router = self.broker_router
             if (router is not None and cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}
                     and not (self.halt_gate is not None and self.halt_gate.halted)):
-                self._audit_safely(lambda: router.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars),
-                                   cycle_context.get("run_id"), symbol)  # never raises, never changes `returned`
+                def call_router():
+                    if _ema_cross_enabled(router):
+                        return router.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars,
+                                               m15_bars=ema_m15, h1_closes=ema_h1)
+                    return router.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars)
+                self._audit_safely(call_router, cycle_context.get("run_id"), symbol)  # never raises, never changes `returned`
             if rex_holder and rex_holder[0] is not None:
                 try:
                     rex_holder[0].finish(returned)
@@ -1477,3 +1490,13 @@ class OperationalRuntime:
                     cycle_context["_h1_bars"] = bars_from_frame(snapshot.get("1h"))
                 except Exception:  # noqa: BLE001 - missing bars skip the limit; they never fail the paper cycle
                     cycle_context["_h1_bars"] = None
+                router = getattr(self, "broker_router", None)
+                if _ema_cross_enabled(router):
+                    try:
+                        from datetime import timedelta
+                        from execution.ema_cross import closes_from_frame
+                        cycle_context["_ema_m15"] = closes_from_frame(snapshot.get("15m"), timedelta(minutes=15))
+                        cycle_context["_ema_h1"] = closes_from_frame(snapshot.get("1h"), timedelta(hours=1))
+                    except Exception:  # noqa: BLE001 - missing bars skip the EMA entry; the paper cycle is unchanged
+                        cycle_context["_ema_m15"] = None
+                        cycle_context["_ema_h1"] = None
