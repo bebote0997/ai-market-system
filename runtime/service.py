@@ -1475,10 +1475,12 @@ class OperationalRuntime:
                 symbol, self._snapshot(from_ai_report(ai, now=slot))), run_id, symbol)
             if not self._persist("L", lambda: self.store.finish(key, self.clock(), "COMPLETED", ai.final_status)):
                 return "ERROR"
+            from execution.eurusd_pullback import entry_offset_mode, limit_management_v2
             LOG.info("run_id=%s symbol=%s scheduled_slot=%s component=runtime event=RUN_COMPLETED status=%s "
-                     "setup_status=%s side=%s setup_warnings=%s",
+                     "setup_status=%s side=%s setup_warnings=%s limit_management_v2=%s entry_offset_mode=%s",
                      ai.run_id, symbol, utc(slot), ai.final_status,
-                     *setup_log_fields(deterministic.setup_assessment))
+                     *setup_log_fields(deterministic.setup_assessment),
+                     "1" if limit_management_v2(os.environ) else "0", entry_offset_mode(os.environ))
             return ai.final_status
         except HaltRefused as halt:  # V2 P4a: an admission or the run lifecycle was refused after T_h
             return self._halt_run(key, run_id, symbol, halt, rex)

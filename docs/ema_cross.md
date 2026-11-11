@@ -13,6 +13,7 @@ Exact `AI_FLOOR_EMA_CROSS=1` on a process that already has OANDA practice routin
 * No partial, no breakeven, no trail. Friday 16:45 America/New_York and the one-week max hold still close the position.
 * The order is tagged `EURUSD_EMA_CROSS`. The pullback manager only touches `EURUSD_H1_PULLBACK`. Reversal will not close an EMA position to open a pullback.
 * One routed position or resting order blocks the other strategy. EMA does not reverse the pullback.
+  Exact `AI_FLOOR_LIMIT_MANAGEMENT_V2=1` on the practice router is the exception for a resting pullback LIMIT only: an EMA entry cancels that limit and then sends. An actually filled position still blocks. Unset or any other value keeps the block. The flag is off by default and is not an EMA exit change.
 * The signal row lives in the broker state DB (`ema_cross_signals`). A restart reloads `PENDING` and will not send a second order for a `SUBMITTED`, `REJECTED`, `CANCELLED`, or `EXPIRED` id.
 * Size is the router's existing rule: 1% of OANDA practice NAV, then `AI_FLOOR_BROKER_DEMO_MAX_UNITS` (default 100000). The risk engine is not bypassed.
 

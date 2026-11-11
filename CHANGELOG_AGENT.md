@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-11 — DEC-LIMIT-MGMT-1: límite de práctica con interruptor (A+B, apagado)
+
+- `AI_FLOOR_LIMIT_MANAGEMENT_V2=1` (cuenta OANDA practice): la LIMIT dura 4 h, se cancela si el precio se aleja 15 pips a favor sin llenarse, un `PLAN_READY` del mismo lado la reemplaza, y una entrada EMA 10/21 la cancela y sigue. El lado opuesto no reemplaza. Una posición ya llena sigue bloqueando.
+- `AI_FLOOR_ENTRY_OFFSET_MODE=5pips` coloca la LIMIT a 5 pips (SL 25 / TP 50 desde esa LIMIT). `market` reutiliza la orden de mercado con anclaje al precio. Sin valor, `legacy` u otro valor: 12,5 pips.
+- Sin esas claves el ciclo queda como hoy (24 h, 12,5 pips, sin cancelar ni reemplazar). Se leen en cada ciclo. El evento de cancelación/vencimiento lleva las banderas; `RUN_COMPLETED` y `CYCLE_FLAGS` también. Un broker que no sea practice, o `REAL_EXECUTION_ENABLED`, no puede usarlas.
+- Sin merge, sin deploy, sin cambio de `render.yaml` ni de env en Render. REAL sigue bloqueado. Riesgo, 1 posición, SL, alineación, salidas EMA, xAI, scheduler y auth no cambian.
+
 ## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte
 
 - El control separa la solicitud en curso (pendiente, anotada o rechazada, con su hora) del último paso inmutable. La bandera de valla solo sale de `provider_transition_fence`: `1` activa, `0` no activa, y si falta o no se puede leer queda UNKNOWN. Un cálculo sobre los pasos se rotula aparte y no es esa bandera.

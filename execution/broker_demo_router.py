@@ -27,6 +27,12 @@ and move the stop to breakeven, then trail the rest at 1R; those levels and brea
 deploy does not change a position that is already open. The high-impact news filter stays in the setup validator, before
 this router ever sees a plan.
 
+``AI_FLOOR_LIMIT_MANAGEMENT_V2`` (exact ``1``, practice only) shortens that GTD to 4 hours, cancels a resting pullback
+limit that runs 15 pips in its favor unfilled, replaces it when a new same-side plan is ready, and lets an EMA entry
+cancel it first. ``AI_FLOOR_ENTRY_OFFSET_MODE=5pips`` uses a 5-pip offset; ``market`` reuses the fill-anchor market
+order. Any other value, including unset, keeps 12.5 pips, 24 hours and no cancel/replace. Both are read every cycle.
+A filled position is never cancelled by these rules. A non-practice broker cannot enable them.
+
 Dry-run (``AI_FLOOR_BROKER_DEMO_DRY_RUN=1``, opt-in) records the exact order JSON (event DRY_RUN) and never POSTs/PUTs;
 it may read summary/pricing/openTrades. ``manage`` applies the trade-duration rule (execution/trade_duration.py) to
 LIVE routed trades (DEC-HOLD-WEEK-1: max hold one week, Friday 16:45 NY flatten, no entries until the Sunday
@@ -67,6 +73,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import logging
+import os
 from pathlib import Path
 import sqlite3
 import threading
@@ -84,9 +91,10 @@ from execution.broker_demo_state import (CANCELLED, CLOSED, CLOSED_AT_BROKER, DR
 from execution.ema_cross import (STRATEGY as EMA_STRATEGY, SYMBOL as EMA_SYMBOL, anchor_plan, client_id_for,
                                 context_news_reason, ema_flag, levels_from_fill, session_is_open, step as ema_step)
 from execution.ema_cross_state import EmaSignalStore, signal_from_row
-from execution.eurusd_pullback import (LIMIT_OFFSET_PIPS, STRATEGY, PullbackPlan, gtd_timestamp, limit_expiry,
-                                       limit_fill_verdict, management_steps, market_anchor, plan_pullback,
-                                       pullback_flag)
+from execution.eurusd_pullback import (ENTRY_OFFSET_MARKET, LIMIT_TTL_V2, OFFSET_5, STRATEGY, SYMBOL,
+                                       PullbackPlan, entry_offset_mode, favorable_runaway, gtd_timestamp,
+                                       limit_expiry, limit_fill_verdict, limit_management_v2, management_steps,
+                                       market_anchor, plan_pullback, pullback_flag)
 from execution.broker_port import (ACCEPTED, APPROVED, BrokerAuthError, BrokerGuardError, BrokerMalformedResponse,
                                    BrokerRateLimited, OrderPlan, RiskApproval)
 from execution.demo_epoch import demo_start_equity
@@ -166,10 +174,13 @@ def _structural_stop(context, stop):
     return stop if structural is None or structural <= 0 else structural
 
 
-def _plan_pullback(side, entry, stop, target, h1_bars, structural):
-    """``plan_pullback`` with SL/TP measured from the limit (DEC-FX-SL-3). Pure; bad data is ``h1_no_data``."""
+def _plan_pullback(side, entry, stop, target, h1_bars, structural, offset=None):
+    """``plan_pullback`` with SL/TP measured from the limit (DEC-FX-SL-3). Pure; bad data is ``h1_no_data``.
+
+    ``offset`` None keeps the fixed 12.5 pips. The 5-pip offset is passed only when that mode is active.
+    """
     try:
-        return plan_pullback(side, entry, stop, target, h1_bars, structural=structural)
+        return plan_pullback(side, entry, stop, target, h1_bars, structural=structural, offset=offset)
     except (ValueError, ArithmeticError, TypeError):
         return "h1_no_data"
 
@@ -285,7 +296,7 @@ _ACTION_LOG_OK = frozenset({"CLOSED", CLOSED_AT_BROKER, "BREAKEVEN", "PARTIAL_CL
 # reject text, unexpected exception names, ...) -> OTHER, so a reason can never leak an id or token.
 _LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN, REVERSAL,
                           MANUAL_CLOSE, "LIMIT_EXPIRED", "LIMIT_CANCELLED", "WEEKEND_ENTRY_BLOCK", "0.5R", "1R",
-                          "TRAIL", "BE",
+                          "TRAIL", "BE", "FAVORABLE_15_PIPS", "SAME_SIDE_REPLACE", "EMA_PRIORITY",
                           EMERGENCY_ACTIVE, EMERGENCY_BUTTON, "BrokerAuthError", "BrokerRateLimited",
                           "BrokerGuardError", "BrokerMalformedResponse", "no_open_position"})
 
@@ -345,6 +356,18 @@ def _log_limit(kind, **detail):
 def _pips(value):
     """Decimal pips as plain text (``-1.6``, ``60``), never exponent notation."""
     return format(value.normalize(), "f")
+
+
+def _ttl_hours(start, end):
+    """Whole hours when the span is exact, otherwise a plain decimal. ``None`` when the span is not usable."""
+    if start is None or end is None:
+        return None
+    seconds = int((end - start).total_seconds())
+    if seconds <= 0:
+        return "0"
+    if seconds % 3600 == 0:
+        return str(seconds // 3600)
+    return format(Decimal(seconds) / Decimal(3600), "f")
 
 
 def _not_routed(reason):
@@ -470,6 +493,76 @@ class BrokerDemoRouter:
         except Exception:  # noqa: BLE001 - unreadable registry: fail closed
             return False
 
+    def _env_map(self):
+        """The mapping passed at construction, or the process env. Read again on every cycle (not cached)."""
+        return os.environ if self._env is None else self._env
+
+    def _practice_v2_allowed(self):
+        """A and B run only on this practice router. A real host, or REAL_EXECUTION_ENABLED, cannot reach them."""
+        if real_execution_enabled() is not False:
+            return False
+        if getattr(self._broker, "mode", None) != DEMO_MODE:
+            return False
+        client = getattr(self._broker, "_client", None)
+        base = getattr(client, "_base", None) if client is not None else None
+        if isinstance(base, str) and "api-fxtrade.oanda.com" in base:
+            return False
+        return True
+
+    def _limit_management_v2(self):
+        return self._practice_v2_allowed() and limit_management_v2(self._env_map())
+
+    def _entry_offset_mode(self):
+        if not self._practice_v2_allowed():
+            return "legacy"
+        return entry_offset_mode(self._env_map())
+
+    def _flag_detail(self):
+        return {"limit_management_v2": "1" if self._limit_management_v2() else "0",
+                "entry_offset_mode": self._entry_offset_mode()}
+
+    def _log_cycle_flags(self):
+        """One line per cycle so a Render log shows which mode actually ran."""
+        try:
+            detail = self._flag_detail()
+            LOG.info("component=broker_demo event=CYCLE_FLAGS limit_management_v2=%s entry_offset_mode=%s",
+                     detail["limit_management_v2"], detail["entry_offset_mode"])
+        except Exception as exc:  # noqa: BLE001 - a log line never changes the cycle
+            LOG.warning("component=broker_demo event=CYCLE_FLAGS_FAILED error_type=%s", type(exc).__name__)
+
+    def _same_side_pending(self, decision, symbol, report):
+        """The single resting pullback LIMIT on ``decision.side``, or None.
+
+        An open broker trade, any filled row, the opposite side, or an unresolved action is None. The caller
+        then keeps the existing one-position refusal, including ``position_already_open``.
+        """
+        if any(getattr(trade, "instrument", None) == INSTRUMENTS[symbol] for trade in report):
+            return None
+        live = self._store.trades(LIVE_STATUSES)
+        if len(live) != 1:
+            return None
+        row = live[0]
+        if (row.get("status") != PENDING_LIMIT or row.get("order_kind") != "LIMIT"
+                or row.get("strategy") != STRATEGY or row.get("symbol") != symbol
+                or row.get("side") != getattr(decision, "side", None) or row.get("action_status")):
+            return None
+        return row
+
+    def _resting_pullback_limit(self, report):
+        """The single resting pullback LIMIT when the broker book has no open trade, else None."""
+        if report is None:
+            return None
+        if any(getattr(trade, "instrument", None) == INSTRUMENTS[SYMBOL] for trade in report):
+            return None
+        live = self._store.trades(LIVE_STATUSES)
+        if len(live) != 1:
+            return None
+        row = live[0]
+        if (row.get("status") != PENDING_LIMIT or row.get("order_kind") != "LIMIT"
+                or row.get("strategy") != STRATEGY or row.get("symbol") != SYMBOL or row.get("action_status")):
+            return None
+        return row
+
     # -- routing ---------------------------------------------------------------------------------------------------
     def on_cycle(self, context, status, at, h1_bars=None, m15_bars=None, h1_closes=None):
         """Called post-cycle by the runtime. Returns ``(outcome, reason)``; never changes the paper cycle.
@@ -480,6 +573,7 @@ class BrokerDemoRouter:
         """
         with self._lock:
             self._heartbeat()
+            self._log_cycle_flags()
             flattened, reconciled = self._process_requests(at)
             manual, reconciled = self._process_manual_close(reconciled)
             flattened = {**flattened, **manual}
@@ -558,15 +652,23 @@ class BrokerDemoRouter:
         if not self.dry_run and not self._open_allowed():
             return self._refuse(client_id, "broker_demo_not_allowed")
         reversing = None
+        replacing = None
         if self._store.trades(LIVE_STATUSES) or any(t.instrument == INSTRUMENTS[symbol] for t in report):
-            reversing, reason = self._reversal_row(decision, symbol, report)
-            if reversing is None:
-                return self._refuse(client_id, reason)
+            # Same-side replace is practice-only and never runs in dry-run (a dry-run must not cancel a live order).
+            if self._limit_management_v2() and not self.dry_run:
+                replacing = self._same_side_pending(decision, symbol, report)
+            if replacing is None:
+                reversing, reason = self._reversal_row(decision, symbol, report)
+                if reversing is None:
+                    return self._refuse(client_id, reason)
         entry, stop, target = (_dec(getattr(decision, n)) for n in ("entry", "stop", "target"))
         pullback = None
-        if self.pullback and symbol == "EURUSD":  # pure (no network): DEC-FX-SL-3 sizes on the limit-relative risk
+        offset_mode = self._entry_offset_mode()
+        # ``market`` reuses the existing fill-anchor market path. ``5pips`` keeps the limit, 5 pips behind the signal.
+        if self.pullback and symbol == "EURUSD" and offset_mode != ENTRY_OFFSET_MARKET:
+            offset = OFFSET_5 if offset_mode == "5pips" else None
             pullback = self._prepare_pullback(client_id, decision.side, _plan_pullback(
-                decision.side, entry, stop, target, h1_bars, _structural_stop(context, stop)))
+                decision.side, entry, stop, target, h1_bars, _structural_stop(context, stop), offset))
             if not isinstance(pullback, PullbackPlan):  # rejected before sizing: no reversal close, no submission
                 return self._refuse(client_id, pullback)
         size_entry, size_stop = (pullback.limit, pullback.stop) if pullback is not None else (entry, stop)
@@ -597,7 +699,7 @@ class BrokerDemoRouter:
             # DEC-FX-SL-3: the units were sized on limit/stop; SL/TP are measured from the limit, not re-anchored.
             prepared = pullback
             order_entry, order_stop, order_target = prepared.limit, prepared.stop, prepared.target
-            expiry = limit_expiry(at)
+            expiry = limit_expiry(at, LIMIT_TTL_V2 if self._limit_management_v2() else None)
             limit_order = (prepared.limit, gtd_timestamp(expiry), prepared, expiry)
         else:
             anchored = self._fill_anchor(client_id, symbol, decision.side, entry, stop, target)
@@ -616,6 +718,13 @@ class BrokerDemoRouter:
                                entry=order_entry, stop=order_stop, target=order_target)
         except (TypeError, ValueError, ArithmeticError):
             return self._refuse(client_id, "approval_invalid")
+        if replacing is not None:
+            # The new plan is valid. Cancel the resting same-side limit and send only after the broker accepts.
+            cancelled = self._cancel_limit(replacing, "SAME_SIDE_REPLACE")
+            if cancelled != "LIMIT_CANCELLED":
+                return self._refuse(client_id, "limit_cancel_failed")
+            if self._store.trades(LIVE_STATUSES) or self._store.trades(UNRESOLVED_STATUSES):
+                return self._refuse(client_id, "position_already_open")
         row = {"client_id": client_id, "run_id": run_id, "symbol": symbol, "side": decision.side, "units": units,
                "entry": round_price(order_entry), "stop": round_price(order_stop), "target": round_price(order_target)}
         if limit_order is not None:
@@ -673,10 +782,11 @@ class BrokerDemoRouter:
         if isinstance(prepared, PullbackPlan):
             pip = fx_policy.pip_size("EURUSD")
             self._event("PULLBACK_PLAN", client_id, side=side, limit=str(prepared.limit),
-                        offset_pips=_pips(LIMIT_OFFSET_PIPS), ema=str(prepared.ema), price=str(prepared.price),
+                        offset_pips=_pips(prepared.offset_pips), ema=str(prepared.ema), price=str(prepared.price),
                         risk=str(prepared.risk), stop=str(prepared.stop), target=str(prepared.target),
                         sl_clamp=prepared.sl_clamp, structural_pips=_pips(prepared.structural_pips),
-                        sl_pips=_pips(prepared.risk / pip), tp_pips=_pips(abs(prepared.target - prepared.limit) / pip))
+                        sl_pips=_pips(prepared.risk / pip), tp_pips=_pips(abs(prepared.target - prepared.limit) / pip),
+                        **self._flag_detail())
             return prepared
         self._event("PULLBACK_SKIPPED", client_id, reason=prepared, side=side)
         return prepared
@@ -957,9 +1067,12 @@ class BrokerDemoRouter:
                        expires_at=row.get("expires_at"))
         if isinstance(result, LimitResult) and result.status == "RESTING":
             self._store.update(client_id, status=PENDING_LIMIT, order_id=result.broker_ref, closed_reason=None)
+            expires = _parse_time(row.get("expires_at"))
+            ttl = None if expires is None else _ttl_hours(at, expires)
             self._event("LIMIT_PENDING", client_id, order_id=result.broker_ref, side=row["side"], units=row["units"],
                         symbol=row["symbol"], limit_price=row.get("limit_price"), expires_at=row.get("expires_at"),
-                        stop=row["stop"], target=row["target"])
+                        stop=row["stop"], target=row["target"], **self._flag_detail(),
+                        **({} if ttl is None else {"ttl_hours": ttl}))
             return PENDING_LIMIT, result.broker_ref
         if result.status == ACCEPTED:
             self._mark_open(client_id, result.broker_ref, at)
@@ -1113,7 +1226,7 @@ class BrokerDemoRouter:
                 self._store.update(client_id, status=PENDING_LIMIT, order_id=still.order_id, closed_reason=None)
                 self._event("LIMIT_PENDING", client_id, order_id=still.order_id, symbol=row["symbol"],
                             side=row["side"], units=row["units"], limit_price=row.get("limit_price"),
-                            expires_at=row.get("expires_at"), resolved=True)
+                            expires_at=row.get("expires_at"), resolved=True, **self._flag_detail())
             return None  # expiry is _expire_limits, so a resting order is never called a bad fill here
         try:
             trade_id = self._broker.trade_id_for_client(client_id)
@@ -1127,18 +1240,27 @@ class BrokerDemoRouter:
         reason = "LIMIT_EXPIRED"
         self._store.update(client_id, status=CANCELLED, closed_reason=reason, pending_action=None, action_status=None)
         self._event("LIMIT_EXPIRED", client_id, symbol=row["symbol"], side=row["side"], reason=reason,
-                    limit_price=row.get("limit_price"), log_row=row)
+                    limit_price=row.get("limit_price"), log_row=row, **self._cancel_detail(row, {}))
         return None
 
-    def _cancel_limit(self, row, reason):
+    def _cancel_detail(self, row, extra):
+        detail = self._flag_detail()
+        ttl = _ttl_hours(_parse_time(row.get("created_at")), _parse_time(row.get("expires_at")))
+        if ttl is not None:
+            detail["ttl_hours"] = ttl
+        detail.update(extra)
+        return detail
+
+    def _cancel_limit(self, row, reason, **extra):
         """Cancel one resting limit. 404 (already gone) is completed by the next reconcile, not guessed here."""
         client_id = row["client_id"]
         order_id = row.get("order_id")
+        detail = self._cancel_detail(row, extra)
         if not order_id:
             self._store.update(client_id, status=CANCELLED, closed_reason=reason, pending_action=None,
                                action_status=None)
             self._event("LIMIT_CANCELLED", client_id, symbol=row["symbol"], side=row["side"], reason=reason,
-                        log_row=row)
+                        log_row=row, **detail)
             return "LIMIT_CANCELLED"
         try:
             result = self._broker.cancel_order(str(order_id), client_id=f"{client_id}-cancel")
@@ -1156,7 +1278,7 @@ class BrokerDemoRouter:
                                action_status=None)
             kind = "LIMIT_EXPIRED" if reason in ("LIMIT_EXPIRED", "WEEKEND_ENTRY_BLOCK") else "LIMIT_CANCELLED"
             self._event(kind, client_id, symbol=row["symbol"], side=row["side"], reason=reason,
-                        order_id=order_id, limit_price=row.get("limit_price"), log_row=row)
+                        order_id=order_id, limit_price=row.get("limit_price"), log_row=row, **detail)
             return kind
         if result.status == REJECTED:
             self._event("LIMIT_CANCEL_FAILED", client_id, reason=result.reason)
@@ -1276,6 +1398,8 @@ class BrokerDemoRouter:
         if report is None or self.dry_run:
             return report
         self._expire_limits(at)
+        if self._limit_management_v2():
+            self._cancel_favorable_limits()
         quotes = {}
         for row in self._store.trades((OPEN,)):
             if row["client_id"] in skip:  # already acted on by the loss-limit flatten this tick
@@ -1314,6 +1438,39 @@ class BrokerDemoRouter:
             if (expires is not None and at >= expires) or td.entries_blocked(at):
                 reason = "LIMIT_EXPIRED" if expires is not None and at >= expires else "WEEKEND_ENTRY_BLOCK"
                 self._last_manage[row["client_id"]] = self._cancel_limit(row, reason)
+
+    def _cancel_favorable_limits(self):
+        """Cancel a resting pullback LIMIT that ran 15 pips in its favor without filling. Practice v2 only.
+
+        LONG uses the bid (the favorable mark). SHORT uses the ask. A missing quote keeps the order.
+        An open position is not a PENDING_LIMIT row, so this never closes a fill.
+        """
+        pip = fx_policy.pip_size(SYMBOL)
+        quotes = {}
+        for row in self._store.trades((PENDING_LIMIT,)):
+            if row["client_id"] in self._last_manage or row.get("action_status") == UNKNOWN:
+                continue
+            if row.get("strategy") != STRATEGY or row.get("symbol") != SYMBOL or row.get("order_kind") != "LIMIT":
+                continue
+            side = row.get("side")
+            limit = _dec(row.get("limit_price")) or _dec(row.get("entry"))
+            if side not in ("LONG", "SHORT") or limit is None:
+                continue
+            if row["symbol"] not in quotes:
+                quotes[row["symbol"]] = self._quote(row["symbol"], None)
+            quote, problem = quotes[row["symbol"]]
+            if problem is not None:
+                continue
+            _tradeable, bid, ask = quote
+            try:
+                runaway = favorable_runaway(side, limit, bid, ask, pip=pip)
+            except (ValueError, ArithmeticError, TypeError):
+                continue
+            if not runaway:
+                continue
+            moved = (bid - limit) / pip if side == "LONG" else (limit - ask) / pip
+            self._last_manage[row["client_id"]] = self._cancel_limit(
+                row, "FAVORABLE_15_PIPS", distance_pips=_pips(moved))
 
     def _manage_row(self, row, at, quotes, price_provider):
         if row.get("strategy") == STRATEGY:
@@ -1361,12 +1518,27 @@ class BrokerDemoRouter:
         occupied = False if read_failed else bool(
             self._store.trades(LIVE_STATUSES)
             or any(getattr(trade, "instrument", None) == INSTRUMENTS[EMA_SYMBOL] for trade in report))
+        resting = None if read_failed or self.dry_run else self._resting_pullback_limit(report)
         pending = signal_from_row(self._ema_store.pending(EMA_SYMBOL))
+        news = None if read_failed else context_news_reason(context)
+        session_open = session_is_open(at, context)
+        terminal = self._ema_store.terminal_ids(EMA_SYMBOL)
         decision = ema_step(
-            pending, at=at, m15=m15_bars, h1=h1_closes,
-            news_reason=None if read_failed else context_news_reason(context),
-            session_open=session_is_open(at, context), flat=not occupied,
-            terminal_ids=self._ema_store.terminal_ids(EMA_SYMBOL))
+            pending, at=at, m15=m15_bars, h1=h1_closes, news_reason=news, session_open=session_open,
+            flat=not occupied, terminal_ids=terminal)
+        if (self._limit_management_v2() and resting is not None and decision.action == "HOLD"
+                and decision.reason == "position_open"):
+            # The signal is otherwise ready. An open fill never reaches here: resting is only a pullback LIMIT.
+            preview = ema_step(
+                pending, at=at, m15=m15_bars, h1=h1_closes, news_reason=news, session_open=session_open,
+                flat=True, terminal_ids=terminal)
+            if preview.action == "ENTER" and preview.signal is not None:
+                cancelled = self._cancel_limit(resting, "EMA_PRIORITY")
+                if cancelled != "LIMIT_CANCELLED":
+                    self._event("EMA_HOLD", preview.signal.client_id, reason="limit_cancel_failed",
+                                strategy=EMA_STRATEGY, **self._flag_detail())
+                    return
+                decision = preview
         if read_failed and decision.action == "ENTER":
             decision = type(decision)("HOLD", "broker_read_failed", decision.signal)
         signal = decision.signal
@@ -2088,4 +2260,6 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     LOG.info("component=broker_demo event=REVERSAL_%s", "ON" if router.reversal else "OFF")
     LOG.info("component=broker_demo event=EURUSD_PULLBACK_%s", "ON" if router.pullback else "OFF")
     LOG.info("component=broker_demo event=EURUSD_EMA_CROSS_%s", "ON" if router.ema_cross else "OFF")
+    LOG.info("component=broker_demo event=LIMIT_FLAGS limit_management_v2=%s entry_offset_mode=%s",
+             "1" if limit_management_v2(env) else "0", entry_offset_mode(env))
     return router

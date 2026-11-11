@@ -3,11 +3,13 @@
 The engine still chooses the side and the structural invalidation. This module only decides:
 
 * whether that side agrees with the closed H1 EMA(200),
-* the limit price (DEC-FX-SL-3: signal ± a FIXED 12.5 pips, half the 25-pip SL, for every setup; no ATR),
+* the limit price (DEC-FX-SL-3: signal ± a FIXED 12.5 pips, half the 25-pip SL, for every setup; no ATR).
+  ``AI_FLOOR_ENTRY_OFFSET_MODE=5pips`` uses 5 pips instead; ``market`` skips this limit and the caller reuses the
+  existing market order. Unset, ``legacy`` and any other value keep 12.5,
 * the stop and target of the limit (DEC-FX-SL-3): exactly FX_SL_MAX_PIPS (25) pips from the LIMIT price
   (``fx_policy.clamp_stop`` with min == max) and TP = limit ± FX_TP_RR × that distance (50 pips). The structural
   invalidation only decides whether the setup is still valid: a limit at or through it is ``limit_through_stop``,
-* when the unfilled limit expires,
+* when the unfilled limit expires (24 hours, or 4 hours when ``AI_FLOOR_LIMIT_MANAGEMENT_V2`` is exactly ``1``),
 * how a filled position is scaled out (1/3 at +0.5R, 1/3 at +1R with the stop to breakeven, then a 1R trail).
 
 R is ``abs(limit − stop)``, the risk the position has once the limit fills. Profit levels (+0.5R, +1R), breakeven
@@ -35,7 +37,17 @@ EMA_PERIOD = 200
 # DEC-FX-SL-3 (owner, 2026-11-03): the limit sits a fixed half of the 25-pip SL away from the signal, for all setups.
 LIMIT_OFFSET_PIPS = Decimal("12.5")
 LIMIT_OFFSET = LIMIT_OFFSET_PIPS * fx_policy.pip_size(SYMBOL)
+OFFSET_5_PIPS = Decimal("5")
+OFFSET_5 = OFFSET_5_PIPS * fx_policy.pip_size(SYMBOL)
+FAVORABLE_CANCEL_PIPS = Decimal("15")
 LIMIT_TTL = timedelta(hours=24)
+LIMIT_TTL_V2 = timedelta(hours=4)
+# Read on every cycle from the process env. Unset reproduces DEC-FX-SL-3 exactly.
+LIMIT_MANAGEMENT_ENV = "AI_FLOOR_LIMIT_MANAGEMENT_V2"
+ENTRY_OFFSET_ENV = "AI_FLOOR_ENTRY_OFFSET_MODE"
+ENTRY_OFFSET_LEGACY = "legacy"
+ENTRY_OFFSET_5PIPS = "5pips"
+ENTRY_OFFSET_MARKET = "market"
 HALF_R = Decimal("0.5")
 ONE_R = Decimal("1")
 # Rounding slack for "filled at the limit". A fill this far through the wrong side is slippage, not the level.
@@ -46,6 +58,22 @@ _PRICE = Decimal("0.00001")
 def pullback_flag(env):
     """Demo default ON. Only the exact value ``0`` restores immediate market entries (the rollback)."""
     return (env or {}).get(PULLBACK_ENV) != "0"
+
+
+def limit_management_v2(env):
+    """Exact ``1`` enables the 4h GTD, the 15-pip favorable cancel, same-side replace and EMA priority.
+
+    Unset, ``0``, ``true`` and any other value keep the legacy 24h limit with none of those cancels.
+    """
+    return (env or {}).get(LIMIT_MANAGEMENT_ENV) == "1"
+
+
+def entry_offset_mode(env):
+    """``5pips`` or ``market`` only when the value is exactly that. Everything else, including unset, is ``legacy``."""
+    raw = (env or {}).get(ENTRY_OFFSET_ENV)
+    if raw in (ENTRY_OFFSET_5PIPS, ENTRY_OFFSET_MARKET):
+        return raw
+    return ENTRY_OFFSET_LEGACY
 
 
 def round_fx(price):
@@ -139,15 +167,19 @@ def geometry_ok(side, limit, stop, target):
     return False
 
 
-def limit_expiry(submitted):
-    """24 hours after ``submitted``, capped by the next Friday entry ban (16:45 America/New_York).
+def limit_expiry(submitted, ttl=None):
+    """``ttl`` after ``submitted`` (default 24 hours), capped by the next Friday entry ban (16:45 America/New_York).
 
-    A resting limit must not be able to fill while the demo already refuses new entries. When ``submitted`` is
-    already inside that ban the expiry is ``submitted`` itself (the caller does not place the order).
+    Pass ``LIMIT_TTL_V2`` (4 hours) only when limit management v2 is on. A resting limit must not be able to fill
+    while the demo already refuses new entries. When ``submitted`` is already inside that ban the expiry is
+    ``submitted`` itself (the caller does not place the order).
     """
     if not isinstance(submitted, datetime) or submitted.tzinfo is None or submitted.utcoffset() is None:
         raise ValueError("timezone-aware datetime required")
-    horizon = submitted.astimezone(timezone.utc) + LIMIT_TTL
+    span = LIMIT_TTL if ttl is None else ttl
+    if not isinstance(span, timedelta) or span <= timedelta(0):
+        raise ValueError("ttl must be a positive timedelta")
+    horizon = submitted.astimezone(timezone.utc) + span
     if td.entries_blocked(submitted):
         return submitted.astimezone(timezone.utc)
     cap = td.friday_flatten_after(submitted)
@@ -171,6 +203,7 @@ class PullbackPlan:
     target: Decimal = None
     sl_clamp: str = None
     structural_pips: Decimal = None
+    offset_pips: Decimal = LIMIT_OFFSET_PIPS
 
 
 def limit_levels(side, limit, structural, *, symbol=SYMBOL, rounder=round_fx):
@@ -201,7 +234,7 @@ def limit_levels(side, limit, structural, *, symbol=SYMBOL, rounder=round_fx):
     return stop, target, action, pips
 
 
-def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=round_fx):
+def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=round_fx, offset=None):
     """``PullbackPlan`` or a short reason string. Never raises on bad market data (that reason is ``h1_no_data``).
 
     ``stop`` / ``target`` are the engine's signal-based levels; ``structural`` is the structural invalidation (the
@@ -226,7 +259,10 @@ def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=
         return "trend_flat"
     if allowed != side:
         return "trend_filter"
-    raw = limit_price(side, signal)
+    used = LIMIT_OFFSET if offset is None else offset
+    if not isinstance(used, Decimal) or not used.is_finite() or used <= 0:
+        return "limit_invalid"
+    raw = limit_price(side, signal, used)
     try:
         limit = rounder(raw)
     except (ValueError, ArithmeticError, TypeError):
@@ -240,7 +276,8 @@ def plan_pullback(side, signal, stop, target, bars, *, structural=None, rounder=
     new_stop, new_target, action, pips = levels
     if not geometry_ok(side, limit, new_stop, new_target):
         return "limit_through_stop"
-    return PullbackPlan(limit, ema_value, price, abs(limit - new_stop), new_stop, new_target, action, pips)
+    return PullbackPlan(limit, ema_value, price, abs(limit - new_stop), new_stop, new_target, action, pips,
+                        used / fx_policy.pip_size(SYMBOL))
 
 
 def _is_bars(value):
@@ -336,6 +373,26 @@ def management_steps(*, side, anchor, risk, units, stage, remaining, price, stop
     kind = "STOP" if _tighter(side, new_stop, stop) else "MARK"
     steps.append(ManageStep(kind, "TRAIL", "BE", journals, remaining=left, stop=new_stop if kind == "STOP" else None))
     return tuple(steps)
+
+
+def favorable_runaway(side, limit, bid, ask, *, pip, pips=FAVORABLE_CANCEL_PIPS):
+    """True when the quote is at least ``pips`` beyond ``limit`` in the trade's favorable direction.
+
+    LONG (buy limit): the bid is that far above the limit, so price ran up without filling.
+    SHORT (sell limit): the ask is that far below the limit, so price ran down without filling.
+    A move toward the limit is how the order fills and is not a cancel. Exactly ``pips`` cancels.
+    """
+    if side not in ("LONG", "SHORT"):
+        raise ValueError("side must be LONG or SHORT")
+    for name, value in (("limit", limit), ("bid", bid), ("ask", ask), ("pip", pip), ("pips", pips)):
+        if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+            raise ValueError(f"{name} must be a finite positive Decimal")
+    if ask < bid:
+        raise ValueError("ask below bid")
+    gap = pips * pip
+    if side == "LONG":
+        return bid >= limit + gap
+    return ask <= limit - gap
 
 
 def limit_fill_verdict(side, limit, fill, *, pip, slack_pips=FILL_SLACK_PIPS):

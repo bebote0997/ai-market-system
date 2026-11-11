@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96` apilada sobre `cursor/ema-cross-demo-9b96`). xAI preparado y apagado; el cambio de proveedor solo lo anota el runner después de una confirmación del owner en el panel, con la cuenta plana, y no al arrancar. EMA 10/21 preparado y apagado. Ninguno está mergeado ni desplegado. REAL sigue bloqueado. Ver `docs/provider_migration.md` y `docs/ema_cross.md`._
+_Última actualización: 2026-11-11 (America/New_York; rama `cursor/limit-management-v2-c632`). DEC-LIMIT-MGMT-1 preparado y apagado: A+B solo en la cuenta OANDA practice, cada uno con su interruptor. Sin las claves, el ciclo sigue en LIMIT 24 h y 12,5 pips, sin cancelar ni reemplazar. REAL sigue bloqueado. Sin merge, sin deploy, sin cambio de `render.yaml`. Ver `CHANGELOG_AGENT.md`._
+
+_Anterior: 2026-11-07 (America/New_York; rama `cursor/xai-provider-migration-9b96` apilada sobre `cursor/ema-cross-demo-9b96`). xAI preparado y apagado; el cambio de proveedor solo lo anota el runner después de una confirmación del owner en el panel, con la cuenta plana, y no al arrancar. EMA 10/21 preparado y apagado. Ninguno está mergeado ni desplegado. REAL sigue bloqueado. Ver `docs/provider_migration.md` y `docs/ema_cross.md`._
 
 _Anterior en esta pila: 2026-11-07 (DEC-EMA-1). Estrategia EMA 10/21 EURUSD, flag `AI_FLOOR_EMA_CROSS` apagado. DEC-FX-SL-3 (LIMIT 12,5 pips, SL 25 / TP 50, parciales y trail) no cambia._
 
