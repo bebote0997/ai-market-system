@@ -12,6 +12,7 @@ from typing import Optional
 
 
 RISK_FRACTION_CAP = Decimal("0.01")
+USD_RISK_CAP = Decimal("5")
 
 
 def _pos(value):
@@ -65,6 +66,33 @@ def size_lots(balance, risk_fraction, entry, stop, spec):
         lots = floor_to_step(spec.volume_max, spec.volume_step)
     if lots < spec.volume_min:
         return Decimal(0), "below_volume_min"
+    return lots, None
+
+
+def capped_lots(equity, balance, entry, stop, spec, fraction=RISK_FRACTION_CAP, usd_cap=USD_RISK_CAP):
+    """``(lots, reason)``. Budget is the lesser of ``fraction`` of equity, of balance, and ``usd_cap``.
+
+    Lots are floored to ``volume_step`` and never raised to ``volume_min``. ``entry`` and ``stop`` are the
+    prices the order will actually use.
+    """
+    if not isinstance(spec, InstrumentSpec):
+        return Decimal(0), "symbol_spec_missing"
+    equity, balance = _pos(equity), _pos(balance)
+    entry, stop = _pos(entry), _pos(stop)
+    fraction = _pos(fraction) if not isinstance(fraction, bool) else None
+    cap = _pos(usd_cap) if not isinstance(usd_cap, bool) else None
+    if (equity is None or balance is None or fraction is None or fraction > RISK_FRACTION_CAP or cap is None
+            or entry is None or stop is None or entry == stop):
+        return Decimal(0), "sizing_invalid"
+    budget = min(equity * fraction, balance * fraction, cap)
+    unit = abs(entry - stop) * spec.contract_size * spec.profit_rate
+    if unit <= 0:
+        return Decimal(0), "sizing_invalid"
+    if spec.volume_min * unit > budget:
+        return Decimal(0), "min_volume_over_cap"
+    lots = floor_to_step(budget / unit, spec.volume_step)
+    if lots < spec.volume_min:
+        return Decimal(0), "min_volume_over_cap"
     return lots, None
 
 

@@ -10,6 +10,8 @@
 - El rango incompleto se reintenta hasta las 02:00; si falta, `range_incomplete` y ese día no se reabre. GBPUSD y EURUSD usan cada uno sus velas.
 - SL/TP y el tope de 5 USD salen del fill real (ask/bid), no del nivel del rango. TP = 2 veces esa distancia.
 - El estado del día queda en el almacén de flags (`combo_lon_*`, `combo_fix_*`). Un reinicio, un stop o la salida por tiempo no reenvían el mismo trade.
+- La salida por tiempo cierra el id de posición devuelto en el fill. Sin ese id, busca símbolo, lado, volumen y hora. No da el día por cerrado mientras la posición siga abierta. El cuerpo de la orden de mercado no lleva client id: la página oficial no lo publica.
+- Si la segunda lectura del precio rompe el tope de 1 % o 5 USD, `open_market` reduce el lote o no envía.
 
 ## 2026-11-11 — DEC-EXNESS-1: adaptador Exness API, apagado
 

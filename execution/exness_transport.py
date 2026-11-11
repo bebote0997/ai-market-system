@@ -28,6 +28,7 @@ class Position:
     stop: Optional[Decimal] = None
     target: Optional[Decimal] = None
     comment: str = ""
+    opened_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)
@@ -146,8 +147,11 @@ class FakeExnessTransport:
         self._seq += 1
         ref = str(self._seq)
         if command.kind == "MARKET":
+            # The open-position body has no client id, and the snapshot is not documented to echo one.
+            # The position id is the broker ref. ``opened_at`` is the fill clock so a restart can match
+            # symbol, side, volume and time when the id was not stored.
             self.positions.append(Position(ref, command.symbol, command.side, command.volume, command.price,
-                                           command.stop, command.target, command.idempotency_key))
+                                           command.stop, command.target, "", self._clock()))
             result = CommandResult("ACCEPTED", command.idempotency_key, ref, "filled")
         elif command.kind == "LIMIT":
             self.orders.append(WorkingOrder(ref, command.symbol, command.side, command.volume, command.price,
@@ -250,6 +254,10 @@ class RestExnessTransport:
         account = self._client.account_id
         side = "buy" if command.side == "LONG" else "sell" if command.side == "SHORT" else None
         if command.kind == "MARKET":
+            # Official open-position body: instrument, side, volume, and the price fields
+            # stop_loss_price / take_profit_price. No comment or client id. The idempotency
+            # key is the EXN-IDEMPOTENCY-KEY header; the portal echoes it as client_request_id
+            # on the ACK and transaction_event, not on the position snapshot.
             body = {"instrument": command.symbol, "side": side, "volume": format(command.volume, "f")}
             if command.stop is not None:
                 body["stop_loss_price"] = format(command.stop, "f")

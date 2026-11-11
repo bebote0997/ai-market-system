@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import unittest
 
-from execution.broker_port import ACCEPTED, APPROVED, BrokerBalance, OrderPlan, RiskApproval
+from execution.broker_port import ACCEPTED, APPROVED, REJECTED, BrokerBalance, OrderPlan, RiskApproval
 from execution.exness_brakes import RESUME_PHRASE, ExnessBrakes
 from execution.exness_broker import REAL_CONFIRM, ExnessBroker, broker_selected, real_execution_armed
 from execution.exness_client import ExnessClient
@@ -107,11 +107,52 @@ class SafetyTests(unittest.TestCase):
             first = adapter.submit_plan(plan(), approval())
             second = adapter.submit_plan(plan(), approval())
         self.assertEqual((first.status, first.broker_ref), (ACCEPTED, "1"))
-        self.assertEqual((second.status, second.reason, second.broker_ref), (ACCEPTED, "already_submitted", "1"))
+        self.assertEqual(fake.positions[0].comment, "")
+        self.assertEqual((second.status, second.reason), (REJECTED, "position_already_open"))
         self.assertEqual(len(fake.commands), 1)
+        fake.positions[0] = Position("1", "EURUSD", "LONG", fake.positions[0].volume, fake.positions[0].price,
+                                     comment="aif-run-1")
+        third = adapter.submit_plan(plan(), approval())
+        self.assertEqual((third.status, third.reason, third.broker_ref), (ACCEPTED, "already_submitted", "1"))
         text = "\n".join(logs.output)
         self.assertIn("expected_cost=0.04", text)
         self.assertNotIn(SECRET, text)
+
+    def test_second_quote_resizes_or_skips_when_the_cap_breaks(self):
+        jpy = {"volume_min": "0.01", "volume_step": "0.01", "point_digits": 3,
+               "contractSize": "100000", "profitRate": "0.01"}
+
+        class MovingQuote(FakeExnessTransport):
+            def __init__(self, second):
+                super().__init__(clock=lambda: NOW)
+                self.second = second
+                self.reads = 0
+
+            def read_state(self):
+                self.reads += 1
+                if self.reads >= 2:
+                    self.push_tick(self.second[0], self.second[1], NOW)
+                return super().read_state()
+
+        def opened(second):
+            fake = MovingQuote(second)
+            fake.balance = BrokerBalance(Decimal("500"), Decimal("500"), Decimal("0"), "USD")
+            fake.instruments = ("USDJPY",)
+            fake.conditions = {"USDJPY": jpy}
+            fake.push_tick(Decimal("150.19"), Decimal("150.20"), NOW)
+            adapter = ExnessBroker(fake, env=armed(), brakes=ExnessBrakes.from_env(fake, armed()), clock=lambda: NOW)
+            result = adapter.open_market(symbol="USDJPY", side="LONG", quantity=Decimal("0.02"),
+                                          entry=Decimal("150.20"), stop=Decimal("150.00"), target=Decimal("150.60"),
+                                          client_id="combo-lon-2026-01-15-LONG", source_run_id="session-combo")
+            return result, fake
+
+        resized, fake = opened((Decimal("150.29"), Decimal("150.30")))
+        self.assertEqual(resized.status, ACCEPTED)
+        self.assertEqual(fake.commands[0].volume, Decimal("0.01"))
+        self.assertEqual(fake.commands[0].price, Decimal("150.30"))
+        skipped, fake = opened((Decimal("150.50"), Decimal("150.51")))
+        self.assertEqual(skipped.reason, "min_volume_over_cap")
+        self.assertEqual(fake.commands, [])
 
     def test_above_risk_and_unknown_symbol(self):
         adapter, fake = broker()

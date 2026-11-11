@@ -23,7 +23,7 @@ import json
 import logging
 from zoneinfo import ZoneInfo
 
-from execution.exness_sizing import RISK_FRACTION_CAP, floor_to_step
+from execution.exness_sizing import RISK_FRACTION_CAP, capped_lots
 
 
 LOG = logging.getLogger("ai_floor.session_combo")
@@ -39,7 +39,9 @@ FIX_TOLERANCE = timedelta(minutes=5)
 PIP = {"USDJPY": Decimal("0.01"), "EURUSD": Decimal("0.0001"), "GBPUSD": Decimal("0.0001")}
 LONDON_SYMBOL = "USDJPY"
 FIX_SYMBOLS = ("GBPUSD", "EURUSD")
-_FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range")
+_FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
+           "position_id", "volume", "opened_at")
+_MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
 
 
@@ -174,18 +176,7 @@ def fix_signal(bars, symbol, at):
 
 def size_for_cap(equity, balance, entry, stop, spec):
     """Budget is the lesser of 1% of equity, 1% of balance, and $5. ``entry`` is the actual fill."""
-    if spec is None or equity is None or balance is None or equity <= 0 or balance <= 0 or entry == stop:
-        return Decimal(0), "sizing_invalid"
-    budget = min(equity * RISK_FRACTION_CAP, balance * RISK_FRACTION_CAP, RISK_CAP)
-    unit = abs(entry - stop) * spec.contract_size * spec.profit_rate
-    if unit <= 0:
-        return Decimal(0), "sizing_invalid"
-    if spec.volume_min * unit > budget:
-        return Decimal(0), "min_volume_over_cap"
-    lots = floor_to_step(budget / unit, spec.volume_step)
-    if lots < spec.volume_min:
-        return Decimal(0), "min_volume_over_cap"
-    return lots, None
+    return capped_lots(equity, balance, entry, stop, spec, usd_cap=RISK_CAP)
 
 
 def _log(event, **detail):
@@ -195,7 +186,8 @@ def _log(event, **detail):
 
 def _blank():
     return {"status": "pending", "client_id": None, "exit_at": None, "exited": False,
-            "symbol": None, "side": None, "logged_range": False}
+            "symbol": None, "side": None, "logged_range": False, "position_id": None,
+            "volume": None, "opened_at": None}
 
 
 def london_key(day):
@@ -260,6 +252,8 @@ class SessionCombo:
                     state[field] = parsed[field]
             if isinstance(state["exit_at"], str):
                 state["exit_at"] = datetime.fromisoformat(state["exit_at"])
+            if isinstance(state["opened_at"], str):
+                state["opened_at"] = datetime.fromisoformat(state["opened_at"])
             state["exited"] = bool(state["exited"])
             state["logged_range"] = bool(state["logged_range"])
         self._phase[key] = state
@@ -273,22 +267,29 @@ class SessionCombo:
 
     def _put(self, key, state):
         payload = dict(state)
-        if isinstance(payload.get("exit_at"), datetime):
-            payload["exit_at"] = payload["exit_at"].isoformat()
+        for field in ("exit_at", "opened_at"):
+            if isinstance(payload.get(field), datetime):
+                payload[field] = payload[field].isoformat()
         self._store.set_flag(key, json.dumps(payload, sort_keys=True))
 
     def _reconcile_submitted(self):
         for key, state in list(self._phase.items()):
             if state["status"] != "submitted":
                 continue
-            client = state.get("client_id")
             try:
-                ticket = self._broker.trade_id_for_client(client) if client else None
+                kind, row = self._locate(state)
             except Exception:  # noqa: BLE001
                 continue
-            if ticket:
+            if kind == "held":
+                self._adopt(state, row)
                 state["status"] = "filled"
                 self._put(key, state)
+                continue
+            if kind != "gone":
+                state["status"] = "done"
+                state["exited"] = True
+                self._put(key, state)
+                _log("SIZE_SKIP", symbol=state.get("symbol"), reason="restart_unconfirmed")
                 continue
             state["status"] = "done"
             state["exited"] = True
@@ -377,7 +378,7 @@ class SessionCombo:
         target = fill + distance * 2 if side == "LONG" else fill - distance * 2
         client = f"combo-lon-{day.isoformat()}-{side}"
         exit_at = datetime.combine(day, time(11, 0), tzinfo=NY)
-        self._commit(key, state, day, LONDON_SYMBOL, side, fill, stop, target, client, exit_at)
+        self._commit(key, state, day, LONDON_SYMBOL, side, fill, stop, target, client, exit_at, at)
 
     def _fix(self, at, bars):
         local = _lon(at)
@@ -414,7 +415,7 @@ class SessionCombo:
             pip = pip_size(symbol)
             stop = fill - FIX_SL_PIPS * pip if side == "LONG" else fill + FIX_SL_PIPS * pip
             client = f"combo-fix-{day.isoformat()}-{symbol}"
-            if self._commit(key, state, day, symbol, side, fill, stop, None, client, at + FIX_HOLD):
+            if self._commit(key, state, day, symbol, side, fill, stop, None, client, at + FIX_HOLD, at):
                 _log("FIX_ENTRY", symbol=symbol, side=side)
                 return
         if waiting or signaled:
@@ -432,74 +433,155 @@ class SessionCombo:
             return None
         return book.quotes.ask if side == "LONG" else book.quotes.bid
 
-    def _commit(self, key, state, day, symbol, side, entry, stop, target, client_id, exit_at):
+    def _commit(self, key, state, day, symbol, side, entry, stop, target, client_id, exit_at, opened_at):
         if state["status"] in _TERMINAL:
             return False
-        state.update(status="submitted", client_id=client_id, exit_at=exit_at, symbol=symbol, side=side, exited=False)
+        state.update(status="submitted", client_id=client_id, exit_at=exit_at, symbol=symbol, side=side,
+                     exited=False, opened_at=opened_at, position_id=None)
         self._put(key, state)
-        if not self._send(day, symbol, side, entry, stop, target, client_id):
-            try:
-                opened = self._broker.trade_id_for_client(client_id)
-            except Exception:  # noqa: BLE001
-                opened = None
-            if opened:
-                state["status"] = "filled"
-                self._put(key, state)
-                return True
-            state.update(status="armed", client_id=None, exit_at=None, symbol=None, side=None)
+        result, lots = self._send(day, symbol, side, entry, stop, target, client_id)
+        if lots is not None:
+            state["volume"] = format(lots, "f")
+        if getattr(result, "status", None) == "ACCEPTED":
+            self._adopt(state, None, ticket=getattr(result, "broker_ref", None), lots=lots, opened_at=opened_at)
+            state["status"] = "filled"
             self._put(key, state)
-            return False
-        state["status"] = "filled"
+            return True
+        try:
+            kind, row = self._locate(state)
+        except Exception:  # noqa: BLE001
+            kind, row = "unknown", None
+        if kind == "held":
+            self._adopt(state, row)
+            state["status"] = "filled"
+            self._put(key, state)
+            return True
+        state.update(status="armed", client_id=None, exit_at=None, symbol=None, side=None, position_id=None,
+                     volume=None, opened_at=None)
         self._put(key, state)
-        return True
+        return False
 
     def _send(self, day, symbol, side, entry, stop, target, client_id):
         try:
             book = self._broker._read()
         except Exception:  # noqa: BLE001
             _log("SIZE_SKIP", symbol=symbol, reason="book_unread")
-            return False
+            return None, None
         if book.balance is None or book.balance.currency != "USD":
             _log("SIZE_SKIP", symbol=symbol, reason="currency_unsupported")
-            return False
+            return None, None
         lots, reason = size_for_cap(book.balance.equity, book.balance.balance, entry, stop, book.specs.get(symbol))
         if reason:
             _log("SIZE_SKIP", symbol=symbol, reason=reason)
-            return False
+            return None, None
         result = self._broker.open_market(symbol=symbol, side=side, quantity=lots, entry=entry, stop=stop,
                                            target=target, client_id=client_id,
                                            source_run_id=f"session-combo-{day}", risk_fraction=RISK_FRACTION_CAP)
         if getattr(result, "status", None) != "ACCEPTED":
             _log("SIZE_SKIP", symbol=symbol, reason=getattr(result, "reason", None) or "not_accepted")
-            return False
-        return True
+            return result, lots
+        return result, lots
+
+    def _adopt(self, state, row, ticket=None, lots=None, opened_at=None):
+        if row is not None:
+            state["position_id"] = row.ticket
+            state["symbol"] = row.symbol
+            state["side"] = row.side
+            state["volume"] = format(row.volume, "f")
+            if getattr(row, "opened_at", None) is not None:
+                state["opened_at"] = row.opened_at
+            return
+        if ticket:
+            state["position_id"] = ticket
+        if lots is not None:
+            state["volume"] = format(lots, "f")
+        if opened_at is not None and state.get("opened_at") is None:
+            state["opened_at"] = opened_at
+        if not state.get("position_id"):
+            return
+        try:
+            trades = self._broker.open_trades()
+        except Exception:  # noqa: BLE001
+            return
+        for item in trades:
+            if item.ticket == state["position_id"]:
+                self._adopt(state, item)
+                return
+
+    def _locate(self, state):
+        """``(held, row)``, ``(gone, None)``, ``(unknown, None)`` or ``(ambiguous, None)``.
+
+        A known position id that a successful read does not show is gone. No id and no single
+        symbol/side/volume/time match is not proof the position is gone.
+        """
+        trades = self._broker.open_trades()
+        ticket = state.get("position_id")
+        if ticket:
+            found = next((row for row in trades if row.ticket == ticket), None)
+            return ("held", found) if found is not None else ("gone", None)
+        client = state.get("client_id")
+        if client:
+            by_comment = next((row for row in trades if row.comment == client), None)
+            if by_comment is not None:
+                return "held", by_comment
+        symbol, side = state.get("symbol"), state.get("side")
+        if not symbol or side not in ("LONG", "SHORT"):
+            return "unknown", None
+        matches = [row for row in trades if row.symbol == symbol and row.side == side]
+        volume = state.get("volume")
+        if volume:
+            wanted = Decimal(str(volume))
+            matches = [row for row in matches if row.volume == wanted]
+        opened = state.get("opened_at")
+        if isinstance(opened, datetime):
+            timed = []
+            for row in matches:
+                stamp = getattr(row, "opened_at", None)
+                if stamp is None or abs((stamp - opened).total_seconds()) <= _MATCH_SECONDS:
+                    timed.append(row)
+            matches = timed
+        if len(matches) == 1:
+            return "held", matches[0]
+        if len(matches) > 1:
+            return "ambiguous", None
+        return "unknown", None
 
     def _exits(self, at):
         for key, state in list(self._phase.items()):
             if state.get("exited") or state.get("status") != "filled":
                 continue
-            exit_at = state.get("exit_at")
-            client = state.get("client_id")
             try:
-                ticket = self._broker.trade_id_for_client(client) if client else None
+                kind, row = self._locate(state)
             except Exception:  # noqa: BLE001
                 continue
-            if ticket is None:
+            if kind == "held":
+                self._adopt(state, row)
+                self._put(key, state)
+            elif kind == "gone":
                 state["exited"] = True
                 state["status"] = "done"
                 self._put(key, state)
                 continue
+            else:
+                continue
+            exit_at = state.get("exit_at")
             if not isinstance(exit_at, datetime) or at < exit_at:
                 continue
-            try:
-                trades = self._broker.open_trades()
-            except Exception:  # noqa: BLE001
+            ticket = state.get("position_id")
+            if not ticket:
                 continue
-            symbol = next((row.symbol for row in trades if row.ticket == ticket), state.get("symbol"))
+            client = state.get("client_id")
             reason = "london_1100" if str(client or "").startswith("combo-lon-") else "fix_30m"
             result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
-            _log("TIME_EXIT", symbol=symbol, reason=reason, status=getattr(result, "status", None))
-            if getattr(result, "status", None) == "ACCEPTED":
-                state["exited"] = True
-                state["status"] = "done"
-                self._put(key, state)
+            _log("TIME_EXIT", symbol=state.get("symbol"), reason=reason, status=getattr(result, "status", None))
+            if getattr(result, "status", None) not in ("ACCEPTED", "REJECTED"):
+                continue
+            try:
+                still = any(item.ticket == ticket for item in self._broker.open_trades())
+            except Exception:  # noqa: BLE001
+                continue
+            if still:
+                continue
+            state["exited"] = True
+            state["status"] = "done"
+            self._put(key, state)

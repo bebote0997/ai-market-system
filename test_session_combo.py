@@ -1,6 +1,7 @@
 """Session combo rules. See execution/session_combo.py."""
 from datetime import datetime, timedelta
 from decimal import Decimal
+import json
 import logging
 from pathlib import Path
 import tempfile
@@ -422,6 +423,47 @@ class ProgressionTests(unittest.TestCase):
         self.assertEqual(len(_markets(fake)), 1)
         ExnessSession(broker, env=env_armed(), clock=clock).manage(at, bars)
         self.assertEqual(len(_markets(fake)), 1)
+
+    def test_london_and_fix_exits_close_the_position_id_without_a_client_comment(self):
+        at = ny(2026, 1, 16, 2, 10)
+        morning = range_pair(at.date()) + [bar(at, "150.18", "150.25", "150.12", "150.22")]
+        clock, fake, broker, combo = world(at)
+        fake.push_tick(Decimal("150.19"), Decimal("150.20"), at)
+        combo.tick(at, morning)
+        self.assertEqual(len(_markets(fake)), 1)
+        self.assertEqual(fake.positions[0].comment, "")
+        ticket = fake.positions[0].ticket
+        clock.at = ny(2026, 1, 16, 10, 0)
+        fake.push_tick(Decimal("150.25"), Decimal("150.26"), clock.at)
+        SessionCombo(broker).tick(clock.at, morning)
+        self.assertEqual([command.kind for command in fake.commands], ["MARKET"])
+        self.assertIn('"status": "filled"', fake.get_flag(london_key(at.date())))
+        clock.at = ny(2026, 1, 16, 11, 0)
+        fake.push_tick(Decimal("150.30"), Decimal("150.31"), clock.at)
+        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+            SessionCombo(broker).tick(clock.at, morning)
+        self.assertIn("reason=london_1100", "\n".join(logs.output))
+        self.assertEqual(fake.commands[-1].kind, "CLOSE")
+        self.assertEqual(fake.commands[-1].position_ref, ticket)
+        self.assertEqual(fake.positions, [])
+
+        fix_at = lon(2026, 1, 15, 16, 0)
+        bars = fix_bars("GBPUSD", "1.25150", fix_at)
+        clock, fake, broker, combo = world(fix_at)
+        fake.push_tick(Decimal("1.25140"), Decimal("1.25150"), fix_at)
+        combo.tick(fix_at, bars)
+        self.assertEqual(fake.positions[0].comment, "")
+        ticket = fake.positions[0].ticket
+        saved = json.loads(fake.get_flag(fix_key(fix_at.date())))
+        saved["position_id"] = None
+        fake.set_flag(fix_key(fix_at.date()), json.dumps(saved))
+        clock.at = fix_at + timedelta(minutes=30)
+        fake.push_tick(Decimal("1.25100"), Decimal("1.25110"), clock.at)
+        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+            SessionCombo(broker).tick(clock.at, bars)
+        self.assertIn("reason=fix_30m", "\n".join(logs.output))
+        self.assertEqual(fake.commands[-1].position_ref, ticket)
+        self.assertEqual(fake.positions, [])
 
     def test_day_state_survives_a_new_process_store(self):
         at = ny(2026, 1, 15, 2, 0)

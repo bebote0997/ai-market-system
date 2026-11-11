@@ -20,7 +20,7 @@ Fuente: [portal](https://www.exness-api.com/trading/get-started), [ayuda](https:
 | `execution/exness_client.py` | REST firmado. Descubre el Access Point una vez y lo guarda. La misma clave de idempotencia no se reenvía. |
 | `execution/exness_stream.py` | Libro del último tick. Si el socket cae, el tick se borra al momento. Reintento 1, 2, 4, 8, 16, 30 s (política del Floor: el portal solo dice «backoff»). |
 | `execution/exness_transport.py` | `FakeExnessTransport` y `RestExnessTransport`. El adaptador solo llama `read_state` y `submit`. |
-| `execution/exness_broker.py` | `ExnessBroker`. Mercado = `POST .../positions`. Límite = `POST .../orders`. Cancelar = `DELETE .../orders/{id}`. Cerrar = `DELETE .../positions/{id}`. SL/TP = `stop_loss_price` / `take_profit_price`. |
+| `execution/exness_broker.py` | `ExnessBroker`. Mercado = `POST .../positions` con `instrument`, `side`, `volume` y, si hay, `stop_loss_price` / `take_profit_price`. La página no publica comentario ni client id; la clave va en `EXN-IDEMPOTENCY-KEY`. Límite = `POST .../orders`. Cancelar = `DELETE .../orders/{id}`. Cerrar = `DELETE .../positions/{id}`. |
 | `execution/exness_brakes.py` | Pérdida diaria 10 USD y drawdown 50 USD desde el saldo inicial. Frenan y aplanan hasta `RESUME_EXNESS`. |
 | `execution/exness_check.py` | Lectura de cuenta, especificación y tick. No envía órdenes. |
 

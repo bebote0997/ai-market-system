@@ -14,7 +14,7 @@ from execution.broker_port import (ACCEPTED, REJECTED, UNKNOWN, BrokerGuardError
                                    approval_problem)
 from execution.dxtrade_broker import real_execution_enabled
 from execution.exness_brakes import ExnessBrakes
-from execution.exness_sizing import RISK_FRACTION_CAP, on_step, size_lots, spread_cost
+from execution.exness_sizing import RISK_FRACTION_CAP, capped_lots, on_step, size_lots, spread_cost
 from execution.exness_transport import Command
 from execution.friday_close import OPEN, friday_window, minutes_from_env
 from execution.trade_duration import entries_blocked
@@ -90,6 +90,12 @@ def _fraction(value):
 
 def _round(value, digits):
     return value.quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+
+
+def _exposure(book):
+    """Positions and working orders. The quote is allowed to move between the two reads."""
+    positions, orders, _quote = book.token()
+    return positions, orders
 
 
 class ExnessBroker:
@@ -334,8 +340,11 @@ class ExnessBroker:
             again = self._read()
         except BrokerUnavailable:
             return self._refuse(client_id, "reread_failed")
-        if again.token() != book.token():
+        if _exposure(again) != _exposure(book):
             return self._refuse(client_id, "reread_changed")
+        if not again.quotes.fresh(now, _stale_seconds(self._env)):
+            self.note_link(again)
+            return self._refuse(client_id, "quote_stale")
         owned = [row.ticket for row in again.positions if row.comment == client_id]
         if owned:
             return SubmitResult(ACCEPTED, client_id, broker_ref=owned[0], reason="already_submitted")
@@ -353,22 +362,27 @@ class ExnessBroker:
                 self._alert("EXNESS_BRAKE_HALT", {"reason": brake.reason})
             return self._refuse(client_id, brake.reason or "brake_halt")
         spec = again.specs.get(symbol)
-        if spec is None or again.balance is None or again.quotes.bid is None:
+        price = again.quotes.ask if side == "LONG" else again.quotes.bid
+        if spec is None or again.balance is None or price is None:
             return self._refuse(client_id, "sizing_invalid")
-        lots, why = size_lots(again.balance.balance, fraction, entry, stop, spec)
-        if why or quantity > lots or not on_step(quantity, spec):
-            return self._refuse(client_id, why or ("above_risk" if quantity > lots else "volume_step"))
+        allowed, why = capped_lots(again.balance.equity, again.balance.balance, price, stop, spec, fraction)
+        if why:
+            return self._refuse(client_id, why)
+        if not on_step(quantity, spec):
+            return self._refuse(client_id, "volume_step")
+        if quantity > allowed:
+            quantity = allowed
         try:
             stop_r = _round(stop, spec.point_digits)
-            entry_r = _round(entry, spec.point_digits)
+            price_r = _round(price, spec.point_digits)
             target_r = None if target is None else _round(target, spec.point_digits)
         except (ArithmeticError, ValueError):
             return self._refuse(client_id, "price_rounding_breaks_geometry")
-        if side == "LONG" and not stop_r < entry_r:
+        if side == "LONG" and not stop_r < price_r:
             return self._refuse(client_id, "price_rounding_breaks_geometry")
-        if side == "SHORT" and not stop_r > entry_r:
+        if side == "SHORT" and not stop_r > price_r:
             return self._refuse(client_id, "price_rounding_breaks_geometry")
-        if target_r is not None and not (stop_r < entry_r < target_r if side == "LONG" else target_r < entry_r < stop_r):
+        if target_r is not None and not (stop_r < price_r < target_r if side == "LONG" else target_r < price_r < stop_r):
             return self._refuse(client_id, "price_rounding_breaks_geometry")
         spread = spread_cost(again.quotes.bid, again.quotes.ask, quantity, spec)
         commission = _commission(self._env)
