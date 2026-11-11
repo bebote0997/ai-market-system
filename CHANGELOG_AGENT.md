@@ -13,6 +13,14 @@
 - La lectura de banderas del control abre la base del broker en `mode=ro` y usa los mismos nombres que el runner, sin importar símbolos de más ni leer el entorno desde esa vista. El ejemplo de Streamlit no pinta nada al importarse.
 - En pantallas estrechas el historial sigue mostrando todas las filas de la página (ciclos, setups, órdenes, informes, diario) y la tabla ancha no se oculta. El contenido deja libre el carril de 56 px. La leyenda del Floor se lee en horizontal. Una ficha de agente con hora y sin estado lo dice así, sin inventar la causa.
 
+## 2026-11-11 — DEC-LIMIT-MGMT-1: límite de práctica con interruptor (A+B, apagado)
+
+- `AI_FLOOR_LIMIT_MANAGEMENT_V2=1` (cuenta OANDA practice): la LIMIT dura 4 h, se cancela si el precio se aleja 15 pips a favor sin llenarse, un `PLAN_READY` del mismo lado la reemplaza, y una entrada EMA 10/21 la cancela y sigue. El lado opuesto no reemplaza. Una posición ya llena sigue bloqueando.
+- Tras esa cancelación aceptada se vuelven a leer operaciones abiertas, posiciones y órdenes pendientes. Solo se envía si el instrumento está plano. Si la cancelación dejó un fill, o el resultado es 404 o desconocido, no se envía en ese ciclo y queda anotado el motivo.
+- `AI_FLOOR_ENTRY_OFFSET_MODE=5pips` coloca la LIMIT a 5 pips (SL 25 / TP 50 desde esa LIMIT). `market` reutiliza la orden de mercado con anclaje al precio. Sin valor, `legacy` u otro valor: 12,5 pips.
+- Sin esas claves el ciclo queda como hoy (24 h, 12,5 pips, sin cancelar ni reemplazar) y los logs del ciclo no ganan campos nuevos. Con una clave activa, el ciclo anota el modo. Un broker que no sea practice, o `REAL_EXECUTION_ENABLED`, no puede usarlas.
+- Sin merge, sin deploy, sin cambio de `render.yaml` ni de env en Render. REAL sigue bloqueado. Riesgo, 1 posición, SL, alineación, salidas EMA, xAI, scheduler y auth no cambian.
+
 ## 2026-11-08 — DEC-XAI-1: la transición mira el libro real y deja constancia
 
 - El runner lee, bajo su candado, las operaciones abiertas y las órdenes pendientes del broker. Una lectura fallida no anota y deja la solicitud en cola. Un bloqueo, una operación o una orden pendiente rechaza la solicitud. El libro local se comprueba además.

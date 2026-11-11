@@ -8,6 +8,8 @@ _Anterior en esta pila: 2026-11-07 (DEC-EMA-1). Estrategia EMA 10/21 EURUSD, fla
 
 _Anterior: 2026-11-03 (America/New_York; rama `feat/fx-sl-fixed-25`, DEC-FX-SL-3 aprobada por el owner (sustituye a DEC-FX-SL-2): LIMIT de retroceso EURUSD a 12,5 pips fijos de la señal (sin ATR); SL fijo 25 pips y TP fijo 50 pips (2R) desde la LIMIT/entrada; `limit_through_stop` solo si la LIMIT queda en/tras la invalidación estructural. Sin commit, sin merge, sin deploy; sin cambios de UI, env ni Render. REAL sigue bloqueado. Ver `CHANGELOG_AGENT.md`)._
 
+_2026-11-11 (`cursor/limit-management-v2-c632`, DEC-LIMIT-MGMT-1, preparado y apagado). A+B solo en OANDA practice. Sin las claves: LIMIT 24 h y 12,5 pips, sin cancelar ni reemplazar. Con `AI_FLOOR_LIMIT_MANAGEMENT_V2=1`, tras una cancelación aceptada se vuelve a leer el libro del broker y no se envía si queda una operación o una orden. REAL sigue bloqueado. Sin merge, sin deploy, sin cambio de `render.yaml`. Ver `CHANGELOG_AGENT.md`._
+
 _Anterior: 2026-11-03 (America/New_York; rama `feat/fx-sl-20-25`, DEC-FX-SL-2 aprobada por el owner: SL FX/EURUSD 20–25 pips, TP 2R (40–50); la LIMIT de retroceso EURUSD mide SL/TP y R desde el precio límite. Sin commit, sin merge, sin deploy; sin cambios de UI, env ni Render. REAL sigue bloqueado. Ver `CHANGELOG_AGENT.md`)._
 
 _Anterior: 2026-11-01 (America/New_York; rama `cursor/menu-home-layout-cc4c`, borrador solo de UI: pastilla del menú más fina, iconos centrados, sin buscador, «Día N de 30» una sola vez, panel abierto más estrecho en el teléfono. Sin merge, sin deploy, sin cambios de motor, órdenes, Render ni secretos. REAL sigue bloqueado. Antes: menú de cristal y paleta en `main` `667f967`. Ver `CHANGELOG_AGENT.md`)._
