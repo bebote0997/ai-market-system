@@ -48,11 +48,12 @@ Checked in the code, not by replaying the Render logs. `ai/orchestrator.py` call
 * One process-wide lock covers each xAI HTTP call and its 429 waits. Two calls do not overlap.
 * HTTP 429 (not quota) waits `1, 2, 4, 8, 16` seconds plus jitter, at most six tries. Jitter is at most 1 second and never shortens a `Retry-After` value.
 * A `Retry-After` header is the wait when it is present, including values above 15 seconds, up to 60 seconds. Above 60 seconds the call fails closed and does not sleep.
-* All of those waits in the process share 90 seconds. After 120 seconds with no 429 wait, the budget resets, so the next 15-minute cycle starts clear. A wait that would pass the cycle deadline still stops, as it does today.
+* HTTP time and waits share two wall-clock budgets. `v2_ai_resilience` defaults off, so production never sets `provider.deadline`. The heartbeat is written after the symbol cycle, and the watchdog is 300 seconds. One call may spend 90 seconds. Every xAI call in the process shares 180 seconds, then further attempts are refused. An attempt starts only when both leftovers can hold a full timeout (default 30 seconds). A retry starts only when they can hold the sleep plus another full timeout, so the xAI portion ends at or under 180 seconds, 120 seconds under the watchdog. After 120 seconds with no xAI time, the budget resets. A wait that would pass an explicit cycle deadline still stops, as it does today. If the sleep raises, the reserved wait is released.
+* Unchecked, 10 calls (5 specialists plus a macro retry of the floor) times 6 attempts times 30 seconds is 1800 seconds under the lock. A slow 429 now burns one timeout per attempt and stops once another timeout does not fit.
 * The failure is still `RATE_LIMITED`. The adapter does not construct `OpenAIProvider`. The cycle's existing rule stands: an agent `ERROR` cannot become a paper order, and a deterministic `WATCH` stays `WATCH`.
 * Each wait that actually happens logs `component=xai event=RATE_LIMIT_RETRY agent=… attempt=… wait_seconds=…`. The agent is a token or `-`. The line has no key, header, or body.
 
-5xx, timeouts, and quota keep the legacy schedule even when the flag is on. Enabling it later is an owner action on the process environment. This change does not edit Render, `render.yaml`, or the scheduler. Rollback is unset or any value other than `1`.
+5xx and connection errors keep the legacy delay and retry count, and they draw on the same wall-clock budgets, so a slow 500 cannot run past them either. Quota is not retried. Enabling the flag later is an owner action on the process environment. This change does not edit Render, `render.yaml`, or the scheduler. Rollback is unset or any value other than `1`.
 
 Official pages checked 2026-11-07 (no live call, no account entitlement check):
 

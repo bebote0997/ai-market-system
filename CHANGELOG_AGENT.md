@@ -3,7 +3,7 @@
 ## 2026-11-11 — xAI HTTP 429: reintento serializado, apagado por defecto (DEC-XAI-429-1)
 
 - El ciclo llama a los especialistas uno tras otro. No hay un pool de hilos. El fallo visto es una ráfaga, y `Retry-After` por encima de 15 s no espera: la llamada se corta. Sin cabecera, la espera es ~0,4 s y luego ~0,8 s (`XAI_RETRIES=2`).
-- `XAI_RATE_LIMIT_V2` exacto `1`: un candado de proceso, backoff 1-2-4-8-16 s con jitter, la cabecera `Retry-After` se respeta hasta 60 s, tope compartido de 90 s (se reinicia tras 120 s en calma). Después, `RATE_LIMITED` y ningún otro proveedor. Cada espera real se anota con agente, intento y segundos.
+- `XAI_RATE_LIMIT_V2` exacto `1`: un candado de proceso, backoff 1-2-4-8-16 s con jitter, la cabecera `Retry-After` se respeta hasta 60 s. El tiempo de HTTP y las esperas comparten 90 s por llamada y 180 s por ciclo (el watchdog es 300 s y en producción no hay deadline). Si no cabe otro intento más el timeout, `RATE_LIMITED` y ningún otro proveedor. Una espera que falla devuelve el tiempo reservado. Cada espera real se anota con agente, intento y segundos.
 - Sin la variable, o con cualquier otro valor, el bucle anterior queda igual. No entra en el fingerprint. 5xx, timeout y cuota no cambian. Sin cambios de estrategia, riesgo, órdenes, cadencia, `render.yaml` ni Render. REAL sigue bloqueado.
 
 ## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte

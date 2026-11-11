@@ -237,34 +237,69 @@ class XAIProvider(AIProvider):
             self._sleep(delay + random.uniform(0, 0.1))
         raise AssertionError("unreachable")
 
+    def _budget_stop(self, last):
+        """The wall budget cannot hold another full timeout. Fail closed, no further HTTP."""
+        if last is None or last["kind"] == "RATE_LIMITED":
+            self.last_failure = "RATE_LIMITED"
+            http_status = None if last is None else last["http_status"]
+            raise XAIProviderError(
+                "RATE_LIMITED", http_status=http_status,
+                error_type=None if last is None else last["error_type"],
+                error_code=None if last is None else last["error_code"],
+                retry_after=None if last is None else last["retry_after"],
+                timed_out=False if last is None else last["timed_out"]) from None
+        self._fail(last)
+
+    def _sleep_reserved(self, wait):
+        """Charge the wait up front. If the sleep raises, keep only the time that passed."""
+        started = self._monotonic()
+        xai_rate_limit.reserve_wait(wait)
+        try:
+            self._sleep(wait)
+        except BaseException:
+            xai_rate_limit.release_wait(wait)
+            elapsed = self._monotonic() - started
+            if elapsed > 0:
+                xai_rate_limit.charge(min(elapsed, wait), self._monotonic())
+            raise
+        xai_rate_limit.finish_wait(self._monotonic())
+
     def _post_v2(self, payload, agent_name):
-        """429 uses the shared budget. Every other failure keeps the legacy wait and retry count."""
+        """Wall budgets cover HTTP and waits. 429 uses backoff; other failures keep the legacy schedule."""
         attempt = 0
+        last = None
+        call_started = self._monotonic()
         while True:
+            if not xai_rate_limit.attempt_fits(self._monotonic(), call_started, self.timeout):
+                self._budget_stop(last)
             outcome = self._transport_once(payload)
+            xai_rate_limit.charge(self._monotonic() - outcome["started"], self._monotonic())
             if outcome["ok"]:
                 self._attempt(attempt + 1, outcome["started"], http_status=200)
                 return outcome["raw"]
+            last = outcome
             self._attempt(attempt + 1, outcome["started"], http_status=outcome["http_status"],
                           kind=outcome["kind"])
             if outcome["kind"] == "RATE_LIMITED" and outcome["transient"]:
                 wait = xai_rate_limit.plan_wait(
-                    attempt, outcome["retry_after"], now=self._monotonic(), uniform=random.uniform)
+                    attempt, outcome["retry_after"], now=self._monotonic(), call_started=call_started,
+                    timeout=self.timeout, uniform=random.uniform)
                 if wait is not None and self.deadline is not None and self._monotonic() + wait >= self.deadline:
                     wait = None
                 if wait is None:
                     self._fail(outcome)
-                xai_rate_limit.reserve_wait(wait)
                 LOG.info("component=xai event=RATE_LIMIT_RETRY agent=%s attempt=%s wait_seconds=%s",
                          _agent_token(agent_name), attempt + 1, f"{wait:.3f}")
-                self._sleep(wait)
-                xai_rate_limit.finish_wait(self._monotonic())
+                self._sleep_reserved(wait)
                 attempt += 1
                 continue
             delay, stop = self._legacy_delay(attempt, outcome)
             if stop or attempt > self.retries:
                 self._fail(outcome)
-            self._sleep(delay + random.uniform(0, 0.1))
+            wait = delay + random.uniform(0, 0.1)
+            if not xai_rate_limit.wait_fits(self._monotonic(), call_started, wait, self.timeout):
+                self._fail(outcome)
+            self._sleep_reserved(wait)
             attempt += 1
 
     def generate(self, request):

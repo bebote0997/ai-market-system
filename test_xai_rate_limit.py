@@ -17,9 +17,11 @@ from ai.openai_provider import OpenAIProvider
 from ai.runtime import AuditLog, call_agent
 from ai.xai_provider import XAIProvider, XAIProviderError
 from ai.xai_rate_limit import (
-    BASE_SECONDS, CALL_LOCK, FLAG, MAX_ATTEMPTS, MAX_BACKOFF_SECONDS, MAX_SINGLE_WAIT_SECONDS,
-    QUIET_RESET_SECONDS, TOTAL_WAIT_CAP_SECONDS, enabled, plan_wait, reset_state,
+    BASE_SECONDS, CALL_LOCK, CALL_WALL_SECONDS, CYCLE_WALL_SECONDS, FLAG, MAX_ATTEMPTS,
+    MAX_BACKOFF_SECONDS, MAX_SINGLE_WAIT_SECONDS, QUIET_RESET_SECONDS, enabled, plan_wait,
+    reset_state, wall_spent,
 )
+from runtime.cloud import WATCHDOG_STALE_SECONDS
 from runtime.config import RuntimeConfig
 from runtime.gates import paper_policy
 from test_real_providers import openai_payload, request
@@ -51,23 +53,36 @@ class FlagTests(unittest.TestCase):
         self.assertTrue(enabled({FLAG: "1"}))
 
     def test_caps_finish_inside_a_cycle(self):
-        self.assertEqual(TOTAL_WAIT_CAP_SECONDS, 90.0)
+        # 10 calls (5 agents + a macro retry of the floor) x 6 attempts x 30s = 1800s unchecked.
+        self.assertEqual(WATCHDOG_STALE_SECONDS, 300)
+        self.assertIs(RuntimeConfig.__dataclass_fields__["v2_ai_resilience"].default, False)
+        self.assertEqual(CALL_WALL_SECONDS, 90.0)
+        self.assertEqual(CYCLE_WALL_SECONDS, 180.0)
         self.assertEqual(MAX_SINGLE_WAIT_SECONDS, 60.0)
         self.assertEqual(QUIET_RESET_SECONDS, 120.0)
         self.assertEqual(MAX_ATTEMPTS, 6)
         self.assertEqual(BASE_SECONDS, 1.0)
-        self.assertLessEqual(TOTAL_WAIT_CAP_SECONDS, 120.0)
-        self.assertLess(TOTAL_WAIT_CAP_SECONDS, 15 * 60)
+        self.assertLessEqual(CYCLE_WALL_SECONDS, WATCHDOG_STALE_SECONDS - 120)
+        self.assertLessEqual(CALL_WALL_SECONDS, CYCLE_WALL_SECONDS)
+        self.assertGreaterEqual(CALL_WALL_SECONDS, 30 + 1 + 30)
+        # Two full timeouts plus the two short backoffs before a third attempt do not fit.
+        self.assertLess(CALL_WALL_SECONDS, 30 + BASE_SECONDS + 30 + BASE_SECONDS + 30)
+        self.assertLess(CYCLE_WALL_SECONDS, 10 * MAX_ATTEMPTS * 30)
         self.assertLessEqual(MAX_SINGLE_WAIT_SECONDS, MAX_BACKOFF_SECONDS + 30)
 
     def test_jitter_never_waits_less_than_retry_after_and_stays_bounded(self):
         reset_state()
         self.addCleanup(reset_state)
+        kwargs = {"now": 0.0, "call_started": 0.0, "timeout": 30.0}
+
+        def draw(value):
+            return lambda _a, _b: value
+
         with CALL_LOCK:
-            short = plan_wait(0, None, now=0.0, uniform=lambda _a, _b: 999)
-            honored = plan_wait(0, 20, now=0.0, uniform=lambda _a, _b: -5)
-            capped = plan_wait(0, 20, now=0.0, uniform=lambda _a, _b: 999)
-            refused = plan_wait(0, 61, now=0.0, uniform=lambda _a, _b: 0)
+            short = plan_wait(0, None, uniform=draw(999), **kwargs)
+            honored = plan_wait(0, 20, uniform=draw(-5), **kwargs)
+            capped = plan_wait(0, 20, uniform=draw(999), **kwargs)
+            refused = plan_wait(0, 61, uniform=draw(0), **kwargs)
         self.assertEqual(short, 1.25)
         self.assertEqual(honored, 20.0)
         self.assertEqual(capped, 21.0)
@@ -197,7 +212,7 @@ class ProviderRetryTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "RATE_LIMITED")
         self.assertEqual(calls["n"], MAX_ATTEMPTS)
         self.assertEqual(state["slept"], [BASE_SECONDS * 2 ** i for i in range(MAX_ATTEMPTS - 1)])
-        self.assertLessEqual(sum(state["slept"]), TOTAL_WAIT_CAP_SECONDS)
+        self.assertLessEqual(sum(state["slept"]), CYCLE_WALL_SECONDS)
         self.assertEqual(len(logs.output), MAX_ATTEMPTS - 1)
         self.assertIsNotNone(OpenAIProvider)
 
@@ -216,25 +231,52 @@ class ProviderRetryTests(unittest.TestCase):
                          ("RATE_LIMITED", 61, 1, []))
 
     def test_shared_budget_fails_the_next_call_closed_and_a_quiet_gap_resets_it(self):
+        pending = {"n": 0}
+
+        def transport(*_args):
+            if pending["n"]:
+                pending["n"] -= 1
+                raise http_error(429, headers={"Retry-After": "60"})
+            return openai_payload()
+
+        def once():
+            pending["n"] = 1
+
+        provider, state = self.provider(transport)
+        with patch.dict(os.environ, {FLAG: "1"}), patch("ai.xai_provider.random.uniform", return_value=0):
+            once()
+            self.assertEqual(provider.generate(request()).status, "OK")
+            once()
+            self.assertEqual(provider.generate(request()).status, "OK")
+            once()
+            with self.assertRaises(XAIProviderError) as caught:
+                provider.generate(request())
+            self.assertEqual(caught.exception.kind, "RATE_LIMITED")
+            self.assertEqual(state["slept"], [60.0, 60.0])
+            self.assertEqual(wall_spent(), 120.0)
+            state["t"] += QUIET_RESET_SECONDS
+            once()
+            self.assertEqual(provider.generate(request()).status, "OK")
+        self.assertEqual(state["slept"], [60.0, 60.0, 60.0])
+        self.assertEqual(wall_spent(), 60.0)
+
+    def test_a_raised_sleep_releases_the_reserved_wait(self):
         calls = {"n": 0}
 
         def transport(*_args):
             calls["n"] += 1
-            if calls["n"] in {1, 3}:
-                raise http_error(429, headers={"Retry-After": "60"})
-            return openai_payload()
+            raise http_error(429, headers={"Retry-After": "60"})
 
-        provider, state = self.provider(transport)
-        with patch.dict(os.environ, {FLAG: "1"}), patch("ai.xai_provider.random.uniform", return_value=0):
-            self.assertEqual(provider.generate(request()).status, "OK")
-            with self.assertRaises(XAIProviderError) as caught:
-                provider.generate(request())
-            self.assertEqual(caught.exception.kind, "RATE_LIMITED")
-            self.assertEqual(state["slept"], [60.0])
-            state["t"] = state["slept"][0] + QUIET_RESET_SECONDS
-            calls["n"] = 2
-            self.assertEqual(provider.generate(request()).status, "OK")
-        self.assertEqual(state["slept"], [60.0, 60.0])
+        def boom(_seconds):
+            raise RuntimeError("sleep failed")
+
+        provider, _state = self.provider(transport)
+        provider._sleep = boom
+        with patch.dict(os.environ, {FLAG: "1"}), patch("ai.xai_provider.random.uniform", return_value=0), \
+                self.assertRaises(RuntimeError):
+            provider.generate(request())
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(wall_spent(), 0.0)
 
     def test_deadline_still_cuts_a_wait_that_would_pass_it(self):
         calls = {"n": 0}
@@ -319,6 +361,56 @@ class ProviderRetryTests(unittest.TestCase):
         self.assertFalse(paper_policy(report))
         report.final_status = "WATCH"
         self.assertFalse(paper_policy(report))
+
+
+class SlowCycleTests(unittest.TestCase):
+    """Each 429 burns the full HTTP timeout on the fake clock. No deadline is set."""
+
+    def setUp(self):
+        reset_state()
+        self.addCleanup(reset_state)
+
+    def test_ten_slow_calls_stay_under_the_watchdog(self):
+        # 5 specialists, then the macro NO_DATA path runs the floor again.
+        agents = ("structure_ai", "liquidity_ai", "macro_ai", "setup_reviewer_ai", "trade_reviewer_ai")
+        state = {"t": 0.0, "calls": 0, "timeouts": []}
+
+        def monotonic():
+            return state["t"]
+
+        def sleep(seconds):
+            state["t"] += seconds
+
+        def transport(*args):
+            timeout = args[-1]
+            state["calls"] += 1
+            state["timeouts"].append(timeout)
+            state["t"] += timeout
+            raise http_error(429)
+
+        provider = XAIProvider(api_key="k", transport=transport, sleep=sleep, monotonic=monotonic,
+                               timeout=30, retries=2)
+        self.assertIsNone(provider.deadline)
+        per_call = []
+        with patch.dict(os.environ, {FLAG: "1"}), patch("ai.xai_provider.random.uniform", return_value=0):
+            for _agent in agents + agents:
+                started = state["t"]
+                before = state["calls"]
+                with self.assertRaises(XAIProviderError) as caught:
+                    provider.generate(request())
+                self.assertEqual(caught.exception.kind, "RATE_LIMITED")
+                per_call.append((state["calls"] - before, state["t"] - started))
+        self.assertLessEqual(state["t"], CYCLE_WALL_SECONDS)
+        self.assertLess(state["t"], WATCHDOG_STALE_SECONDS)
+        self.assertGreaterEqual(WATCHDOG_STALE_SECONDS - state["t"], 120)
+        self.assertTrue(state["timeouts"])
+        self.assertTrue(all(timeout == 30.0 for timeout in state["timeouts"]))
+        self.assertLessEqual(len(state["timeouts"]) * 30.0, CYCLE_WALL_SECONDS)
+        self.assertLess(len(state["timeouts"]), len(agents) * 2 * MAX_ATTEMPTS)
+        self.assertTrue(all(calls <= 2 and elapsed <= CALL_WALL_SECONDS for calls, elapsed in per_call))
+        self.assertTrue(any(calls == 0 for calls, _elapsed in per_call))
+        self.assertLessEqual(wall_spent(), CYCLE_WALL_SECONDS)
+        self.assertAlmostEqual(wall_spent(), state["t"])
 
 
 class SerializationTests(unittest.TestCase):
