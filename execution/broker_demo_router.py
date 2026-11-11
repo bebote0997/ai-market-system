@@ -397,6 +397,7 @@ class BrokerDemoRouter:
             self._ema_store.initialize()
         self._flatten_ticks = 0
         self._manual_ticks = 0
+        self._v2_cancel_pending_reread = False
         self.on_alert = on_alert  # optional callable(kind, detail dict | message str); see ALERT_KINDS
         if loss_limit is not None:
             loss_limit.on_event = self._alert  # halt / resume events reach the same hook
@@ -521,14 +522,95 @@ class BrokerDemoRouter:
         return {"limit_management_v2": "1" if self._limit_management_v2() else "0",
                 "entry_offset_mode": self._entry_offset_mode()}
 
+    def _active_flag_detail(self):
+        """Extra event fields only when a flag is off the legacy default, so an off cycle adds nothing."""
+        if not self._limit_management_v2() and self._entry_offset_mode() == "legacy":
+            return {}
+        return self._flag_detail()
+
     def _log_cycle_flags(self):
-        """One line per cycle so a Render log shows which mode actually ran."""
+        """One line per cycle when a flag is on, so a Render log shows which mode ran."""
         try:
+            if not self._limit_management_v2() and self._entry_offset_mode() == "legacy":
+                return
             detail = self._flag_detail()
             LOG.info("component=broker_demo event=CYCLE_FLAGS limit_management_v2=%s entry_offset_mode=%s",
                      detail["limit_management_v2"], detail["entry_offset_mode"])
         except Exception as exc:  # noqa: BLE001 - a log line never changes the cycle
             LOG.warning("component=broker_demo event=CYCLE_FLAGS_FAILED error_type=%s", type(exc).__name__)
+
+    def _note_v2_cancel(self, outcome):
+        """An accepted v2 cancel is not proof the book is flat. The next send this cycle must re-read the broker."""
+        if self._limit_management_v2() and outcome in ("LIMIT_CANCELLED", "LIMIT_EXPIRED"):
+            self._v2_cancel_pending_reread = True
+
+    def _read_broker_book(self, symbol):
+        """Fresh open trades, positions, and pending orders. ``None`` when any read fails.
+
+        The reconcile snapshot taken before the cancel is not reused. ``get_positions`` is the same open-trade
+        read under the position name when the broker provides it.
+        """
+        self._pending_book = None
+        try:
+            trades = self._broker.open_trades()
+        except Exception as exc:  # noqa: BLE001 - a failed read is not an empty book
+            self._event("BROKER_REREAD_FAILED", None, symbol=symbol, what="open_trades", error=type(exc).__name__)
+            return None
+        positions = ()
+        get_positions = getattr(self._broker, "get_positions", None)
+        if get_positions is not None:
+            try:
+                positions = get_positions()
+            except Exception as exc:  # noqa: BLE001
+                self._event("BROKER_REREAD_FAILED", None, symbol=symbol, what="positions", error=type(exc).__name__)
+                return None
+        try:
+            orders = self._broker.pending_orders()
+        except Exception as exc:  # noqa: BLE001
+            self._event("BROKER_REREAD_FAILED", None, symbol=symbol, what="pending_orders", error=type(exc).__name__)
+            return None
+        return trades, positions, orders
+
+    def _adopt_cancel_fill(self, trades):
+        """A cancel that left our own trade open is an open position, recorded on the local row."""
+        for trade in trades:
+            ext = getattr(trade, "client_ext_id", None)
+            if not ext:
+                continue
+            for row in self._store.trades():
+                if client_extension_id(row["client_id"]) != ext or row.get("status") == OPEN:
+                    continue
+                self._store.update(row["client_id"], status=OPEN, trade_id=trade.trade_id, fill_price=trade.price,
+                                   opened_at=getattr(trade, "open_time", None) or row.get("created_at"),
+                                   closed_reason=None, pending_action=None, action_status=None,
+                                   units_remaining=row.get("units_remaining") or row["units"])
+                self._event("RESOLVED", row["client_id"], trade_id=trade.trade_id, status=OPEN, order_kind="LIMIT",
+                            reason="cancel_left_a_fill")
+
+    def _flat_block_reason(self, symbol, book):
+        """Why a post-cancel send is refused, or ``None`` when the instrument is flat at the broker."""
+        if book is None:
+            return "broker_reread_failed"
+        trades, positions, orders = book
+        instrument = INSTRUMENTS[symbol]
+        self._adopt_cancel_fill(trades)
+        if any(getattr(trade, "instrument", None) == instrument for trade in trades):
+            return "broker_trade_open"
+        if any(getattr(position, "symbol", None) == symbol for position in positions):
+            return "broker_position_open"
+        if any(getattr(order, "instrument", None) in (None, "", instrument, symbol) for order in orders):
+            return "broker_order_pending"
+        if self._store.trades(LIVE_STATUSES) or self._store.trades(UNRESOLVED_STATUSES):
+            return "position_already_open"
+        if self.blocked_reason:
+            return f"blocked:{self.blocked_reason}"
+        return None
+
+    def _block_send_after_v2_cancel(self, symbol):
+        """Re-read after a v2 cancel. ``None`` when this cycle did not cancel, or the broker is flat."""
+        if not self._v2_cancel_pending_reread:
+            return None
+        return self._flat_block_reason(symbol, self._read_broker_book(symbol))
 
     def _same_side_pending(self, decision, symbol, report):
         """The single resting pullback LIMIT on ``decision.side``, or None.
@@ -572,6 +654,7 @@ class BrokerDemoRouter:
         unless that flag is on.
         """
         with self._lock:
+            self._v2_cancel_pending_reread = False
             self._heartbeat()
             self._log_cycle_flags()
             flattened, reconciled = self._process_requests(at)
@@ -719,7 +802,7 @@ class BrokerDemoRouter:
         except (TypeError, ValueError, ArithmeticError):
             return self._refuse(client_id, "approval_invalid")
         if replacing is not None:
-            # The new plan is valid. Cancel the resting same-side limit and send only after the broker accepts.
+            # The new plan is valid. Cancel, then re-read the broker before anything is sent.
             cancelled = self._cancel_limit(replacing, "SAME_SIDE_REPLACE")
             if cancelled != "LIMIT_CANCELLED":
                 return self._refuse(client_id, "limit_cancel_failed")
@@ -736,6 +819,9 @@ class BrokerDemoRouter:
             row["order_kind"] = "MARKET"
         if self.dry_run:
             return self._dry_run(order_plan, units, row, limit_order)
+        blocked = self._block_send_after_v2_cancel(symbol)
+        if blocked:
+            return self._refuse(client_id, blocked)
         return self._send(order_plan, approval, row, at, limit_order)
 
     def _fill_anchor(self, client_id, symbol, side, entry, stop, target):
@@ -786,7 +872,7 @@ class BrokerDemoRouter:
                         risk=str(prepared.risk), stop=str(prepared.stop), target=str(prepared.target),
                         sl_clamp=prepared.sl_clamp, structural_pips=_pips(prepared.structural_pips),
                         sl_pips=_pips(prepared.risk / pip), tp_pips=_pips(abs(prepared.target - prepared.limit) / pip),
-                        **self._flag_detail())
+                        **self._active_flag_detail())
             return prepared
         self._event("PULLBACK_SKIPPED", client_id, reason=prepared, side=side)
         return prepared
@@ -1068,10 +1154,10 @@ class BrokerDemoRouter:
         if isinstance(result, LimitResult) and result.status == "RESTING":
             self._store.update(client_id, status=PENDING_LIMIT, order_id=result.broker_ref, closed_reason=None)
             expires = _parse_time(row.get("expires_at"))
-            ttl = None if expires is None else _ttl_hours(at, expires)
+            ttl = None if expires is None or not self._active_flag_detail() else _ttl_hours(at, expires)
             self._event("LIMIT_PENDING", client_id, order_id=result.broker_ref, side=row["side"], units=row["units"],
                         symbol=row["symbol"], limit_price=row.get("limit_price"), expires_at=row.get("expires_at"),
-                        stop=row["stop"], target=row["target"], **self._flag_detail(),
+                        stop=row["stop"], target=row["target"], **self._active_flag_detail(),
                         **({} if ttl is None else {"ttl_hours": ttl}))
             return PENDING_LIMIT, result.broker_ref
         if result.status == ACCEPTED:
@@ -1226,7 +1312,7 @@ class BrokerDemoRouter:
                 self._store.update(client_id, status=PENDING_LIMIT, order_id=still.order_id, closed_reason=None)
                 self._event("LIMIT_PENDING", client_id, order_id=still.order_id, symbol=row["symbol"],
                             side=row["side"], units=row["units"], limit_price=row.get("limit_price"),
-                            expires_at=row.get("expires_at"), resolved=True, **self._flag_detail())
+                            expires_at=row.get("expires_at"), resolved=True, **self._active_flag_detail())
             return None  # expiry is _expire_limits, so a resting order is never called a bad fill here
         try:
             trade_id = self._broker.trade_id_for_client(client_id)
@@ -1244,10 +1330,11 @@ class BrokerDemoRouter:
         return None
 
     def _cancel_detail(self, row, extra):
-        detail = self._flag_detail()
-        ttl = _ttl_hours(_parse_time(row.get("created_at")), _parse_time(row.get("expires_at")))
-        if ttl is not None:
-            detail["ttl_hours"] = ttl
+        detail = self._active_flag_detail()
+        if detail:
+            ttl = _ttl_hours(_parse_time(row.get("created_at")), _parse_time(row.get("expires_at")))
+            if ttl is not None:
+                detail["ttl_hours"] = ttl
         detail.update(extra)
         return detail
 
@@ -1261,6 +1348,7 @@ class BrokerDemoRouter:
                                action_status=None)
             self._event("LIMIT_CANCELLED", client_id, symbol=row["symbol"], side=row["side"], reason=reason,
                         log_row=row, **detail)
+            self._note_v2_cancel("LIMIT_CANCELLED")
             return "LIMIT_CANCELLED"
         try:
             result = self._broker.cancel_order(str(order_id), client_id=f"{client_id}-cancel")
@@ -1279,6 +1367,7 @@ class BrokerDemoRouter:
             kind = "LIMIT_EXPIRED" if reason in ("LIMIT_EXPIRED", "WEEKEND_ENTRY_BLOCK") else "LIMIT_CANCELLED"
             self._event(kind, client_id, symbol=row["symbol"], side=row["side"], reason=reason,
                         order_id=order_id, limit_price=row.get("limit_price"), log_row=row, **detail)
+            self._note_v2_cancel(kind)
             return kind
         if result.status == REJECTED:
             self._event("LIMIT_CANCEL_FAILED", client_id, reason=result.reason)
@@ -1536,7 +1625,12 @@ class BrokerDemoRouter:
                 cancelled = self._cancel_limit(resting, "EMA_PRIORITY")
                 if cancelled != "LIMIT_CANCELLED":
                     self._event("EMA_HOLD", preview.signal.client_id, reason="limit_cancel_failed",
-                                strategy=EMA_STRATEGY, **self._flag_detail())
+                                strategy=EMA_STRATEGY, **self._active_flag_detail())
+                    return
+                blocked = self._block_send_after_v2_cancel(EMA_SYMBOL)
+                if blocked:
+                    self._event("EMA_HOLD", preview.signal.client_id, reason=blocked, strategy=EMA_STRATEGY,
+                                **self._active_flag_detail())
                     return
                 decision = preview
         if read_failed and decision.action == "ENTER":
@@ -1605,6 +1699,11 @@ class BrokerDemoRouter:
                "units": units, "entry": round_price(fill), "stop": round_price(stop), "target": round_price(target),
                "initial_stop": round_price(stop), "order_kind": "MARKET", "strategy": EMA_STRATEGY,
                "scale_stage": "NONE", "units_remaining": units, "risk_distance": abs(fill - stop)}
+        if not self.dry_run:
+            blocked = self._block_send_after_v2_cancel(EMA_SYMBOL)
+            if blocked:
+                self._event("EMA_HOLD", client_id, reason=blocked, strategy=EMA_STRATEGY, **self._active_flag_detail())
+                return
         outcome = self._dry_run(order_plan, units, row) if self.dry_run else self._send(order_plan, approval, row, at)
         status = "REJECTED" if outcome[0] == REJECTED else "SUBMITTED"
         self._ema_store.save(replace(signal, status=status, reason=outcome[0], client_id=client_id), now=at)

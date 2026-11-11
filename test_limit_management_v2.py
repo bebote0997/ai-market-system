@@ -118,10 +118,10 @@ class RouterFlagTests(RouterBase):
         self.assertEqual(order["gtdTime"], gtd_timestamp(limit_expiry(NOW)))
         self.assertEqual(router._store.trade(CID)["expires_at"], limit_expiry(NOW).isoformat())
         pending = self.events("LIMIT_PENDING")[0][2]
-        self.assertEqual((pending["ttl_hours"], pending["limit_management_v2"], pending["entry_offset_mode"]),
-                         ("24", "0", "legacy"))
-        self.assertTrue(any("event=CYCLE_FLAGS limit_management_v2=0 entry_offset_mode=legacy" in record.getMessage()
-                            for record in logs.records))
+        self.assertNotIn("ttl_hours", pending)
+        self.assertNotIn("limit_management_v2", pending)
+        self.assertNotIn("entry_offset_mode", pending)
+        self.assertFalse(any("event=CYCLE_FLAGS" in record.getMessage() for record in logs.records))
         self.server.routes[("GET", OPEN_TRADES)] = [trades()]
         self.server.add("GET", f"{A}/pendingOrders", (200, {"orders": [
             {"id": "200", "instrument": "EUR_USD", "price": "1.08875", "clientExtensions": {"id": CID}}]}))
@@ -248,6 +248,58 @@ class RouterFlagTests(RouterBase):
         self.assertEqual(router._store.trade(CID)["status"], OPEN)
         self.assertEqual(self.posted(), [])
 
+    def test_an_accepted_cancel_that_leaves_a_trade_does_not_send(self):
+        router = self.make(v2="1")
+        filled = trades(open_trade(ext=CID, price="1.08875", sl="1.08625"))
+        self._arm_cancel(router, opens=(trades(), filled, filled), cancel=self.cancel_ok())
+        outcome = router.on_cycle(self.replacement(), "PLAN_READY", NOW, h1_bars=ramp())
+        self.assertEqual(outcome, ("NOT_ROUTED", "broker_trade_open"))
+        self.assertEqual(self.posted(), [])
+        self.assertEqual(router._store.trade(CID)["status"], OPEN)
+        self.assertEqual(self.events("RESOLVED")[0][2]["reason"], "cancel_left_a_fill")
+
+    def test_cancel_not_found_and_unknown_do_not_send(self):
+        router = self.make(v2="1")
+        self._arm_cancel(router, opens=(trades(),), cancel=(404, {"errorCode": "NO_SUCH_ORDER"}))
+        self.assertEqual(router.on_cycle(self.replacement(), "PLAN_READY", NOW, h1_bars=ramp()),
+                         ("NOT_ROUTED", "limit_cancel_failed"))
+        self.assertEqual(self.posted(), [])
+        self.assertEqual(router._store.trade(CID)["status"], PENDING_LIMIT)
+        self.setUp()
+        router = self.make(v2="1")
+        self._arm_cancel(router, opens=(trades(),), cancel=(200, {}))
+        self.assertEqual(router.on_cycle(self.replacement(), "PLAN_READY", NOW, h1_bars=ramp()),
+                         ("NOT_ROUTED", "limit_cancel_failed"))
+        self.assertEqual(self.posted(), [])
+        self.assertEqual(router._store.trade(CID)["action_status"], "UNKNOWN")
+
+    def test_a_fill_that_appears_between_cancel_and_submit_does_not_send(self):
+        router = self.make(v2="1")
+        filled = trades(open_trade(ext=CID, price="1.08875", sl="1.08625"))
+        # Reconcile is empty. The open-trade read is still empty. The position read then shows the fill.
+        self._arm_cancel(router, opens=(trades(), trades(), filled), cancel=self.cancel_ok())
+        outcome = router.on_cycle(self.replacement(), "PLAN_READY", NOW, h1_bars=ramp())
+        self.assertEqual(outcome, ("NOT_ROUTED", "broker_position_open"))
+        self.assertEqual(self.posted(), [])
+
+    def test_a_favorable_cancel_does_not_let_the_same_cycle_send_over_a_fill(self):
+        router = self.make(v2="1")
+        self._seed(router, limit="1.08875")
+        filled = trades(open_trade(ext=CID, price="1.09025", sl="1.08625"))
+        order = {"id": "200", "instrument": "EUR_USD", "price": "1.08875", "clientExtensions": {"id": CID}}
+        self.server.add("GET", OPEN_TRADES, trades(), filled, filled)
+        self.server.add("GET", f"{A}/pendingOrders", (200, {"orders": [order]}), (200, {"orders": []}))
+        self.server.add("GET", PRICING, pricing(bid="1.09025", ask="1.09035"))
+        self.server.add("GET", SUMMARY, (200, {"account": {"balance": "10000", "NAV": "10000", "marginUsed": "0",
+                                                           "currency": "USD"}}))
+        self.server.add("PUT", f"{A}/orders/200/cancel", self.cancel_ok())
+        self.server.add("POST", ORDERS, self.resting())
+        outcome = router.on_cycle(context(run_id="run-2"), "PLAN_READY", NOW, h1_bars=ramp())
+        self.assertEqual(outcome, ("NOT_ROUTED", "broker_trade_open"))
+        self.assertEqual(self.posted(), [])
+        self.assertEqual(self.cancels(), [f"{A}/orders/200/cancel"])
+        self.assertEqual(router._store.trade(CID)["status"], OPEN)
+
     def test_five_pips_is_independent_of_the_4h_flag(self):
         router = self.make(offset="5pips")
         self.ready(order=self.resting("1.08950"))
@@ -308,8 +360,8 @@ class RouterFlagTests(RouterBase):
         self.assertEqual(outcome[0], PENDING_LIMIT)
         self.assertEqual(self.posted()[-1]["price"], "1.08875")
         self.assertEqual(router._store.trade("aif-run-2")["expires_at"], limit_expiry(self.now).isoformat())
-        self.assertTrue(any("event=CYCLE_FLAGS limit_management_v2=0 entry_offset_mode=legacy" in record.getMessage()
-                            for record in logs.records))
+        self.assertFalse(any("event=CYCLE_FLAGS" in record.getMessage() for record in logs.records))
+        self.assertNotIn("ttl_hours", self.events("LIMIT_PENDING")[-1][2])
 
     def test_a_non_practice_broker_cannot_use_either_flag(self):
         with patch("runtime.demo_runner.REAL_EXECUTION_ENABLED", True):
@@ -323,6 +375,24 @@ class RouterFlagTests(RouterBase):
         self.assertFalse(router._limit_management_v2())
         self.assertEqual(router._entry_offset_mode(), "legacy")
 
+    def replacement(self):
+        return context(run_id="run-2", entry=1.092, stop=1.089, target=1.097)
+
+    def cancel_ok(self):
+        return (200, {"orderCancelTransaction": {"id": "201", "reason": "CLIENT_REQUEST"}})
+
+    def _arm_cancel(self, router, *, opens, cancel):
+        self._seed(router, limit="1.08875")
+        order = {"id": "200", "instrument": "EUR_USD", "price": "1.08875", "clientExtensions": {"id": CID}}
+        self.server.add("GET", OPEN_TRADES, *opens)
+        self.server.add("GET", f"{A}/pendingOrders", (200, {"orders": [order]}), (200, {"orders": []}))
+        self.server.add("GET", PRICING, pricing(bid="1.08880", ask="1.08890"))
+        self.server.add("GET", SUMMARY, (200, {"account": {"balance": "10000", "NAV": "10000", "marginUsed": "0",
+                                                           "currency": "USD"}}))
+        self.server.add("GET", f"{A}/trades/@aif-run-2", NOT_FOUND)
+        self.server.add("PUT", f"{A}/orders/200/cancel", cancel)
+        self.server.add("POST", ORDERS, self.resting("1.09075"))
+
     def _seed(self, router, *, side="LONG", limit="1.08875", stop="1.08625", target="1.09375"):
         router._store.insert_intent({
             "client_id": CID, "run_id": "run-1", "symbol": "EURUSD", "side": side, "units": 40000,
@@ -333,8 +403,8 @@ class RouterFlagTests(RouterBase):
 
     def _book(self, *, limit, bid, ask):
         self.server.add("GET", OPEN_TRADES, trades())
-        self.server.add("GET", f"{A}/pendingOrders", (200, {"orders": [
-            {"id": "200", "instrument": "EUR_USD", "price": limit, "clientExtensions": {"id": CID}}]}))
+        order = {"id": "200", "instrument": "EUR_USD", "price": limit, "clientExtensions": {"id": CID}}
+        self.server.add("GET", f"{A}/pendingOrders", (200, {"orders": [order]}), (200, {"orders": []}))
         self.server.add("GET", PRICING, pricing(bid=bid, ask=ask))
 
 
@@ -415,6 +485,30 @@ class EmaPriorityTests(unittest.TestCase):
         self.assertEqual(self.broker.cancelled, [])
         self.assertEqual(self.store.trade("aif-pullback")["status"], PENDING_LIMIT)
 
+    def test_ema_does_not_send_when_the_cancel_leaves_a_trade(self):
+        self.seed_limit()
+        self.broker.fill_on_cancel = True
+        router = self.router(v2="1")
+        later = m15_long() + [(READY, m15_long()[-1][1])]
+        router.on_cycle(macro(), "NO_SETUP", CONFIRM, m15_bars=m15_long(), h1_closes=h1_up())
+        router.on_cycle(macro(), "NO_SETUP", READY, m15_bars=later, h1_closes=h1_up())
+        self.assertEqual(self.broker.cancelled, ["200"])
+        self.assertEqual(self.broker.plans, [])
+        self.assertEqual(self.store.trade("aif-pullback")["status"], OPEN)
+
+    def test_ema_does_not_send_when_the_cancel_is_missing_or_unknown(self):
+        for status, reason in (("REJECTED", "order_not_found"), ("UNKNOWN", "no_acceptance_evidence")):
+            with self.subTest(status=status):
+                self.setUp()
+                self.seed_limit()
+                self.broker.cancel_result = SimpleNamespace(status=status, reason=reason)
+                router = self.router(v2="1")
+                later = m15_long() + [(READY, m15_long()[-1][1])]
+                router.on_cycle(macro(), "NO_SETUP", CONFIRM, m15_bars=m15_long(), h1_closes=h1_up())
+                router.on_cycle(macro(), "NO_SETUP", READY, m15_bars=later, h1_closes=h1_up())
+                self.assertEqual(self.broker.plans, [])
+                self.assertEqual(self.store.trade("aif-pullback")["status"], PENDING_LIMIT)
+
 
 class _Book:
     mode = "broker_demo"
@@ -433,7 +527,14 @@ class _Book:
 
     def cancel_order(self, order_id, client_id=None):
         self.cancelled.append(str(order_id))
+        outcome = getattr(self, "cancel_result", None)
+        if outcome is not None:
+            return outcome
         self.pending = [order for order in self.pending if order.order_id != str(order_id)]
+        if getattr(self, "fill_on_cancel", False):
+            self.trades.append(SimpleNamespace(
+                trade_id="9001", instrument="EUR_USD", client_ext_id="aif-pullback", price=D("1.08875"),
+                open_time=READY, stop=D("1.08625"), units=D("1000")))
         return SimpleNamespace(status="ACCEPTED", reason=None)
 
     def get_balance(self):

@@ -1,18 +1,19 @@
 # Agent Changelog
 
-## 2026-11-11 — DEC-LIMIT-MGMT-1: límite de práctica con interruptor (A+B, apagado)
-
-- `AI_FLOOR_LIMIT_MANAGEMENT_V2=1` (cuenta OANDA practice): la LIMIT dura 4 h, se cancela si el precio se aleja 15 pips a favor sin llenarse, un `PLAN_READY` del mismo lado la reemplaza, y una entrada EMA 10/21 la cancela y sigue. El lado opuesto no reemplaza. Una posición ya llena sigue bloqueando.
-- `AI_FLOOR_ENTRY_OFFSET_MODE=5pips` coloca la LIMIT a 5 pips (SL 25 / TP 50 desde esa LIMIT). `market` reutiliza la orden de mercado con anclaje al precio. Sin valor, `legacy` u otro valor: 12,5 pips.
-- Sin esas claves el ciclo queda como hoy (24 h, 12,5 pips, sin cancelar ni reemplazar). Se leen en cada ciclo. El evento de cancelación/vencimiento lleva las banderas; `RUN_COMPLETED` y `CYCLE_FLAGS` también. Un broker que no sea practice, o `REAL_EXECUTION_ENABLED`, no puede usarlas.
-- Sin merge, sin deploy, sin cambio de `render.yaml` ni de env en Render. REAL sigue bloqueado. Riesgo, 1 posición, SL, alineación, salidas EMA, xAI, scheduler y auth no cambian.
-
 ## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte
 
 - El control separa la solicitud en curso (pendiente, anotada o rechazada, con su hora) del último paso inmutable. La bandera de valla solo sale de `provider_transition_fence`: `1` activa, `0` no activa, y si falta o no se puede leer queda UNKNOWN. Un cálculo sobre los pasos se rotula aparte y no es esa bandera.
 - La salud, si no hay observaciones de componentes fechadas, dice que esa ausencia no demuestra que no haya un fallo. Un error guardado se muestra aunque el calendario esté cerrado. «Sin datos» es «sin comprobación guardada», no un «no es un fallo». La tabla de servicios sigue mostrando el token guardado (`DISABLED`, `NO_DATA`, `ERROR`); la antigüedad se añade solo a las marcas de tiempo.
 - La lectura de banderas del control abre la base del broker en `mode=ro` y usa los mismos nombres que el runner, sin importar símbolos de más ni leer el entorno desde esa vista. El ejemplo de Streamlit no pinta nada al importarse.
 - En pantallas estrechas el historial sigue mostrando todas las filas de la página (ciclos, setups, órdenes, informes, diario) y la tabla ancha no se oculta. El contenido deja libre el carril de 56 px. La leyenda del Floor se lee en horizontal. Una ficha de agente con hora y sin estado lo dice así, sin inventar la causa.
+
+## 2026-11-11 — DEC-LIMIT-MGMT-1: límite de práctica con interruptor (A+B, apagado)
+
+- `AI_FLOOR_LIMIT_MANAGEMENT_V2=1` (cuenta OANDA practice): la LIMIT dura 4 h, se cancela si el precio se aleja 15 pips a favor sin llenarse, un `PLAN_READY` del mismo lado la reemplaza, y una entrada EMA 10/21 la cancela y sigue. El lado opuesto no reemplaza. Una posición ya llena sigue bloqueando.
+- Tras esa cancelación aceptada se vuelven a leer operaciones abiertas, posiciones y órdenes pendientes. Solo se envía si el instrumento está plano. Si la cancelación dejó un fill, o el resultado es 404 o desconocido, no se envía en ese ciclo y queda anotado el motivo.
+- `AI_FLOOR_ENTRY_OFFSET_MODE=5pips` coloca la LIMIT a 5 pips (SL 25 / TP 50 desde esa LIMIT). `market` reutiliza la orden de mercado con anclaje al precio. Sin valor, `legacy` u otro valor: 12,5 pips.
+- Sin esas claves el ciclo queda como hoy (24 h, 12,5 pips, sin cancelar ni reemplazar) y los logs del ciclo no ganan campos nuevos. Con una clave activa, el ciclo anota el modo. Un broker que no sea practice, o `REAL_EXECUTION_ENABLED`, no puede usarlas.
+- Sin merge, sin deploy, sin cambio de `render.yaml` ni de env en Render. REAL sigue bloqueado. Riesgo, 1 posición, SL, alineación, salidas EMA, xAI, scheduler y auth no cambian.
 
 ## 2026-11-08 — DEC-XAI-1: la transición mira el libro real y deja constancia
 

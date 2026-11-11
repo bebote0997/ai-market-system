@@ -94,8 +94,7 @@ class RunCompletedLogTests(unittest.TestCase):
     def test_valid_setup_line_has_status_side_and_no_warnings(self):
         result, line = self.run_completed()
         self.assertRegex(line, r"^run_id=\S+ symbol=XAUUSD scheduled_slot=\S+ component=runtime event=RUN_COMPLETED "
-                               r"status=\S+ setup_status=VALID_SETUP side=LONG setup_warnings=- "
-                               r"limit_management_v2=0 entry_offset_mode=legacy$")
+                               r"status=\S+ setup_status=VALID_SETUP side=LONG setup_warnings=-$")
         self.assertIn(f"status={result['status']} ", line)
 
     def test_watch_line_lists_the_validator_warning(self):
@@ -109,8 +108,7 @@ class RunCompletedLogTests(unittest.TestCase):
         result, line = self.run_completed(patch("floor.orchestrator.analizar_estructura", mixed))
         self.assertEqual(result["status"], "WATCH")
         self.assertTrue(line.endswith(" status=WATCH setup_status=WATCH side=- "
-                                      "setup_warnings=timeframe_incompatibility "
-                                      "limit_management_v2=0 entry_offset_mode=legacy"))
+                                      "setup_warnings=timeframe_incompatibility"))
 
 
 # --- 2) OANDA demo LIMIT lifecycle: SENT / FILLED / EXPIRED / CANCELLED -------------------------------------------
@@ -205,9 +203,8 @@ class LimitLifecycleLogTests(RouterBase):
         alerts = []
         self.router_.on_alert = lambda kind, detail=None: alerts.append((kind, sorted(detail)))
         self.send()
-        self.assertEqual(alerts, [("LIMIT_PENDING", ["entry_offset_mode", "expires_at", "limit_management_v2",
-                                                     "limit_price", "order_id", "side", "stop", "symbol", "target",
-                                                     "ttl_hours", "units"])])
+        self.assertEqual(alerts, [("LIMIT_PENDING", ["expires_at", "limit_price", "order_id", "side", "stop", "symbol",
+                                                     "target", "units"])])
 
     def test_a_failing_log_line_never_changes_the_order_flow(self):
         with patch.object(bdr, "_limit_fields", side_effect=RuntimeError("boom")), \
