@@ -6,6 +6,7 @@
 - A+B (5 pips / 4 h / 15 pips / reemplazo del mismo lado) se simula en el harness; no se toca `execution/eurusd_pullback.py`.
 - Resultado en `tools/eurusd_replay/RESULTS.md`. C no pasa PF 1.15 ni PF fuera de muestra ≥ 1. E no pasa PF ≥ 1 con drawdown no peor. D no mejora. No se añade ninguna bandera. REAL sigue bloqueado.
 - Libros separados: la EMA 10/21 sola tiene PF 1.29 (256 operaciones, caída 15R); el retroceso solo tiene PF 0.70. E y D no mejoran la EMA. La diferencia con el PF 1.35 anterior es el contrato en vivo (SL 20/TP 40, espera de 15 minutos, cierre del viernes y de la semana), no otro mercado.
+- Búsqueda de 10 celdas (ventana × SL 20 o 25) a riesgo 1% real. Ninguna cumple a la vez PF 1.15 dentro y fuera de muestra, 1.5 operaciones por semana y caída ≤ 15%. No hay bandera ni prueba de $500.
 
 ## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte
 

@@ -14,6 +14,23 @@ from tools.eurusd_replay.scan import BAR, fresh_session_slots, load_frames, scan
 from tools.eurusd_replay.simulate import ab_limit, ab_market, close_pairs, iter_bars, legacy, run, with_flags
 
 
+def ema_search_configs():
+    """Pre-registered EMA-only grid: five windows times stop 20 or 25 (target is always 2R).
+
+    Equity starts at 10,000 with the unit cap lifted, so each trade risks 1% and the percent
+    drawdown is not shrunk by the 100,000-unit cap. Pullback is off. This list is not part of
+    ``configs()``; it is the search recorded in RESULTS.md.
+    """
+    from dataclasses import replace
+    base = replace(legacy(), pullback_enabled=False, start_equity=Decimal(10000), max_units=5_000_000)
+    rows = []
+    for window in ("utc", "et_7_11", "et_7_12", "et_8_12", "et_7_16"):
+        for sl in (20, 25):
+            rows.append(replace(base, name=f"ema_{window}_sl{sl}", ema_window=window,
+                                ema_sl_pips=Decimal(sl), ema_tp_pips=Decimal(sl * 2)))
+    return rows
+
+
 def configs():
     base, market = ab_limit(), ab_market()
     be = Decimal("1.5")

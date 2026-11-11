@@ -9,7 +9,7 @@ import pandas as pd
 from agents.setup_validator import evaluar_setup
 from tools.eurusd_replay.scan import Signal, _relax_5m, closed_bounds
 from tools.eurusd_replay.scouts import equivalent, frame_from_csv_window
-from tools.eurusd_replay.simulate import ab_limit, legacy, run, with_flags
+from tools.eurusd_replay.simulate import ab_limit, legacy, run, window_et, with_flags
 from core.contracts import AgentMessage
 from execution.ema_cross import in_entry_window
 from test_ema_cross import CONFIRM, h1_up, m15_long
@@ -223,6 +223,9 @@ class BookTests(unittest.TestCase):
         self.assertTrue(_window_et(datetime(2026, 1, 6, 15, 30, tzinfo=UTC)))
         self.assertFalse(_window_et(summer))
         self.assertTrue(_window_et(datetime(2026, 7, 2, 14, 30, tzinfo=UTC)))
+        later = window_et(7, 12)
+        self.assertTrue(later(datetime(2026, 1, 6, 16, 30, tzinfo=UTC)))  # 11:30 EST
+        self.assertFalse(later(datetime(2026, 1, 6, 17, 0, tzinfo=UTC)))  # 12:00 EST
 
 
 if __name__ == "__main__":

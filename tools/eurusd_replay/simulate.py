@@ -41,6 +41,11 @@ class Config:
     ema_window: str            # "utc" or "et_7_11"
     pullback_enabled: bool = True
     ema_enabled: bool = True
+    ema_sl_pips: Decimal = Decimal(20)
+    ema_tp_pips: Decimal = Decimal(40)
+    start_equity: Decimal = START_EQUITY
+    max_units: int = DEFAULT_MAX_UNITS
+    fixed_risk: Decimal | None = None
 
 
 def legacy():
@@ -131,6 +136,23 @@ def _window_et(at):
     return local.weekday() < 5 and 7 <= local.hour < 11
 
 
+def window_et(start_hour, end_hour):
+    """Weekday hours in America/New_York, ``start_hour`` inclusive and ``end_hour`` exclusive."""
+    def _inner(at):
+        local = at.astimezone(NY)
+        return local.weekday() < 5 and start_hour <= local.hour < end_hour
+    return _inner
+
+
+# Named entry windows. ``utc`` is the live UTC [12, 15) rule.
+EMA_WINDOWS = {
+    "et_7_11": (7, 11),
+    "et_7_12": (7, 12),
+    "et_8_12": (8, 12),
+    "et_7_16": (7, 16),
+}
+
+
 def _expiry(at, ttl):
     previous = pullback.LIMIT_TTL
     pullback.LIMIT_TTL = ttl
@@ -140,10 +162,14 @@ def _expiry(at, ttl):
         pullback.LIMIT_TTL = previous
 
 
-def _units(equity, entry, stop):
+def _units(book, entry, stop):
+    distance = abs(entry - stop)
+    if book.config.fixed_risk is not None:
+        units = int((book.config.fixed_risk / distance).to_integral_value(rounding=ROUND_FLOOR))
+        return (units if units >= 1 else 0), False
     decision = SimpleNamespace(risk_fraction=Decimal("0.01"))
-    units = broker_units(equity, decision, entry, stop, DEFAULT_MAX_UNITS)
-    capped = size_would_exceed(equity, entry, stop, units)
+    units = broker_units(book.cash, decision, entry, stop, book.config.max_units)
+    capped = size_would_exceed(book.cash, entry, stop, units)
     return units, capped
 
 
@@ -322,7 +348,7 @@ def _place_limit(book, signal, at):
         return
     stop, target, _action, _pips = levels
     risk = abs(limit - stop)
-    units, capped = _units(book.cash, limit, stop)
+    units, capped = _units(book, limit, stop)
     if units < 1:
         return
     if capped:
@@ -348,7 +374,7 @@ def _place_market(book, signal, quote, at):
         book.market_refused += 1
         return
     fill, stop, target = anchored
-    units, capped = _units(book.cash, fill, stop)
+    units, capped = _units(book, fill, stop)
     if units < 1:
         book.market_refused += 1
         return
@@ -359,15 +385,28 @@ def _place_market(book, signal, quote, at):
                    abs(fill - stop) * units, at, signal.setup_id)
 
 
+def _ema_levels(side, fill_quote, sl_pips, tp_pips):
+    """Same grid as ``levels_from_fill``. The live function is fixed at 20/40; other distances stay in the harness."""
+    if sl_pips == Decimal(20) and tp_pips == Decimal(40):
+        return levels_from_fill(side, fill_quote)
+    fill = round_fx(fill_quote)
+    risk, reward = sl_pips * PIP, tp_pips * PIP
+    if side == "LONG":
+        stop, target = fill - risk, fill + reward
+    else:
+        stop, target = fill + risk, fill - reward
+    return fill, round_fx(stop), round_fx(target)
+
+
 def _enter_ema(book, signal, quote, at):
     if quote is None:
         return False
     fill_quote = quote["ask"] if signal.side == "LONG" else quote["bid"]
     try:
-        fill, stop, target = levels_from_fill(signal.side, fill_quote)
+        fill, stop, target = _ema_levels(signal.side, fill_quote, book.config.ema_sl_pips, book.config.ema_tp_pips)
     except (ValueError, ArithmeticError):
         return False
-    units, capped = _units(book.cash, fill, stop)
+    units, capped = _units(book, fill, stop)
     if units < 1:
         return False
     if capped:
@@ -493,9 +532,14 @@ def run(config, signals, bars, m15_pairs, h1_pairs, fresh_slots):
     previous_window = ema_cross.in_entry_window
     if config.ema_window == "et_7_11":
         ema_cross.in_entry_window = _window_et
+    elif config.ema_window in EMA_WINDOWS:
+        open_hour, close_hour = EMA_WINDOWS[config.ema_window]
+        ema_cross.in_entry_window = window_et(open_hour, close_hour)
     elif config.ema_window != "utc":
         raise ValueError(config.ema_window)
     book = Book(config)
+    book.cash = config.start_equity
+    book.peak_equity = config.start_equity
     try:
         for bar in bars:
             quote = _quote(bar)

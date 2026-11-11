@@ -143,6 +143,29 @@ Each row is a separate book. EMA-only never places a pullback order. Pullback-on
 | Pullback only, legacy 24h / 12.5 pips | 522 | 70.5% | 41.6% | 0.70 | -0.155 | 83.97 | 20.9% | 9 | 1.98 | 0.73 |
 | Pullback only, A+B 5 pips | 714 | 56.0% | 41.5% | 0.76 | -0.123 | 101.09 | 24.9% | 13 | 2.71 | 0.71 |
 
+The 3.0% drawdown on the EMA-only legacy row is at the 100,000-unit cap, which is about 0.2% of the $100,000 start, not 1%. The same trades, sized at 1% of equity, draw down 14.3%. R multiples in the table do not depend on that cap.
+
 **Verdict.** The losses are the pullback book; EMA 10/21 alone is profitable, and neither E nor D improves it.
 
 The earlier box (PF about 1.35, 273 trades, max drawdown 12R, stop 25 / target 50, entry on the M15 cross with an H1 trend filter) and this EMA-only legacy row (PF 1.29, 256 trades, max drawdown 15.3R) are the same idea under two contracts. This harness follows the live module: stop 20 / target 40, the order goes out 15 minutes after the cross and only on that first slot, the long pays the ask and the short sells the bid, and Friday 16:45 New York plus the one-week hold can close the trade before the target. A stop five pips tighter is hit by noise a 25-pip stop survives, the delayed fill is a worse price, and the time exit cuts both winners and losers. Those three differences are the gap between 1.35 and 1.29, and between 12R and 15R of drawdown. The trade count is already in the same range, about one a week. `docs/ema_cross.md` records that the 1.35-style pass reused years that had already been used to choose the variant. The out-of-sample half of this run, from 2024-10-01, still prints PF 1.48, so the live EMA rules are not only an in-sample result. The combined book's PF of 0.87 is this EMA book being outnumbered by the pullback book (PF 0.70).
+
+## Search for a 30-day test
+
+Pass rule, fixed before this grid was ranked: profit factor at least 1.15 in-sample (entries before 2024-10-01) and out-of-sample, at least 1.5 trades per week on the full sample, mark-to-market drawdown at most 15% with each trade risking 1% of current equity, and no calendar year at −10R or worse (or profit factor under 0.75 with at least 15 trades). Spread, the 15-minute delay, the H1 EMA filter, and the Friday and one-week exits stay as in the live EMA module. Target is twice the stop. Pullback stays off, because the earlier pullback books were 0.70–0.76.
+
+Ten cells: the live UTC window, 07:00–11:00, 07:00–12:00, 08:00–12:00, and 07:00–16:00 New York, each at stop 20 and stop 25. Together with the 14 combined books and the 5 single-strategy books already in this file, that is 29 books. D was not crossed with the new windows; on the best window it had already cut the profit factor from 1.29 to 1.26.
+
+| Config | Trades | /week | IS PF | OOS PF | PF | E[R] | Max DD R | Max DD % | Lose streak | Worst year |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| EMA UTC [12, 15), SL 20 | 256 | 0.97 | 1.17 | 1.48 | 1.29 | 0.166 | 15.33 | 14.3% | 10 | 2021 −5.0R (17 trades, partial) |
+| EMA UTC [12, 15), SL 25 | 251 | 0.95 | 1.01 | 1.46 | 1.17 | 0.100 | 18.89 | 17.3% | 9 | 2021 −3.1R |
+| EMA 07:00–11:00 ET, SL 20 | 336 | 1.27 | 1.15 | 1.23 | 1.18 | 0.109 | 19.21 | 17.6% | 12 | 2021 −7.0R |
+| EMA 07:00–11:00 ET, SL 25 | 327 | 1.24 | 1.10 | 1.14 | 1.12 | 0.068 | 17.77 | 16.4% | 11 | 2025 −6.2R |
+| EMA 07:00–12:00 ET, SL 20 | 413 | 1.57 | 1.02 | 1.13 | 1.06 | 0.038 | 26.50 | 23.6% | 14 | 2021 −7.3R |
+| EMA 07:00–12:00 ET, SL 25 | 393 | 1.49 | 0.99 | 1.06 | 1.02 | 0.012 | 23.21 | 21.0% | 13 | 2021 −6.2R |
+| EMA 08:00–12:00 ET, SL 20 | 340 | 1.29 | 0.92 | 1.18 | 1.02 | 0.014 | 23.57 | 21.3% | 13 | 2021 −8.3R |
+| EMA 08:00–12:00 ET, SL 25 | 330 | 1.25 | 0.90 | 1.11 | 0.98 | -0.011 | 25.98 | 24.2% | 13 | 2022 −7.1R |
+| EMA 07:00–16:00 ET, SL 20 | 582 | 2.21 | 1.00 | 1.02 | 1.01 | 0.003 | 21.37 | 20.8% | 12 | 2026 −9.3R |
+| EMA 07:00–16:00 ET, SL 25 | 543 | 2.06 | 0.96 | 0.91 | 0.94 | -0.033 | 36.25 | 32.1% | 13 | 2024 −12.7R |
+
+**Verdict.** Nothing passes. The only book that clears both profit-factor bars and the 15% drawdown is the live EMA window with a 20-pip stop (in-sample 1.17, out-of-sample 1.48, drawdown 14.3%), and it trades 0.97 times a week. The first window that reaches 1.5 trades a week, 07:00–12:00, is profit factor 1.02 / 1.13 with a 24% drawdown. Widening the window buys frequency and gives the edge back. No flag, and no $500 sizing, because there is no winner to size.
