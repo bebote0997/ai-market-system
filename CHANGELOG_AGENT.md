@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-11 — Réplica EURUSD de C, D y E (sin cambio en vivo)
+
+- Harness en `tools/eurusd_replay/`: validator, plan FX, retroceso, EMA 10/21, una posición, 1% del router de práctica, sesiones NY/Londres y la regla de la semana, vela a vela, con bid/ask. Los agentes de IA no se replican (paso directo). No hay calendario de noticias en el archivo.
+- A+B (5 pips / 4 h / 15 pips / reemplazo del mismo lado) se simula en el harness; no se toca `execution/eurusd_pullback.py`.
+- Resultado en `tools/eurusd_replay/RESULTS.md`. C no pasa PF 1.15 ni PF fuera de muestra ≥ 1. E no pasa PF ≥ 1 con drawdown no peor. D no mejora. No se añade ninguna bandera. REAL sigue bloqueado.
+
 ## 2026-11-08 — Panel, salud e historial: lo guardado y lo configurado se leen aparte
 
 - El control separa la solicitud en curso (pendiente, anotada o rechazada, con su hora) del último paso inmutable. La bandera de valla solo sale de `provider_transition_fence`: `1` activa, `0` no activa, y si falta o no se puede leer queda UNKNOWN. Un cálculo sobre los pasos se rotula aparte y no es esa bandera.
