@@ -6,6 +6,10 @@
 - USDJPY: rango M5 19:00–02:00 Nueva York, stops emulados (el campo JSON de la orden stop no está documentado), salto si una vela cruza los dos lados, cancelación a las 05:00, SL al otro lado, TP 2R, salida a las 11:00.
 - GBPUSD y después EURUSD: movimiento 15:45–16:00 Londres, entrada en contra si hay 15 pips, SL 30, sin TP, salida a los 30 minutos. Una sola posición.
 - Riesgo el menor entre 1 % y 5 USD; el lote mínimo que pase el tope se salta. Frenos de 10/50 USD y tick viejo sin cambios.
+- La entrada de Londres solo vive en `[02:00, 05:00)` ET y solo con la vela M5 abierta en ese instante. A las 05:00 se cancela aunque haya cruces viejos. El fix solo entra en los primeros 5 minutos de las 16:00 Londres.
+- El rango incompleto se reintenta hasta las 02:00; si falta, `range_incomplete` y ese día no se reabre. GBPUSD y EURUSD usan cada uno sus velas.
+- SL/TP y el tope de 5 USD salen del fill real (ask/bid), no del nivel del rango. TP = 2 veces esa distancia.
+- El estado del día queda en el almacén de flags (`combo_lon_*`, `combo_fix_*`). Un reinicio, un stop o la salida por tiempo no reenvían el mismo trade.
 
 ## 2026-11-11 — DEC-EXNESS-1: adaptador Exness API, apagado
 

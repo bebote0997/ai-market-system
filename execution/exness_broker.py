@@ -109,6 +109,11 @@ class ExnessBroker:
     def __repr__(self):
         return f"ExnessBroker(provider='exness', armed={real_execution_armed(self._env)!r})"
 
+    @property
+    def flag_store(self):
+        """Durable flags shared with the brakes. The session combo keeps its day state here."""
+        return self._brakes._store
+
     def _now(self):
         now = self._clock()
         if not isinstance(now, datetime) or now.tzinfo is None:
