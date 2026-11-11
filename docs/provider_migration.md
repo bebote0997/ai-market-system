@@ -32,11 +32,28 @@ Checked against the xAI docs on 2026-11-07:
 | Endpoint | `POST /v1/responses` |
 | `XAI_TIMEOUT_SECONDS` | `30` |
 | `XAI_RETRIES` | `2` (429 and 5xx; quota is not retried; Retry-After above 15 seconds stops) |
+| `XAI_RATE_LIMIT_V2` | unset. Exact `1` replaces only the 429 path (below). Any other value keeps this row. |
 | `XAI_MAX_INPUT_TOKENS` | `6000` (rough byte/4 budget, checked before the request) |
 | `XAI_MAX_OUTPUT_TOKENS` | `800` |
 | `XAI_MAX_TOTAL_TOKENS` | `8000` (a larger reported total fails closed) |
 
 The request sets `store: false`, `reasoning.effort` to `low`, and `text.format` `json_schema` with `strict: true`. It does not send `tools`. Logs keep the kind, HTTP status, and token counts. They do not keep the key, the prompt, or the body. A test feeds a body that contains a fake key and checks that the exception text and `last_call` do not. `grok-4.7` can return encrypted reasoning; that content is not copied into the decision or the log.
+
+## HTTP 429 retries (`XAI_RATE_LIMIT_V2`)
+
+Checked in the code, not by replaying the Render logs. `ai/orchestrator.py` calls structure, liquidity, macro, the setup reviewer, and (when a plan exists) the trade reviewer one after another on the calling thread. `runtime/scheduler.py` does the same across symbols. There is no thread pool around xAI. A cycle is still a burst: up to five calls, and a macro `NO_DATA` retry runs the floor again. With the legacy loop, `XAI_RETRIES` defaults to 2. Without `Retry-After` the wait is `min(4, 0.4 * 2**attempt)` plus at most 0.1s of jitter. A `Retry-After` above 15 seconds does not wait; that call stops. Quota is not retried.
+
+`XAI_RATE_LIMIT_V2` is optional and is not part of `RuntimeConfig.fingerprint`. Unset, empty, `0`, `true`, and ` 1` keep the legacy loop, including concurrent calls if some other path ever makes them. Exact `1`:
+
+* One process-wide lock covers each xAI HTTP call and its 429 waits. Two calls do not overlap.
+* HTTP 429 (not quota) waits `1, 2, 4, 8, 16` seconds plus jitter, at most six tries. Jitter is at most 1 second and never shortens a `Retry-After` value.
+* A `Retry-After` header is the wait when it is present, including values above 15 seconds, up to 60 seconds. Above 60 seconds the call fails closed and does not sleep.
+* HTTP time and waits share two wall-clock budgets. `v2_ai_resilience` defaults off, so production never sets `provider.deadline`. The heartbeat is written after the symbol cycle, and the watchdog is 300 seconds. One call may spend 90 seconds. Every xAI call in the process shares 180 seconds, then further attempts are refused. An attempt starts only when both leftovers can hold a full timeout (default 30 seconds). A retry starts only when they can hold the sleep plus another full timeout, so the xAI portion ends at or under 180 seconds, 120 seconds under the watchdog. After 120 seconds with no xAI time, the budget resets. A wait that would pass an explicit cycle deadline still stops, as it does today. If the sleep raises, the reserved wait is released.
+* Unchecked, 10 calls (5 specialists plus a macro retry of the floor) times 6 attempts times 30 seconds is 1800 seconds under the lock. A slow 429 now burns one timeout per attempt and stops once another timeout does not fit.
+* The failure is still `RATE_LIMITED`. The adapter does not construct `OpenAIProvider`. The cycle's existing rule stands: an agent `ERROR` cannot become a paper order, and a deterministic `WATCH` stays `WATCH`.
+* Each wait that actually happens logs `component=xai event=RATE_LIMIT_RETRY agent=… attempt=… wait_seconds=…`. The agent is a token or `-`. The line has no key, header, or body.
+
+5xx and connection errors keep the legacy delay and retry count, and they draw on the same wall-clock budgets, so a slow 500 cannot run past them either. Quota is not retried. Enabling the flag later is an owner action on the process environment. This change does not edit Render, `render.yaml`, or the scheduler. Rollback is unset or any value other than `1`.
 
 Official pages checked 2026-11-07 (no live call, no account entitlement check):
 

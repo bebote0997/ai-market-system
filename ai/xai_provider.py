@@ -10,9 +10,14 @@ Official API (docs.x.ai, checked 2026-11-07):
 * Reasoning effort is ``low`` so a trading advisory call stays inside the output-token cap.
 
 A selected xAI provider that fails stays failed. This module does not call OpenAI.
+
+``XAI_RATE_LIMIT_V2=1`` serializes calls and retries HTTP 429 with backoff that
+honors Retry-After, then fails closed. Any other value, including unset, keeps
+the legacy retry loop below unchanged.
 """
 from datetime import datetime, timezone
 import json
+import logging
 import os
 import random
 import time
@@ -24,8 +29,12 @@ from ai.openai_provider import RESPONSE_SCHEMA, _PROPERTIES
 from ai.provider import AIProvider
 from ai.provider_policy import XAI_BASE_URL, XAI_MODEL
 from ai import prompts
+from ai import xai_rate_limit
 from runtime import health_hooks
 from runtime.retry_after import retry_after_seconds
+
+
+LOG = logging.getLogger("ai_floor.xai")
 
 
 class XAIProviderError(RuntimeError):
@@ -78,6 +87,13 @@ def _default(value):
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError("unsupported request value")
+
+
+def _agent_token(name):
+    """A log-safe agent id. Anything else becomes ``-`` so the line cannot grow new fields."""
+    if isinstance(name, str) and 1 <= len(name) <= 64 and name.replace("_", "").isalnum():
+        return name
+    return "-"
 
 
 def _positive_int(raw, default, name, *, upper):
@@ -136,60 +152,155 @@ class XAIProvider(AIProvider):
                 "attempt": number, "http_status": http_status, "kind": kind,
                 "latency_ms": round((self._monotonic() - started) * 1000, 3)})
 
-    def _post(self, payload):
+    def _fail(self, outcome):
+        self.last_failure = outcome["kind"]
+        raise XAIProviderError(
+            outcome["kind"], http_status=outcome["http_status"], error_type=outcome["error_type"],
+            error_code=outcome["error_code"], retry_after=outcome["retry_after"],
+            timed_out=outcome["timed_out"]) from None
+
+    def _transport_once(self, payload):
+        """One HTTP try. ``ok`` carries the body. A failure dict matches the legacy classifier."""
+        http_status = error_type = error_code = retry_after = None
+        timed_out = False
+        started = self._monotonic()
+        timeout = self.timeout
+        if self.deadline is not None:
+            remaining = self.deadline - started
+            if remaining <= 0:
+                raise XAIProviderError("AI_TIME_BUDGET_EXHAUSTED")
+            timeout = min(self.timeout, remaining)
+        try:
+            raw = self._transport(self.base_url, payload, self.api_key, timeout)
+        except HTTPError as exc:
+            http_status = exc.code
+            retry_after = retry_after_seconds(exc.headers)
+            transient = exc.code in {408, 409, 429} or 500 <= exc.code <= 599
+            try:
+                body = json.load(exc)
+                detail = body.get("error", {}) if isinstance(body, dict) else {}
+                if isinstance(detail, dict):
+                    error_code = detail.get("code")
+                    error_type = detail.get("type")
+            except (ValueError, TypeError, AttributeError):
+                pass
+            if not isinstance(error_code, str) or not error_code.replace("_", "").isalnum() or len(error_code) > 64:
+                error_code = None
+            if not isinstance(error_type, str) or not error_type.replace("_", "").isalnum() or len(error_type) > 64:
+                error_type = None
+            if (error_type == "insufficient_quota" or error_code in {
+                    "insufficient_quota", "billing_hard_limit_reached", "credit_balance_exhausted"}):
+                kind, transient = "QUOTA_EXHAUSTED", False
+            else:
+                kind = ("RATE_LIMITED" if exc.code == 429 else
+                        "AUTH_ERROR" if exc.code in {401, 403} else
+                        "MODEL_UNAVAILABLE" if exc.code == 404 else "PROVIDER_ERROR")
+        except (URLError, TimeoutError, ConnectionError) as exc:
+            transient, kind = True, "CONNECTION_ERROR"
+            timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
+        else:
+            return {"ok": True, "raw": raw, "started": started}
+        return {
+            "ok": False, "started": started, "http_status": http_status, "kind": kind,
+            "transient": transient, "error_type": error_type, "error_code": error_code,
+            "retry_after": retry_after, "timed_out": timed_out,
+        }
+
+    def _legacy_delay(self, attempt, outcome):
+        """The pre-flag wait. Retry-After above 15 seconds does not wait; the call stops."""
+        retry_after = outcome["retry_after"]
+        delay = retry_after if retry_after is not None else min(4.0, 0.4 * 2 ** attempt)
+        budget_cut = self.deadline is not None and self._monotonic() + delay >= self.deadline
+        stop = (not outcome["transient"] or attempt == self.retries
+                or (retry_after is not None and retry_after > 15) or budget_cut)
+        return delay, stop
+
+    def _post(self, payload, agent_name=None):
         if not self.api_key:
             raise XAIProviderError("NOT_CONFIGURED")
+        if xai_rate_limit.enabled():
+            with xai_rate_limit.CALL_LOCK:
+                return self._post_v2(payload, agent_name)
+        return self._post_legacy(payload)
+
+    def _post_legacy(self, payload):
         for attempt in range(self.retries + 1):
-            http_status = error_type = error_code = retry_after = None
-            timed_out = False
-            started = self._monotonic()
-            timeout = self.timeout
-            if self.deadline is not None:
-                remaining = self.deadline - started
-                if remaining <= 0:
-                    raise XAIProviderError("AI_TIME_BUDGET_EXHAUSTED")
-                timeout = min(self.timeout, remaining)
-            try:
-                raw = self._transport(self.base_url, payload, self.api_key, timeout)
-                self._attempt(attempt + 1, started, http_status=200)
-                return raw
-            except HTTPError as exc:
-                http_status = exc.code
-                retry_after = retry_after_seconds(exc.headers)
-                transient = exc.code in {408, 409, 429} or 500 <= exc.code <= 599
-                try:
-                    body = json.load(exc)
-                    detail = body.get("error", {}) if isinstance(body, dict) else {}
-                    if isinstance(detail, dict):
-                        error_code = detail.get("code")
-                        error_type = detail.get("type")
-                except (ValueError, TypeError, AttributeError):
-                    pass
-                if not isinstance(error_code, str) or not error_code.replace("_", "").isalnum() or len(error_code) > 64:
-                    error_code = None
-                if not isinstance(error_type, str) or not error_type.replace("_", "").isalnum() or len(error_type) > 64:
-                    error_type = None
-                if (error_type == "insufficient_quota" or error_code in {
-                        "insufficient_quota", "billing_hard_limit_reached", "credit_balance_exhausted"}):
-                    kind, transient = "QUOTA_EXHAUSTED", False
-                else:
-                    kind = ("RATE_LIMITED" if exc.code == 429 else
-                            "AUTH_ERROR" if exc.code in {401, 403} else
-                            "MODEL_UNAVAILABLE" if exc.code == 404 else "PROVIDER_ERROR")
-            except (URLError, TimeoutError, ConnectionError) as exc:
-                transient, kind = True, "CONNECTION_ERROR"
-                timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
-            self._attempt(attempt + 1, started, http_status=http_status, kind=kind)
-            delay = retry_after if retry_after is not None else min(4.0, 0.4 * 2 ** attempt)
-            budget_cut = self.deadline is not None and self._monotonic() + delay >= self.deadline
-            if (not transient or attempt == self.retries or (retry_after is not None and retry_after > 15)
-                    or budget_cut):
-                self.last_failure = kind
-                raise XAIProviderError(kind, http_status=http_status, error_type=error_type,
-                                       error_code=error_code, retry_after=retry_after,
-                                       timed_out=timed_out) from None
+            outcome = self._transport_once(payload)
+            if outcome["ok"]:
+                self._attempt(attempt + 1, outcome["started"], http_status=200)
+                return outcome["raw"]
+            self._attempt(attempt + 1, outcome["started"], http_status=outcome["http_status"],
+                          kind=outcome["kind"])
+            delay, stop = self._legacy_delay(attempt, outcome)
+            if stop:
+                self._fail(outcome)
             self._sleep(delay + random.uniform(0, 0.1))
         raise AssertionError("unreachable")
+
+    def _budget_stop(self, last):
+        """The wall budget cannot hold another full timeout. Fail closed, no further HTTP."""
+        if last is None or last["kind"] == "RATE_LIMITED":
+            self.last_failure = "RATE_LIMITED"
+            http_status = None if last is None else last["http_status"]
+            raise XAIProviderError(
+                "RATE_LIMITED", http_status=http_status,
+                error_type=None if last is None else last["error_type"],
+                error_code=None if last is None else last["error_code"],
+                retry_after=None if last is None else last["retry_after"],
+                timed_out=False if last is None else last["timed_out"]) from None
+        self._fail(last)
+
+    def _sleep_reserved(self, wait):
+        """Charge the wait up front. If the sleep raises, keep only the time that passed."""
+        started = self._monotonic()
+        xai_rate_limit.reserve_wait(wait)
+        try:
+            self._sleep(wait)
+        except BaseException:
+            xai_rate_limit.release_wait(wait)
+            elapsed = self._monotonic() - started
+            if elapsed > 0:
+                xai_rate_limit.charge(min(elapsed, wait), self._monotonic())
+            raise
+        xai_rate_limit.finish_wait(self._monotonic())
+
+    def _post_v2(self, payload, agent_name):
+        """Wall budgets cover HTTP and waits. 429 uses backoff; other failures keep the legacy schedule."""
+        attempt = 0
+        last = None
+        call_started = self._monotonic()
+        while True:
+            if not xai_rate_limit.attempt_fits(self._monotonic(), call_started, self.timeout):
+                self._budget_stop(last)
+            outcome = self._transport_once(payload)
+            xai_rate_limit.charge(self._monotonic() - outcome["started"], self._monotonic())
+            if outcome["ok"]:
+                self._attempt(attempt + 1, outcome["started"], http_status=200)
+                return outcome["raw"]
+            last = outcome
+            self._attempt(attempt + 1, outcome["started"], http_status=outcome["http_status"],
+                          kind=outcome["kind"])
+            if outcome["kind"] == "RATE_LIMITED" and outcome["transient"]:
+                wait = xai_rate_limit.plan_wait(
+                    attempt, outcome["retry_after"], now=self._monotonic(), call_started=call_started,
+                    timeout=self.timeout, uniform=random.uniform)
+                if wait is not None and self.deadline is not None and self._monotonic() + wait >= self.deadline:
+                    wait = None
+                if wait is None:
+                    self._fail(outcome)
+                LOG.info("component=xai event=RATE_LIMIT_RETRY agent=%s attempt=%s wait_seconds=%s",
+                         _agent_token(agent_name), attempt + 1, f"{wait:.3f}")
+                self._sleep_reserved(wait)
+                attempt += 1
+                continue
+            delay, stop = self._legacy_delay(attempt, outcome)
+            if stop or attempt > self.retries:
+                self._fail(outcome)
+            wait = delay + random.uniform(0, 0.1)
+            if not xai_rate_limit.wait_fits(self._monotonic(), call_started, wait, self.timeout):
+                self._fail(outcome)
+            self._sleep_reserved(wait)
+            attempt += 1
 
     def generate(self, request):
         started = time.perf_counter()
@@ -243,7 +354,7 @@ class XAIProvider(AIProvider):
         }
         if "tools" in payload:
             raise AssertionError("xAI trading calls do not enable tools")
-        raw = self._post(payload)
+        raw = self._post(payload, request.agent_name)
         return self._parse(raw, request)
 
     def _parse(self, raw, request):

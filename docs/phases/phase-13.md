@@ -8,6 +8,8 @@ Demo iniciado con GO del owner sobre la DB actual (sin DB nueva ni sealed genesi
 
 2026-11-07, DEC-XAI-1, solo preparado y apilado encima: xAI no cambia el proveedor en marcha. El owner puede pedir el paso desde el panel; el runner lo anota solo con la cuenta plana, y el arranque no lo hace. Ver `docs/provider_migration.md`.
 
+2026-11-11, DEC-XAI-429-1, solo preparado: `XAI_RATE_LIMIT_V2` apagado. Con `1`, las llamadas a xAI van de una en una y un HTTP 429 espera (backoff y `Retry-After`) dentro de 90 s por llamada y 180 s por ciclo, contando el HTTP; si no cabe otro intento, el ciclo sigue en fallo cerrado. Sin cambio de estrategia, riesgo, órdenes, cadencia ni Render.
+
 PR #39, gold options 1 y 4 autorizadas por el owner (2026-10-13): fix de continuidad macro en refrescos
 de 6 h, sin backdating de fetched_at/known_at; auditoría SQLite por ciclo, acotada a 30 días / 10 000 filas,
 con gates y estados 1h/15m/5m, y logging INFO a stdout. Alineación y lógica de estrategia intactas.
