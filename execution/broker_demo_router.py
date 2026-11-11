@@ -33,6 +33,14 @@ cancel it first. ``AI_FLOOR_ENTRY_OFFSET_MODE=5pips`` uses a 5-pip offset; ``mar
 order. Any other value, including unset, keeps 12.5 pips, 24 hours and no cancel/replace. Both are read every cycle.
 A filled position is never cancelled by these rules. A non-practice broker cannot enable them.
 
+``AI_FLOOR_EMA_ONLY`` (exact ``1``, practice only, read every cycle) turns the engine/plan route off.
+``on_cycle`` journals ``NOT_ROUTED`` with reason ``ema_only`` and does not submit a pullback LIMIT or a market
+order. A resting unfilled pullback LIMIT is cancelled once through ``_cancel_limit`` (reason ``EMA_ONLY``), then
+the broker book is read again, even when ``AI_FLOOR_LIMIT_MANAGEMENT_V2`` is off. A fill left by that cancel is
+recorded and left open. An open position and an EMA trade are not cancelled. Reconcile, the EMA cross, and
+management (trade duration, Friday pre-flatten, the daily loss limit, emergency close) are unchanged. Unset and
+any other value leave the route as it is. A non-practice broker cannot enable this flag.
+
 Dry-run (``AI_FLOOR_BROKER_DEMO_DRY_RUN=1``, opt-in) records the exact order JSON (event DRY_RUN) and never POSTs/PUTs;
 it may read summary/pricing/openTrades. ``manage`` applies the trade-duration rule (execution/trade_duration.py) to
 LIVE routed trades (DEC-HOLD-WEEK-1: max hold one week, Friday 16:45 NY flatten, no entries until the Sunday
@@ -126,11 +134,18 @@ FRIDAY_PREFLATTEN = "FRIDAY_PREFLATTEN"
 # direction (every entry gate still applies). ON by default whenever routing is ON; ``AI_FLOOR_DEMO_REVERSAL=0`` = OFF.
 REVERSAL = "REVERSAL_IN_PROFIT"
 REVERSAL_ENV = "AI_FLOOR_DEMO_REVERSAL"
+# Exact ``1`` disables the engine/plan route. Unset and any other value keep it. Read on every cycle.
+EMA_ONLY_ENV = "AI_FLOOR_EMA_ONLY"
 
 
 def reversal_flag(env):
     """Demo-profile default ON; only the exact value ``0`` turns the reversal off."""
     return (env or {}).get(REVERSAL_ENV) != "0"
+
+
+def ema_only_flag(env):
+    """Exact ``1`` disables the engine/plan route. Unset, ``0``, ``true`` and any other value keep it."""
+    return (env or {}).get(EMA_ONLY_ENV) == "1"
 FRIDAY_ALERT = "FRIDAY_FLATTEN_FAILED"
 OUTBOX_CLAIM_GRACE = timedelta(minutes=10)  # a CLAIMED alert this old had a crash mid-delivery -> UNKNOWN, not resent
 # DEC-FILL-ANCHOR-1: max |expected fill - planned entry| (pips) for translating entry / SL / TP onto the fill.
@@ -296,7 +311,7 @@ _ACTION_LOG_OK = frozenset({"CLOSED", CLOSED_AT_BROKER, "BREAKEVEN", "PARTIAL_CL
 # reject text, unexpected exception names, ...) -> OTHER, so a reason can never leak an id or token.
 _LOG_REASONS = frozenset({*td.CLOSE_REASONS, SL_TP_OR_EXTERNAL, "DAILY_LOSS", "DRAWDOWN", FRIDAY_PREFLATTEN, REVERSAL,
                           MANUAL_CLOSE, "LIMIT_EXPIRED", "LIMIT_CANCELLED", "WEEKEND_ENTRY_BLOCK", "0.5R", "1R",
-                          "TRAIL", "BE", "FAVORABLE_15_PIPS", "SAME_SIDE_REPLACE", "EMA_PRIORITY",
+                          "TRAIL", "BE", "FAVORABLE_15_PIPS", "SAME_SIDE_REPLACE", "EMA_PRIORITY", "EMA_ONLY",
                           EMERGENCY_ACTIVE, EMERGENCY_BUTTON, "BrokerAuthError", "BrokerRateLimited",
                           "BrokerGuardError", "BrokerMalformedResponse", "no_open_position"})
 
@@ -518,6 +533,10 @@ class BrokerDemoRouter:
             return "legacy"
         return entry_offset_mode(self._env_map())
 
+    def _ema_only(self):
+        """Engine route off only on this practice router. The env is read again on every call."""
+        return self._practice_v2_allowed() and ema_only_flag(self._env_map())
+
     def _flag_detail(self):
         return {"limit_management_v2": "1" if self._limit_management_v2() else "0",
                 "entry_offset_mode": self._entry_offset_mode()}
@@ -645,6 +664,48 @@ class BrokerDemoRouter:
             return None
         return row
 
+    def _unfilled_pullback_limits(self, report):
+        """Resting pullback LIMIT rows the broker has not filled.
+
+        An OPEN row, an EMA trade, and a limit whose client id is already an open trade are not returned.
+        """
+        if report is None:
+            return []
+        filled = {getattr(trade, "client_ext_id", None) for trade in report}
+        rows = []
+        for row in self._store.trades((PENDING_LIMIT,)):
+            if row.get("action_status"):
+                continue
+            if (row.get("order_kind") != "LIMIT" or row.get("strategy") != STRATEGY
+                    or row.get("symbol") != SYMBOL):
+                continue
+            try:
+                ext = client_extension_id(row["client_id"])
+            except (TypeError, ValueError):
+                continue
+            if ext in filled:
+                continue
+            rows.append(row)
+        return rows
+
+    def _cancel_ema_only_limits(self, report):
+        """Cancel each resting pullback LIMIT once. Never a fill and never an EMA row.
+
+        The broker is re-read after the cancel even when limit-management v2 is off. A fill that the
+        re-read finds is recorded and left open. A dry-run does not cancel a live order.
+        """
+        if not self._ema_only() or self.dry_run:
+            return
+        for row in self._unfilled_pullback_limits(report):
+            outcome = self._cancel_limit(row, "EMA_ONLY")
+            self._last_manage[row["client_id"]] = outcome
+            book = self._read_broker_book(row.get("symbol") or SYMBOL)
+            if book is not None:
+                self._adopt_cancel_fill(book[0])
+            if outcome != "LIMIT_CANCELLED":
+                LOG.warning("component=broker_demo event=%s reason=EMA_ONLY order_id=%s",
+                            _log_token(outcome), _mask_id(row.get("order_id")))
+
     # -- routing ---------------------------------------------------------------------------------------------------
     def on_cycle(self, context, status, at, h1_bars=None, m15_bars=None, h1_closes=None):
         """Called post-cycle by the runtime. Returns ``(outcome, reason)``; never changes the paper cycle.
@@ -721,6 +782,8 @@ class BrokerDemoRouter:
             return self._refuse(client_id, "provider_transition_pending")
         if self._store.trade(client_id) is not None:
             return "ALREADY_ROUTED", client_id
+        if self._ema_only():  # no pullback LIMIT and no market order; EMA and management are outside this method
+            return self._refuse(client_id, "ema_only")
         if self._friday_minutes is not None and fc.friday_window(at, self._friday_minutes) != fc.OPEN:
             return self._refuse(client_id, "friday_close_window")  # dry-run too; no network
         if td.entries_blocked(at):  # DEC-HOLD-WEEK-1: Friday 16:45 NY -> Sunday 17:00 NY, whatever the flag
@@ -1486,6 +1549,7 @@ class BrokerDemoRouter:
         report = self.reconcile() if report is None else report
         if report is None or self.dry_run:
             return report
+        self._cancel_ema_only_limits(report)
         self._expire_limits(at)
         if self._limit_management_v2():
             self._cancel_favorable_limits()
@@ -2359,6 +2423,8 @@ def _build(env, *, registry, transport, clock, sleep, broker_clock):
     LOG.info("component=broker_demo event=REVERSAL_%s", "ON" if router.reversal else "OFF")
     LOG.info("component=broker_demo event=EURUSD_PULLBACK_%s", "ON" if router.pullback else "OFF")
     LOG.info("component=broker_demo event=EURUSD_EMA_CROSS_%s", "ON" if router.ema_cross else "OFF")
-    LOG.info("component=broker_demo event=LIMIT_FLAGS limit_management_v2=%s entry_offset_mode=%s",
-             "1" if limit_management_v2(env) else "0", entry_offset_mode(env))
+    LOG.info("component=broker_demo event=LIMIT_FLAGS limit_management_v2=%s entry_offset_mode=%s ema_only=%s",
+             "1" if limit_management_v2(env) else "0", entry_offset_mode(env),
+             "1" if router._ema_only() else "0")
+    LOG.info("component=broker_demo event=EMA_ONLY_%s", "ON" if router._ema_only() else "OFF")
     return router

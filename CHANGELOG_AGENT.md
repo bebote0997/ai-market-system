@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-11 — DEC-EMA-ONLY-1: solo EMA en practice, apagado por defecto
+
+- `AI_FLOOR_EMA_ONLY` exacto `1` (cuenta OANDA practice, leído en cada ciclo): la ruta del motor en el router demo no envía ni la LIMIT de retroceso ni la orden de mercado. El diario anota `NOT_ROUTED` con motivo `ema_only`.
+- Si el libro tiene una LIMIT de retroceso sin fill, se cancela una vez por `_cancel_limit` (motivo `EMA_ONLY`) y se vuelven a leer operaciones, posiciones y órdenes pendientes. También con `AI_FLOOR_LIMIT_MANAGEMENT_V2` apagado. Si la cancelación dejó un fill, se anota y se deja abierto. Una posición ya llena y una operación EMA no se cancelan.
+- Al arrancar, `LIMIT_FLAGS` incluye `ema_only=0|1` y una línea `EMA_ONLY_ON` o `EMA_ONLY_OFF`. Un broker que no sea practice, o `REAL_EXECUTION_ENABLED`, no puede encender el flag. Sin la clave, o con cualquier otro valor, el ciclo queda como hoy.
+- EMA, conciliación, duración, viernes, límite de pérdida diaria y cierre de emergencia no cambian. El flag no enciende EMA: sigue haciendo falta `AI_FLOOR_EMA_CROSS=1`. Sin merge, sin deploy, sin cambio de `render.yaml`. REAL sigue bloqueado.
+
 ## 2026-11-11 — xAI HTTP 429: reintento serializado, apagado por defecto (DEC-XAI-429-1)
 
 - El ciclo llama a los especialistas uno tras otro. No hay un pool de hilos. El fallo visto es una ráfaga, y `Retry-After` por encima de 15 s no espera: la llamada se corta. Sin cabecera, la espera es ~0,4 s y luego ~0,8 s (`XAI_RETRIES=2`).
