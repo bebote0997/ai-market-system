@@ -28,7 +28,7 @@ REAL_CONFIRM = "EXNESS_REAL_AUTHORIZED"
 COMMISSION_ENV = "AI_FLOOR_EXNESS_COMMISSION_PER_LOT_SIDE"
 STALE_ENV = "AI_FLOOR_EXNESS_QUOTE_STALE_SECONDS"
 DEFAULT_STALE = 5
-ALLOWED = ("EURUSD",)
+ALLOWED = ("EURUSD", "GBPUSD", "USDJPY")
 _SECRET_ENV = ("EXN_PRIVATE_KEY", "EXN_API_KEY", "OANDA_PRACTICE_TOKEN", "OANDA_LIVE_TOKEN")
 
 
@@ -299,6 +299,82 @@ class ExnessBroker:
                  plan.symbol, format(plan.quantity, "f"), format(spread, "f"), format(commission, "f"), format(cost, "f"))
         command = Command(plan.client_id, kind, plan.symbol, plan.side, plan.quantity, price, stop, target)
         return self._send(command, plan.client_id, SubmitResult)
+
+    def open_market(self, *, symbol, side, quantity, entry, stop, client_id, source_run_id, risk_fraction=RISK_FRACTION_CAP,
+                    target=None):
+        """Market order from the session-combo strategy. ``target`` None means no take-profit (the fix fade).
+
+        The pending-order JSON type is still undocumented, so stop entries are not sent as broker stops.
+        """
+        del source_run_id
+        if not isinstance(client_id, str) or not client_id or side not in ("LONG", "SHORT"):
+            return self._refuse(client_id if isinstance(client_id, str) else "", "plan_invalid")
+        refused = self._readonly(client_id)
+        if refused is not None:
+            return refused
+        fraction = _fraction(risk_fraction if isinstance(risk_fraction, Decimal) else None)
+        if fraction is None or not isinstance(quantity, Decimal) or not isinstance(entry, Decimal) or not isinstance(stop, Decimal):
+            return self._refuse(client_id, "sizing_invalid")
+        try:
+            now = self._now()
+            book = self._read()
+        except BrokerUnavailable as exc:
+            return SubmitResult(UNKNOWN, client_id, reason=f"read_failed:{exc}")
+        if symbol not in ALLOWED or symbol not in book.instruments:
+            return self._refuse(client_id, "symbol_not_supported" if symbol not in ALLOWED else "symbol_unresolved")
+        if not book.quotes.fresh(now, _stale_seconds(self._env)):
+            self.note_link(book)
+            return self._refuse(client_id, "quote_stale")
+        try:
+            again = self._read()
+        except BrokerUnavailable:
+            return self._refuse(client_id, "reread_failed")
+        if again.token() != book.token():
+            return self._refuse(client_id, "reread_changed")
+        owned = [row.ticket for row in again.positions if row.comment == client_id]
+        if owned:
+            return SubmitResult(ACCEPTED, client_id, broker_ref=owned[0], reason="already_submitted")
+        if again.positions or again.orders:
+            return self._refuse(client_id, "position_already_open")
+        if entries_blocked(now):
+            return self._refuse(client_id, "friday_close_window")
+        minutes = minutes_from_env(self._env)
+        if minutes is not None and friday_window(now, minutes) != OPEN:
+            return self._refuse(client_id, "friday_close_window")
+        brake = self._brakes.evaluate(again.balance.equity if again.balance else None,
+                                      again.balance.currency if again.balance else None, now)
+        if not brake.entry_allowed:
+            if brake.flatten:
+                self._alert("EXNESS_BRAKE_HALT", {"reason": brake.reason})
+            return self._refuse(client_id, brake.reason or "brake_halt")
+        spec = again.specs.get(symbol)
+        if spec is None or again.balance is None or again.quotes.bid is None:
+            return self._refuse(client_id, "sizing_invalid")
+        lots, why = size_lots(again.balance.balance, fraction, entry, stop, spec)
+        if why or quantity > lots or not on_step(quantity, spec):
+            return self._refuse(client_id, why or ("above_risk" if quantity > lots else "volume_step"))
+        try:
+            stop_r = _round(stop, spec.point_digits)
+            entry_r = _round(entry, spec.point_digits)
+            target_r = None if target is None else _round(target, spec.point_digits)
+        except (ArithmeticError, ValueError):
+            return self._refuse(client_id, "price_rounding_breaks_geometry")
+        if side == "LONG" and not stop_r < entry_r:
+            return self._refuse(client_id, "price_rounding_breaks_geometry")
+        if side == "SHORT" and not stop_r > entry_r:
+            return self._refuse(client_id, "price_rounding_breaks_geometry")
+        if target_r is not None and not (stop_r < entry_r < target_r if side == "LONG" else target_r < entry_r < stop_r):
+            return self._refuse(client_id, "price_rounding_breaks_geometry")
+        spread = spread_cost(again.quotes.bid, again.quotes.ask, quantity, spec)
+        commission = _commission(self._env)
+        if spread is None or commission is None:
+            return self._refuse(client_id, "cost_unknown")
+        price = again.quotes.ask if side == "LONG" else again.quotes.bid
+        LOG.info("component=exness event=PRETRADE_COST symbol=%s lots=%s spread_cost=%s commission=%s expected_cost=%s",
+                 symbol, format(quantity, "f"), format(spread, "f"), format(commission, "f"),
+                 format(spread + commission * quantity * 2, "f"))
+        return self._send(Command(client_id, "MARKET", symbol, side, quantity, price, stop_r, target_r), client_id,
+                          SubmitResult)
 
     def _send(self, command, client_id, result_type):
         try:

@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-11 (rama `cursor/exness-api-broker-76d4`). Adaptador Exness Trader API preparado y apagado (`AI_FLOOR_BROKER=oanda` por defecto). Órdenes reales solo con `AI_FLOOR_EXNESS_REAL_EXECUTION=1` y `AI_FLOOR_EXNESS_REAL_CONFIRM=EXNESS_REAL_AUTHORIZED`. Sin merge, sin deploy, sin cambio de Render. `REAL_EXECUTION_ENABLED` sigue False. Ver `docs/exness_api.md`._
+_Última actualización: 2026-11-11 (rama `cursor/session-combo-exness-76d4`, apilada sobre el adaptador Exness). Estrategia London/NY preparada y apagada: `AI_FLOOR_SESSION_COMBO` exacto `1` y `AI_FLOOR_BROKER=exness`. La bandera sola no envía órdenes. Siguen haciendo falta las dos claves de ejecución real. Sin merge, sin deploy, sin Render. Ver `docs/session_combo.md`._
+
+_Anterior: 2026-11-11 (rama `cursor/exness-api-broker-76d4`). Adaptador Exness Trader API preparado y apagado (`AI_FLOOR_BROKER=oanda` por defecto). Órdenes reales solo con `AI_FLOOR_EXNESS_REAL_EXECUTION=1` y `AI_FLOOR_EXNESS_REAL_CONFIRM=EXNESS_REAL_AUTHORIZED`. Sin merge, sin deploy, sin cambio de Render. `REAL_EXECUTION_ENABLED` sigue False. Ver `docs/exness_api.md`._
 
 _Anterior: 2026-11-11 (rama `cursor/ema-only-flag-92df`, DEC-EMA-ONLY-1, preparado y apagado). `AI_FLOOR_EMA_ONLY` exacto `1` en OANDA practice: el router no envía órdenes del motor (ni LIMIT de retroceso ni mercado) y anota `NOT_ROUTED` / `ema_only`. Una LIMIT de retroceso sin fill se cancela una vez (`EMA_ONLY`) y se relee el libro, aunque `AI_FLOOR_LIMIT_MANAGEMENT_V2` esté apagado. Una posición llena y una operación EMA no se cancelan. EMA, conciliación y la gestión siguen igual. Sin la clave, el ciclo no cambia. Sin merge, sin deploy, sin cambio de `render.yaml`. REAL sigue bloqueado._
 

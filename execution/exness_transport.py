@@ -214,11 +214,14 @@ class RestExnessTransport:
         names = listed.get("instruments") if isinstance(listed.get("instruments"), list) else []
         instruments = tuple(item for item in names if isinstance(item, str))
         specs = {}
-        if "EURUSD" in instruments:
-            payload = self._client.get_json(f"/v1/configuration/accounts/{account_id}/instruments/EURUSD/conditions")
+        for name in instruments:
+            if name not in ("EURUSD", "GBPUSD", "USDJPY"):
+                continue
+            payload = self._client.get_json(
+                f"/v1/configuration/accounts/{account_id}/instruments/{name}/conditions")
             spec, _reason = spec_from_conditions(payload, None if money is None else money.currency)
             if spec is not None:
-                specs["EURUSD"] = spec
+                specs[name] = spec
         positions, orders = [], []
         for item in snapshot.get("positions") or []:
             if not isinstance(item, dict) or _side(item.get("side")) is None:
@@ -247,8 +250,11 @@ class RestExnessTransport:
         account = self._client.account_id
         side = "buy" if command.side == "LONG" else "sell" if command.side == "SHORT" else None
         if command.kind == "MARKET":
-            body = {"instrument": command.symbol, "side": side, "volume": format(command.volume, "f"),
-                    "stop_loss_price": format(command.stop, "f"), "take_profit_price": format(command.target, "f")}
+            body = {"instrument": command.symbol, "side": side, "volume": format(command.volume, "f")}
+            if command.stop is not None:
+                body["stop_loss_price"] = format(command.stop, "f")
+            if command.target is not None:
+                body["take_profit_price"] = format(command.target, "f")
             path = f"/v1/trading/accounts/{account}/positions"
             method = "POST"
         elif command.kind == "LIMIT":

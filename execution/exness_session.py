@@ -11,6 +11,7 @@ from execution.broker_port import APPROVED, OrderPlan, RiskApproval
 from execution.exness_broker import broker_from_env
 from execution.exness_sizing import RISK_FRACTION_CAP
 from execution.friday_close import OPEN, friday_window, minutes_from_env
+from execution.session_combo import SessionCombo, combo_enabled
 from execution.trade_duration import entries_blocked
 
 
@@ -39,6 +40,9 @@ class ExnessSession:
         self._env = env
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self.on_alert = None
+        self._combo = SessionCombo(broker) if combo_enabled(env) else None
+        logging.getLogger("ai_floor.session_combo").info(
+            "component=session_combo event=%s", "SESSION_COMBO_ON" if self._combo is not None else "SESSION_COMBO_OFF")
 
     @property
     def on_alert(self):
@@ -60,7 +64,7 @@ class ExnessSession:
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=exness event=ALERT_FAILED error_type=%s", type(exc).__name__)
 
-    def manage(self, at):
+    def manage(self, at, bars=None):
         try:
             fresh = self.broker.note_link()
             brake = self.broker.evaluate_brakes(at)
@@ -69,18 +73,29 @@ class ExnessSession:
             minutes = minutes_from_env(self._env)
             friday = entries_blocked(at) or (minutes is not None and friday_window(at, minutes) != OPEN)
             if not brake.flatten and not friday:
+                self._run_combo(at, bars)
                 return {}
             if not fresh:
+                self._run_combo(at, bars)
                 return {"_": "quote_stale"}
             results = {}
             for position in self.broker.open_trades():
                 closed = self.broker.close_market(position.ticket, reason=brake.reason or "friday_close",
                                                    client_id=f"flatten-{position.ticket}")
                 results[position.ticket] = closed.status
+            self._run_combo(at, bars)
             return results
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=exness event=MANAGE_FAILED error_type=%s", type(exc).__name__)
             return {"_": type(exc).__name__}
+
+    def _run_combo(self, at, bars):
+        if self._combo is None:
+            return
+        try:
+            self._combo.tick(at, bars or ())
+        except Exception as exc:  # noqa: BLE001 - the next tick retries; paper is unchanged
+            LOG.warning("component=session_combo event=TICK_FAILED error_type=%s", type(exc).__name__)
 
     def _candidate(self, context, status):
         if status != PLAN_READY or not isinstance(context, dict):

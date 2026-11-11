@@ -8,6 +8,8 @@ Demo iniciado con GO del owner sobre la DB actual (sin DB nueva ni sealed genesi
 
 2026-11-07, DEC-XAI-1, solo preparado y apilado encima: xAI no cambia el proveedor en marcha. El owner puede pedir el paso desde el panel; el runner lo anota solo con la cuenta plana, y el arranque no lo hace. Ver `docs/provider_migration.md`.
 
+2026-11-11, DEC-SESSION-COMBO-1, solo preparado y apilado sobre el adaptador Exness: rango asiático USDJPY y fade del fix de Londres. `AI_FLOOR_SESSION_COMBO` apagado. No envía órdenes sin las dos claves reales. Ver `docs/session_combo.md`.
+
 2026-11-11, DEC-EXNESS-1, solo preparado: adaptador de la API oficial de Exness, apagado. No sustituye al demo OANDA. Ver `docs/exness_api.md`.
 
 2026-11-11, DEC-EMA-ONLY-1, solo preparado: `AI_FLOOR_EMA_ONLY` apagado. Con `1` en practice el router no envía el plan del motor y cancela una LIMIT de retroceso sin fill (`EMA_ONLY`). EMA y la gestión no cambian. Sin merge ni deploy.

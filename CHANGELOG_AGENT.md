@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-11 — DEC-SESSION-COMBO-1: rango de Londres y fade del fix, apagado
+
+- `AI_FLOOR_SESSION_COMBO` exacto `1` y solo con `AI_FLOOR_BROKER=exness`. La bandera no envía órdenes: siguen las dos claves de ejecución real.
+- USDJPY: rango M5 19:00–02:00 Nueva York, stops emulados (el campo JSON de la orden stop no está documentado), salto si una vela cruza los dos lados, cancelación a las 05:00, SL al otro lado, TP 2R, salida a las 11:00.
+- GBPUSD y después EURUSD: movimiento 15:45–16:00 Londres, entrada en contra si hay 15 pips, SL 30, sin TP, salida a los 30 minutos. Una sola posición.
+- Riesgo el menor entre 1 % y 5 USD; el lote mínimo que pase el tope se salta. Frenos de 10/50 USD y tick viejo sin cambios.
+
 ## 2026-11-11 — DEC-EXNESS-1: adaptador Exness API, apagado
 
 - El broker por defecto sigue siendo OANDA. `AI_FLOOR_BROKER=exness` construye `ExnessBroker` y no el router de práctica.
