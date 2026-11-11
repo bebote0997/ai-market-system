@@ -7,15 +7,12 @@ between calls (``AI_FLOOR_EXNESS_MIN_INTERVAL_MS``, default 100). TODO: parse
 ``GET /v1/configuration/accounts/{account_id}/limits`` once its field names are confirmed.
 """
 from datetime import datetime, timezone
-from decimal import Decimal
 import json
-import logging
 from urllib.parse import urlsplit
 
 from execution.exness_sign import headers
 
 
-LOG = logging.getLogger("ai_floor.exness")
 MIN_INTERVAL_ENV = "AI_FLOOR_EXNESS_MIN_INTERVAL_MS"
 DEFAULT_MIN_INTERVAL_MS = 100
 

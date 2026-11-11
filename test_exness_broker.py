@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import unittest
 
-from execution.broker_port import ACCEPTED, APPROVED, REJECTED, UNKNOWN, BrokerBalance, OrderPlan, RiskApproval
+from execution.broker_port import ACCEPTED, APPROVED, BrokerBalance, OrderPlan, RiskApproval
 from execution.exness_brakes import RESUME_PHRASE, ExnessBrakes
 from execution.exness_broker import REAL_CONFIRM, ExnessBroker, broker_selected, real_execution_armed
 from execution.exness_client import ExnessClient
@@ -13,7 +13,7 @@ from execution.exness_session import ExnessSession
 from execution.exness_sign import EMPTY_BODY_HASH, body_hash, payload_bytes
 from execution.exness_sizing import size_lots, spec_from_conditions
 from execution.exness_stream import backoff_seconds, subscribe_ticks
-from execution.exness_transport import Command, FakeExnessTransport, Position
+from execution.exness_transport import FakeExnessTransport, Position
 from runtime.demo_runner import REAL_EXECUTION_ENABLED
 
 

@@ -15,7 +15,6 @@ from execution.broker_port import (ACCEPTED, REJECTED, UNKNOWN, BrokerGuardError
 from execution.dxtrade_broker import real_execution_enabled
 from execution.exness_brakes import ExnessBrakes
 from execution.exness_sizing import RISK_FRACTION_CAP, on_step, size_lots, spread_cost
-from execution.exness_stream import QuoteBook
 from execution.exness_transport import Command
 from execution.friday_close import OPEN, friday_window, minutes_from_env
 from execution.trade_duration import entries_blocked
