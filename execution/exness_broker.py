@@ -188,12 +188,16 @@ class ExnessBroker:
 
     def get_quote(self, symbol="EURUSD"):
         book = self._read()
-        if symbol not in book.instruments or book.quotes.bid is None:
+        slot = book.quotes.quote(symbol)
+        if symbol not in book.instruments or slot is None or slot.bid is None:
             raise BrokerUnavailable("NO_DATA")
-        return self.note_link(book), book.quotes.bid, book.quotes.ask
+        return self.note_link(book), slot.bid, slot.ask
 
     def candles(self, symbol="EURUSD", timeframe="5M"):
-        """TODO: the candle history rules are documented, the REST path is not on the pages read for this change."""
+        """The path is ``GET /v1/market-data/accounts/{id}/candles``. The response schema is not published.
+
+        ``execution.exness_m5.parse_candle_payload`` accepts only the provisional fixture. Anything else is a gap.
+        """
         del symbol, timeframe
         return None
 
@@ -224,7 +228,7 @@ class ExnessBroker:
     def _entry_blocked(self, plan, book, now):
         if plan.symbol not in ALLOWED or plan.symbol not in book.instruments:
             return "symbol_not_supported" if plan.symbol not in ALLOWED else "symbol_unresolved"
-        if not book.quotes.fresh(now, _stale_seconds(self._env)):
+        if not book.quotes.fresh(now, _stale_seconds(self._env), plan.symbol):
             self.note_link(book)
             return "quote_stale"
         try:
@@ -280,8 +284,9 @@ class ExnessBroker:
             return SubmitResult(ACCEPTED, plan.client_id, broker_ref=reason[1], reason="already_submitted")
         if reason:
             return self._refuse(plan.client_id, reason)
+        slot = book.quotes.quote(plan.symbol)
         spec = book.specs.get(plan.symbol)
-        if spec is None or book.balance is None or book.quotes.bid is None:
+        if spec is None or book.balance is None or slot is None or slot.bid is None:
             return self._refuse(plan.client_id, "sizing_invalid")
         lots, why = size_lots(book.balance.balance, fraction, plan.planned_entry, plan.stop, spec)
         if why or plan.quantity > lots or not on_step(plan.quantity, spec):
@@ -296,12 +301,12 @@ class ExnessBroker:
         price = entry
         if kind == "LIMIT":
             price = _round(limit_price, spec.point_digits)
-            if price != entry or (plan.side == "LONG" and not price < book.quotes.ask) or (
-                    plan.side == "SHORT" and not price > book.quotes.bid):
+            if price != entry or (plan.side == "LONG" and not price < slot.ask) or (
+                    plan.side == "SHORT" and not price > slot.bid):
                 return self._refuse(plan.client_id, "limit_price_invalid")
         else:
-            price = book.quotes.ask if plan.side == "LONG" else book.quotes.bid
-        spread = spread_cost(book.quotes.bid, book.quotes.ask, plan.quantity, spec)
+            price = slot.ask if plan.side == "LONG" else slot.bid
+        spread = spread_cost(slot.bid, slot.ask, plan.quantity, spec)
         commission = _commission(self._env)
         if spread is None or commission is None:
             return self._refuse(plan.client_id, "cost_unknown")
@@ -333,7 +338,7 @@ class ExnessBroker:
             return SubmitResult(UNKNOWN, client_id, reason=f"read_failed:{exc}")
         if symbol not in ALLOWED or symbol not in book.instruments:
             return self._refuse(client_id, "symbol_not_supported" if symbol not in ALLOWED else "symbol_unresolved")
-        if not book.quotes.fresh(now, _stale_seconds(self._env)):
+        if not book.quotes.fresh(now, _stale_seconds(self._env), symbol):
             self.note_link(book)
             return self._refuse(client_id, "quote_stale")
         try:
@@ -342,7 +347,7 @@ class ExnessBroker:
             return self._refuse(client_id, "reread_failed")
         if _exposure(again) != _exposure(book):
             return self._refuse(client_id, "reread_changed")
-        if not again.quotes.fresh(now, _stale_seconds(self._env)):
+        if not again.quotes.fresh(now, _stale_seconds(self._env), symbol):
             self.note_link(again)
             return self._refuse(client_id, "quote_stale")
         owned = [row.ticket for row in again.positions if row.comment == client_id]
@@ -361,8 +366,9 @@ class ExnessBroker:
             if brake.flatten:
                 self._alert("EXNESS_BRAKE_HALT", {"reason": brake.reason})
             return self._refuse(client_id, brake.reason or "brake_halt")
+        slot = again.quotes.quote(symbol)
         spec = again.specs.get(symbol)
-        price = again.quotes.ask if side == "LONG" else again.quotes.bid
+        price = None if slot is None else (slot.ask if side == "LONG" else slot.bid)
         if spec is None or again.balance is None or price is None:
             return self._refuse(client_id, "sizing_invalid")
         allowed, why = capped_lots(again.balance.equity, again.balance.balance, price, stop, spec, fraction)
@@ -384,11 +390,10 @@ class ExnessBroker:
             return self._refuse(client_id, "price_rounding_breaks_geometry")
         if target_r is not None and not (stop_r < price_r < target_r if side == "LONG" else target_r < price_r < stop_r):
             return self._refuse(client_id, "price_rounding_breaks_geometry")
-        spread = spread_cost(again.quotes.bid, again.quotes.ask, quantity, spec)
+        spread = spread_cost(slot.bid, slot.ask, quantity, spec)
         commission = _commission(self._env)
         if spread is None or commission is None:
             return self._refuse(client_id, "cost_unknown")
-        price = again.quotes.ask if side == "LONG" else again.quotes.bid
         LOG.info("component=exness event=PRETRADE_COST symbol=%s lots=%s spread_cost=%s commission=%s expected_cost=%s",
                  symbol, format(quantity, "f"), format(spread, "f"), format(commission, "f"),
                  format(spread + commission * quantity * 2, "f"))

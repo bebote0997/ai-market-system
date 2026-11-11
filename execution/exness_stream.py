@@ -39,31 +39,76 @@ def backoff_seconds(attempt):
     return min(BACKOFF_CAP_SECONDS, 2 ** min(attempt, 5))
 
 
-class QuoteBook:
-    """Last tick. ``connected`` is false the moment the socket drops, before the backoff wait."""
-
-    def __init__(self):
-        self.connected = False
-        self.bid = None
-        self.ask = None
-        self.tick_at = None
-        self.disconnects = 0
-
-    def note_tick(self, bid, ask, at):
-        self.connected = True
+class _Quote:
+    def __init__(self, bid, ask, at):
         self.bid = bid
         self.ask = ask
         self.tick_at = at
 
+
+class QuoteBook:
+    """One bid/ask per symbol. ``connected`` is false the moment the socket drops.
+
+    A tick without a symbol stays on the unspecialized slot so a single-instrument test still
+    resolves through ``quote(symbol)``. A named tick never overwrites another symbol.
+    """
+
+    def __init__(self):
+        self.connected = False
+        self.disconnects = 0
+        self._default = None
+        self._by_symbol = {}
+        self._last = None
+
+    def note_tick(self, bid, ask, at, symbol=None):
+        self.connected = True
+        slot = _Quote(bid, ask, at)
+        if symbol is None:
+            self._default = slot
+            self._last = None
+            return
+        self._by_symbol[symbol] = slot
+        self._last = symbol
+
+    def quote(self, symbol=None):
+        if symbol is not None and symbol in self._by_symbol:
+            return self._by_symbol[symbol]
+        if symbol is not None and self._default is not None and not self._by_symbol:
+            return self._default
+        if symbol is None and self._last is not None:
+            return self._by_symbol.get(self._last)
+        return self._default
+
+    @property
+    def bid(self):
+        slot = self.quote()
+        return None if slot is None else slot.bid
+
+    @property
+    def ask(self):
+        slot = self.quote()
+        return None if slot is None else slot.ask
+
+    @property
+    def tick_at(self):
+        slot = self.quote()
+        return None if slot is None else slot.tick_at
+
     def mark_disconnected(self):
         self.connected = False
-        self.tick_at = None
         self.disconnects += 1
+        if self._default is not None:
+            self._default.tick_at = None
+        for slot in self._by_symbol.values():
+            slot.tick_at = None
 
-    def fresh(self, now, stale_seconds):
-        if not self.connected or self.tick_at is None or not isinstance(stale_seconds, int) or stale_seconds < 1:
+    def fresh(self, now, stale_seconds, symbol=None):
+        if not self.connected or not isinstance(stale_seconds, int) or stale_seconds < 1:
             return False
-        age = (now - self.tick_at).total_seconds()
+        slot = self.quote(symbol)
+        if slot is None or slot.tick_at is None:
+            return False
+        age = (now - slot.tick_at).total_seconds()
         return 0 <= age <= stale_seconds
 
 

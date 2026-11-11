@@ -77,8 +77,8 @@ La firma en vivo usa el paquete `cryptography` (el ejemplo oficial de Python). N
 3. Nombre del campo de tipo en `POST /orders` (`limit` / `stop` / `sltp`). Se envía `order_type` y puede ser rechazado.
 4. Cierre parcial: no hay campo de volumen documentado en el DELETE de la posición. `close_units` se niega.
 5. Forma JSON de `GET .../limits`. Mientras tanto hay un hueco mínimo de 100 ms (`AI_FLOOR_EXNESS_MIN_INTERVAL_MS`) y un 429 bloquea el envío.
-6. Sobre del mensaje de tick (bid/ask). El libro acepta un tick empujado por el bucle; el parseo del frame real no está cerrado.
-7. Ruta REST de velas. `candles()` devuelve vacío.
+6. Sobre del mensaje de tick. La ruta `/ws/ticks` y el subscribe `id` + `subscribe.event=ticks` + `instruments` están publicados. El JSON del frame no. `parse_tick_frame` solo acepta el fixture provisional de `execution/exness_m5.py`.
+7. `GET /v1/market-data/accounts/{id}/candles` existe (`from` inclusivo, `to` exclusivo, velas M5, precio bid). No publica las claves de query de instrumento, timeframe y tipo de precio, ni el objeto de la vela. `parse_candle_payload` solo acepta el fixture provisional. Si no encaja, el hueco se marca y el combo puede saltar el día.
 8. No hay host de sandbox. Un demo de MetaTrader no vale. No está escrito si una cuenta demo de la plataforma Exness puede crear claves.
 9. Nombres exactos de los permisos en el formulario (además de «Trading read access» y de la advertencia de no usar una Info API key para operar).
 10. `cryptography` sin pin en este repo.

@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-11 — DEC-EXNESS-M5-1: velas M5 de Exness, apagadas
+
+- `AI_FLOOR_EXNESS_M5_FEED` exacto `1` y solo con `AI_FLOOR_BROKER=exness`. No toca las dos claves de ejecución real.
+- Libro de precios por símbolo. Velas M5 de bid alineadas a 5 minutos UTC. Al cerrar el reloj, la vela de las 01:55 existe para la decisión de las 02:00.
+- Caída del socket: tick viejo al momento, reintento 1, 2, 4, 8, 16, 30 s, y relleno con `GET .../candles` si el JSON encaja con el fixture. Si no, hueco y el combo puede saltar el día.
+- El frame del tick y el objeto de la vela no están publicados. El parseo vive en `execution/exness_m5.py`. No hay librería WebSocket pinada, así que el socket real no se abre.
+
 ## 2026-11-11 — DEC-SESSION-COMBO-1: rango de Londres y fade del fix, apagado
 
 - `AI_FLOOR_SESSION_COMBO` exacto `1` y solo con `AI_FLOOR_BROKER=exness`. La bandera no envía órdenes: siguen las dos claves de ejecución real.

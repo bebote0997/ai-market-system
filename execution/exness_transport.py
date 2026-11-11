@@ -123,8 +123,8 @@ class FakeExnessTransport:
     def set_flag(self, key, value):
         self.flags.set_flag(key, value)
 
-    def push_tick(self, bid, ask, at=None):
-        self.quotes.note_tick(bid, ask, self._clock() if at is None else at)
+    def push_tick(self, bid, ask, at=None, symbol=None):
+        self.quotes.note_tick(bid, ask, self._clock() if at is None else at, symbol=symbol)
 
     def read_state(self):
         if self.fail == "read":

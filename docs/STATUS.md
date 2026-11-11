@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-11 (rama `cursor/session-combo-exness-76d4`, apilada sobre el adaptador Exness). Estrategia London/NY preparada y apagada: `AI_FLOOR_SESSION_COMBO` exacto `1` y `AI_FLOOR_BROKER=exness`. Entradas solo en la ventana viva, tamaño con el fill real, estado del día en el almacén de flags. La bandera sola no envía órdenes. Siguen haciendo falta las dos claves de ejecución real. Sin merge, sin deploy, sin Render. Ver `docs/session_combo.md`._
+_Última actualización: 2026-11-11 (rama `cursor/exness-m5-feed-76d4`, apilada sobre el session combo). Feed M5 de Exness apagado: `AI_FLOOR_EXNESS_M5_FEED` exacto `1` y `AI_FLOOR_BROKER=exness`. No arma la ejecución real. Ver `docs/exness_m5.md`._
+
+_Anterior: 2026-11-11 (rama `cursor/session-combo-exness-76d4`, apilada sobre el adaptador Exness). Estrategia London/NY preparada y apagada: `AI_FLOOR_SESSION_COMBO` exacto `1` y `AI_FLOOR_BROKER=exness`. Entradas solo en la ventana viva, tamaño con el fill real, estado del día en el almacén de flags. La bandera sola no envía órdenes. Siguen haciendo falta las dos claves de ejecución real. Sin merge, sin deploy, sin Render. Ver `docs/session_combo.md`._
 
 _Anterior: 2026-11-11 (rama `cursor/exness-api-broker-76d4`). Adaptador Exness Trader API preparado y apagado (`AI_FLOOR_BROKER=oanda` por defecto). Órdenes reales solo con `AI_FLOOR_EXNESS_REAL_EXECUTION=1` y `AI_FLOOR_EXNESS_REAL_CONFIRM=EXNESS_REAL_AUTHORIZED`. Sin merge, sin deploy, sin cambio de Render. `REAL_EXECUTION_ENABLED` sigue False. Ver `docs/exness_api.md`._
 

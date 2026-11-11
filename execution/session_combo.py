@@ -364,7 +364,7 @@ class SessionCombo:
             return
         if side is None:
             return
-        fill = self._fill_price(side)
+        fill = self._fill_price(LONDON_SYMBOL, side)
         if fill is None:
             _log("SIZE_SKIP", symbol=LONDON_SYMBOL, reason="quote_missing")
             return
@@ -408,7 +408,7 @@ class SessionCombo:
             side, move = outcome
             signaled = True
             _log("FIX_SIGNAL", symbol=symbol, side=side, move_pips=format(move, "f"))
-            fill = self._fill_price(side)
+            fill = self._fill_price(symbol, side)
             if fill is None:
                 _log("SIZE_SKIP", symbol=symbol, reason="quote_missing")
                 return
@@ -424,14 +424,15 @@ class SessionCombo:
         state["status"] = "done"
         self._put(key, state)
 
-    def _fill_price(self, side):
+    def _fill_price(self, symbol, side):
         try:
             book = self._broker._read()
         except Exception:  # noqa: BLE001
             return None
-        if book.quotes.bid is None or book.quotes.ask is None:
+        slot = book.quotes.quote(symbol)
+        if slot is None or slot.bid is None or slot.ask is None or slot.tick_at is None:
             return None
-        return book.quotes.ask if side == "LONG" else book.quotes.bid
+        return slot.ask if side == "LONG" else slot.bid
 
     def _commit(self, key, state, day, symbol, side, entry, stop, target, client_id, exit_at, opened_at):
         if state["status"] in _TERMINAL:
