@@ -39,6 +39,8 @@ class Config:
     relaxed_alignment: bool
     ema_be_r: Decimal | None
     ema_window: str            # "utc" or "et_7_11"
+    pullback_enabled: bool = True
+    ema_enabled: bool = True
 
 
 def legacy():
@@ -56,10 +58,12 @@ def ab_market():
                   False, True, False, None, "utc")
 
 
-def with_flags(base, *, name, relaxed=False, be=None, window=None):
+def with_flags(base, *, name, relaxed=False, be=None, window=None, pullback=None, ema=None):
     return replace(base, name=name, relaxed_alignment=relaxed,
                    ema_be_r=base.ema_be_r if be is None else be,
-                   ema_window=window or base.ema_window)
+                   ema_window=window or base.ema_window,
+                   pullback_enabled=base.pullback_enabled if pullback is None else pullback,
+                   ema_enabled=base.ema_enabled if ema is None else ema)
 
 
 @dataclass
@@ -439,8 +443,11 @@ def _pullback(book, signal, quote, at):
 
 def _decide(book, signal, quote, at, m15, h1):
     blocked = td.entries_blocked(at)
+    ema_on = book.config.ema_enabled
+    if not book.config.pullback_enabled:
+        signal = None
     ema_handled = False
-    if book.config.ema_priority and book.position is None and not blocked:
+    if ema_on and book.config.ema_priority and book.position is None and not blocked:
         ema_handled = True
         decision = _ema_step(book, at, m15, h1, flat=True)
         if decision.action == "ENTER" and decision.signal is not None:
@@ -450,10 +457,10 @@ def _decide(book, signal, quote, at, m15, h1):
             if _enter_ema(book, decision.signal, quote, at):
                 return
     if not blocked and signal is not None and _pullback(book, signal, quote, at):
-        if not ema_handled:
+        if ema_on and not ema_handled:
             _ema_step(book, at, m15, h1, flat=False)
         return
-    if ema_handled:
+    if not ema_on or ema_handled:
         return
     flat = book.position is None and book.limit is None and not blocked
     decision = _ema_step(book, at, m15, h1, flat=flat)

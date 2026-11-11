@@ -130,3 +130,19 @@ Partials run at the 15-minute slot on the close quote, and only if the resting s
 Structure and liquidity on the five-year loop are a numpy transcription of `agents/structure_agent.py` and `agents/liquidity_agent.py`. The scan calls the real scouts on every 200th aligned window and raises if a decision field differs. The validator, planner, risk sizer, pullback and EMA functions are the real ones on every slot.
 
 A+B's 4-hour life, 15-pip cancel, same-side replace and EMA priority are harness rules. A replace happens only when the new plan's `setup_id` differs; the same identity does not refresh the clock every 15 minutes. They are not edits to `execution/eurusd_pullback.py`.
+
+## Strategy split
+
+Each row is a separate book. EMA-only never places a pullback order. Pullback-only never arms an EMA cross. The two strategies no longer block each other, so these counts are not a partition of the combined table above (legacy combined was 674 trades; the two solo books are 256 + 522).
+
+| Config | Trades | Fill rate | Win rate | PF | E[R] | Max DD R | Max DD % | Lose streak | Trades/week | OOS PF |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| EMA only, legacy window | 256 | — | 40.2% | 1.29 | 0.166 | 15.33 | 3.0% | 10 | 0.97 | 1.48 |
+| EMA only, E (07:00–11:00 ET) | 336 | — | 38.1% | 1.18 | 0.109 | 19.21 | 3.8% | 12 | 1.27 | 1.23 |
+| EMA only, D (breakeven at +1.5R) | 257 | — | 38.1% | 1.26 | 0.146 | 14.43 | 2.9% | 10 | 0.98 | 1.43 |
+| Pullback only, legacy 24h / 12.5 pips | 522 | 70.5% | 41.6% | 0.70 | -0.155 | 83.97 | 20.9% | 9 | 1.98 | 0.73 |
+| Pullback only, A+B 5 pips | 714 | 56.0% | 41.5% | 0.76 | -0.123 | 101.09 | 24.9% | 13 | 2.71 | 0.71 |
+
+**Verdict.** The losses are the pullback book; EMA 10/21 alone is profitable, and neither E nor D improves it.
+
+The earlier box (PF about 1.35, 273 trades, max drawdown 12R, stop 25 / target 50, entry on the M15 cross with an H1 trend filter) and this EMA-only legacy row (PF 1.29, 256 trades, max drawdown 15.3R) are the same idea under two contracts. This harness follows the live module: stop 20 / target 40, the order goes out 15 minutes after the cross and only on that first slot, the long pays the ask and the short sells the bid, and Friday 16:45 New York plus the one-week hold can close the trade before the target. A stop five pips tighter is hit by noise a 25-pip stop survives, the delayed fill is a worse price, and the time exit cuts both winners and losers. Those three differences are the gap between 1.35 and 1.29, and between 12R and 15R of drawdown. The trade count is already in the same range, about one a week. `docs/ema_cross.md` records that the 1.35-style pass reused years that had already been used to choose the variant. The out-of-sample half of this run, from 2024-10-01, still prints PF 1.48, so the live EMA rules are not only an in-sample result. The combined book's PF of 0.87 is this EMA book being outnumbered by the pullback book (PF 0.70).

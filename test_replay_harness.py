@@ -194,6 +194,24 @@ class BookTests(unittest.TestCase):
         self.assertGreater(book.trades[0]["r"], -0.2)
         self.assertLess(book.trades[0]["r"], 0.2)
 
+    def test_one_strategy_can_be_turned_off(self):
+        arm, enter = CONFIRM, CONFIRM + timedelta(minutes=15)
+        bars = [
+            _bar(arm - timedelta(minutes=5), open_=Decimal("1.10020"), high=Decimal("1.10030"),
+                 low=Decimal("1.10000"), bid=Decimal("1.10010"), ask=Decimal("1.10030")),
+            _bar(enter - timedelta(minutes=5), open_=Decimal("1.10040"), high=Decimal("1.10050"),
+                 low=Decimal("1.10020"), bid=Decimal("1.10030"), ask=Decimal("1.10050")),
+        ]
+        ema_only = with_flags(ab_limit(), name="ema", pullback=False)
+        ema_book = self._run(ema_only, [_signal(arm)], bars, m15_long(), h1_up())
+        self.assertEqual(ema_book.placed, 0)
+        self.assertEqual(ema_book.trades[0]["strategy"], "ema")
+        pullback_only = with_flags(ab_limit(), name="pullback", ema=False)
+        pullback_book = self._run(pullback_only, [_signal(arm)], bars, m15_long(), h1_up())
+        self.assertEqual(pullback_book.cancelled_ema, 0)
+        self.assertEqual(pullback_book.placed, 1)
+        self.assertFalse(any(trade["strategy"] == "ema" for trade in pullback_book.trades))
+
     def test_et_window_accepts_the_hour_the_utc_window_misses_in_summer(self):
         # 14:30 UTC on 2 July 2026 is 10:30 EDT. Live UTC window is [12, 15), so 14:30 is inside it.
         # 15:30 UTC is 11:30 EDT, outside both. 10:30 UTC is 06:30 EDT (outside E) and outside [12, 15).

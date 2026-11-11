@@ -32,6 +32,11 @@ def configs():
         with_flags(market, name="5_abm_e", window="et_7_11"),
         with_flags(market, name="5_abm_c", relaxed=True),
         with_flags(market, name="5_abm_c_d_e", relaxed=True, be=be, window="et_7_11"),
+        with_flags(legacy(), name="a_ema_legacy", pullback=False),
+        with_flags(legacy(), name="a_ema_e", pullback=False, window="et_7_11"),
+        with_flags(legacy(), name="a_ema_d", pullback=False, be=be),
+        with_flags(legacy(), name="b_pullback_legacy", ema=False),
+        with_flags(base, name="b_pullback_ab5", ema=False),
     ]
 
 
@@ -132,6 +137,28 @@ def _report(results, meta, split, start, end):
         "They are not edits to `execution/eurusd_pullback.py`.",
         "",
     ]
+    split_names = ("a_ema_legacy", "a_ema_e", "a_ema_d", "b_pullback_legacy", "b_pullback_ab5")
+    if all(name in by_name for name in split_names):
+        ema_row = by_name["a_ema_legacy"]
+        lines += [
+            "## Strategy split",
+            "",
+            "Each row is its own book. EMA-only never places a pullback. Pullback-only never arms an EMA cross. "
+            "They no longer block each other, so the counts are not a partition of the combined table.",
+            "",
+            markdown_table([by_name[name] for name in split_names]),
+            "",
+            f"**Verdict.** The losses are the pullback book (PF {_num(by_name['b_pullback_legacy']['all']['pf'])} legacy, "
+            f"{_num(by_name['b_pullback_ab5']['all']['pf'])} at 5 pips). EMA 10/21 alone is PF {_num(ema_row['all']['pf'])} "
+            f"({ema_row['all']['trades']} trades, drawdown {_num(ema_row['all']['max_dd_r'])}R). "
+            "E and D do not improve that EMA book.",
+            "",
+            "The earlier box (PF about 1.35, 273 trades, max drawdown 12R, stop 25 / target 50, entry on the M15 cross) "
+            "uses a wider stop, no 15-minute delay, and no Friday or one-week exit. This row uses the live module: "
+            "stop 20 / target 40, one shot 15 minutes after the cross, the spread, and those time exits. "
+            "The trade count is already about one a week, and the out-of-sample PF on this EMA book stays above 1.",
+            "",
+        ]
     return "\n".join(lines) + "\n"
 
 
