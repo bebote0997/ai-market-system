@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-11 — DEC-EXNESS-1: adaptador Exness API, apagado
+
+- El broker por defecto sigue siendo OANDA. `AI_FLOOR_BROKER=exness` construye `ExnessBroker` y no el router de práctica.
+- REST firmado (`EXN-*`, Ed25519) y libro de ticks. Sin tick fresco no hay orden nueva y salta la alerta existente.
+- Tamaño con `contractSize` y `ProfitRate` de la página de fórmulas; por debajo de `volume_min` no se manda. Frenos 10 USD / 50 USD hasta `RESUME_EXNESS`.
+- Las dos claves de ejecución real vienen apagadas. `REAL_EXECUTION_ENABLED` no cambia. Sin merge, sin deploy, sin Render.
+- Huecos de la documentación oficial listados en `docs/exness_api.md`.
+
 ## 2026-11-11 — DEC-EMA-ONLY-1: solo EMA en practice, apagado por defecto
 
 - `AI_FLOOR_EMA_ONLY` exacto `1` (cuenta OANDA practice, leído en cada ciclo): la ruta del motor en el router demo no envía ni la LIMIT de retroceso ni la orden de mercado. El diario anota `NOT_ROUTED` con motivo `ema_only`.

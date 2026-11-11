@@ -28,7 +28,8 @@ BROKER_SDKS = {"oanda", "oandapyV20", "MetaTrader5", "alpaca", "alpaca_trade_api
 # builds it from the cycle's APPROVED RiskDecision (test_broker_demo_router).
 SUBMIT_PLAN_CALLERS = {"runtime/service.py", "execution/risk_reservation.py",
                        "replay/conflict_audit.py", "replay/risk_audit.py", "execution/paper_broker_adapter.py",
-                       "execution/broker_demo_router.py", "scripts/oanda_first_test_order.py"}
+                       "execution/broker_demo_router.py", "execution/exness_session.py",
+                       "scripts/oanda_first_test_order.py"}
 
 
 def python_sources():

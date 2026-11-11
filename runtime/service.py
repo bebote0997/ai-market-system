@@ -84,6 +84,7 @@ _AUTO = object()  # broker_router default: built from the environment (None unle
 class OperationalRuntime:
     halt_gate = None  # V2 P4a R-HALT: the process HaltGate when v2_rhalt is ON; None = legacy
     broker_router = None  # OANDA practice demo routing (execution/broker_demo_router.py); None = OFF
+    exness_session = None  # Exness API; None unless AI_FLOOR_BROKER is exactly exness
 
     def _audit_safely(self, action, run_id, symbol, category="O"):
         if self.halt_gate is not None and not self.halt_gate.allow(category):
@@ -176,9 +177,19 @@ class OperationalRuntime:
             if isinstance(exc, (HaltRefused, GenesisSealError)):
                 self.store.close()  # V2 P4a / P2b: the constructor stops without any further write
             raise
+        self.exness_session = None
         if broker_router is _AUTO:  # Broker demo routing: OFF unless the flag is exactly 1; never affects paper.
             broker_router = None
-            if os.environ.get("AI_FLOOR_BROKER_DEMO_ROUTING") == "1":
+            # Exact "exness" selects the Exness API and does not also build the OANDA router.
+            if str(os.environ.get("AI_FLOOR_BROKER") or "oanda").strip().lower() == "exness":
+                try:
+                    from execution.exness_session import session_from_env
+                    self.exness_session = session_from_env(os.environ)
+                except Exception as exc:  # noqa: BLE001 - paper is unchanged when Exness cannot be built
+                    LOG.warning("component=exness event=SESSION_UNAVAILABLE error_type=%s", type(exc).__name__)
+                if self.exness_session is not None:
+                    attach_broker_alerts(self.exness_session, os.environ)
+            elif os.environ.get("AI_FLOOR_BROKER_DEMO_ROUTING") == "1":
                 try:
                     from execution.broker_demo_router import router_from_env
                     broker_router = router_from_env(os.environ)
@@ -648,6 +659,11 @@ class OperationalRuntime:
                 self.broker_router.manage(at)
             except Exception as exc:  # noqa: BLE001
                 LOG.warning("component=broker_demo event=MANAGE_FAILED error_type=%s", type(exc).__name__)
+        if self.exness_session is not None and not (self.halt_gate is not None and self.halt_gate.halted):
+            try:
+                self.exness_session.manage(at)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("component=exness event=MANAGE_FAILED error_type=%s", type(exc).__name__)
         results = {}
         if not self.paper_enabled:
             return results
@@ -1029,6 +1045,13 @@ class OperationalRuntime:
                                                m15_bars=ema_m15, h1_closes=ema_h1)
                     return router.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars)
                 self._audit_safely(call_router, cycle_context.get("run_id"), symbol)  # never raises, never changes `returned`
+            session = self.exness_session
+            if (session is not None and cycle_context and returned not in {"DUPLICATE", "HALT_REFUSED"}
+                    and not (self.halt_gate is not None and self.halt_gate.halted)):
+                def call_exness():
+                    return session.on_cycle(cycle_context, returned, self.clock(), h1_bars=h1_bars,
+                                            m15_bars=ema_m15, h1_closes=ema_h1)
+                self._audit_safely(call_exness, cycle_context.get("run_id"), symbol)  # never raises, never changes `returned`
             if rex_holder and rex_holder[0] is not None:
                 try:
                     rex_holder[0].finish(returned)
