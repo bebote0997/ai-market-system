@@ -152,6 +152,8 @@ run_cycle(símbolo) ──► (paper sin cambios) ──► record_cycle ──�
  LIVE:    fila PENDING_SEND (write-ahead) ─► OandaBroker.submit_plan ─► OPEN(trade_id) | REJECTED(código) | UNKNOWN
 ```
 
+`AI_FLOOR_EMA_ONLY=1` (solo practice, leído en cada ciclo): el plan del motor no se envía (`NOT_ROUTED`, motivo `ema_only`), ni como LIMIT de retroceso ni como mercado. Una LIMIT de retroceso sin fill se cancela una vez (`EMA_ONLY`) y el libro del broker se vuelve a leer. Una posición ya llena y una operación EMA no se tocan. Conciliación, EMA y la gestión siguen igual. Cualquier otro valor deja el flujo de arriba.
+
 - No depende de que paper haya enviado su orden, pero respeta el mismo `eligible` y el Risk APPROVED.
 - `risk_fraction` = `RiskDecision.risk_fraction` si está en (0, 0.01], si no 0.01 (tope). La `RiskApproval` se
   deriva de la decisión aprobada con la cantidad re-dimensionada; entrada/stop/meta idénticos (5 decimales).
