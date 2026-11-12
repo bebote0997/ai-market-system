@@ -431,8 +431,11 @@ class ProgressionTests(unittest.TestCase):
         fake.push_tick(Decimal("150.19"), Decimal("150.20"), at)
         combo.tick(at, morning)
         self.assertEqual(len(_markets(fake)), 1)
-        self.assertEqual(fake.positions[0].comment, "")
+        self.assertTrue(fake.positions[0].comment.startswith("combo-lon-"))
         ticket = fake.positions[0].ticket
+        fake.positions[0] = Position(ticket, fake.positions[0].symbol, fake.positions[0].side, fake.positions[0].volume,
+                                     fake.positions[0].price, fake.positions[0].stop, fake.positions[0].target, "",
+                                     fake.positions[0].opened_at)
         clock.at = ny(2026, 1, 16, 10, 0)
         fake.push_tick(Decimal("150.25"), Decimal("150.26"), clock.at)
         SessionCombo(broker).tick(clock.at, morning)
@@ -452,8 +455,11 @@ class ProgressionTests(unittest.TestCase):
         clock, fake, broker, combo = world(fix_at)
         fake.push_tick(Decimal("1.25140"), Decimal("1.25150"), fix_at)
         combo.tick(fix_at, bars)
-        self.assertEqual(fake.positions[0].comment, "")
+        self.assertTrue(fake.positions[0].comment.startswith("combo-fix-"))
         ticket = fake.positions[0].ticket
+        held = fake.positions[0]
+        fake.positions[0] = Position(held.ticket, held.symbol, held.side, held.volume, held.price, held.stop,
+                                     held.target, "", held.opened_at)
         saved = json.loads(fake.get_flag(fix_key(fix_at.date())))
         saved["position_id"] = None
         fake.set_flag(fix_key(fix_at.date()), json.dumps(saved))

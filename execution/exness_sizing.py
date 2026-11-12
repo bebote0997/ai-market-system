@@ -13,6 +13,7 @@ from typing import Optional
 
 RISK_FRACTION_CAP = Decimal("0.01")
 USD_RISK_CAP = Decimal("5")
+USC_RISK_CAP = Decimal("500")
 
 
 def _pos(value):
@@ -111,9 +112,23 @@ def spread_cost(bid, ask, lots, spec):
     return (ask - bid) * spec.contract_size * spec.profit_rate * lots
 
 
+def account_risk_cap(currency):
+    """Hard cap in account currency. 5 USD, or 500 USC (100 USC = 1 USD)."""
+    code = currency.strip().upper() if isinstance(currency, str) else ""
+    if code == "USD":
+        return USD_RISK_CAP
+    if code == "USC":
+        return USC_RISK_CAP
+    return None
+
+
 def _dec(value):
-    if isinstance(value, bool) or isinstance(value, float) or value is None:
+    if isinstance(value, bool) or value is None:
         return None
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        value = str(value)
     try:
         out = Decimal(value) if isinstance(value, int) else Decimal(str(value).strip())
     except (ArithmeticError, ValueError):
@@ -121,26 +136,37 @@ def _dec(value):
     return out if out.is_finite() else None
 
 
-def spec_from_conditions(payload, account_currency=None):
+def spec_from_conditions(payload, account_currency=None, usd_jpy_price=None):
     """Build a spec from a conditions object. Missing contract size or profit rate -> ``(None, reason)``.
 
-    ``contractSize`` and ``profitRate`` are the identifiers on the formulas page. The reference page does not
-    publish the JSON names; if the live payload uses different keys the reason is ``contract_size_unavailable``
-    or ``profit_rate_unavailable`` and nothing is sized.
+    Live conditions use ``contract_size`` (string). ``contractSize`` is still accepted.
+    There is no ``profitRate`` on the cent account. The rate is 1 when ``quote_currency`` matches the
+    account, 100 when the quote is USD and the account is USC, and ``100 / USDJPY`` when the quote is
+    JPY and the account is USC and that price is already in hand. Anything else is unavailable.
     """
     if not isinstance(payload, dict):
         return None, "symbol_spec_missing"
     volume_min, volume_step = _dec(payload.get("volume_min")), _dec(payload.get("volume_step"))
     digits = payload.get("point_digits")
-    contract = _dec(payload.get("contractSize"))
+    contract = _dec(payload.get("contract_size"))
+    if contract is None:
+        contract = _dec(payload.get("contractSize"))
     if (volume_min is None or volume_min <= 0 or volume_step is None or volume_step <= 0
             or isinstance(digits, bool) or type(digits) is not int or contract is None or contract <= 0):
         return None, "contract_size_unavailable" if contract is None else "symbol_spec_missing"
     rate = _dec(payload.get("profitRate"))
     quote = payload.get("quote_currency") if isinstance(payload.get("quote_currency"), str) else None
-    # TODO: the formulas page names ProfitRate and the conversion rule, not the JSON key ``quote_currency``.
-    if rate is None and quote and account_currency and quote.upper() == str(account_currency).upper():
+    account = account_currency.strip().upper() if isinstance(account_currency, str) else ""
+    quote_code = quote.strip().upper() if isinstance(quote, str) else ""
+    if rate is None and quote_code and account and quote_code == account:
         rate = Decimal(1)
+    if rate is None and quote_code == "USD" and account == "USC":
+        rate = Decimal(100)
+    if rate is None and quote_code == "JPY" and account == "USC":
+        price = usd_jpy_price if isinstance(usd_jpy_price, Decimal) else _dec(usd_jpy_price)
+        if price is None or price <= 0:
+            return None, "profit_rate_unavailable"
+        rate = Decimal(100) / price
     if rate is None or rate <= 0:
         return None, "profit_rate_unavailable"
     maximum = None if payload.get("volume_max") in (None, "") else _dec(payload.get("volume_max"))

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import unittest
 
-from execution.broker_port import ACCEPTED, APPROVED, REJECTED, BrokerBalance, OrderPlan, RiskApproval
+from execution.broker_port import ACCEPTED, APPROVED, BrokerBalance, OrderPlan, RiskApproval
 from execution.exness_brakes import RESUME_PHRASE, ExnessBrakes
 from execution.exness_broker import REAL_CONFIRM, ExnessBroker, broker_selected, real_execution_armed
 from execution.exness_client import ExnessClient
@@ -107,13 +107,9 @@ class SafetyTests(unittest.TestCase):
             first = adapter.submit_plan(plan(), approval())
             second = adapter.submit_plan(plan(), approval())
         self.assertEqual((first.status, first.broker_ref), (ACCEPTED, "1"))
-        self.assertEqual(fake.positions[0].comment, "")
-        self.assertEqual((second.status, second.reason), (REJECTED, "position_already_open"))
+        self.assertEqual(fake.positions[0].comment, "aif-run-1")
+        self.assertEqual((second.status, second.reason, second.broker_ref), (ACCEPTED, "already_submitted", "1"))
         self.assertEqual(len(fake.commands), 1)
-        fake.positions[0] = Position("1", "EURUSD", "LONG", fake.positions[0].volume, fake.positions[0].price,
-                                     comment="aif-run-1")
-        third = adapter.submit_plan(plan(), approval())
-        self.assertEqual((third.status, third.reason, third.broker_ref), (ACCEPTED, "already_submitted", "1"))
         text = "\n".join(logs.output)
         self.assertIn("expected_cost=0.04", text)
         self.assertNotIn(SECRET, text)

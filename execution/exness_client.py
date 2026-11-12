@@ -26,6 +26,14 @@ def _interval_ms(env):
     return int(raw)
 
 
+def normalize_gateway(raw):
+    """Bare hostnames from Key Management become https URLs. http and userinfo stay invalid."""
+    text = raw.strip().rstrip("/") if isinstance(raw, str) else ""
+    if text and "://" not in text:
+        text = "https://" + text
+    return text
+
+
 def _host_ok(url):
     parts = urlsplit(url if isinstance(url, str) else "")
     return parts.scheme == "https" and bool(parts.hostname) and not parts.username and not parts.password and not parts.query and not parts.fragment
@@ -45,16 +53,16 @@ class ExnessClient:
         self._sent = {}
         key = env.get("EXN_API_KEY")
         account = env.get("EXN_ACCOUNT_ID")
-        gateway = env.get("EXN_DISCOVERY_BASE_URL")
+        gateway = normalize_gateway(env.get("EXN_DISCOVERY_BASE_URL"))
         if not isinstance(key, str) or not key.strip() or not isinstance(account, str) or not account.strip().isdigit():
             raise ValueError("EXN_API_KEY and numeric EXN_ACCOUNT_ID are required")
-        if not _host_ok((gateway or "").strip().rstrip("/")):
+        if not _host_ok(gateway):
             raise ValueError("EXN_DISCOVERY_BASE_URL must be an https URL without userinfo")
         if self._interval is None:
             raise ValueError("AI_FLOOR_EXNESS_MIN_INTERVAL_MS is invalid")
         self.api_key = key.strip()
         self.account_id = account.strip()
-        self.gateway = gateway.strip().rstrip("/")
+        self.gateway = gateway
 
     def _request(self, base, method, path, body=None, idempotency_key=""):
         now = self._now_ms()

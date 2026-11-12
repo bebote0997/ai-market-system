@@ -14,7 +14,7 @@ from execution.broker_port import (ACCEPTED, REJECTED, UNKNOWN, BrokerGuardError
                                    approval_problem)
 from execution.dxtrade_broker import real_execution_enabled
 from execution.exness_brakes import ExnessBrakes
-from execution.exness_sizing import RISK_FRACTION_CAP, capped_lots, on_step, size_lots, spread_cost
+from execution.exness_sizing import RISK_FRACTION_CAP, account_risk_cap, capped_lots, on_step, size_lots, spread_cost
 from execution.exness_transport import Command
 from execution.friday_close import OPEN, friday_window, minutes_from_env
 from execution.trade_duration import entries_blocked
@@ -369,9 +369,10 @@ class ExnessBroker:
         slot = again.quotes.quote(symbol)
         spec = again.specs.get(symbol)
         price = None if slot is None else (slot.ask if side == "LONG" else slot.bid)
-        if spec is None or again.balance is None or price is None:
-            return self._refuse(client_id, "sizing_invalid")
-        allowed, why = capped_lots(again.balance.equity, again.balance.balance, price, stop, spec, fraction)
+        cap = None if again.balance is None else account_risk_cap(again.balance.currency)
+        if spec is None or again.balance is None or price is None or cap is None:
+            return self._refuse(client_id, "sizing_invalid" if cap is not None else "currency_unsupported")
+        allowed, why = capped_lots(again.balance.equity, again.balance.balance, price, stop, spec, fraction, cap)
         if why:
             return self._refuse(client_id, why)
         if not on_step(quantity, spec):
@@ -428,8 +429,25 @@ class ExnessBroker:
                           client_id, CloseResult)
 
     def close_units(self, position_ref, units, *, client_id):
-        del position_ref, units
-        return CloseResult(REJECTED, client_id, reason="partial_close_undocumented")
+        """Partial close. The live DELETE accepts ``volume`` as a query parameter."""
+        refused = self._readonly(client_id, CloseResult)
+        if refused is not None:
+            return refused
+        if not isinstance(units, Decimal) or not units.is_finite() or units <= 0:
+            return CloseResult(REJECTED, client_id, reason="volume_invalid")
+        try:
+            book = self._read()
+        except BrokerUnavailable as exc:
+            return CloseResult(UNKNOWN, client_id, reason=f"read_failed:{exc}")
+        match = next((row for row in book.positions if row.ticket == str(position_ref)), None)
+        if match is None:
+            return CloseResult(REJECTED, client_id, reason="position_not_found")
+        if units > match.volume:
+            return CloseResult(REJECTED, client_id, reason="volume_invalid")
+        if not self.note_link():
+            return CloseResult(REJECTED, client_id, reason="quote_stale")
+        return self._send(Command(f"close-{position_ref}-{client_id}", "CLOSE", "", volume=units,
+                                 position_ref=str(position_ref)), client_id, CloseResult)
 
     def modify_stop(self, position_ref, new_stop, *, client_id):
         return self.replace_protection(position_ref, new_stop, None, client_id=client_id)

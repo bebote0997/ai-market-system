@@ -23,7 +23,7 @@ import json
 import logging
 from zoneinfo import ZoneInfo
 
-from execution.exness_sizing import RISK_FRACTION_CAP, capped_lots
+from execution.exness_sizing import RISK_FRACTION_CAP, account_risk_cap, capped_lots
 
 
 LOG = logging.getLogger("ai_floor.session_combo")
@@ -31,7 +31,6 @@ NY = ZoneInfo("America/New_York")
 LONDON = ZoneInfo("Europe/London")
 FLAG = "AI_FLOOR_SESSION_COMBO"
 BROKER_FLAG = "AI_FLOOR_BROKER"
-RISK_CAP = Decimal("5")
 FIX_PIPS = Decimal("15")
 FIX_SL_PIPS = Decimal("30")
 FIX_HOLD = timedelta(minutes=30)
@@ -174,9 +173,12 @@ def fix_signal(bars, symbol, at):
     return side, move, entry_at
 
 
-def size_for_cap(equity, balance, entry, stop, spec):
-    """Budget is the lesser of 1% of equity, 1% of balance, and $5. ``entry`` is the actual fill."""
-    return capped_lots(equity, balance, entry, stop, spec, usd_cap=RISK_CAP)
+def size_for_cap(equity, balance, entry, stop, spec, currency="USD"):
+    """Budget is the lesser of 1% of equity, 1% of balance, and the currency cap. ``entry`` is the fill."""
+    cap = account_risk_cap(currency)
+    if cap is None:
+        return Decimal(0), "currency_unsupported"
+    return capped_lots(equity, balance, entry, stop, spec, usd_cap=cap)
 
 
 def _log(event, **detail):
@@ -468,10 +470,11 @@ class SessionCombo:
         except Exception:  # noqa: BLE001
             _log("SIZE_SKIP", symbol=symbol, reason="book_unread")
             return None, None
-        if book.balance is None or book.balance.currency != "USD":
+        if book.balance is None or account_risk_cap(book.balance.currency) is None:
             _log("SIZE_SKIP", symbol=symbol, reason="currency_unsupported")
             return None, None
-        lots, reason = size_for_cap(book.balance.equity, book.balance.balance, entry, stop, book.specs.get(symbol))
+        lots, reason = size_for_cap(book.balance.equity, book.balance.balance, entry, stop, book.specs.get(symbol),
+                                    book.balance.currency)
         if reason:
             _log("SIZE_SKIP", symbol=symbol, reason=reason)
             return None, None

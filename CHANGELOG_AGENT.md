@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-12 — DEC-EXNESS-USC-1: cuenta centavo USC
+
+- La divisa sale de `settings.currency`. El saldo del snapshot ya no queda vacío por falta de `account.currency`.
+- El contrato es `contract_size`. No hay `profitRate`: USD en cuenta USC vale 100; JPY en cuenta USC vale `100 / USDJPY` solo con ese precio ya en el libro.
+- Frenos por defecto 1000 USC al día y 5000 USC desde el inicio. El tope de riesgo es 500 USC. USD sigue en 10, 50 y 5.
+- Posiciones usan `direction` y `position_id`. Órdenes usan `type`. El SL/TP de una posición es `type=sltp`. El tick acepta `timestamp` y números. La vela usa `time`.
+- `POST /positions` manda `comment` con el client id. Un host de discovery sin esquema recibe `https://`. La comprobación de solo lectura no arma ni frena.
+
 ## 2026-11-11 — DEC-EXNESS-M5-1: velas M5 de Exness, apagadas
 
 - `AI_FLOOR_EXNESS_M5_FEED` exacto `1` y solo con `AI_FLOOR_BROKER=exness`. No toca las dos claves de ejecución real.

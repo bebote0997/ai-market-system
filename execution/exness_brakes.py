@@ -1,7 +1,7 @@
-"""Dollar brakes for a future real Exness account. Floor side. Defaults: $10 day, $50 from the start.
+"""Brakes for an Exness account. Floor side. Amounts are in account currency.
 
-Both halt until ``clear_halt`` is called with ``RESUME_EXNESS``. Amounts are in account currency.
-A non-USD currency is refused: the docs do not define a conversion from the configured USD limits.
+USD defaults: 10 day, 50 from the start. USC defaults: 1000 day, 5000 from the start (100 USC = 1 USD).
+Both halt until ``clear_halt`` is called with ``RESUME_EXNESS``. Any other currency is refused.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,6 +19,8 @@ LOG = logging.getLogger("ai_floor.exness")
 DAILY_ENV, DRAWDOWN_ENV = "AI_FLOOR_EXNESS_DAILY_LOSS_USD", "AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD"
 START_ENV = "AI_FLOOR_EXNESS_START_BALANCE"
 DEFAULT_DAILY, DEFAULT_DRAWDOWN = Decimal("10"), Decimal("50")
+USC_DAILY, USC_DRAWDOWN = Decimal("1000"), Decimal("5000")
+ACCOUNT_CURRENCIES = ("USD", "USC")
 RESUME_PHRASE = "RESUME_EXNESS"
 HALT_FLAG, REASON_FLAG = "exness_brake_halt", "exness_brake_reason"
 DAY_FLAG, DAY_EQUITY_FLAG = "exness_brake_day", "exness_brake_day_equity"
@@ -110,13 +112,26 @@ class ExnessBrakes:
 
     @classmethod
     def from_env(cls, store, env):
-        daily = _env_amount(env.get(DAILY_ENV), DEFAULT_DAILY)
-        drawdown = _env_amount(env.get(DRAWDOWN_ENV), DEFAULT_DRAWDOWN)
+        daily = _env_amount(env.get(DAILY_ENV), None)
+        drawdown = _env_amount(env.get(DRAWDOWN_ENV), None)
         raw = env.get(START_ENV)
         start = None if raw is None or str(raw).strip() == "" else _money(raw)
-        if daily is None or drawdown is None or (raw not in (None, "") and (start is None or start <= 0)):
+        explicit_daily = env.get(DAILY_ENV) not in (None, "")
+        explicit_drawdown = env.get(DRAWDOWN_ENV) not in (None, "")
+        if (explicit_daily and daily is None) or (explicit_drawdown and drawdown is None):
+            return None
+        if raw not in (None, "") and (start is None or start <= 0):
             return None
         return cls(store, daily_usd=daily, drawdown_usd=drawdown, start_balance=start)
+
+    def _limits(self, currency):
+        code = currency.strip().upper() if isinstance(currency, str) else ""
+        if code not in ACCOUNT_CURRENCIES:
+            return None
+        daily = self.daily_usd if self.daily_usd is not None else (USC_DAILY if code == "USC" else DEFAULT_DAILY)
+        drawdown = self.drawdown_usd if self.drawdown_usd is not None else (
+            USC_DRAWDOWN if code == "USC" else DEFAULT_DRAWDOWN)
+        return daily, drawdown
 
     def halted(self):
         return self._store.get_flag(HALT_FLAG) == "1"
@@ -142,13 +157,15 @@ class ExnessBrakes:
         if self.halted():
             return BrakeStatus(False, True, self._store.get_flag(REASON_FLAG) or "brake_halt")
         equity = _money(equity)
+        limits = self._limits(currency)
+        if limits is None:
+            return BrakeStatus(False, False, "currency_unsupported")
         if equity is not None and equity <= 0:
             self._halt("drawdown")
             return BrakeStatus(False, True, "drawdown")
-        if not isinstance(currency, str) or currency.strip().upper() != "USD":
-            return BrakeStatus(False, False, "currency_unsupported")
         if equity is None or equity <= 0:
             return BrakeStatus(False, False, "equity_unavailable")
+        daily_limit, drawdown_limit = limits
         try:
             key = day_key(now.astimezone(timezone.utc))
         except (ValueError, OverflowError):
@@ -165,10 +182,10 @@ class ExnessBrakes:
             self._store.set_flag(START_FLAG, format(start, "f"))
         if day_open is None or start is None or day_open <= 0 or start <= 0:
             return BrakeStatus(False, False, "equity_unavailable")
-        if day_open - equity >= self.daily_usd:
+        if day_open - equity >= daily_limit:
             self._halt("daily_loss")
             return BrakeStatus(False, True, "daily_loss")
-        if start - equity >= self.drawdown_usd:
+        if start - equity >= drawdown_limit:
             self._halt("drawdown")
             return BrakeStatus(False, True, "drawdown")
         return BrakeStatus(True, False, None)

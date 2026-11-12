@@ -42,21 +42,19 @@ def candles_path(account_id):
 
 
 def candle_query(symbol, start, end):
-    """Documented: ``from`` inclusive, ``to`` exclusive, timeframe ``M5``, price type bid.
-
-    TODO: the page does not name the query keys for instrument, timeframe or price type.
-    ``REQUEST_INVALID_TIMEFRAME`` and ``REQUEST_INVALID_PRICE_TYPE`` are the only spellings published.
-    ``instrument``, ``timeframe`` and ``price_type`` below are unverified and must be confirmed
-    against a real request before this query is sent live.
-    """
+    """Live query: ``instrument``, ``timeframe=M5``, ``price_type=bid``, ``from`` inclusive, ``to`` exclusive."""
     return {"instrument": symbol, "timeframe": "M5", "price_type": "bid",
             "from": start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "to": end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
 def _price(value):
-    if isinstance(value, bool) or isinstance(value, float) or value is None:
+    if isinstance(value, bool) or value is None:
         return None
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        value = str(value)
     try:
         out = value if isinstance(value, Decimal) else Decimal(str(value).strip())
     except (ArithmeticError, ValueError):
@@ -65,6 +63,16 @@ def _price(value):
 
 
 def _stamp(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+            return None
+        seconds = value / 1000 if value > 10_000_000_000 else value
+        try:
+            return datetime.fromtimestamp(seconds, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
     if not isinstance(value, str):
         return None
     try:
@@ -77,13 +85,10 @@ def _stamp(value):
 
 
 def parse_tick_frame(message):
-    """``(symbol, bid, ask, at)`` for the provisional fixture, else None.
+    """``(symbol, bid, ask, at)`` or None.
 
-    TODO: the ticks page does not publish the frame. This accepts only::
-
-        {"instrument": "USDJPY", "bid": "150.20", "ask": "150.21", "time": "<aware iso>"}
-
-    A subscribe acknowledgement or any other object is ignored.
+    Live ticks are ``{instrument, bid, ask, timestamp}`` with numeric prices. ``time`` and decimal
+    strings are still accepted. A subscribe acknowledgement is ignored.
     """
     if isinstance(message, str):
         try:
@@ -93,19 +98,18 @@ def parse_tick_frame(message):
     if not isinstance(message, dict):
         return None
     symbol = message.get("instrument")
-    bid, ask, at = _price(message.get("bid")), _price(message.get("ask")), _stamp(message.get("time"))
+    stamp = message.get("timestamp") if message.get("timestamp") is not None else message.get("time")
+    bid, ask, at = _price(message.get("bid")), _price(message.get("ask")), _stamp(stamp)
     if not isinstance(symbol, str) or bid is None or ask is None or at is None or ask < bid:
         return None
     return symbol, bid, ask, at
 
 
 def parse_candle_payload(payload, symbol):
-    """``(bars, reason)``. Only the provisional fixture is accepted.
+    """``(bars, reason)``.
 
-    TODO: ``GET /v1/market-data/accounts/{id}/candles`` does not publish the candle object.
-    Expected fixture, bid OHLC, open time aware::
-
-        {"candles": [{"open_time": "<iso>", "open": "1", "high": "2", "low": "0.5", "close": "1.5"}]}
+    Live candles are ``{time, open, high, low, close, volume}``. ``time`` is an ISO timestamp with an
+    offset. Prices may be JSON numbers. ``open_time`` is still accepted.
     """
     if isinstance(payload, str):
         try:
@@ -119,7 +123,7 @@ def parse_candle_payload(payload, symbol):
     for row in rows:
         if not isinstance(row, dict):
             return (), "schema_unknown"
-        opened = _stamp(row.get("open_time"))
+        opened = _stamp(row.get("time") if row.get("time") is not None else row.get("open_time"))
         prices = [_price(row.get(name)) for name in ("open", "high", "low", "close")]
         if opened is None or any(price is None for price in prices):
             return (), "schema_unknown"

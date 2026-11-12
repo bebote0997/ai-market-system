@@ -73,12 +73,12 @@ La firma en vivo usa el paquete `cryptography` (el ejemplo oficial de Python). N
 ## TODO (las páginas no lo fijan)
 
 1. Orden canónico del JSON dentro de `EXN-DATA`. Aquí se usa el orden del ejemplo y separadores compactos.
-2. Nombres JSON de `contractSize`, `ProfitRate` y de la comisión dentro de instrument conditions. La referencia solo nombra `volume_min`, `volume_max`, `volume_step` y `point_digits`.
-3. Nombre del campo de tipo en `POST /orders` (`limit` / `stop` / `sltp`). Se envía `order_type` y puede ser rechazado.
-4. Cierre parcial: no hay campo de volumen documentado en el DELETE de la posición. `close_units` se niega.
+2. La comisión dentro de instrument conditions sigue sin campo. El contrato vivo es `contract_size`. No hay `profitRate`: USD contra USC vale 100; JPY contra USC vale `100 / USDJPY` solo si ese precio ya está en el libro.
+3. `POST /orders` usa `type` (`limit` / `stop` / `sltp`). El SL/TP de una posición es una orden `type=sltp` con `position_id`. `PATCH /orders/{id}` solo cambia una orden pendiente.
+4. El cierre parcial es `DELETE /positions/{id}?volume=`. `close_units` lo manda si el volumen es menor o igual al de la posición.
 5. Forma JSON de `GET .../limits`. Mientras tanto hay un hueco mínimo de 100 ms (`AI_FLOOR_EXNESS_MIN_INTERVAL_MS`) y un 429 bloquea el envío.
-6. Sobre del mensaje de tick. La ruta `/ws/ticks` y el subscribe `id` + `subscribe.event=ticks` + `instruments` están publicados. El JSON del frame no. `parse_tick_frame` solo acepta el fixture provisional de `execution/exness_m5.py`.
-7. `GET /v1/market-data/accounts/{id}/candles` existe (`from` inclusivo, `to` exclusivo, velas M5, precio bid). No publica las claves de query de instrumento, timeframe y tipo de precio, ni el objeto de la vela. `parse_candle_payload` solo acepta el fixture provisional. Si no encaja, el hueco se marca y el combo puede saltar el día.
+6. El tick vivo es `{instrument, bid, ask, timestamp}`. `bid` y `ask` pueden ser números. `parse_tick_frame` los acepta.
+7. Velas: query `instrument`, `timeframe=M5`, `price_type=bid`, `from`, `to`. El objeto es `{time, open, high, low, close, volume}`. `time` es ISO con zona. Los precios pueden ser números.
 8. No hay host de sandbox. Un demo de MetaTrader no vale. No está escrito si una cuenta demo de la plataforma Exness puede crear claves.
 9. Nombres exactos de los permisos en el formulario (además de «Trading read access» y de la advertencia de no usar una Info API key para operar).
 10. `cryptography` sin pin en este repo.
