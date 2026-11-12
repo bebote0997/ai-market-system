@@ -88,31 +88,31 @@ class UscMappingTests(unittest.TestCase):
         same, reason = spec_from_conditions(dict(EUR, quote_currency="USC"), "USC")
         self.assertEqual(same.profit_rate, Decimal("1"))
 
-    def test_usc_brakes_are_one_thousand_and_five_thousand_and_usd_stays_ten(self):
+    def test_usc_brakes_are_two_hundred_and_one_thousand_and_usd_stays_ten(self):
         store = FakeExnessTransport()
         usc = ExnessBrakes.from_env(store, {})
-        self.assertTrue(usc.evaluate(Decimal("50000"), "USC", NOW).entry_allowed)
-        self.assertEqual(usc.evaluate(Decimal("49000"), "USC", NOW).reason, "daily_loss")
+        self.assertTrue(usc.evaluate(Decimal("10000"), "USC", NOW).entry_allowed)
+        self.assertEqual(usc.evaluate(Decimal("9800"), "USC", NOW).reason, "daily_loss")
         self.assertTrue(usc.clear_halt(RESUME_PHRASE))
         fresh = ExnessBrakes.from_env(FakeExnessTransport(), {"AI_FLOOR_EXNESS_DAILY_LOSS_USD": "100000"})
-        fresh.evaluate(Decimal("50000"), "USC", NOW)
-        self.assertEqual(fresh.evaluate(Decimal("45000"), "USC", NOW).reason, "drawdown")
+        fresh.evaluate(Decimal("10000"), "USC", NOW)
+        self.assertEqual(fresh.evaluate(Decimal("9000"), "USC", NOW).reason, "drawdown")
         usd = ExnessBrakes.from_env(FakeExnessTransport(), {})
         self.assertTrue(usd.evaluate(Decimal("500"), "USD", NOW).entry_allowed)
         self.assertEqual(usd.evaluate(Decimal("490"), "USD", NOW).reason, "daily_loss")
         self.assertEqual(ExnessBrakes.from_env(FakeExnessTransport(), {}).evaluate(Decimal("10"), "EUR", NOW).reason,
                          "currency_unsupported")
 
-    def test_risk_cap_is_five_hundred_usc_and_one_percent(self):
-        self.assertEqual(account_risk_cap("USC"), Decimal("500"))
+    def test_risk_cap_is_one_hundred_usc_and_one_percent(self):
+        self.assertEqual(account_risk_cap("USC"), Decimal("100"))
         self.assertEqual(account_risk_cap("USD"), Decimal("5"))
         spec, _reason = spec_from_conditions(EUR, "USC")
-        lots, reason = size_for_cap(Decimal("50000"), Decimal("50000"), Decimal("1.10000"), Decimal("1.09700"), spec, "USC")
-        self.assertEqual((lots, reason), (Decimal("1.66"), None))
-        skipped, reason = size_for_cap(Decimal("50000"), Decimal("50000"), Decimal("1.10000"), Decimal("0.10000"), spec, "USC")
+        lots, reason = size_for_cap(Decimal("10000"), Decimal("10000"), Decimal("1.10000"), Decimal("1.09700"), spec, "USC")
+        self.assertEqual((lots, reason), (Decimal("0.33"), None))
+        skipped, reason = size_for_cap(Decimal("10000"), Decimal("10000"), Decimal("1.10000"), Decimal("0.10000"), spec, "USC")
         self.assertEqual((skipped, reason), (Decimal("0"), "min_volume_over_cap"))
-        sized, reason = size_lots(Decimal("50000"), Decimal("0.01"), Decimal("1.10000"), Decimal("1.09700"), spec)
-        self.assertEqual(sized, Decimal("1.66"))
+        sized, reason = size_lots(Decimal("10000"), Decimal("0.01"), Decimal("1.10000"), Decimal("1.09700"), spec)
+        self.assertEqual(sized, Decimal("0.33"))
         self.assertIsNone(reason)
 
     def test_live_tick_and_candle_shapes(self):
@@ -128,7 +128,7 @@ class UscMappingTests(unittest.TestCase):
         self.assertEqual(bars[0].symbol, "USDJPY")
 
     def test_order_bodies_comment_type_sltp_and_partial_volume(self):
-        client = Map(live_routes("50000"))
+        client = Map(live_routes("10000"))
         transport = RestExnessTransport(client)
         transport.quotes.note_tick(Decimal("160"), Decimal("160"), NOW, symbol="USDJPY")
         market = Command("combo-lon-2026-11-12-LONG", "MARKET", "EURUSD", "LONG", Decimal("0.01"),
@@ -172,7 +172,7 @@ class UscMappingTests(unittest.TestCase):
         fake = FakeExnessTransport(clock=lambda: NOW)
         from execution.broker_port import BrokerBalance
         from execution.exness_transport import Position
-        fake.balance = BrokerBalance(Decimal("50000"), Decimal("50000"), Decimal("0"), "USC")
+        fake.balance = BrokerBalance(Decimal("10000"), Decimal("10000"), Decimal("0"), "USC")
         fake.instruments = ("EURUSD",)
         fake.conditions = {"EURUSD": EUR}
         fake.push_tick(Decimal("1.10000"), Decimal("1.10002"), NOW)

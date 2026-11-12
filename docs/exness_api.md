@@ -21,7 +21,7 @@ Fuente: [portal](https://www.exness-api.com/trading/get-started), [ayuda](https:
 | `execution/exness_stream.py` | Libro del último tick. Si el socket cae, el tick se borra al momento. Reintento 1, 2, 4, 8, 16, 30 s (política del Floor: el portal solo dice «backoff»). |
 | `execution/exness_transport.py` | `FakeExnessTransport` y `RestExnessTransport`. El adaptador solo llama `read_state` y `submit`. |
 | `execution/exness_broker.py` | `ExnessBroker`. Mercado = `POST .../positions` con `instrument`, `side`, `volume` y, si hay, `stop_loss_price` / `take_profit_price`. La página no publica comentario ni client id; la clave va en `EXN-IDEMPOTENCY-KEY`. Límite = `POST .../orders`. Cancelar = `DELETE .../orders/{id}`. Cerrar = `DELETE .../positions/{id}`. |
-| `execution/exness_brakes.py` | Pérdida diaria 10 USD y drawdown 50 USD desde el saldo inicial. Frenan y aplanan hasta `RESUME_EXNESS`. |
+| `execution/exness_brakes.py` | Pérdida diaria y drawdown en la divisa de la cuenta, hasta `RESUME_EXNESS`. USD: 10 y 50. USC: 200 y 1000. |
 | `execution/exness_check.py` | Lectura de cuenta, especificación y tick. No envía órdenes. |
 
 `AI_FLOOR_BROKER` vacío o `oanda` deja el router de práctica como está. Solo el valor exacto `exness` construye esta sesión, y entonces no construye también el router de OANDA.
@@ -60,7 +60,7 @@ Ejecución real, las dos a la vez, y si no el adaptador solo lee:
 - `AI_FLOOR_EXNESS_REAL_EXECUTION=1`
 - `AI_FLOOR_EXNESS_REAL_CONFIRM=EXNESS_REAL_AUTHORIZED`
 
-Frenos (USD de la cuenta; otra divisa no opera): `AI_FLOOR_EXNESS_DAILY_LOSS_USD` (10), `AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD` (50), `AI_FLOOR_EXNESS_START_BALANCE` (si falta, el primer equity). Estado en `AI_FLOOR_EXNESS_STATE_DB_PATH` (si falta, `data/runtime/exness_state.db`).
+Frenos, en la divisa de la cuenta. Si las variables van vacías: USD 10 y 50; USC 200 y 1000 (2 USD y 10 USD sobre 10,000 USC). Otra divisa no opera. `AI_FLOOR_EXNESS_DAILY_LOSS_USD`, `AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD`, `AI_FLOOR_EXNESS_START_BALANCE` (si falta, el primer equity). Estado en `AI_FLOOR_EXNESS_STATE_DB_PATH` (si falta, `data/runtime/exness_state.db`). El tope por trade es 5 USD o 100 USC.
 
 Comisión por lote y lado que el owner copia de la cuenta mientras el JSON no tenga un campo documentado: `AI_FLOOR_EXNESS_COMMISSION_PER_LOT_SIDE` (vacío = 0). El spread sale del tick.
 

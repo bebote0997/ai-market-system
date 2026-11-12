@@ -1,6 +1,7 @@
 """Brakes for an Exness account. Floor side. Amounts are in account currency.
 
-USD defaults: 10 day, 50 from the start. USC defaults: 1000 day, 5000 from the start (100 USC = 1 USD).
+USD defaults: 10 day, 50 from the start. USC defaults: 200 day, 1000 from the start
+(100 USC = 1 USD; the same 2% and 10% of a 10,000 USC balance as 10 and 50 USD on 500 USD).
 Both halt until ``clear_halt`` is called with ``RESUME_EXNESS``. Any other currency is refused.
 """
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ LOG = logging.getLogger("ai_floor.exness")
 DAILY_ENV, DRAWDOWN_ENV = "AI_FLOOR_EXNESS_DAILY_LOSS_USD", "AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD"
 START_ENV = "AI_FLOOR_EXNESS_START_BALANCE"
 DEFAULT_DAILY, DEFAULT_DRAWDOWN = Decimal("10"), Decimal("50")
-USC_DAILY, USC_DRAWDOWN = Decimal("1000"), Decimal("5000")
+USC_DAILY, USC_DRAWDOWN = Decimal("200"), Decimal("1000")
 ACCOUNT_CURRENCIES = ("USD", "USC")
 RESUME_PHRASE = "RESUME_EXNESS"
 HALT_FLAG, REASON_FLAG = "exness_brake_halt", "exness_brake_reason"

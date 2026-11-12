@@ -4,7 +4,7 @@
 
 - La divisa sale de `settings.currency`. El saldo del snapshot ya no queda vacío por falta de `account.currency`.
 - El contrato es `contract_size`. No hay `profitRate`: USD en cuenta USC vale 100; JPY en cuenta USC vale `100 / USDJPY` solo con ese precio ya en el libro.
-- Frenos por defecto 1000 USC al día y 5000 USC desde el inicio. El tope de riesgo es 500 USC. USD sigue en 10, 50 y 5.
+- Sobre 10,000 USC, los frenos por defecto son 200 USC al día y 1000 USC desde el inicio. El tope de riesgo es 100 USC. USD sigue en 10, 50 y 5.
 - Posiciones usan `direction` y `position_id`. Órdenes usan `type`. El SL/TP de una posición es `type=sltp`. El tick acepta `timestamp` y números. La vela usa `time`.
 - `POST /positions` manda `comment` con el client id. Un host de discovery sin esquema recibe `https://`. La comprobación de solo lectura no arma ni frena.
 

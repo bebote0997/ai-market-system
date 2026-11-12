@@ -13,7 +13,7 @@ from typing import Optional
 
 RISK_FRACTION_CAP = Decimal("0.01")
 USD_RISK_CAP = Decimal("5")
-USC_RISK_CAP = Decimal("500")
+USC_RISK_CAP = Decimal("100")
 
 
 def _pos(value):
@@ -113,7 +113,7 @@ def spread_cost(bid, ask, lots, spec):
 
 
 def account_risk_cap(currency):
-    """Hard cap in account currency. 5 USD, or 500 USC (100 USC = 1 USD)."""
+    """Hard cap in account currency. 5 USD, or 100 USC (1 USD) on a 10,000 USC balance."""
     code = currency.strip().upper() if isinstance(currency, str) else ""
     if code == "USD":
         return USD_RISK_CAP

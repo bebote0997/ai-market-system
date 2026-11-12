@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-12 (rama `cursor/exness-usc-account-76d4`, apilada sobre el feed M5). Cuenta centavo USC: frenos 1000/5000 USC, tope 500 USC, campos vivos de cuenta, contrato, velas y ticks. La ejecución real sigue apagada. Ver `docs/exness_api.md`._
+_Última actualización: 2026-11-12 (rama `cursor/exness-usc-account-76d4`, apilada sobre el feed M5). Cuenta centavo USC de 10,000: frenos 200/1000 USC, tope 100 USC, campos vivos de cuenta, contrato, velas y ticks. La ejecución real sigue apagada. Ver `docs/exness_api.md`._
 
 _Anterior: 2026-11-11 (rama `cursor/exness-m5-feed-76d4`, apilada sobre el session combo). Feed M5 de Exness apagado: `AI_FLOOR_EXNESS_M5_FEED` exacto `1` y `AI_FLOOR_BROKER=exness`. No arma la ejecución real. Ver `docs/exness_m5.md`._
 
