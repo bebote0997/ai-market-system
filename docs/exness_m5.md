@@ -8,7 +8,7 @@ Velas de 5 minutos para el session combo. No arranca salvo que `AI_FLOOR_EXNESS_
 - La vela es OHLC del bid, abierta en una frontera de 5 minutos UTC. Se cierra cuando llega la frontera siguiente o cuando el reloj la cruza. Así la vela de las 01:55 Nueva York está cerrada en la decisión de las 02:00, y las de las 15:45 y 15:55 Londres están cerradas para el fix.
 - Si falta una frontera, se anota `M5_GAP` y no se inventa el precio. El combo, si le falta la vela del rango, espera hasta las 02:00 y luego salta el día.
 - Al reconectar, y en cada `manage` del session combo, se pide `GET /v1/market-data/accounts/{id}/candles` con `instrument`, `timeframe=M5`, `price_type=bid`, `from` y `to`. La vela es `{time, open, high, low, close, volume}`. `candles()` devuelve esas velas. El combo las usa aunque la bandera del feed esté apagada.
-- Con `AI_FLOOR_BROKER=exness` y el transporte real, el proceso abre el socket de ticks, manda el subscribe y lo vuelve a abrir si cae o si pasan 15 s sin un frame. Eso mantiene el bid/ask fresco. La bandera del feed no hace falta para el socket.
+- Con `AI_FLOOR_BROKER=exness` y el transporte real, el proceso abre el socket de ticks, manda el subscribe y lo vuelve a abrir si cae o si pasan 15 s sin un frame. Eso mantiene el bid/ask fresco. La bandera del feed no hace falta para el socket. Aceptar el socket no reinicia el contador: hace falta un tick y 5 s abierto. La espera es 1, 2, 4, 8, 16 y 30 s. Un cierre inmediato no firma un handshake cada segundo.
 
 ## Lo que sigue abierto
 

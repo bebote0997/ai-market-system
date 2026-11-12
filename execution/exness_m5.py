@@ -28,6 +28,9 @@ FEED_SYMBOLS = ("USDJPY", "GBPUSD", "EURUSD")
 CANDLES_PATH = "/v1/market-data/accounts/{account_id}/candles"
 # Floor policy. The portal says reconnect with backoff and does not publish a heartbeat frame.
 HEARTBEAT_SILENCE_SECONDS = 15
+# Accepting the socket is not a success. The attempt counter clears only after a parsed tick has
+# been on the wire this long, so accept-then-close cannot sign a new handshake every second.
+STREAM_STABLE_SECONDS = 5
 BAR = timedelta(minutes=5)
 # The candle page rejects a from/to span longer than the account candle limit. 900 M5 bars is 75 hours.
 MAX_CANDLE_BARS = 900
@@ -319,6 +322,8 @@ class TickStream:
         self.attempt = 0
         self.connected = False
         self.last_frame_at = None
+        self._opened_at = None
+        self._saw_tick = False
 
     def subscribe_message(self):
         return subscribe_ticks(tuple(self.feed.aggs))
@@ -327,8 +332,11 @@ class TickStream:
         return ticks_path(account_id)
 
     def on_open(self, at):
+        # Do not clear ``attempt`` here. The server can accept the socket and close it before a frame.
+        # Resetting on that accept made every reconnect wait 1 s and sign a new handshake.
         self.connected = True
-        self.attempt = 0
+        self._opened_at = at
+        self._saw_tick = False
         self.last_frame_at = at
         message = self.subscribe_message()
         _log("STREAM_SUBSCRIBE", symbols=",".join(message["subscribe"]["instruments"]))
@@ -339,8 +347,17 @@ class TickStream:
         parsed = parse_tick_frame(message)
         if parsed is None:
             return []
+        self._saw_tick = True
+        self._note_stable(at)
         symbol, bid, ask, tick_at = parsed
         return self.feed.on_tick(symbol, bid, ask, tick_at)
+
+    def _note_stable(self, at):
+        opened = self._opened_at
+        if not self._saw_tick or opened is None:
+            return
+        if (at - opened).total_seconds() >= STREAM_STABLE_SECONDS:
+            self.attempt = 0
 
     def on_drop(self, at):
         del at
@@ -357,6 +374,7 @@ class TickStream:
         return (at - self.last_frame_at).total_seconds() > HEARTBEAT_SILENCE_SECONDS
 
     def poll(self, at):
+        self._note_stable(at)
         if self.silent(at):
             return self.on_drop(at)
         return None

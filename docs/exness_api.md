@@ -76,7 +76,7 @@ La firma en vivo usa el paquete `cryptography` (el ejemplo oficial de Python). E
 2. La comisión dentro de instrument conditions sigue sin campo. El contrato vivo es `contract_size`. No hay `profitRate`: USD contra USC vale 100; JPY contra USC vale `100 / USDJPY` solo si ese precio ya está en el libro.
 3. `POST /orders` usa `type` (`limit` / `stop` / `sltp`). El SL/TP de una posición es una orden `type=sltp` con `position_id`. `PATCH /orders/{id}` solo cambia una orden pendiente.
 4. El cierre parcial es `DELETE /positions/{id}?volume=`. `close_units` lo manda si el volumen es menor o igual al de la posición.
-5. Forma JSON de `GET .../limits`. Mientras tanto hay un hueco mínimo de 100 ms (`AI_FLOOR_EXNESS_MIN_INTERVAL_MS`) y un 429 bloquea el envío.
+5. Forma JSON de `GET .../limits`. Mientras tanto hay un hueco mínimo de 100 ms (`AI_FLOOR_EXNESS_MIN_INTERVAL_MS`): la llamada espera, no se rechaza. Un HTTP 429 sigue sin reintento y bloquea el envío hasta `Retry-After`. Un `manage` lee la cuenta una vez; la orden de mercado sigue leyendo dos veces.
 6. El tick vivo es `{instrument, bid, ask, timestamp}`. `bid` y `ask` pueden ser números. `parse_tick_frame` los acepta.
 7. Velas: query `instrument`, `timeframe=M5`, `price_type=bid`, `from`, `to`. El objeto es `{time, open, high, low, close, volume}`. `time` es ISO con zona. Los precios pueden ser números.
 8. No hay host de sandbox. Un demo de MetaTrader no vale. No está escrito si una cuenta demo de la plataforma Exness puede crear claves.

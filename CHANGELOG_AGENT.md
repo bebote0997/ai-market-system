@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-12 — DEC-EXNESS-PACE-1: hueco, reconexión y cadencia del combo, apagado
+
+- El hueco de 100 ms espera. Una ráfaga de GET ya no sale `floor_min_interval` ni `BrokerUnavailable`. Un HTTP 429 sigue sin reintento. Un `manage` reutiliza una sola lectura de cuenta; la orden sigue leyendo dos veces.
+- El contador del socket ya no se pone a cero al aceptar la conexión. Solo se pone a cero cuando ha llegado un tick y el socket lleva 5 s abierto. Un cierre inmediato espera 1, 2, 4, 8, 16 y 30 s. No firma un handshake cada segundo.
+- De 02:00 a 03:00 ET el combo recibe el reloj real, no el inicio del bloque de 15 minutos. De 03:00 a 05:00 ET, y en los 5 minutos del fix, `manage` corre como mucho cada 30 s (el tick y el sondeo de 5 s comparten esa espera). No hay una petición por sondeo.
+- `candles()` queda cubierto por el camino real: `ExnessClient.get_json` y `candle_request_path`.
+- Frenos USC 200/1000 y tope 100 sin cambios. USD sigue en 5/10/50. Las dos claves reales, `AI_FLOOR_BROKER` y `AI_FLOOR_EXNESS_M5_FEED` no se tocan. Sin merge, sin deploy, sin Render.
+
 ## 2026-11-12 — DEC-EXNESS-STREAM-1: socket, velas M5 y candado del motor, apagado
 
 - Con `AI_FLOOR_BROKER=exness` el proceso abre y mantiene el WebSocket de ticks (GET firmado, subscribe, silencio de 15 s, reintento). Sin ese socket cada entrada o cierre salía `quote_stale`. Un transporte de prueba no abre red.

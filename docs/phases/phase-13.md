@@ -8,6 +8,8 @@ Demo iniciado con GO del owner sobre la DB actual (sin DB nueva ni sealed genesi
 
 2026-11-07, DEC-XAI-1, solo preparado y apilado encima: xAI no cambia el proveedor en marcha. El owner puede pedir el paso desde el panel; el runner lo anota solo con la cuenta plana, y el arranque no lo hace. Ver `docs/provider_migration.md`.
 
+2026-11-12, DEC-EXNESS-PACE-1, solo preparado y apilado sobre la preparación en vivo: el hueco de 100 ms espera, la reconexión no firma cada segundo, y el combo de 02:00 a 05:00 ET mira el reloj real como mucho cada 30 s. Sigue apagado. Sin merge ni deploy.
+
 2026-11-12, DEC-EXNESS-STREAM-1, solo preparado y apilado sobre la cuenta USC: el proceso abre el socket de ticks, `candles()` devuelve velas M5, y un plan del motor no puede mandar una orden Exness. `cryptography` está en el lock de Render. Sigue apagado. Sin merge ni deploy.
 
 2026-11-12, DEC-EXNESS-USC-1, solo preparado y apilado sobre el feed M5: la cuenta centavo USC usa sus campos vivos. Frenos 200/1000 USC y tope 100 USC sobre 10,000 USC. La ejecución real sigue apagada. Ver `docs/exness_api.md`.

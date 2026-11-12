@@ -110,6 +110,8 @@ class ExnessBroker:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._on_alert = on_alert
         self._stale_alerted = False
+        self._cache_reads = False
+        self._read_cache = None
         _install_redaction(env)
 
     def __repr__(self):
@@ -135,11 +137,26 @@ class ExnessBroker:
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=exness event=ALERT_FAILED error_type=%s", type(exc).__name__)
 
-    def _read(self):
+    def cache_account_reads(self, enabled):
+        """Reuse one account snapshot for the checks inside a single ``manage``.
+
+        ``open_market`` still reads twice. That second read is what keeps the lot inside the cap
+        when the quote moves. The cache is off outside ``ExnessSession.manage``.
+        """
+        self._cache_reads = bool(enabled)
+        if not enabled:
+            self._read_cache = None
+
+    def _read(self, *, fresh=False):
+        if not fresh and self._read_cache is not None:
+            return self._read_cache
         try:
-            return self._transport.read_state()
+            book = self._transport.read_state()
         except Exception as exc:  # noqa: BLE001
             raise BrokerUnavailable(type(exc).__name__) from None
+        if self._cache_reads and not fresh:
+            self._read_cache = book
+        return book
 
     def note_link(self, book=None):
         book = self._read() if book is None else book
@@ -268,7 +285,7 @@ class ExnessBroker:
             self.note_link(book)
             return "quote_stale"
         try:
-            again = self._read()
+            again = self._read(fresh=True)
         except BrokerUnavailable:
             return "reread_failed"
         if again.token() != book.token():
@@ -369,7 +386,7 @@ class ExnessBroker:
             return self._refuse(client_id, "sizing_invalid")
         try:
             now = self._now()
-            book = self._read()
+            book = self._read(fresh=True)
         except BrokerUnavailable as exc:
             return SubmitResult(UNKNOWN, client_id, reason=f"read_failed:{exc}")
         if symbol not in ALLOWED or symbol not in book.instruments:
@@ -378,7 +395,7 @@ class ExnessBroker:
             self.note_link(book)
             return self._refuse(client_id, "quote_stale")
         try:
-            again = self._read()
+            again = self._read(fresh=True)
         except BrokerUnavailable:
             return self._refuse(client_id, "reread_failed")
         if _exposure(again) != _exposure(book):
@@ -438,6 +455,7 @@ class ExnessBroker:
                           SubmitResult)
 
     def _send(self, command, client_id, result_type):
+        self._read_cache = None
         try:
             result = self._transport.submit(command)
         except Exception as exc:  # noqa: BLE001

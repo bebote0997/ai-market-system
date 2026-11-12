@@ -48,6 +48,9 @@ EVIDENCE_OBSERVE_SKIPPED_BUSY = "EVIDENCE_OBSERVE_SKIPPED_BUSY"
 OBSERVE_BUSY_TIMEOUT_MS = 500
 EVIDENCE_BUSY_TIMEOUT_MS = 10000  # the Evidence Store's own default (restored after every observation)
 OBSERVE_DEGRADED_AFTER = 4
+# Session-combo entries follow the M5 bar that is open now. Once per 15-minute slot is late.
+# The runner already ticks about every 30 s; the 5 s operator poll must not add a second stream.
+EXNESS_ENTRY_PACE_SECONDS = 30
 # Phase 13 evidence preparation (catch-up OFF, evidence path set): bounds of the end-of-tick observe-only write.
 EVIDENCE_OBSERVE_BUDGET_EXCEEDED = "EVIDENCE_OBSERVE_BUDGET_EXCEEDED"
 OFF_OBSERVE_TIMEOUT_SECONDS = 0.5
@@ -661,7 +664,8 @@ class OperationalRuntime:
                 LOG.warning("component=broker_demo event=MANAGE_FAILED error_type=%s", type(exc).__name__)
         if self.exness_session is not None and not (self.halt_gate is not None and self.halt_gate.halted):
             try:
-                self.exness_session.manage(at)
+                # The scheduler passes the 15-minute boundary. The open M5 bar follows the real clock.
+                self.exness_session.manage(self._exness_manage_at(at))
             except Exception as exc:  # noqa: BLE001
                 LOG.warning("component=exness event=MANAGE_FAILED error_type=%s", type(exc).__name__)
         results = {}
@@ -711,14 +715,66 @@ class OperationalRuntime:
                 results[symbol] = "ERROR"
         return results
 
+    def _exness_manage_at(self, at):
+        """Real clock when ``at`` is only the start of the current 15-minute slot.
+
+        Outside London and New York the scheduler passes that boundary. From 02:00 to 03:00 ET the
+        session combo would otherwise keep the M5 bar that opened on the boundary.
+        """
+        if not isinstance(at, datetime) or at.tzinfo is None or at.utcoffset() is None:
+            return at
+        try:
+            now = self.clock()
+        except Exception:  # noqa: BLE001
+            return at
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            return at
+        try:
+            same_slot = slot_at(now, self.config.cadence_minutes) == slot_at(at, self.config.cadence_minutes)
+        except (TypeError, ValueError):
+            return at
+        if same_slot and now >= at:
+            return now
+        return at
+
+    def pace_exness(self, at):
+        """One session-combo ``manage`` during the live entry window, at most every 30 seconds.
+
+        From 03:00 to 05:00 ET a claimed slot never reaches ``on_cycle`` again, and the 5-second
+        operator poll used to skip Exness. Later polls share ``last_manage_at`` so they do not
+        each read the account.
+        """
+        session = self.exness_session
+        if session is None or (self.halt_gate is not None and self.halt_gate.halted):
+            return None
+        when = self._exness_manage_at(at)
+        from execution.session_combo import entry_window
+        if not entry_window(when):
+            return None
+        last = getattr(session, "last_manage_at", None)
+        if isinstance(last, datetime) and getattr(last, "tzinfo", None) is not None and when.tzinfo is not None:
+            gap = (when - last).total_seconds()
+            if 0 <= gap < EXNESS_ENTRY_PACE_SECONDS:
+                return None
+        try:
+            session.last_manage_at = when
+            return session.manage(when)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("component=exness event=MANAGE_FAILED error_type=%s", type(exc).__name__)
+            return None
+
     def process_operator_requests(self, at):
         """Dashboard requests (Floor «Cerrar operación», emergency flatten, provider transition) between cycles.
 
         The provider step uses the router that already polls this mailbox. It never sends an order, including when
         the halt latch is set. An in-session tick inside an already claimed slot is DUPLICATE and never reaches
-        ``router.on_cycle``. Never raises. Returns {client_id: outcome}."""
+        ``router.on_cycle``. The same poll paces an Exness entry window without a request every 5 seconds.
+        Never raises. Returns {client_id: outcome}."""
         self._consume_provider_transition(at)
-        if self.broker_router is None or (self.halt_gate is not None and self.halt_gate.halted):
+        if self.halt_gate is not None and self.halt_gate.halted:
+            return {}
+        self.pace_exness(at)
+        if self.broker_router is None:
             return {}
         try:
             return self.broker_router.process_operator_requests(at)

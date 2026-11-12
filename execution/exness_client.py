@@ -3,12 +3,14 @@
 Discovery is cached. Mutating calls reuse one idempotency key and are not sent twice.
 HTTP 429 is not retried (the troubleshooting page says REQUEST_RATE_LIMIT is not retried automatically).
 The limits JSON shape is not published on the pages we could read, so the Floor also keeps a minimum gap
-between calls (``AI_FLOOR_EXNESS_MIN_INTERVAL_MS``, default 100). TODO: parse
+between calls (``AI_FLOOR_EXNESS_MIN_INTERVAL_MS``, default 100). A call inside that gap waits.
+It is not rejected, and the wait is not a retry of HTTP 429. TODO: parse
 ``GET /v1/configuration/accounts/{account_id}/limits`` once its field names are confirmed.
 """
 from datetime import datetime, timezone
 import json
 from threading import Lock
+import time
 from urllib.parse import urlsplit
 
 from execution.exness_sign import headers
@@ -41,12 +43,13 @@ def _host_ok(url):
 
 
 class ExnessClient:
-    def __init__(self, env, *, caller, sign, clock=None, now_ms=None):
+    def __init__(self, env, *, caller, sign, clock=None, now_ms=None, sleep=None):
         self._env = env
         self._caller = caller
         self._sign = sign
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._now_ms = now_ms or (lambda: int(self._clock().timestamp() * 1000))
+        self._sleep = sleep or time.sleep
         self._interval = _interval_ms(env)
         self.access_point = None
         self._last_ms = None
@@ -78,26 +81,40 @@ class ExnessClient:
         if method.upper() != "GET":
             raise ValueError("signed_headers is only for GET")
         with self._lock:
+            state, now = self._acquire_slot_locked()
+            if state != "ready":
+                raise RuntimeError("rate_limited")
+            return headers(self.api_key, "", now, "GET", path, b"", self._sign)
+
+    def _acquire_slot_locked(self):
+        """``("ready", timestamp)`` once the local gap has elapsed.
+
+        A server 429 returns ``("blocked", now)`` at once. REQUEST_RATE_LIMIT is not retried.
+        The local gap is not that 429: a manage cycle and the tick handshake issue several GETs
+        in a row, and rejecting them makes the cycle ``BrokerUnavailable``.
+        """
+        while True:
             now = self._now_ms()
             if self._blocked_until_ms is not None and now < self._blocked_until_ms:
-                raise RuntimeError("rate_limited")
-            if self._last_ms is not None and now - self._last_ms < self._interval:
-                raise RuntimeError("rate_limited")
-            signed = headers(self.api_key, "", now, "GET", path, b"", self._sign)
-            self._last_ms = now
-            return signed
+                return "blocked", now
+            elapsed = None if self._last_ms is None else now - self._last_ms
+            if elapsed is None or elapsed >= self._interval:
+                self._last_ms = now
+                return "ready", now
+            self._sleep((self._interval - elapsed) / 1000)
+            if self._now_ms() <= now:
+                return "stalled", now
 
     def _request_locked(self, base, method, path, body, idempotency_key):
-        now = self._now_ms()
-        if self._blocked_until_ms is not None and now < self._blocked_until_ms:
+        state, now = self._acquire_slot_locked()
+        if state == "blocked":
             return 429, {"error_message": "REQUEST_RATE_LIMIT"}, {}, False
-        if self._last_ms is not None and now - self._last_ms < self._interval:
+        if state != "ready":
             return 429, {"error_message": "floor_min_interval"}, {}, False
         raw = b"" if body is None else json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         signed = headers(self.api_key, idempotency_key, now, method, path, raw, self._sign)
         if body is not None:
             signed["Content-Type"] = "application/json"
-        self._last_ms = now
         status, payload, response_headers = self._caller(method, base + path, signed, raw)
         if status == 429:
             retry = response_headers.get("Retry-After") if isinstance(response_headers, dict) else None

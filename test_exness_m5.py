@@ -9,9 +9,10 @@ from zoneinfo import ZoneInfo
 from execution.broker_port import BrokerBalance
 from execution.exness_brakes import ExnessBrakes
 from execution.exness_broker import REAL_CONFIRM, ExnessBroker
-from execution.exness_m5 import (FEED_SYMBOLS, M5Aggregator, M5Feed, LiveTickRunner, TickStream, candle_query,
-                                candle_request_path, candles_path, connect_ticks, floor_m5_utc, m5_feed_enabled,
-                                parse_candle_payload, parse_tick_frame)
+from execution.exness_client import ExnessClient
+from execution.exness_m5 import (FEED_SYMBOLS, M5Aggregator, M5Feed, LiveTickRunner, TickStream, STREAM_STABLE_SECONDS,
+                                candle_query, candle_request_path, candles_path, connect_ticks, floor_m5_utc,
+                                m5_feed_enabled, parse_candle_payload, parse_tick_frame)
 from execution.exness_session import ExnessSession
 from execution.exness_stream import QuoteBook
 from execution.exness_transport import FakeExnessTransport
@@ -159,6 +160,26 @@ class BarTests(unittest.TestCase):
         self.assertLess(path.index("price_type="), path.index("from="))
         self.assertLess(path.index("from="), path.index("to="))
 
+    def test_accept_then_close_backs_off_and_a_stable_tick_resets(self):
+        feed = M5Feed(QuoteBook())
+        stream = TickStream(feed)
+        opened = utc(2026, 1, 15, 0, 0)
+        stream.on_open(opened)
+        self.assertEqual(stream.attempt, 0)
+        self.assertEqual(stream.on_drop(opened), 1)
+        stream.on_open(opened)
+        self.assertEqual(stream.attempt, 1)
+        self.assertEqual(stream.on_drop(opened), 2)
+        self.assertEqual(stream.attempt, 2)
+        stable_at = opened + timedelta(seconds=STREAM_STABLE_SECONDS)
+        stream.on_open(stable_at)
+        stream.on_message(tick("EURUSD", "1.10000", "1.10002", stable_at), stable_at)
+        self.assertEqual(stream.attempt, 2)
+        later = stable_at + timedelta(seconds=STREAM_STABLE_SECONDS)
+        self.assertIsNone(stream.poll(later))
+        self.assertEqual(stream.attempt, 0)
+        self.assertEqual(stream.on_drop(later), 1)
+
 
 class FeedSessionTests(unittest.TestCase):
     def test_flag_off_does_not_build_a_feed_and_the_stream_drives_london_then_the_fix(self):
@@ -280,6 +301,66 @@ class LiveStreamTests(unittest.TestCase):
         self.assertEqual(len(opens), 2)
         self.assertFalse(stream.connected)
 
+    def test_accept_then_close_does_not_sign_a_handshake_every_second(self):
+        at = utc(2026, 1, 15, 12, 0)
+        feed = M5Feed(QuoteBook())
+        stream = TickStream(feed)
+        delays = []
+
+        class Closed:
+            def send(self, data):
+                del data
+
+            def recv(self, timeout):
+                del timeout
+                raise ConnectionError("closed")
+
+            def close(self):
+                return None
+
+        runner = LiveTickRunner(stream, lambda url, headers: Closed(), lambda: ("wss://ap.example/ticks", {}),
+                                clock=lambda: at, sleep=delays.append)
+        runner.serve_once()
+        runner.serve_once()
+        runner.serve_once()
+        self.assertEqual(delays, [1, 2, 4])
+        self.assertGreater(stream.attempt, 1)
+
+    def test_candles_go_through_get_json_and_the_request_path(self):
+        now = [1_000_000]
+        seen = []
+        start = utc(2026, 1, 15, 0, 0)
+        end = start + timedelta(minutes=10)
+        opened = start.isoformat().replace("+00:00", "Z")
+
+        def caller(method, url, headers, body):
+            del method, headers, body
+            seen.append(url)
+            now[0] += 150
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            return 200, {"candles": [{"time": opened, "open": 150.1, "high": 150.4, "low": 149.9,
+                                      "close": 150.2, "volume": 3}]}, {}
+
+        def sleep(seconds):
+            now[0] += int(round(seconds * 1000))
+
+        client = ExnessClient(
+            {"EXN_API_KEY": "exnsk-public", "EXN_ACCOUNT_ID": "123456",
+             "EXN_DISCOVERY_BASE_URL": "https://gateway.example"},
+            caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+        _clock, fake, live = session(start, armed(**{"AI_FLOOR_EXNESS_M5_FEED": "0"}))
+        fake._client = client
+        bars = live.broker.candles("USDJPY", "M5", start, end)
+        path = candle_request_path(client.account_id, "USDJPY", start, end)
+        self.assertTrue(seen[0].startswith("https://gateway.example/v1/trading/access-point"))
+        self.assertTrue(seen[1].endswith(path))
+        self.assertIn("instrument=USDJPY", seen[1])
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0].symbol, "USDJPY")
+        self.assertEqual(bars[0].close, Decimal("150.2"))
+
     def test_connect_passes_the_signed_headers_and_does_not_enable_deflate(self):
         from unittest.mock import patch
         seen = {}
@@ -331,6 +412,21 @@ class LiveStreamTests(unittest.TestCase):
         self.assertEqual([command.symbol for command in markets], ["USDJPY"])
         self.assertEqual(markets[0].side, "LONG")
         self.assertNotEqual(markets[0].symbol, "EURUSD")
+
+    def test_manage_reads_the_account_once(self):
+        at = datetime(2026, 1, 15, 2, 0, tzinfo=NY)
+        _clock, fake, live = session(at, armed(**{"AI_FLOOR_EXNESS_M5_FEED": "0"}))
+        calls = []
+        original = fake.read_state
+
+        def counted():
+            calls.append(1)
+            return original()
+
+        fake.read_state = counted
+        live.manage(at)
+        live.manage(at + timedelta(seconds=31))
+        self.assertEqual(calls, [1, 1])
 
     def test_a_live_transport_starts_the_runner_and_a_tick_clears_quote_stale(self):
         import time
@@ -398,3 +494,98 @@ class LiveStreamTests(unittest.TestCase):
             self.assertTrue(transport.quotes.fresh(at, 5, "GBPUSD"))
         finally:
             live._runner.stop()
+
+
+class EntryPaceTests(unittest.TestCase):
+    def runtime(self, at):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from runtime.config import RuntimeConfig
+        from runtime.service import OperationalRuntime
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        config = RuntimeConfig(db_path=Path(self._tmp.name) / "trading.db", enabled_symbols=("EURUSD",),
+                               scheduler_enabled=True)
+        holder = [at]
+        runtime = OperationalRuntime(config, clock=lambda: holder[0], broker_router=None,
+                                     market_provider=SimpleNamespace())
+        self.addCleanup(runtime.close)
+
+        class Session:
+            def __init__(self):
+                self.calls = []
+                self.last_manage_at = None
+
+            def manage(self, when, bars=None):
+                del bars
+                self.calls.append(when)
+                self.last_manage_at = when
+                return {}
+
+        runtime.exness_session = Session()
+        runtime._clock_holder = holder
+        return runtime
+
+    def test_0200_uses_the_real_clock_and_later_polls_wait(self):
+        from runtime.scheduler import slot_at
+        from runtime.service import EXNESS_ENTRY_PACE_SECONDS
+        at = datetime(2026, 1, 15, 2, 7, tzinfo=NY)
+        runtime = self.runtime(at)
+        runtime.manage_trade_duration(slot_at(at))
+        session = runtime.exness_session
+        self.assertEqual(session.calls, [at])
+        self.assertNotEqual(at, slot_at(at))
+        runtime.process_operator_requests(at + timedelta(seconds=5))
+        self.assertEqual(session.calls, [at])
+        later = at + timedelta(seconds=EXNESS_ENTRY_PACE_SECONDS)
+        runtime._clock_holder[0] = later
+        runtime.process_operator_requests(later)
+        self.assertEqual(session.calls, [at, later])
+        noon = datetime(2026, 1, 15, 12, 0, tzinfo=NY)
+        runtime._clock_holder[0] = noon
+        runtime.process_operator_requests(noon)
+        self.assertEqual(session.calls, [at, later])
+
+    def test_0300_tick_paces_the_real_clock_once_per_window(self):
+        import tempfile
+        from pathlib import Path
+        from runtime.config import RuntimeConfig
+        from runtime.scheduler import Scheduler, slot_at
+        from storage.database import Store
+        at = datetime(2026, 1, 15, 3, 7, tzinfo=NY)
+        early = datetime(2026, 1, 15, 2, 7, tzinfo=NY)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+
+        class Fake:
+            def __init__(self, path):
+                self.config = RuntimeConfig(db_path=path, enabled_symbols=("EURUSD",), scheduler_enabled=True)
+                self.store = Store(path)
+                self.halt_gate = None
+                self.paced = []
+                self.managed = []
+                self.cycles = []
+
+            def manage_trade_duration(self, when):
+                self.managed.append(when)
+
+            def run_cycle(self, symbol, slot):
+                self.cycles.append((symbol, slot))
+                return "DUPLICATE"
+
+            def pace_exness(self, when):
+                self.paced.append(when)
+
+        live = Fake(Path(folder.name) / "trading.db")
+        self.addCleanup(live.store.close)
+        self.assertEqual(Scheduler(live, lambda: at).tick(), ["DUPLICATE"])
+        self.assertEqual(live.managed, [])
+        self.assertEqual(live.paced, [at])
+        self.assertEqual(live.cycles, [("EURUSD", slot_at(at))])
+        self.assertLess(slot_at(at), at)
+        quiet = Fake(Path(folder.name) / "early.db")
+        self.addCleanup(quiet.store.close)
+        self.assertEqual(Scheduler(quiet, lambda: early).tick(), [])
+        self.assertEqual(quiet.paced, [])
+        self.assertEqual(quiet.managed, [slot_at(early)])

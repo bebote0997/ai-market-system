@@ -41,6 +41,7 @@ class ExnessSession:
         self._feed = M5Feed(broker._transport.quotes) if m5_feed_enabled(env) else None
         self._quote_feed = None
         self._runner = None
+        self.last_manage_at = None
         logging.getLogger("ai_floor.session_combo").info(
             "component=session_combo event=%s", "SESSION_COMBO_ON" if self._combo is not None else "SESSION_COMBO_OFF")
         logging.getLogger("ai_floor.exness_m5").info(
@@ -120,6 +121,17 @@ class ExnessSession:
         return None
 
     def manage(self, at, bars=None):
+        self.last_manage_at = at
+        cache = getattr(self.broker, "cache_account_reads", None)
+        if cache is not None:
+            cache(True)
+        try:
+            return self._manage(at, bars)
+        finally:
+            if cache is not None:
+                cache(False)
+
+    def _manage(self, at, bars):
         try:
             if bars is None:
                 bars = self._bars(at)

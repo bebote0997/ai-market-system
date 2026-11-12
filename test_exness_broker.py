@@ -262,6 +262,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(payload["path"], "/v1/trading/access-point?account_id=123456")
         calls = []
         now = [1_000_000]
+        slept = []
 
         def caller(method, url, headers, body):
             calls.append((method, url, dict(headers), body))
@@ -271,7 +272,11 @@ class ClientTests(unittest.TestCase):
                 return 202, {"operation_id": "9", "status": "accepted"}, {}
             return 429, {"error_message": "REQUEST_RATE_LIMIT"}, {"Retry-After": "2"}
 
-        client = ExnessClient(armed(), caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0])
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += int(round(seconds * 1000))
+
+        client = ExnessClient(armed(), caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
         self.assertEqual(client.discover(), "https://ap.example")
         signed = calls[0][2]
         self.assertEqual(signed["EXN-IDEMPOTENCY-KEY"], "")
@@ -292,13 +297,90 @@ class ClientTests(unittest.TestCase):
         padded = signed["EXN-DATA"] + "=" * (-len(signed["EXN-DATA"]) % 4)
         body = json.loads(base64.urlsafe_b64decode(padded))
         self.assertEqual((body["method"], body["path"], body["idempotency_key"]), ("GET", path, ""))
-        with self.assertRaises(RuntimeError):
-            client.signed_headers("GET", path)
+        before = now[0]
+        again = client.signed_headers("GET", path)
+        self.assertEqual(slept, [0.1])
+        self.assertEqual(int(again["EXN-TIMESTAMP"]) - before, 100)
         now[0] += 100
         limited = client.mutate("GET", "/v1/configuration/accounts/123456/account", None, "read-1")
         # GET through mutate still sends; the canned caller returns 429 and that key is remembered.
         self.assertEqual(limited["status"], 429)
         self.assertEqual(client.mutate("GET", "/v1/configuration/accounts/123456/account", None, "read-1")["status"], 429)
+
+    def test_short_latency_waits_for_the_gap_and_a_429_does_not(self):
+        now = [1_000_000]
+        calls = []
+        slept = []
+
+        def caller(method, url, headers, body):
+            del method, headers, body
+            calls.append(url)
+            now[0] += 20
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            return 200, {"ok": True}, {}
+
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += int(round(seconds * 1000))
+
+        client = ExnessClient(armed(), caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+        self.assertEqual(client.discover(), "https://ap.example")
+        for _ in range(8):
+            self.assertEqual(client.get_json("/v1/configuration/accounts/123456/account"), {"ok": True})
+        self.assertEqual(len(calls), 9)
+        self.assertTrue(slept)
+        self.assertTrue(all(0 < delay <= 0.1 for delay in slept))
+        signed = client.signed_headers("GET", "/v1/server-events/accounts/123456/ws/ticks")
+        self.assertEqual(signed["EXN-IDEMPOTENCY-KEY"], "")
+        self.assertIn("EXN-SIGN", signed)
+
+        blocked = [1_000_000]
+        seen = []
+
+        def limited(method, url, headers, body):
+            del method, headers, body
+            seen.append(url)
+            blocked[0] += 150
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            return 429, {"error_message": "REQUEST_RATE_LIMIT"}, {"Retry-After": "5"}
+
+        def no_sleep(seconds):
+            raise AssertionError(seconds)
+
+        slow = ExnessClient(armed(), caller=limited, sign=lambda data: b"sig", now_ms=lambda: blocked[0], sleep=no_sleep)
+        self.assertEqual(slow.discover(), "https://ap.example")
+        blocked[0] += 150
+        with self.assertRaises(RuntimeError):
+            slow.get_json("/v1/configuration/accounts/123456/account")
+        with self.assertRaises(RuntimeError):
+            slow.get_json("/v1/configuration/accounts/123456/account")
+        self.assertEqual(len(seen), 2)
+
+    def test_one_cached_snapshot_still_rereads_before_an_order(self):
+        fake = terminal()
+        adapter, _fake = broker(fake)
+        calls = []
+        original = fake.read_state
+
+        def counted():
+            calls.append(1)
+            return original()
+
+        fake.read_state = counted
+        adapter.cache_account_reads(True)
+        adapter.note_link()
+        adapter.evaluate_brakes(NOW)
+        adapter.open_trades()
+        adapter.pending_orders()
+        self.assertEqual(len(calls), 1)
+        adapter._read(fresh=True)
+        adapter._read(fresh=True)
+        self.assertEqual(len(calls), 3)
+        adapter.cache_account_reads(False)
+        adapter.note_link()
+        self.assertEqual(len(calls), 4)
 
 
 if __name__ == "__main__":

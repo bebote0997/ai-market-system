@@ -48,6 +48,17 @@ def combo_enabled(env):
     return env.get(FLAG) == "1" and str(env.get(BROKER_FLAG) or "").strip().lower() == "exness"
 
 
+def entry_window(at):
+    """True while an entry can still be on time: London ``[02:00, 05:00)`` New York, or the fix's first 5 minutes."""
+    if not _aware(at):
+        return False
+    ny = _ny(at)
+    if ny.weekday() < 5 and time(2, 0) <= ny.time() < time(5, 0):
+        return True
+    lon = _lon(at)
+    return lon.weekday() < 5 and time(16, 0) <= lon.time() < time(16, 5)
+
+
 def _aware(at):
     return isinstance(at, datetime) and at.tzinfo is not None and at.utcoffset() is not None
 

@@ -24,4 +24,5 @@ El portal nombra órdenes `stop`, pero no el campo JSON. No se envía una orden 
 
 - Sigue apagado. Hacen falta `AI_FLOOR_SESSION_COMBO=1`, `AI_FLOOR_BROKER=exness` y las dos claves de ejecución real. Este cambio no las enciende.
 - `manage(at)` pide las velas M5 con `candles()` y, si el socket está abierto, mezcla la vela que se está formando con los ticks. Sin velas el combo registra `SESSION_COMBO_NO_BARS` y no entra.
+- De 02:00 a 03:00 ET el scheduler está fuera de sesión y antes pasaba el inicio del bloque de 15 minutos: la vela M5 no avanzaba. Ahora `manage` usa el reloj real. De 03:00 a 05:00 ET, y en los primeros 5 minutos del fix, un slot ya reclamado y el sondeo de 5 s llaman a `manage` como mucho cada 30 s. No hay una lectura por sondeo.
 - El nombre JSON de `contractSize` / `ProfitRate` sigue sin confirmarse. Si el payload no los trae con esos nombres, el tamaño se salta. En la cuenta USC el contrato vivo es `contract_size` y no hay `profitRate` (ver `docs/exness_api.md`).
