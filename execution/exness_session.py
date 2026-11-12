@@ -6,18 +6,19 @@ and the dollar brakes. The OANDA pullback manager is not reimplemented here.
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
+from zoneinfo import ZoneInfo
 
-from execution.broker_port import APPROVED, OrderPlan, RiskApproval
+from execution.broker_port import APPROVED
 from execution.exness_broker import broker_from_env
-from execution.exness_sizing import RISK_FRACTION_CAP
 from execution.friday_close import OPEN, friday_window, minutes_from_env
-from execution.exness_m5 import M5Feed, m5_feed_enabled
-from execution.session_combo import SessionCombo, combo_enabled
+from execution.exness_m5 import BAR, FEED_SYMBOLS, M5Feed, floor_m5_utc, m5_feed_enabled
+from execution.session_combo import SessionCombo, combo_enabled, range_window
 from execution.trade_duration import entries_blocked
 
 
 LOG = logging.getLogger("ai_floor.exness")
 PLAN_READY = "PLAN_READY"
+NY = ZoneInfo("America/New_York")
 
 
 def _dec(value):
@@ -30,11 +31,6 @@ def _dec(value):
     return out if out.is_finite() and out > 0 else None
 
 
-def _fraction(decision):
-    value = _dec(getattr(decision, "risk_fraction", None))
-    return value if value is not None and value <= RISK_FRACTION_CAP else RISK_FRACTION_CAP
-
-
 class ExnessSession:
     def __init__(self, broker, *, env, clock=None):
         self.broker = broker
@@ -43,10 +39,13 @@ class ExnessSession:
         self.on_alert = None
         self._combo = SessionCombo(broker) if combo_enabled(env) else None
         self._feed = M5Feed(broker._transport.quotes) if m5_feed_enabled(env) else None
+        self._quote_feed = None
+        self._runner = None
         logging.getLogger("ai_floor.session_combo").info(
             "component=session_combo event=%s", "SESSION_COMBO_ON" if self._combo is not None else "SESSION_COMBO_OFF")
         logging.getLogger("ai_floor.exness_m5").info(
             "component=exness_m5 event=%s", "M5_FEED_ON" if self._feed is not None else "M5_FEED_OFF")
+        self._open_live_quotes()
 
     @property
     def on_alert(self):
@@ -68,11 +67,62 @@ class ExnessSession:
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=exness event=ALERT_FAILED error_type=%s", type(exc).__name__)
 
+    def _open_live_quotes(self):
+        """Open the ticks socket in this process when the live Exness transport is in use.
+
+        A fake transport does not open a socket. The M5 feed flag is not required: quotes have to stay
+        fresh for any entry or close. The flag still decides whether ``_feed`` is the session feed.
+        """
+        from execution.exness_m5 import LiveTickRunner, TickStream, connect_ticks
+        from execution.exness_stream import ws_url
+        from execution.exness_transport import RestExnessTransport
+        transport = self.broker._transport
+        if not isinstance(transport, RestExnessTransport):
+            return
+        feed = self._feed if self._feed is not None else M5Feed(transport.quotes)
+        if self._feed is None:
+            self._quote_feed = feed
+        client = transport._client
+        stream = TickStream(feed)
+
+        def handshake():
+            point = client.discover()
+            path = stream.handshake_path(client.account_id)
+            return ws_url(point, path), client.signed_headers("GET", path)
+
+        self._runner = LiveTickRunner(stream, connect_ticks, handshake, clock=self._clock)
+        self._runner.start()
+
+    def _history(self, at):
+        start = range_window(at.astimezone(NY).date())[0]
+        end = floor_m5_utc(at) + BAR
+        bars = []
+        for symbol in FEED_SYMBOLS:
+            try:
+                bars.extend(self.broker.candles(symbol, "M5", start, end) or ())
+            except Exception as exc:  # noqa: BLE001 - the next manage retries; the message can contain the host
+                LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s",
+                            symbol, type(exc).__name__)
+        return tuple(bars)
+
+    def _bars(self, at):
+        feed = self._feed if self._feed is not None else self._quote_feed
+        if feed is not None:
+            feed.close_elapsed(at)
+        if self._combo is not None:
+            history = self._history(at)
+            if feed is not None:
+                feed.insert_bars(history)
+            elif history:
+                return history
+        if feed is not None:
+            return feed.bars()
+        return None
+
     def manage(self, at, bars=None):
         try:
-            if bars is None and self._feed is not None:
-                self._feed.close_elapsed(at)
-                bars = self._feed.bars()
+            if bars is None:
+                bars = self._bars(at)
             fresh = self.broker.note_link()
             brake = self.broker.evaluate_brakes(at)
             if brake.flatten:
@@ -136,17 +186,11 @@ class ExnessSession:
             candidate = self._candidate(context, status)
             if len(candidate) == 2:
                 return candidate
-            decision, entry, stop, target, side, symbol, run_id = candidate
-            client_id = f"aif-{run_id}"
-            fraction = _fraction(decision)
-            lots, why, _spec = self.broker.preview_size(symbol, entry, stop, fraction)
-            if why:
-                LOG.info("component=exness event=SKIPPED reason=%s", why)
-                return ("SKIPPED_BELOW_MIN" if why == "below_volume_min" else "NOT_ROUTED", why)
-            plan = OrderPlan(symbol, side, lots, entry, stop, target, client_id, run_id)
-            approval = RiskApproval(APPROVED, run_id, symbol, side, lots, entry, stop, target)
-            result = self.broker.submit_plan(plan, approval, risk_fraction=fraction)
-            return result.status, result.broker_ref or result.reason
+            # Engine plans, including EMA-only practice, never become Exness orders.
+            # The session combo places its own orders from manage() via open_market.
+            del candidate
+            LOG.info("component=exness event=ORDER_REFUSED reason=session_combo_only")
+            return ("NOT_ROUTED", "session_combo_only")
         except Exception as exc:  # noqa: BLE001
             LOG.warning("component=exness event=CYCLE_FAILED error_type=%s", type(exc).__name__)
             return ("NOT_ROUTED", type(exc).__name__)

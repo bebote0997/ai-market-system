@@ -11,12 +11,17 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import logging
+from threading import Event, RLock, Thread
+from urllib.parse import urlencode
 
 from execution.exness_stream import backoff_seconds, subscribe_ticks, ticks_path
 from execution.session_combo import M5Bar
 
 
 LOG = logging.getLogger("ai_floor.exness_m5")
+# The socket library logs the request URL. That URL contains the account id, so it stays quiet.
+_WS_LOG = logging.getLogger("ai_floor.exness_ticks")
+_WS_LOG.setLevel(logging.CRITICAL)
 FLAG = "AI_FLOOR_EXNESS_M5_FEED"
 BROKER_FLAG = "AI_FLOOR_BROKER"
 FEED_SYMBOLS = ("USDJPY", "GBPUSD", "EURUSD")
@@ -24,6 +29,10 @@ CANDLES_PATH = "/v1/market-data/accounts/{account_id}/candles"
 # Floor policy. The portal says reconnect with backoff and does not publish a heartbeat frame.
 HEARTBEAT_SILENCE_SECONDS = 15
 BAR = timedelta(minutes=5)
+# The candle page rejects a from/to span longer than the account candle limit. 900 M5 bars is 75 hours.
+MAX_CANDLE_BARS = 900
+# The official TypeScript example offers this subprotocol and turns per-message deflate off.
+WS_PROTOCOL = "exness-ws-protocol"
 
 
 def m5_feed_enabled(env):
@@ -46,6 +55,24 @@ def candle_query(symbol, start, end):
     return {"instrument": symbol, "timeframe": "M5", "price_type": "bid",
             "from": start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "to": end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def candle_spans(start, end):
+    """``(start, end)`` pairs, each short enough for one candle GET."""
+    if start >= end:
+        return ()
+    step = BAR * MAX_CANDLE_BARS
+    spans, cursor = [], start
+    while cursor < end:
+        nxt = min(end, cursor + step)
+        spans.append((cursor, nxt))
+        cursor = nxt
+    return tuple(spans)
+
+
+def candle_request_path(account_id, symbol, start, end):
+    """Path plus query, encoded once. The signature uses this exact string."""
+    return candles_path(account_id) + "?" + urlencode(candle_query(symbol, start, end))
 
 
 def _price(value):
@@ -116,6 +143,8 @@ def parse_candle_payload(payload, symbol):
             payload = json.loads(payload)
         except ValueError:
             return (), "schema_unknown"
+    if isinstance(payload, list):
+        payload = {"candles": payload}
     rows = payload.get("candles") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         return (), "schema_unknown"
@@ -229,44 +258,59 @@ class M5Feed:
     def __init__(self, quotes, symbols=FEED_SYMBOLS):
         self.quotes = quotes
         self.aggs = {symbol: M5Aggregator(symbol) for symbol in symbols}
+        self._lock = RLock()
 
     def on_tick(self, symbol, bid, ask, at):
-        if symbol not in self.aggs:
-            return []
-        self.quotes.note_tick(bid, ask, at, symbol=symbol)
-        return self.aggs[symbol].on_tick(bid, at)
+        with self._lock:
+            if symbol not in self.aggs:
+                return []
+            self.quotes.note_tick(bid, ask, at, symbol=symbol)
+            return self.aggs[symbol].on_tick(bid, at)
 
     def close_elapsed(self, at):
-        emitted = []
-        for agg in self.aggs.values():
-            emitted.extend(agg.close_elapsed(at))
-        return emitted
+        with self._lock:
+            emitted = []
+            for agg in self.aggs.values():
+                emitted.extend(agg.close_elapsed(at))
+            return emitted
 
     def bars(self):
-        out = []
-        for agg in self.aggs.values():
-            out.extend(agg.bars())
-        return tuple(out)
+        with self._lock:
+            out = []
+            for agg in self.aggs.values():
+                out.extend(agg.bars())
+            return tuple(out)
 
     def mark_disconnected(self):
-        self.quotes.mark_disconnected()
+        with self._lock:
+            self.quotes.mark_disconnected()
+
+    def insert_bars(self, bars):
+        with self._lock:
+            added = []
+            for bar in bars:
+                agg = self.aggs.get(getattr(bar, "symbol", None))
+                if agg is None:
+                    continue
+                added.extend(agg.insert([bar]))
+            return tuple(added)
 
     def accept_candles(self, symbol, payload):
-        agg = self.aggs.get(symbol)
-        if agg is None:
-            return ()
-        bars, reason = parse_candle_payload(payload, symbol)
-        if reason:
-            _log("M5_GAP", symbol=symbol, reason=reason)
-            return ()
-        return tuple(agg.insert(bars))
+        with self._lock:
+            agg = self.aggs.get(symbol)
+            if agg is None or payload is None:
+                return ()
+            bars, reason = parse_candle_payload(payload, symbol)
+            if reason:
+                _log("M5_GAP", symbol=symbol, reason=reason)
+                return ()
+            return tuple(agg.insert(bars))
 
 
 class TickStream:
-    """Subscribe, parse, heartbeat and reconnect. The socket itself is injected.
+    """Subscribe, parse, heartbeat and reconnect.
 
-    A live socket is not opened here: the portal's handshake is a signed GET, and this repo does not
-    pin a WebSocket library. ``on_open`` returns the documented subscribe message.
+    ``on_open`` returns the documented subscribe message. ``LiveTickRunner`` opens the socket.
     """
 
     def __init__(self, feed, *, clock=None):
@@ -322,3 +366,109 @@ class TickStream:
         for symbol, payload in (payloads or {}).items():
             self.feed.accept_candles(symbol, payload)
         return message
+
+
+class _WsSocket:
+    """The small surface ``LiveTickRunner`` needs from ``websockets.sync``."""
+
+    def __init__(self, ws):
+        self._ws = ws
+
+    def send(self, data):
+        self._ws.send(data)
+
+    def recv(self, timeout):
+        return self._ws.recv(timeout=timeout)
+
+    def close(self):
+        try:
+            self._ws.close()
+        except Exception:  # noqa: BLE001 - the runner already treats the socket as gone
+            return
+
+
+def connect_ticks(url, headers):
+    """Open one signed ticks socket. No order is sent. The URL is not logged."""
+    from websockets.sync.client import connect
+    ws = connect(url, additional_headers=dict(headers), subprotocols=[WS_PROTOCOL], compression=None,
+                 proxy=None, open_timeout=10, close_timeout=2, ping_interval=None, ping_timeout=None,
+                 legacy=True, max_size=1_000_000, user_agent_header=None, logger=_WS_LOG)
+    return _WsSocket(ws)
+
+
+class LiveTickRunner:
+    """The process thread that keeps the quote socket open while the Exness path is in use.
+
+    ``connect`` and ``handshake`` are injected. ``handshake`` returns ``(url, headers)`` for a freshly
+    signed GET of the ticks path. A dropped socket backs off, signs a new handshake, and subscribes again.
+    """
+
+    def __init__(self, stream, connect, handshake, *, clock, sleep=None, recv_timeout=1.0):
+        self.stream = stream
+        self._connect = connect
+        self._handshake = handshake
+        self._clock = clock
+        self._sleep = sleep
+        self._recv_timeout = recv_timeout
+        self._stop = Event()
+        self._thread = None
+
+    def start(self):
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = Thread(target=self._loop, name="exness-ticks", daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2)
+
+    def _pause(self, seconds):
+        if self._sleep is not None:
+            self._sleep(seconds)
+            return
+        self._stop.wait(timeout=seconds)
+
+    def _loop(self):
+        while not self._stop.is_set():
+            self.serve_once()
+
+    def serve_once(self):
+        sock = None
+        try:
+            _url, headers = self._handshake()
+            sock = self._connect(_url, headers)
+            at = self._clock()
+            message = self.stream.on_open(at)
+            sock.send(json.dumps(message, separators=(",", ":")))
+            while not self._stop.is_set():
+                try:
+                    raw = sock.recv(self._recv_timeout)
+                except TimeoutError:
+                    raw = None
+                at = self._clock()
+                if raw is None:
+                    delay = self.stream.poll(at)
+                    if delay is not None:
+                        self._pause(delay)
+                        break
+                    continue
+                if isinstance(raw, bytes):
+                    try:
+                        raw = raw.decode("utf-8")
+                    except UnicodeError:
+                        continue
+                self.stream.on_message(raw, at)
+        except Exception as exc:  # noqa: BLE001 - reconnect; the message can contain the host
+            delay = self.stream.on_drop(self._clock())
+            _log("STREAM_ERROR", error_type=type(exc).__name__)
+            self._pause(delay)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:  # noqa: BLE001
+                    pass

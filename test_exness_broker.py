@@ -222,20 +222,38 @@ class BrakeTests(unittest.TestCase):
         other = ExnessBrakes.from_env(FakeExnessTransport(), armed())
         self.assertEqual(other.evaluate(Decimal("500"), "EUR", NOW).reason, "currency_unsupported")
 
-    def test_session_skips_below_min(self):
+    def test_armed_cycle_refuses_an_engine_plan(self):
         from types import SimpleNamespace
         fake = terminal()
         session = ExnessSession(broker(fake)[0], env=armed(), clock=lambda: NOW)
+        self.assertIsNone(session._runner)
+        # 25 pips on 500 USD sizes to 0.02, which submit_plan would accept. The cycle must not send it.
         decision = SimpleNamespace(status="APPROVED", symbol="EURUSD", side="LONG", entry=Decimal("1.10000"),
-                                   stop=Decimal("1.08000"), target=Decimal("1.10500"), risk_fraction=Decimal("0.01"))
+                                   stop=Decimal("1.09750"), target=Decimal("1.10500"), risk_fraction=Decimal("0.01"))
         context = {"symbol": "EURUSD", "run_id": "run-9", "eligible": True,
                    "deterministic": SimpleNamespace(final_status="PLAN_READY", risk_decision=decision, trade_plan=decision),
                    "ai": SimpleNamespace(final_status="PLAN_READY", risk_decision=SimpleNamespace(status="APPROVED"))}
-        self.assertEqual(session.on_cycle(context, "PLAN_READY", NOW)[0], "SKIPPED_BELOW_MIN")
+        for extra in ({}, {"AI_FLOOR_EMA_ONLY": "1"}, {"AI_FLOOR_EMA_ONLY": "0"}):
+            session = ExnessSession(broker(fake)[0], env=armed(**extra), clock=lambda: NOW)
+            self.assertEqual(session.on_cycle(context, "PLAN_READY", NOW), ("NOT_ROUTED", "session_combo_only"))
+        self.assertEqual(fake.commands, [])
+        bare = armed()
+        del bare["AI_FLOOR_EXNESS_REAL_EXECUTION"]
+        del bare["AI_FLOOR_EXNESS_REAL_CONFIRM"]
+        quiet = ExnessSession(broker(fake)[0], env=bare, clock=lambda: NOW)
+        self.assertEqual(quiet.on_cycle(context, "PLAN_READY", NOW), ("NOT_ROUTED", "session_combo_only"))
         self.assertEqual(fake.commands, [])
 
 
 class ClientTests(unittest.TestCase):
+    def test_render_lock_pins_cryptography_and_the_ticks_socket(self):
+        direct = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        locked = (ROOT / "requirements-ci.txt").read_text(encoding="utf-8")
+        self.assertIn("cryptography==50.0.2", direct)
+        self.assertIn("websockets==17.2", direct)
+        self.assertIn("cryptography==50.0.2", locked)
+        self.assertIn("sha256:9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079", locked)
+        self.assertIn("websockets==17.2", locked)
     def test_signed_get_uses_the_documented_empty_body_hash_and_idempotency_is_once(self):
         self.assertEqual(body_hash(b""), EMPTY_BODY_HASH)
         payload = json.loads(payload_bytes("exnsk-public-key-value", "", 1_000, "GET",
@@ -266,6 +284,16 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(posts), 1)
         self.assertEqual(first["payload"]["operation_id"], second["payload"]["operation_id"])
         self.assertEqual(posts[0][2]["EXN-IDEMPOTENCY-KEY"], "aif-run-1")
+        path = "/v1/server-events/accounts/123456/ws/ticks"
+        signed = client.signed_headers("GET", path)
+        self.assertEqual(signed["EXN-IDEMPOTENCY-KEY"], "")
+        self.assertEqual(signed["EXN-SIGN-VERSION"], "1")
+        import base64
+        padded = signed["EXN-DATA"] + "=" * (-len(signed["EXN-DATA"]) % 4)
+        body = json.loads(base64.urlsafe_b64decode(padded))
+        self.assertEqual((body["method"], body["path"], body["idempotency_key"]), ("GET", path, ""))
+        with self.assertRaises(RuntimeError):
+            client.signed_headers("GET", path)
         now[0] += 100
         limited = client.mutate("GET", "/v1/configuration/accounts/123456/account", None, "read-1")
         # GET through mutate still sends; the canned caller returns 429 and that key is remembered.

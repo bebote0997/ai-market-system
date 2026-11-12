@@ -22,7 +22,6 @@ El portal nombra órdenes `stop`, pero no el campo JSON. No se envía una orden 
 
 ## Lo que aún impide usarlo en vivo
 
-- El runtime llama `manage(at)` sin velas M5. Sin velas el combo registra `SESSION_COMBO_NO_BARS` y no entra. La ruta REST de velas de Exness sigue sin estar en las páginas leídas.
-- El libro de ticks del adaptador guarda un solo bid/ask. El fill es ese precio, así que el tick que ve el broker tiene que ser del símbolo que se está entrando.
-- El nombre JSON de `contractSize` / `ProfitRate` sigue sin confirmarse. Si el payload no los trae con esos nombres, el tamaño se salta.
-- `cryptography` no está pinado, así que el transporte real no firma hasta que se añada.
+- Sigue apagado. Hacen falta `AI_FLOOR_SESSION_COMBO=1`, `AI_FLOOR_BROKER=exness` y las dos claves de ejecución real. Este cambio no las enciende.
+- `manage(at)` pide las velas M5 con `candles()` y, si el socket está abierto, mezcla la vela que se está formando con los ticks. Sin velas el combo registra `SESSION_COMBO_NO_BARS` y no entra.
+- El nombre JSON de `contractSize` / `ProfitRate` sigue sin confirmarse. Si el payload no los trae con esos nombres, el tamaño se salta. En la cuenta USC el contrato vivo es `contract_size` y no hay `profitRate` (ver `docs/exness_api.md`).

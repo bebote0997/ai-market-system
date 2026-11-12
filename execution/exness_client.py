@@ -8,6 +8,7 @@ between calls (``AI_FLOOR_EXNESS_MIN_INTERVAL_MS``, default 100). TODO: parse
 """
 from datetime import datetime, timezone
 import json
+from threading import Lock
 from urllib.parse import urlsplit
 
 from execution.exness_sign import headers
@@ -51,6 +52,7 @@ class ExnessClient:
         self._last_ms = None
         self._blocked_until_ms = None
         self._sent = {}
+        self._lock = Lock()
         key = env.get("EXN_API_KEY")
         account = env.get("EXN_ACCOUNT_ID")
         gateway = normalize_gateway(env.get("EXN_DISCOVERY_BASE_URL"))
@@ -65,6 +67,27 @@ class ExnessClient:
         self.gateway = gateway
 
     def _request(self, base, method, path, body=None, idempotency_key=""):
+        with self._lock:
+            return self._request_locked(base, method, path, body, idempotency_key)
+
+    def signed_headers(self, method, path):
+        """Headers for a signed GET that is not sent through the HTTP caller.
+
+        The ticks WebSocket handshake is one of these. The path is the exact path the socket opens.
+        """
+        if method.upper() != "GET":
+            raise ValueError("signed_headers is only for GET")
+        with self._lock:
+            now = self._now_ms()
+            if self._blocked_until_ms is not None and now < self._blocked_until_ms:
+                raise RuntimeError("rate_limited")
+            if self._last_ms is not None and now - self._last_ms < self._interval:
+                raise RuntimeError("rate_limited")
+            signed = headers(self.api_key, "", now, "GET", path, b"", self._sign)
+            self._last_ms = now
+            return signed
+
+    def _request_locked(self, base, method, path, body, idempotency_key):
         now = self._now_ms()
         if self._blocked_until_ms is not None and now < self._blocked_until_ms:
             return 429, {"error_message": "REQUEST_RATE_LIMIT"}, {}, False

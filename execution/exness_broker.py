@@ -5,7 +5,7 @@ Read-only unless ``AI_FLOOR_EXNESS_REAL_EXECUTION`` is exactly ``1`` and ``AI_FL
 
 A stale tick or a dropped WebSocket refuses new orders. The same idempotency key is never submitted twice.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 import logging
 
@@ -193,13 +193,49 @@ class ExnessBroker:
             raise BrokerUnavailable("NO_DATA")
         return self.note_link(book), slot.bid, slot.ask
 
-    def candles(self, symbol="EURUSD", timeframe="5M"):
-        """The path is ``GET /v1/market-data/accounts/{id}/candles``. The response schema is not published.
+    def candles(self, symbol="EURUSD", timeframe="5M", start=None, end=None):
+        """M5 bid bars from ``GET /v1/market-data/accounts/{id}/candles``.
 
-        ``execution.exness_m5.parse_candle_payload`` accepts only the provisional fixture. Anything else is a gap.
+        Query keys are ``instrument``, ``timeframe=M5``, ``price_type=bid``, ``from`` inclusive and ``to``
+        exclusive. A candle is ``{time, open, high, low, close, volume}``. ``time`` is ISO. Prices may be
+        numbers. An unknown payload is a gap and is not turned into a bar. No order is sent.
         """
-        del symbol, timeframe
-        return None
+        from execution.exness_m5 import (candle_request_path, candle_spans, floor_m5_utc, parse_candle_payload)
+        if timeframe not in ("5M", "M5") or symbol not in ALLOWED:
+            return ()
+        now = self._now()
+        if end is None:
+            end = floor_m5_utc(now) + timedelta(minutes=5)
+        if start is None:
+            end_utc = end.astimezone(timezone.utc)
+            start = end_utc - timedelta(hours=24)
+        if start >= end:
+            return ()
+        client = getattr(self._transport, "_client", None)
+        getter = getattr(self._transport, "candle_payload", None)
+        if client is None and getter is None:
+            return ()
+        bars = []
+        for span_start, span_end in candle_spans(start, end):
+            if client is not None:
+                path = candle_request_path(client.account_id, symbol, span_start, span_end)
+                try:
+                    payload = client.get_json(path)
+                except Exception as exc:  # noqa: BLE001 - the message can contain the host
+                    LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s",
+                                symbol, type(exc).__name__)
+                    continue
+            else:
+                payload = getter(symbol, span_start, span_end)
+                if payload is None:
+                    continue
+            parsed, reason = parse_candle_payload(payload, symbol)
+            if reason:
+                LOG.info("component=exness_m5 event=M5_GAP symbol=%s reason=%s", symbol, reason)
+                continue
+            bars.extend(parsed)
+        bars.sort(key=lambda bar: bar.open_time)
+        return tuple(bars)
 
     def trade_id_for_client(self, client_id):
         book = self._read()

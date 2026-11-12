@@ -1,7 +1,8 @@
 """Live signer and HTTP caller. Imported only when a real transport is built.
 
-``cryptography`` is what the official Python example uses for Ed25519. It is not pinned in this repository.
-Without it, building the live transport fails closed. TODO: owner authorizes adding the pin.
+``cryptography`` is what the official Python example uses for Ed25519. It is pinned in
+``requirements.txt`` and in the hash-locked ``requirements-ci.txt`` that Render installs.
+Without it, building the live transport fails closed.
 """
 import json
 import urllib.error

@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-12 — DEC-EXNESS-STREAM-1: socket, velas M5 y candado del motor, apagado
+
+- Con `AI_FLOOR_BROKER=exness` el proceso abre y mantiene el WebSocket de ticks (GET firmado, subscribe, silencio de 15 s, reintento). Sin ese socket cada entrada o cierre salía `quote_stale`. Un transporte de prueba no abre red.
+- `ExnessBroker.candles()` hace `GET /v1/market-data/accounts/{id}/candles` (`instrument`, `timeframe=M5`, `price_type=bid`, `from`, `to`) y devuelve velas `{time, open, high, low, close, volume}`. El session combo las usa para el rango asiático aunque `AI_FLOOR_EXNESS_M5_FEED` siga apagado. La bandera del feed no cambia.
+- `cryptography==50.0.2` está en `requirements.txt` y en `requirements-ci.txt`, que es lo que instala Render. `websockets==17.2` queda como dependencia directa; el lock ya lo traía.
+- `ExnessSession.on_cycle` sigue llamando a `manage()` (ahí opera el session combo) y después rechaza cualquier plan del motor con `session_combo_only`. No llama a `submit_plan`. EMA-only sigue en la cuenta practice de OANDA. Las dos claves reales y `REAL_EXECUTION_ENABLED` no cambian. Frenos USC 200/1000 y tope 100 tampoco. Sin merge, sin deploy, sin Render.
+
 ## 2026-11-12 — DEC-EXNESS-USC-1: cuenta centavo USC
 
 - La divisa sale de `settings.currency`. El saldo del snapshot ya no queda vacío por falta de `account.currency`.

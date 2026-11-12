@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-12 (rama `cursor/exness-usc-account-76d4`, apilada sobre el feed M5). Cuenta centavo USC de 10,000: frenos 200/1000 USC, tope 100 USC, campos vivos de cuenta, contrato, velas y ticks. La ejecución real sigue apagada. Ver `docs/exness_api.md`._
+_Última actualización: 2026-11-12 (rama `cursor/exness-live-prep-f50a`, apilada sobre la cuenta USC). Con el broker Exness el proceso abre el socket de ticks y `candles()` pide velas M5. Un plan del motor no puede salir como orden Exness: solo el session combo. `cryptography` queda en el lock que instala Render. Todo sigue apagado. Sin merge, sin deploy, sin cambio de Render. Ver `docs/exness_api.md`._
+
+_Anterior: 2026-11-12 (rama `cursor/exness-usc-account-76d4`, apilada sobre el feed M5). Cuenta centavo USC de 10,000: frenos 200/1000 USC, tope 100 USC, campos vivos de cuenta, contrato, velas y ticks. La ejecución real sigue apagada. Ver `docs/exness_api.md`._
 
 _Anterior: 2026-11-11 (rama `cursor/exness-m5-feed-76d4`, apilada sobre el session combo). Feed M5 de Exness apagado: `AI_FLOOR_EXNESS_M5_FEED` exacto `1` y `AI_FLOOR_BROKER=exness`. No arma la ejecución real. Ver `docs/exness_m5.md`._
 

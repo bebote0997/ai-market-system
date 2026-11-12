@@ -64,7 +64,7 @@ Frenos, en la divisa de la cuenta. Si las variables van vacías: USD 10 y 50; US
 
 Comisión por lote y lado que el owner copia de la cuenta mientras el JSON no tenga un campo documentado: `AI_FLOOR_EXNESS_COMMISSION_PER_LOT_SIDE` (vacío = 0). El spread sale del tick.
 
-La firma en vivo usa el paquete `cryptography` (el ejemplo oficial de Python). No está en `requirements.txt`. Sin él, el transporte real no arranca.
+La firma en vivo usa el paquete `cryptography` (el ejemplo oficial de Python). Está pinado en `requirements.txt` y en `requirements-ci.txt` (`cryptography==50.0.2`), que es el fichero que instala Render. Sin él, el transporte real no arranca.
 
 ## Tamaño
 
@@ -81,5 +81,4 @@ La firma en vivo usa el paquete `cryptography` (el ejemplo oficial de Python). N
 7. Velas: query `instrument`, `timeframe=M5`, `price_type=bid`, `from`, `to`. El objeto es `{time, open, high, low, close, volume}`. `time` es ISO con zona. Los precios pueden ser números.
 8. No hay host de sandbox. Un demo de MetaTrader no vale. No está escrito si una cuenta demo de la plataforma Exness puede crear claves.
 9. Nombres exactos de los permisos en el formulario (además de «Trading read access» y de la advertencia de no usar una Info API key para operar).
-10. `cryptography` sin pin en este repo.
-11. El camino de OANDA (retroceso 12,5 pips, parciales, trail) no está reescrito para Exness. Con el flag `exness` y las dos claves, un plan aprobado se manda a mercado con su SL/TP.
+10. El camino de OANDA (retroceso 12,5 pips, parciales, trail) no está reescrito para Exness. `ExnessSession.on_cycle` no lo manda: con las dos claves reales solo el session combo puede abrir una orden Exness. Un plan del motor, incluido EMA-only, sale `session_combo_only` y no llama a `submit_plan`. EMA-only sigue en la practice de OANDA, con `AI_FLOOR_BROKER` vacío.

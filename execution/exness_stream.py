@@ -2,7 +2,9 @@
 
 The delay schedule is Floor policy: the portal says "reconnect with backoff" and does not give the delays.
 A dropped socket clears the last tick immediately, so the adapter opens nothing until a new tick arrives.
+The quote book is written by the tick thread and read by the cycle thread.
 """
+from threading import RLock
 from urllib.parse import urlsplit
 
 
@@ -59,25 +61,28 @@ class QuoteBook:
         self._default = None
         self._by_symbol = {}
         self._last = None
+        self._lock = RLock()
 
     def note_tick(self, bid, ask, at, symbol=None):
-        self.connected = True
-        slot = _Quote(bid, ask, at)
-        if symbol is None:
-            self._default = slot
-            self._last = None
-            return
-        self._by_symbol[symbol] = slot
-        self._last = symbol
+        with self._lock:
+            self.connected = True
+            slot = _Quote(bid, ask, at)
+            if symbol is None:
+                self._default = slot
+                self._last = None
+                return
+            self._by_symbol[symbol] = slot
+            self._last = symbol
 
     def quote(self, symbol=None):
-        if symbol is not None and symbol in self._by_symbol:
-            return self._by_symbol[symbol]
-        if symbol is not None and self._default is not None and not self._by_symbol:
+        with self._lock:
+            if symbol is not None and symbol in self._by_symbol:
+                return self._by_symbol[symbol]
+            if symbol is not None and self._default is not None and not self._by_symbol:
+                return self._default
+            if symbol is None and self._last is not None:
+                return self._by_symbol.get(self._last)
             return self._default
-        if symbol is None and self._last is not None:
-            return self._by_symbol.get(self._last)
-        return self._default
 
     @property
     def bid(self):
@@ -95,21 +100,23 @@ class QuoteBook:
         return None if slot is None else slot.tick_at
 
     def mark_disconnected(self):
-        self.connected = False
-        self.disconnects += 1
-        if self._default is not None:
-            self._default.tick_at = None
-        for slot in self._by_symbol.values():
-            slot.tick_at = None
+        with self._lock:
+            self.connected = False
+            self.disconnects += 1
+            if self._default is not None:
+                self._default.tick_at = None
+            for slot in self._by_symbol.values():
+                slot.tick_at = None
 
     def fresh(self, now, stale_seconds, symbol=None):
-        if not self.connected or not isinstance(stale_seconds, int) or stale_seconds < 1:
-            return False
-        slot = self.quote(symbol)
-        if slot is None or slot.tick_at is None:
-            return False
-        age = (now - slot.tick_at).total_seconds()
-        return 0 <= age <= stale_seconds
+        with self._lock:
+            if not self.connected or not isinstance(stale_seconds, int) or stale_seconds < 1:
+                return False
+            slot = self.quote(symbol)
+            if slot is None or slot.tick_at is None:
+                return False
+            age = (now - slot.tick_at).total_seconds()
+            return 0 <= age <= stale_seconds
 
 
 def subscribe_ticks(instruments):
