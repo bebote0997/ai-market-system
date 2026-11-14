@@ -14,7 +14,7 @@ from execution.broker_port import (ACCEPTED, REJECTED, UNKNOWN, BrokerGuardError
                                    BrokerUnavailable, CloseResult, ModifyResult, OrderPlan, SubmitResult,
                                    approval_problem)
 from execution.dxtrade_broker import real_execution_enabled
-from execution.exness_brakes import ExnessBrakes
+from execution.exness_brakes import ExnessBrakes, log_brake_state
 from execution.exness_sizing import RISK_FRACTION_CAP, account_risk_cap, capped_lots, on_step, size_lots, spread_cost
 from execution.exness_transport import Command
 from execution.friday_close import OPEN, friday_window, minutes_from_env
@@ -552,6 +552,24 @@ class ExnessBroker:
                 "halted": self._brakes.halted()}
 
 
+def _startup_equity(transport):
+    """``(equity, currency)`` for the startup brake log. A live client uses two GETs, not the full book."""
+    client = getattr(transport, "_client", None)
+    if client is not None:
+        account_id = client.account_id
+        account = client.get_json(f"/v1/configuration/accounts/{account_id}/account")
+        snapshot = client.get_json(f"/v1/trading/accounts/{account_id}/snapshot")
+        from execution.exness_transport import _account_currency, _dec
+        raw = snapshot.get("account_state") if isinstance(snapshot, dict) else None
+        state = raw if isinstance(raw, dict) else {}
+        return _dec(state.get("equity")), _account_currency(account if isinstance(account, dict) else {}, state)
+    book = transport.read_state()
+    balance = getattr(book, "balance", None)
+    if balance is None:
+        return None
+    return balance.equity, balance.currency
+
+
 def broker_from_env(env, *, transport=None, clock=None, on_alert=None):
     if transport is None:
         from execution.exness_client import ExnessClient
@@ -563,4 +581,6 @@ def broker_from_env(env, *, transport=None, clock=None, on_alert=None):
     brakes = ExnessBrakes.from_env(flag_store_from_env(env), env)
     if brakes is None:
         raise BrokerGuardError("exness brake configuration is invalid")
-    return ExnessBroker(transport, env=env, brakes=brakes, clock=clock, on_alert=on_alert)
+    broker = ExnessBroker(transport, env=env, brakes=brakes, clock=clock, on_alert=on_alert)
+    log_brake_state(brakes._store, lambda: _startup_equity(transport))
+    return broker

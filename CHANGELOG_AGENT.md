@@ -1,5 +1,9 @@
 # Agent Changelog
 
+## 2026-11-14 — registro de frenos Exness al arrancar (solo lectura)
+
+- Al cargar los frenos del camino Exness, una línea INFO `BRAKE_STATE` anota el equity vivo (o `none`) y los valores ya guardados: inicio, base del día, día, freno y motivo. No escribe flags ni cambia órdenes, riesgo ni claves. Si la lectura del equity falla, el arranque sigue. Sin merge, sin deploy, sin Render.
+
 ## 2026-11-14 — DEC-EXNESS-LAUNCH-1: tope por trade configurable y reinicio de lanzamiento, apagados
 
 - `AI_FLOOR_EXNESS_RISK_CAP` vacío deja el tope en 100 USC o 5 USD. Un decimal positivo finito, en la divisa de la cuenta, sustituye ese tope. El tamaño sigue siendo el menor entre el 1 % del equity, el 1 % del balance y ese tope. El lote se trunca al `volume_step` y no se sube a `volume_min`. Si el lote mínimo pasa el tope, no hay orden. Un valor inválido se anota y se deja el tope de serie.

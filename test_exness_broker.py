@@ -3,13 +3,16 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
+import sqlite3
+import tempfile
 import unittest
 
 from execution.broker_port import ACCEPTED, APPROVED, BrokerBalance, OrderPlan, RiskApproval
-from execution.exness_brakes import RESUME_PHRASE, ExnessBrakes
+from execution.exness_brakes import (DAY_EQUITY_FLAG, DAY_FLAG, HALT_FLAG, REASON_FLAG, RESUME_PHRASE,
+                                   START_FLAG, ExnessBrakes, SqliteFlags)
 from execution.exness_broker import REAL_CONFIRM, ExnessBroker, broker_selected, real_execution_armed
 from execution.exness_client import ExnessClient
-from execution.exness_session import ExnessSession
+from execution.exness_session import ExnessSession, session_from_env
 from execution.exness_sign import EMPTY_BODY_HASH, body_hash, payload_bytes
 from execution.exness_sizing import size_lots, spec_from_conditions
 from execution.exness_stream import backoff_seconds, subscribe_ticks
@@ -381,6 +384,82 @@ class ClientTests(unittest.TestCase):
         adapter.cache_account_reads(False)
         adapter.note_link()
         self.assertEqual(len(calls), 4)
+
+
+class BrakeStateLogTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / "exness.db"
+        store = SqliteFlags(self.db)
+        store.set_flag(HALT_FLAG, "1")
+        store.set_flag(REASON_FLAG, "daily_loss")
+        store.set_flag(START_FLAG, "25000")
+        store.set_flag(DAY_EQUITY_FLAG, "24950.5")
+        store.set_flag(DAY_FLAG, "2026-11-13T17:00:00-05:00")
+
+    def env(self):
+        env = armed()
+        env["AI_FLOOR_EXNESS_STATE_DB_PATH"] = str(self.db)
+        return env
+
+    def rows(self):
+        with sqlite3.connect(self.db) as con:
+            return dict(con.execute("SELECT key, value FROM flags"))
+
+    def test_startup_logs_the_stored_brakes_and_the_equity_read(self):
+        before = self.rows()
+        fake = FakeExnessTransport(clock=lambda: NOW)
+        fake.balance = BrokerBalance(Decimal("25000"), Decimal("24800.25"), Decimal("0"), "usc")
+        with self.assertLogs("ai_floor.exness_brakes", level="INFO") as logs:
+            session = session_from_env(self.env(), transport=fake, clock=lambda: NOW)
+        self.assertIsNotNone(session)
+        line = next(item for item in logs.output if "event=BRAKE_STATE" in item)
+        self.assertEqual(sum("event=BRAKE_STATE" in item for item in logs.output), 1)
+        self.assertIn(
+            "component=exness_brakes event=BRAKE_STATE equity=24800.25 currency=USC "
+            "brake_start=25000 day_base=24950.5 day=2026-11-13T17:00:00-05:00 "
+            "halt=true halt_reason=daily_loss", line)
+        self.assertNotIn("123456", line)
+        self.assertNotIn("gateway.example", line)
+        self.assertNotIn("exnsk", line)
+        self.assertEqual(fake.commands, [])
+        self.assertEqual(self.rows(), before)
+
+    def test_a_failed_equity_read_logs_none_and_startup_continues(self):
+        before = self.rows()
+
+        class Client:
+            account_id = "999001"
+
+            def get_json(self, path):
+                raise RuntimeError("https://secret.example" + path)
+
+        class Live:
+            def __init__(self):
+                self._client = Client()
+                self.reads = 0
+
+            def read_state(self):
+                self.reads += 1
+                raise AssertionError("full book read")
+
+        transport = Live()
+        with self.assertLogs("ai_floor.exness_brakes", level="INFO") as logs:
+            session = session_from_env(self.env(), transport=transport, clock=lambda: NOW)
+        self.assertIsNotNone(session)
+        self.assertEqual(transport.reads, 0)
+        line = next(item for item in logs.output if "event=BRAKE_STATE" in item)
+        self.assertIn("equity=none", line)
+        self.assertIn("currency=none", line)
+        self.assertIn("brake_start=25000", line)
+        self.assertIn("day_base=24950.5", line)
+        self.assertIn("day=2026-11-13T17:00:00-05:00", line)
+        self.assertIn("halt=true", line)
+        self.assertIn("halt_reason=daily_loss", line)
+        self.assertNotIn("secret.example", line)
+        self.assertNotIn("999001", line)
+        self.assertEqual(self.rows(), before)
 
 
 if __name__ == "__main__":
