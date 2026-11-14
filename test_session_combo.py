@@ -72,10 +72,24 @@ def world(at, env=None, store=None):
     return clock, fake, broker, SessionCombo(broker)
 
 
+def cover_asian(day, bars, symbol="USDJPY"):
+    """Fill missing M5 slots inside the Asian window without moving the range extremes."""
+    start, end = range_window(day)
+    seen = {item.open_time.astimezone(NY).replace(second=0, microsecond=0)
+            for item in bars if item.symbol == symbol}
+    extra = []
+    at = start
+    while at < end:
+        if at not in seen:
+            extra.append(bar(at, "150.10", "150.12", "150.08", "150.10", symbol))
+        at += timedelta(minutes=5)
+    return list(bars) + extra
+
+
 def range_pair(day, high=("150.20", "150.10"), low=("150.15", "150.00")):
     start, end = range_window(day)
-    return [bar(start, high[1], high[0], high[1], high[1]),
-            bar(end - timedelta(minutes=5), low[0], low[0], low[1], low[1])]
+    return cover_asian(day, [bar(start, high[1], high[0], high[1], high[1]),
+                             bar(end - timedelta(minutes=5), low[0], low[0], low[1], low[1])])
 
 
 class RangeTests(unittest.TestCase):
@@ -90,8 +104,8 @@ class RangeTests(unittest.TestCase):
     def test_one_bar_spanning_the_range_skips(self):
         day = ny(2026, 1, 15, 2, 0).date()
         start, end = range_window(day)
-        bars = [bar(start, "150.00", "150.20", "150.00", "150.10"),
-                bar(end - timedelta(minutes=5), "150.10", "150.20", "150.00", "150.10")]
+        bars = cover_asian(day, [bar(start, "150.00", "150.20", "150.00", "150.10"),
+                                 bar(end - timedelta(minutes=5), "150.10", "150.20", "150.00", "150.10")])
         high, low, window, reason = asian_range(bars, day)
         self.assertIsNone(reason)
         self.assertTrue(any(item.high >= high and item.low <= low for item in window))
@@ -237,7 +251,7 @@ def range_pair_wide():
     bars = [bar(start, "150.10", "150.20", "150.10", "150.10"),
             bar(end - timedelta(minutes=5), "149.80", "149.90", "149.69", "149.80"),
             bar(ny(2026, 1, 15, 2, 0), "150.10", "150.30", "150.05", "150.25")]
-    return bars
+    return cover_asian(day, bars)
 
 
 def _markets(fake):
@@ -260,6 +274,7 @@ class ProgressionTests(unittest.TestCase):
         self.assertIsNone(fake.get_flag(london_key(day)))
         self.assertEqual(fake.commands, [])
         bars.append(bar(end - timedelta(minutes=5), "150.05", "150.08", "150.00", "150.02"))
+        bars.append(bar(start + timedelta(hours=3), "150.10", "150.12", "150.08", "150.10"))
         clock.at = ny(2026, 1, 15, 1, 55)
         fake.push_tick(Decimal("150.05"), Decimal("150.06"), clock.at)
         combo.tick(clock.at, bars)
@@ -319,24 +334,41 @@ class ProgressionTests(unittest.TestCase):
         later.tick(clock.at, morning)
         self.assertEqual([command.kind for command in fake.commands], ["MARKET", "CLOSE"])
 
-    def test_incomplete_range_is_retried_until_0200_then_skipped(self):
+    def test_empty_or_thin_range_stays_open_until_0500(self):
         day = ny(2026, 1, 15, 2, 0).date()
         start, _end = range_window(day)
-        bars = [bar(start, "150.10", "150.20", "150.10", "150.15")]
-        clock, fake, broker, combo = world(ny(2026, 1, 15, 1, 0))
-        combo.tick(clock.at, bars)
+        thin = [bar(start, "150.10", "150.20", "150.10", "150.15"),
+                bar(range_window(day)[1] - timedelta(minutes=5), "150.00", "150.00", "150.00", "150.00")]
+        self.assertEqual(asian_range(thin, day)[3], "range_incomplete")
+        clock, fake, broker, combo = world(ny(2026, 1, 15, 2, 10))
+        combo.tick(clock.at, [])
         self.assertIsNone(fake.get_flag(london_key(day)))
-        clock.at = ny(2026, 1, 15, 2, 0)
-        fake.push_tick(Decimal("150.10"), Decimal("150.11"), clock.at)
+        clock.at = ny(2026, 1, 15, 4, 50)
+        combo.tick(clock.at, thin)
+        self.assertIsNone(fake.get_flag(london_key(day)))
+        clock.at = ny(2026, 1, 15, 2, 20)
+        fake.push_tick(Decimal("150.19"), Decimal("150.20"), clock.at)
+        full = range_pair(day) + [bar(clock.at, "150.18", "150.25", "150.12", "150.22")]
+        combo.tick(clock.at, full)
+        self.assertEqual(len(_markets(fake)), 1)
+        clock, fake, broker, combo = world(ny(2026, 1, 15, 5, 0))
         with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
-            combo.tick(clock.at, bars)
+            combo.tick(clock.at, [])
         self.assertIn("reason=range_incomplete", "\n".join(logs.output))
-        self.assertEqual(fake.commands, [])
-        clock.at = ny(2026, 1, 15, 2, 10)
-        fake.push_tick(Decimal("150.25"), Decimal("150.26"), clock.at)
-        SessionCombo(broker).tick(clock.at, bars + [bar(clock.at, "150.18", "150.40", "150.10", "150.30")])
-        self.assertEqual(fake.commands, [])
         self.assertIn('"status": "skipped"', fake.get_flag(london_key(day)))
+        fake.push_tick(Decimal("150.19"), Decimal("150.20"), ny(2026, 1, 15, 2, 20))
+        SessionCombo(broker).tick(ny(2026, 1, 15, 2, 20), full)
+        self.assertEqual(fake.commands, [])
+
+    def test_fix_with_no_bars_waits_until_the_window_ends(self):
+        at = lon(2026, 1, 15, 16, 1)
+        _clock, fake, _broker, combo = world(at)
+        combo.tick(at, [])
+        self.assertIsNone(fake.get_flag(fix_key(at.date())))
+        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+            combo.tick(lon(2026, 1, 15, 16, 5), [])
+        self.assertIn("reason=window_closed", "\n".join(logs.output))
+        self.assertIn('"status": "done"', fake.get_flag(fix_key(at.date())))
 
     def test_a_gap_through_the_level_is_sized_from_the_fill(self):
         at = ny(2026, 1, 15, 2, 0)

@@ -8,6 +8,7 @@ A stale tick or a dropped WebSocket refuses new orders. The same idempotency key
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 import logging
+import time
 
 from execution.broker_port import (ACCEPTED, REJECTED, UNKNOWN, BrokerGuardError, BrokerHealth, BrokerPosition,
                                    BrokerUnavailable, CloseResult, ModifyResult, OrderPlan, SubmitResult,
@@ -28,6 +29,7 @@ REAL_CONFIRM = "EXNESS_REAL_AUTHORIZED"
 COMMISSION_ENV = "AI_FLOOR_EXNESS_COMMISSION_PER_LOT_SIDE"
 STALE_ENV = "AI_FLOOR_EXNESS_QUOTE_STALE_SECONDS"
 DEFAULT_STALE = 5
+CANDLE_BACKOFF_SECONDS = (0.1, 0.2, 0.4)  # at least the 100 ms Exness gap; not a retry of HTTP 429
 ALLOWED = ("EURUSD", "GBPUSD", "USDJPY")
 _SECRET_ENV = ("EXN_PRIVATE_KEY", "EXN_API_KEY", "OANDA_PRACTICE_TOKEN", "OANDA_LIVE_TOKEN")
 
@@ -101,13 +103,14 @@ def _exposure(book):
 class ExnessBroker:
     provider = "exness"
 
-    def __init__(self, transport, *, env, brakes, clock=None, on_alert=None):
+    def __init__(self, transport, *, env, brakes, clock=None, on_alert=None, sleep=None):
         if transport is None or brakes is None or _stale_seconds(env) is None:
             raise BrokerGuardError("exness transport, brakes or quote window is invalid")
         self._transport = transport
         self._env = env
         self._brakes = brakes
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._sleep = sleep or time.sleep
         self._on_alert = on_alert
         self._stale_alerted = False
         self._cache_reads = False
@@ -232,26 +235,40 @@ class ExnessBroker:
         getter = getattr(self._transport, "candle_payload", None)
         if client is None and getter is None:
             return ()
-        bars = []
-        for span_start, span_end in candle_spans(start, end):
-            if client is not None:
-                path = candle_request_path(client.account_id, symbol, span_start, span_end)
-                try:
-                    payload = client.get_json(path)
-                except Exception as exc:  # noqa: BLE001 - the message can contain the host
-                    LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s",
-                                symbol, type(exc).__name__)
+
+        def collect():
+            found = []
+            for span_start, span_end in candle_spans(start, end):
+                if client is not None:
+                    path = candle_request_path(client.account_id, symbol, span_start, span_end)
+                    try:
+                        payload = client.get_json(path)
+                    except Exception as exc:  # noqa: BLE001 - the message can contain the host
+                        LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s",
+                                    symbol, type(exc).__name__)
+                        continue
+                else:
+                    payload = getter(symbol, span_start, span_end)
+                    if payload is None:
+                        continue
+                parsed, reason = parse_candle_payload(payload, symbol)
+                if reason:
+                    LOG.info("component=exness_m5 event=M5_GAP symbol=%s reason=%s", symbol, reason)
                     continue
-            else:
-                payload = getter(symbol, span_start, span_end)
-                if payload is None:
-                    continue
-            parsed, reason = parse_candle_payload(payload, symbol)
-            if reason:
-                LOG.info("component=exness_m5 event=M5_GAP symbol=%s reason=%s", symbol, reason)
-                continue
-            bars.extend(parsed)
-        bars.sort(key=lambda bar: bar.open_time)
+                found.extend(parsed)
+            found.sort(key=lambda bar: bar.open_time)
+            return found
+
+        bars = collect()
+        from execution.session_combo import entry_window
+        if bars or not entry_window(self._now()):
+            return tuple(bars)
+        for pause in CANDLE_BACKOFF_SECONDS:
+            self._sleep(pause)
+            LOG.info("component=exness_m5 event=M5_RETRY symbol=%s wait_seconds=%s", symbol, pause)
+            bars = collect()
+            if bars:
+                break
         return tuple(bars)
 
     def trade_id_for_client(self, client_id):

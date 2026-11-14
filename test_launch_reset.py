@@ -1,5 +1,6 @@
 """Opt-in launch reset: backup first, archive by cutoff, never delete. Synthetic SQLite only."""
 from datetime import datetime, timezone
+from decimal import Decimal
 import inspect
 import os
 import sqlite3
@@ -8,9 +9,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from execution.daily_loss_limit import day_key
 from execution.demo_dashboard import demo_progress, demo_snapshot
 from execution.demo_metrics import demo_statistics
-from execution.launch_reset import (TOKEN_ENV, apply_launch_reset, launch_cutoff, session_counters)
+from execution.exness_brakes import DAY_EQUITY_FLAG, ExnessBrakes, START_FLAG, SqliteFlags
+from execution.launch_reset import (TOKEN_ENV, apply_launch_reset, launch_cutoff, read_launch_equity,
+                                    session_counters)
 from runtime.cloud import serve
 from ui.views import dashboard
 
@@ -19,6 +23,11 @@ UTC = timezone.utc
 LAUNCH = datetime(2026, 11, 14, 15, 0, tzinfo=UTC)
 LATER = datetime(2026, 11, 14, 18, 0, tzinfo=UTC)
 BEFORE, AFTER = "2026-10-20T18:00:00Z", "2026-11-14T16:00:00Z"
+EQUITY = Decimal("30086")
+
+
+def reset(env, now):
+    return apply_launch_reset(env, now=now, equity_reader=lambda: (EQUITY, "USC"))
 
 
 def _env(folder, token="launch-2026-11-14"):
@@ -57,6 +66,9 @@ def _seed(folder):
     state = sqlite3.connect(folder / "exness.db")
     state.execute("CREATE TABLE flags (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     state.execute("INSERT INTO flags VALUES ('exness_brake_halt', '1')")
+    state.execute("INSERT INTO flags VALUES ('exness_brake_reason', 'daily_loss')")
+    state.execute("INSERT INTO flags VALUES ('exness_brake_start', '25000')")
+    state.execute("INSERT INTO flags VALUES ('exness_brake_day_equity', '25000')")
     state.commit()
     state.close()
 
@@ -94,12 +106,16 @@ class LaunchResetTests(unittest.TestCase):
         self.trading_before = _dump(self.folder / "trading.db")
 
     def test_backup_then_archive_keeps_every_row_and_resets_counters(self):
-        result = apply_launch_reset(self.env, now=LAUNCH)
+        result = reset(self.env, LAUNCH)
         self.assertEqual(result.reason, "applied")
         self.assertEqual(result.launch_start, LAUNCH)
         self.assertEqual(_dump(self.folder / "broker.db"), self.broker_before)
         self.assertEqual(_dump(self.folder / "trading.db"), self.trading_before)
         self.assertEqual(_flag(self.folder / "exness.db", "exness_brake_halt"), "1")
+        self.assertEqual(_flag(self.folder / "exness.db", "exness_brake_reason"), "daily_loss")
+        self.assertEqual(_flag(self.folder / "exness.db", START_FLAG), format(EQUITY, "f"))
+        self.assertEqual(_flag(self.folder / "exness.db", DAY_EQUITY_FLAG), format(EQUITY, "f"))
+        self.assertEqual(_flag(self.folder / "exness.db", "exness_brake_day"), day_key(LAUNCH))
         counters = session_counters(self.env)
         self.assertEqual(counters["day"], 0)
         self.assertEqual(counters["trades"], 0)
@@ -113,25 +129,26 @@ class LaunchResetTests(unittest.TestCase):
         self.assertEqual(_dump(broker_copy), self.broker_before)
         self.assertEqual(_dump(trading_copy), self.trading_before)
         self.assertEqual(_flag(exness_copy, "exness_brake_halt"), "1")
+        self.assertEqual(_flag(exness_copy, START_FLAG), "25000")
         self.assertIsNone(_flag(exness_copy, "exness_session_day"))
         self.assertFalse(any(path.name.endswith(".tmp") for path in (self.folder / "launch_backups").iterdir()))
 
     def test_the_same_token_does_not_run_again_and_a_new_token_can(self):
-        first = apply_launch_reset(self.env, now=LAUNCH)
-        again = apply_launch_reset(self.env, now=LATER)
+        first = reset(self.env, LAUNCH)
+        again = reset(self.env, LATER)
         self.assertEqual(again.reason, "already_applied")
         self.assertEqual(again.launch_start, LAUNCH)
         self.assertEqual(again.backups, ())
         self.assertEqual(len(list((self.folder / "launch_backups").glob("*.db"))), len(first.backups))
         self.assertEqual(session_counters(self.env)["launch_start"], LAUNCH)
-        second = apply_launch_reset(_env(self.folder, "launch-next"), now=LATER)
+        second = reset(_env(self.folder, "launch-next"), LATER)
         self.assertEqual(second.reason, "applied")
         self.assertEqual(session_counters(self.env)["day"], 0)
         self.assertEqual(session_counters(self.env)["trades"], 0)
         self.assertEqual(session_counters(self.env)["launch_start"], LATER)
         self.assertEqual(_dump(self.folder / "broker.db"), self.broker_before)
         self.assertEqual(_dump(self.folder / "trading.db"), self.trading_before)
-        third = apply_launch_reset(self.env, now=LATER)
+        third = reset(self.env, LATER)
         self.assertEqual(third.reason, "already_applied")
         self.assertEqual(third.launch_start, LAUNCH)
         self.assertEqual(session_counters(self.env)["launch_start"], LATER)
@@ -144,7 +161,7 @@ class LaunchResetTests(unittest.TestCase):
 
     def test_a_failed_backup_leaves_the_sources_and_does_not_record_the_token(self):
         (self.folder / "broker.db").write_bytes(b"this is not a database")
-        result = apply_launch_reset(self.env, now=LAUNCH)
+        result = reset(self.env, LAUNCH)
         self.assertEqual((result.applied, result.reason), (False, "backup_failed"))
         self.assertIsNone(launch_cutoff(self.env))
         self.assertEqual(session_counters(self.env)["day"], None)
@@ -173,7 +190,7 @@ class LaunchResetTests(unittest.TestCase):
         self.assertEqual(_dump(self.folder / "broker.db"), self.broker_before)
 
     def test_dashboard_and_stats_honor_the_cutoff(self):
-        apply_launch_reset(self.env, now=LAUNCH)
+        reset(self.env, LAUNCH)
         with patch.dict(os.environ, self.env, clear=True):
             since = dashboard.demo_since()
         self.assertEqual(since, LAUNCH)
@@ -213,10 +230,74 @@ class LaunchResetTests(unittest.TestCase):
     def test_cloud_startup_calls_the_reset(self):
         self.assertIn("apply_launch_reset", inspect.getsource(serve))
 
+    def test_missing_equity_does_not_apply_or_copy(self):
+        for reader in (lambda: None, lambda: (Decimal("0"), "USC"), lambda: (_ for _ in ()).throw(RuntimeError("down"))):
+            with self.subTest(reader=reader):
+                result = apply_launch_reset(self.env, now=LAUNCH, equity_reader=reader)
+                self.assertEqual((result.applied, result.reason), (False, "equity_unavailable"))
+        self.assertEqual(_flag(self.folder / "exness.db", "exness_brake_halt"), "1")
+        self.assertEqual(_flag(self.folder / "exness.db", START_FLAG), "25000")
+        con = sqlite3.connect((self.folder / "exness.db").resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            names = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            con.close()
+        self.assertNotIn("launch_resets", names)
+        folder = self.folder / "launch_backups"
+        self.assertEqual([] if not folder.exists() else list(folder.glob("*.db")), [])
+
+    def test_zero_baseline_halt_is_cleared_and_the_brake_uses_the_fresh_equity(self):
+        con = sqlite3.connect(self.folder / "exness.db")
+        con.execute("UPDATE flags SET value = 'drawdown' WHERE key = 'exness_brake_reason'")
+        con.execute("UPDATE flags SET value = '0' WHERE key = 'exness_brake_start'")
+        con.execute("UPDATE flags SET value = '0' WHERE key = 'exness_brake_day_equity'")
+        con.commit()
+        con.close()
+        result = reset(self.env, LAUNCH)
+        self.assertEqual(result.reason, "applied")
+        self.assertIsNone(_flag(self.folder / "exness.db", "exness_brake_halt"))
+        self.assertIsNone(_flag(self.folder / "exness.db", "exness_brake_reason"))
+        brakes = ExnessBrakes.from_env(SqliteFlags(self.folder / "exness.db"), {})
+        self.assertTrue(brakes.evaluate(EQUITY, "USC", LAUNCH).entry_allowed)
+        self.assertTrue(brakes.evaluate(EQUITY - Decimal("50"), "USC", LAUNCH).entry_allowed)
+        self.assertEqual(brakes.evaluate(EQUITY - Decimal("1000"), "USC", LAUNCH).reason, "daily_loss")
+
+    def test_a_failed_record_reuses_the_same_backup(self):
+        from execution import launch_reset
+        with patch.object(launch_reset, "_record", side_effect=sqlite3.OperationalError("disk")):
+            first = reset(self.env, LAUNCH)
+        self.assertEqual(first.reason, "record_failed")
+        names = sorted(path.name for path in (self.folder / "launch_backups").glob("*.db"))
+        self.assertGreaterEqual(len(names), 1)
+        self.assertEqual(len(list((self.folder / "launch_backups").glob("*.pending"))), 1)
+        with patch.object(launch_reset, "_record", side_effect=sqlite3.OperationalError("disk")):
+            second = reset(self.env, LATER)
+        self.assertEqual(second.reason, "record_failed")
+        self.assertEqual(sorted(path.name for path in (self.folder / "launch_backups").glob("*.db")), names)
+        self.assertIsNone(launch_cutoff(self.env))
+
+    def test_read_launch_equity_rejects_zero_and_keeps_a_positive_usc_read(self):
+        class Client:
+            account_id = "99"
+
+            def __init__(self, equity):
+                self.equity = equity
+
+            def get_json(self, path):
+                if path.endswith("/account"):
+                    return {"settings": {"currency": "USC"}}
+                if path.endswith("/snapshot"):
+                    return {"account_state": {"equity": self.equity, "balance": self.equity}}
+                raise RuntimeError("path")
+
+        self.assertIsNone(read_launch_equity({}, client=Client("0")))
+        self.assertEqual(read_launch_equity({}, client=Client("30086")), (Decimal("30086"), "USC"))
+        self.assertIsNone(read_launch_equity({}))
+
     def test_a_start_with_no_databases_still_writes_a_backup_before_the_counters(self):
         folder = self.folder / "fresh"
         folder.mkdir()
-        result = apply_launch_reset(_env(folder, "empty-token"), now=LAUNCH)
+        result = reset(_env(folder, "empty-token"), LAUNCH)
         self.assertEqual(result.reason, "applied")
         self.assertEqual(len(result.backups), 1)
         self.assertTrue(result.backups[0].name.endswith("_empty.db"))

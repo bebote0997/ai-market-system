@@ -195,6 +195,7 @@ class FeedSessionTests(unittest.TestCase):
         start, end = range_window(at.date())
         live._feed.on_tick("USDJPY", Decimal("150.10"), Decimal("150.11"), start.astimezone(UTC))
         live._feed.on_tick("USDJPY", Decimal("150.20"), Decimal("150.21"), start.astimezone(UTC) + timedelta(minutes=2))
+        live._feed.on_tick("USDJPY", Decimal("150.12"), Decimal("150.13"), start.astimezone(UTC) + timedelta(hours=3))
         live._feed.on_tick("GBPUSD", Decimal("1.20000"), Decimal("1.20010"), start.astimezone(UTC))
         live._feed.on_tick("USDJPY", Decimal("150.00"), Decimal("150.01"), (end - timedelta(minutes=5)).astimezone(UTC))
         live._feed.on_tick("USDJPY", Decimal("150.25"), Decimal("150.26"), end.astimezone(UTC))
@@ -223,6 +224,7 @@ class FeedSessionTests(unittest.TestCase):
         clock, fake, live = session(at, bare)
         live._feed.on_tick("USDJPY", Decimal("150.10"), Decimal("150.11"), start.astimezone(UTC))
         live._feed.on_tick("USDJPY", Decimal("150.20"), Decimal("150.21"), start.astimezone(UTC) + timedelta(minutes=2))
+        live._feed.on_tick("USDJPY", Decimal("150.12"), Decimal("150.13"), start.astimezone(UTC) + timedelta(hours=3))
         live._feed.on_tick("USDJPY", Decimal("150.00"), Decimal("150.01"), (end - timedelta(minutes=5)).astimezone(UTC))
         live._feed.on_tick("USDJPY", Decimal("150.25"), Decimal("150.26"), end.astimezone(UTC))
         clock.at = at
@@ -393,6 +395,7 @@ class LiveStreamTests(unittest.TestCase):
             if symbol != "USDJPY":
                 return None
             rows = [(start, 150.10, 150.20, 150.10, 150.20),
+                    (start + timedelta(hours=3), 150.10, 150.12, 150.08, 150.10),
                     (end - timedelta(minutes=5), 150.00, 150.00, 150.00, 150.00),
                     (end, 150.25, 150.25, 150.25, 150.25)]
             return {"candles": [{"time": opened.astimezone(UTC).isoformat(), "open": op, "high": hi, "low": lo,
@@ -427,6 +430,44 @@ class LiveStreamTests(unittest.TestCase):
         live.manage(at)
         live.manage(at + timedelta(seconds=31))
         self.assertEqual(calls, [1, 1])
+
+    def test_empty_candles_back_off_inside_the_window_only(self):
+        at = datetime(2026, 1, 15, 2, 0, tzinfo=NY)
+        clock = Clock(at)
+        fake = FakeExnessTransport(clock=clock)
+        calls = {"n": 0}
+
+        def payload(symbol, span_start, span_end):
+            del symbol, span_start, span_end
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return {"candles": []}
+            opened = at.astimezone(UTC)
+            return {"candles": [{"time": opened.isoformat(), "open": 150.1, "high": 150.2,
+                                 "low": 150.0, "close": 150.1, "volume": 1}]}
+
+        fake.candle_payload = payload
+        waits = []
+        broker = ExnessBroker(fake, env=armed(), brakes=ExnessBrakes.from_env(fake, armed()),
+                              clock=clock, sleep=waits.append)
+        bars = broker.candles("USDJPY", "M5", at, at + timedelta(minutes=5))
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(waits, [0.1, 0.2])
+        self.assertTrue(all(pause >= 0.1 for pause in waits))
+        noon = datetime(2026, 1, 15, 12, 0, tzinfo=NY)
+        clock.at = noon
+        calls["n"] = 0
+        waits.clear()
+
+        def empty(symbol, span_start, span_end):
+            del symbol, span_start, span_end
+            calls["n"] += 1
+            return {"candles": []}
+
+        fake.candle_payload = empty
+        self.assertEqual(broker.candles("USDJPY", "M5", noon, noon + timedelta(minutes=5)), ())
+        self.assertEqual(waits, [])
+        self.assertEqual(calls["n"], 1)
 
     def test_a_live_transport_starts_the_runner_and_a_tick_clears_quote_stale(self):
         import time

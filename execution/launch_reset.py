@@ -6,16 +6,24 @@ can run once more. The step first copies the trading DB, the broker-state DB and
 fails, nothing else changes and the token is not recorded, so the next start tries again.
 
 After a good copy it does not delete rows. It records the token, sets the Exness session day counter and
-trade counter to 0, and sets the launch start to now. Dashboard screens and demo stats treat that start
-as a cutoff: older OANDA practice rows and older dashboard rows stay in the file and are not shown.
+trade counter to 0, and sets the launch start to now. Those two counters are stored for the reset record.
+Dashboard screens and the daily summary do not read them: they use the launch start as a cutoff, so older
+OANDA practice rows and older dashboard rows stay in the file and are not shown. The brake start and the
+brake day baseline are set to a fresh equity read. Without that read the reset does not run. A halt left
+by equity 0 or a missing baseline is cleared. A later failed record reuses the same backup.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
+import json
 import logging
 import os
 from pathlib import Path
 import sqlite3
+
+from execution.daily_loss_limit import day_key
+from execution.exness_brakes import DAY_EQUITY_FLAG, DAY_FLAG, HALT_FLAG, REASON_FLAG, START_FLAG, _money
 
 
 LOG = logging.getLogger("ai_floor.launch_reset")
@@ -181,8 +189,28 @@ def _already(path, token):
     return None if row is None else _parse_time(row[0])
 
 
-def _record(path, token, start, names):
-    """Insert the token and the zeroed counters. Returns ``(launch_start, newly_applied)``."""
+def _flag_value(con, key):
+    try:
+        row = con.execute("SELECT value FROM flags WHERE key = ?", (key,)).fetchone()
+    except sqlite3.Error:
+        return None
+    return None if row is None else row[0]
+
+
+def _halt_from_stale_or_zero(con):
+    """True when the latched halt came from equity 0 or a baseline that is not a positive amount."""
+    if _flag_value(con, HALT_FLAG) != "1":
+        return False
+    reason = _flag_value(con, REASON_FLAG) or ""
+    start = _money(_flag_value(con, START_FLAG))
+    day_open = _money(_flag_value(con, DAY_EQUITY_FLAG))
+    zero = (start is not None and start <= 0) or (day_open is not None and day_open <= 0)
+    missing = start is None or day_open is None
+    return zero or missing or reason in ("", "brake_halt", "equity_unavailable")
+
+
+def _record(path, token, start, names, *, equity, day_key_value):
+    """Insert the token, the zeroed counters and the fresh brake baseline. Returns ``(launch_start, newly_applied)``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path, timeout=5)
     try:
@@ -195,11 +223,16 @@ def _record(path, token, start, names):
         if existing:
             con.rollback()
             return existing[0], False
+        clear_halt = _halt_from_stale_or_zero(con)
         con.execute("INSERT INTO launch_resets(token, applied_at, launch_start, backup_name) VALUES (?, ?, ?, ?)",
                     (token, start, start, ",".join(names)))
-        for key, value in ((DAY_KEY, "0"), (TRADE_KEY, "0"), (START_KEY, start)):
+        fresh = format(equity, "f")
+        for key, value in ((DAY_KEY, "0"), (TRADE_KEY, "0"), (START_KEY, start),
+                           (START_FLAG, fresh), (DAY_FLAG, day_key_value), (DAY_EQUITY_FLAG, fresh)):
             con.execute("INSERT INTO flags(key, value) VALUES (?, ?) "
                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+        if clear_halt:
+            con.execute("DELETE FROM flags WHERE key IN (?, ?)", (HALT_FLAG, REASON_FLAG))
         con.commit()
     except Exception:
         try:
@@ -326,17 +359,93 @@ def _backup(env, now, token):
         raise
 
 
-def apply_launch_reset(env=None, *, now=None):
+def _positive_equity(value, currency):
+    if isinstance(value, bool) or not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+        return None
+    code = currency.strip().upper() if isinstance(currency, str) else ""
+    if code not in ("USD", "USC"):
+        return None
+    return value, code
+
+
+def read_launch_equity(env, client=None):
+    """``(equity, currency)`` from a live account snapshot, or None. Sends no order.
+
+    Two GETs go through ``ExnessClient``, which waits out the 100 ms gap. Equity 0, a missing
+    currency, or any read error is None so the reset can fail closed.
+    """
+    try:
+        if client is None:
+            from execution.exness_client import ExnessClient
+            from execution.exness_live import signer_from_env, urllib_caller
+            client = ExnessClient(env, caller=urllib_caller, sign=signer_from_env(env))
+        account_id = client.account_id
+        account = client.get_json(f"/v1/configuration/accounts/{account_id}/account")
+        snapshot = client.get_json(f"/v1/trading/accounts/{account_id}/snapshot")
+    except Exception:  # noqa: BLE001 - no equity, no reset
+        return None
+    from execution.exness_transport import _account_currency, _dec
+    state = snapshot.get("account_state") if isinstance(snapshot, dict) and isinstance(snapshot.get("account_state"), dict) else {}
+    return _positive_equity(_dec(state.get("equity")), _account_currency(account if isinstance(account, dict) else {}, state))
+
+
+def _fresh_equity(env, reader):
+    try:
+        got = reader() if reader is not None else read_launch_equity(env)
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("component=launch_reset event=RESET_ABORTED reason=equity_unavailable error_type=%s",
+                    type(exc).__name__)
+        return None
+    if not isinstance(got, tuple) or len(got) != 2:
+        LOG.warning("component=launch_reset event=RESET_ABORTED reason=equity_unavailable")
+        return None
+    parsed = _positive_equity(got[0], got[1])
+    if parsed is None:
+        LOG.warning("component=launch_reset event=RESET_ABORTED reason=equity_unavailable")
+    return parsed
+
+
+def _pending_path(env, token):
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+    return state_db_path(env).parent / "launch_backups" / f"launch_{digest}.pending"
+
+
+def _load_pending(path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return None
+    names = data.get("backups") if isinstance(data, dict) else None
+    if not isinstance(names, list) or not names or not all(isinstance(name, str) and name.endswith(".db") for name in names):
+        return None
+    files = tuple(path.parent / name for name in names)
+    if not all(item.is_file() for item in files):
+        return None
+    return files
+
+
+def _save_pending(path, backups):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"backups": [item.name for item in backups]}, sort_keys=True), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
+def apply_launch_reset(env=None, *, now=None, equity_reader=None):
     """Run the reset once for this token. Unset: no effect and no files. Never raises."""
     try:
-        return _apply(env, now)
+        return _apply(env, now, equity_reader)
     except Exception as exc:  # noqa: BLE001 - startup must keep running; the token stays unrecorded
         LOG.warning("component=launch_reset event=RESET_ABORTED reason=backup_failed error_type=%s",
                     type(exc).__name__)
         return LaunchReset(False, "backup_failed")
 
 
-def _apply(env, now):
+def _apply(env, now, equity_reader):
     token = _token(env)
     if token is None:
         return LaunchReset(False, "disabled")
@@ -354,19 +463,37 @@ def _apply(env, now):
     if previous is not None:
         LOG.info("component=launch_reset event=ALREADY_APPLIED")
         return LaunchReset(False, "already_applied", previous, ())
-    try:
-        backups = _backup(env, now, token)
-    except Exception as exc:  # noqa: BLE001 - leave every source row where it is
-        LOG.warning("component=launch_reset event=RESET_ABORTED reason=backup_failed error_type=%s",
-                    type(exc).__name__)
-        return LaunchReset(False, "backup_failed")
+    equity = _fresh_equity(env, equity_reader)
+    if equity is None:
+        return LaunchReset(False, "equity_unavailable")
+    amount, _currency = equity
+    pending = _pending_path(env, token)
+    reused = _load_pending(pending) if pending.is_file() else None
+    if reused is not None:
+        backups = reused
+    else:
+        try:
+            backups = _backup(env, now, token)
+        except Exception as exc:  # noqa: BLE001 - leave every source row where it is
+            LOG.warning("component=launch_reset event=RESET_ABORTED reason=backup_failed error_type=%s",
+                        type(exc).__name__)
+            return LaunchReset(False, "backup_failed")
     start = now.isoformat()
     try:
-        stored, fresh = _record(state, token, start, tuple(path.name for path in backups))
-    except Exception as exc:  # noqa: BLE001 - the copies stay; the token is still unrecorded so the next start retries
+        stored, fresh = _record(state, token, start, tuple(path.name for path in backups),
+                                equity=amount, day_key_value=day_key(now))
+    except Exception as exc:  # noqa: BLE001 - keep this copy; the next start must not make another one
         LOG.warning("component=launch_reset event=RESET_ABORTED reason=record_failed error_type=%s",
                     type(exc).__name__)
+        try:
+            _save_pending(pending, backups)
+        except OSError:
+            LOG.warning("component=launch_reset event=RESET_ABORTED reason=pending_unwritten")
         return LaunchReset(False, "record_failed", None, backups)
+    try:
+        pending.unlink(missing_ok=True)
+    except OSError:
+        pass
     parsed = _parse_time(stored)
     if not fresh:
         LOG.info("component=launch_reset event=ALREADY_APPLIED")

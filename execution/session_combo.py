@@ -42,6 +42,8 @@ _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged
            "position_id", "volume", "opened_at")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
+# The 7-hour window is 84 M5 bars. The first and the last alone are not a range.
+MIN_RANGE_BARS = 3
 
 
 def combo_enabled(env):
@@ -102,15 +104,17 @@ def _floor_m5(at, zone):
 
 
 def asian_range(bars, day, symbol=LONDON_SYMBOL):
-    """``(high, low, bars, reason)``. Missing the 19:00 bar or the 01:55 bar is incomplete.
+    """``(high, low, bars, reason)``. Missing the 19:00 bar, the 01:55 bar, or all but those two is incomplete.
 
-    Incomplete is not final. The runner keeps asking until 02:00 NY, then skips.
+    Incomplete is not final. The runner keeps asking until 05:00 NY, then skips.
     """
     start, end = range_window(day)
     chosen = [bar for bar in bars if bar.symbol == symbol and start <= _ny(bar.open_time) < end]
     if not chosen:
         return None, None, (), "range_incomplete"
     last_open = end - timedelta(minutes=5)
+    if len(chosen) < MIN_RANGE_BARS:
+        return None, None, tuple(chosen), "range_incomplete"
     if not any(_ny(bar.open_time) == start for bar in chosen):
         return None, None, tuple(chosen), "range_incomplete"
     if not any(_ny(bar.open_time) == last_open for bar in chosen):
@@ -224,7 +228,7 @@ class SessionCombo:
         self._load_recent(at)
         self._reconcile_submitted()
         self._exits(at)
-        if not bars:
+        if not bars and entry_window(at):
             if not self._logged_bars:
                 self._logged_bars = True
                 _log("SESSION_COMBO_NO_BARS", reason="m5_unavailable")
@@ -331,9 +335,9 @@ class SessionCombo:
         if state["status"] in _TERMINAL:
             return
         high, low, window, reason = asian_range(bars, day)
+        if reason == "range_incomplete" and local.time() < time(5, 0):
+            return
         if reason:
-            if local.time() < time(2, 0):
-                return
             _log("LONDON_OCO_SKIPPED", symbol=LONDON_SYMBOL, reason=reason)
             state["status"] = "skipped"
             self._put(key, state)
