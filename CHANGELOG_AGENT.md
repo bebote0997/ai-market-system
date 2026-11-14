@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-14 — DEC-EXNESS-LAUNCH-1: tope por trade configurable y reinicio de lanzamiento, apagados
+
+- `AI_FLOOR_EXNESS_RISK_CAP` vacío deja el tope en 100 USC o 5 USD. Un decimal positivo finito, en la divisa de la cuenta, sustituye ese tope. El tamaño sigue siendo el menor entre el 1 % del equity, el 1 % del balance y ese tope. El lote se trunca al `volume_step` y no se sube a `volume_min`. Si el lote mínimo pasa el tope, no hay orden. Un valor inválido se anota y se deja el tope de serie.
+- `AI_FLOOR_LAUNCH_RESET_TOKEN` vacío no hace nada. Con un token nuevo, el arranque de `runtime.cloud` copia primero las bases de trading, del broker y de Exness. Si la copia falla, no guarda el token y no cambia contadores. Si sale bien, archiva por fecha de corte (las filas siguen en el fichero), pone el día de sesión y el contador de trades de Exness en 0, el inicio en ese momento, y guarda el token para no repetirlo. El panel y las cifras no muestran lo anterior al corte.
+- Los frenos diarios y de drawdown siguen en sus variables. Las dos claves reales, `AI_FLOOR_BROKER` y `REAL_EXECUTION_ENABLED` no se tocan. Sin merge, sin deploy, sin Render.
+
 ## 2026-11-12 — DEC-EXNESS-PACE-1: hueco, reconexión y cadencia del combo, apagado
 
 - El hueco de 100 ms espera. Una ráfaga de GET ya no sale `floor_min_interval` ni `BrokerUnavailable`. Un HTTP 429 sigue sin reintento. Un `manage` reutiliza una sola lectura de cuenta; la orden sigue leyendo dos veces.

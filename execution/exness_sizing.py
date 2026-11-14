@@ -8,12 +8,16 @@ and the account currency are the same, or when the payload already carries ``pro
 """
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
+import logging
+import os
 from typing import Optional
 
 
+LOG = logging.getLogger("ai_floor.exness")
 RISK_FRACTION_CAP = Decimal("0.01")
 USD_RISK_CAP = Decimal("5")
 USC_RISK_CAP = Decimal("100")
+RISK_CAP_ENV = "AI_FLOOR_EXNESS_RISK_CAP"
 
 
 def _pos(value):
@@ -112,14 +116,28 @@ def spread_cost(bid, ask, lots, spec):
     return (ask - bid) * spec.contract_size * spec.profit_rate * lots
 
 
-def account_risk_cap(currency):
-    """Hard cap in account currency. 5 USD, or 100 USC (1 USD) on a 10,000 USC balance."""
+def account_risk_cap(currency, env=None):
+    """Hard cap in account currency. Defaults: 5 USD, or 100 USC (1 USD) on a 10,000 USC balance.
+
+    ``AI_FLOOR_EXNESS_RISK_CAP``, when it is a positive finite decimal, replaces that default. The number
+    is in the account currency. Empty keeps the default. Any other value is logged and the default is kept.
+    """
     code = currency.strip().upper() if isinstance(currency, str) else ""
-    if code == "USD":
-        return USD_RISK_CAP
-    if code == "USC":
-        return USC_RISK_CAP
-    return None
+    default = USD_RISK_CAP if code == "USD" else USC_RISK_CAP if code == "USC" else None
+    if default is None:
+        return None
+    try:
+        raw = (os.environ if env is None else env).get(RISK_CAP_ENV)
+    except Exception:  # noqa: BLE001 - a broken env mapping keeps the default
+        LOG.warning("component=exness event=RISK_CAP_INVALID")
+        return default
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return default
+    parsed = _dec(raw)
+    if parsed is None or parsed <= 0:
+        LOG.warning("component=exness event=RISK_CAP_INVALID")
+        return default
+    return parsed
 
 
 def _dec(value):

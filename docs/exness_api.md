@@ -60,7 +60,11 @@ Ejecución real, las dos a la vez, y si no el adaptador solo lee:
 - `AI_FLOOR_EXNESS_REAL_EXECUTION=1`
 - `AI_FLOOR_EXNESS_REAL_CONFIRM=EXNESS_REAL_AUTHORIZED`
 
-Frenos, en la divisa de la cuenta. Si las variables van vacías: USD 10 y 50; USC 200 y 1000 (2 USD y 10 USD sobre 10,000 USC). Otra divisa no opera. `AI_FLOOR_EXNESS_DAILY_LOSS_USD`, `AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD`, `AI_FLOOR_EXNESS_START_BALANCE` (si falta, el primer equity). Estado en `AI_FLOOR_EXNESS_STATE_DB_PATH` (si falta, `data/runtime/exness_state.db`). El tope por trade es 5 USD o 100 USC.
+Frenos, en la divisa de la cuenta. Si las variables van vacías: USD 10 y 50; USC 200 y 1000 (2 USD y 10 USD sobre 10,000 USC). Otra divisa no opera. `AI_FLOOR_EXNESS_DAILY_LOSS_USD`, `AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD`, `AI_FLOOR_EXNESS_START_BALANCE` (si falta, el primer equity). Estado en `AI_FLOOR_EXNESS_STATE_DB_PATH` (si falta, `data/runtime/exness_state.db`). El tope por trade es 5 USD o 100 USC, salvo `AI_FLOOR_EXNESS_RISK_CAP` (decimal positivo en la divisa de la cuenta). Vacío deja el de serie. Un valor que no es un decimal positivo finito se anota y también deja el de serie. El lote se trunca al `volume_step` y no se sube a `volume_min`. Si el lote mínimo pasa el tope, no hay orden.
+
+## Reinicio de lanzamiento
+
+`AI_FLOOR_LAUNCH_RESET_TOKEN` vacío no hace nada. Con un token nuevo, el arranque de `runtime.cloud` copia las bases que ya existan (trading, estado del broker y estado de Exness) a ficheros con fecha en `launch_backups`, en el mismo disco. Solo si esa copia sale bien pone el inicio del lanzamiento en ese momento, el contador de día de la sesión Exness en 0 y el contador de trades en 0, y guarda el token. No hay SQL a mano y no se borra ninguna fila. El panel y las cifras usan ese inicio como corte: lo anterior sigue en el fichero y no se muestra. El mismo token no se vuelve a aplicar. Si la copia falla, el token no se guarda y el siguiente arranque lo intenta otra vez. Las claves de ejecución real no cambian.
 
 Comisión por lote y lado que el owner copia de la cuenta mientras el JSON no tenga un campo documentado: `AI_FLOOR_EXNESS_COMMISSION_PER_LOT_SIDE` (vacío = 0). El spread sale del tick.
 

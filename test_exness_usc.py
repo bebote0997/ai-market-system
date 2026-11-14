@@ -104,16 +104,44 @@ class UscMappingTests(unittest.TestCase):
                          "currency_unsupported")
 
     def test_risk_cap_is_one_hundred_usc_and_one_percent(self):
-        self.assertEqual(account_risk_cap("USC"), Decimal("100"))
-        self.assertEqual(account_risk_cap("USD"), Decimal("5"))
+        self.assertEqual(account_risk_cap("USC", {}), Decimal("100"))
+        self.assertEqual(account_risk_cap("USD", {}), Decimal("5"))
         spec, _reason = spec_from_conditions(EUR, "USC")
-        lots, reason = size_for_cap(Decimal("10000"), Decimal("10000"), Decimal("1.10000"), Decimal("1.09700"), spec, "USC")
+        lots, reason = size_for_cap(Decimal("10000"), Decimal("10000"), Decimal("1.10000"), Decimal("1.09700"), spec, "USC", env={})
         self.assertEqual((lots, reason), (Decimal("0.33"), None))
-        skipped, reason = size_for_cap(Decimal("10000"), Decimal("10000"), Decimal("1.10000"), Decimal("0.10000"), spec, "USC")
+        skipped, reason = size_for_cap(Decimal("10000"), Decimal("10000"), Decimal("1.10000"), Decimal("0.10000"), spec, "USC", env={})
         self.assertEqual((skipped, reason), (Decimal("0"), "min_volume_over_cap"))
         sized, reason = size_lots(Decimal("10000"), Decimal("0.01"), Decimal("1.10000"), Decimal("1.09700"), spec)
         self.assertEqual(sized, Decimal("0.33"))
         self.assertIsNone(reason)
+
+    def test_risk_cap_env_caps_one_percent_and_an_invalid_value_keeps_the_default(self):
+        from execution.exness_sizing import RISK_CAP_ENV, InstrumentSpec
+        spec = InstrumentSpec(Decimal("0.01"), Decimal("0.01"), 5, Decimal("1"), Decimal("1"))
+        self.assertEqual(Decimal("30086") * Decimal("0.01"), Decimal("300.86"))
+        lots, reason = size_for_cap(Decimal("30086"), Decimal("30086"), Decimal("2"), Decimal("1"), spec, "USC",
+                                    env={RISK_CAP_ENV: "300"})
+        self.assertEqual((lots, reason), (Decimal("300"), None))
+        wider, reason = size_for_cap(Decimal("30086"), Decimal("30086"), Decimal("2"), Decimal("1"), spec, "USC",
+                                     env={RISK_CAP_ENV: "300.86"})
+        self.assertEqual((wider, reason), (Decimal("300.86"), None))
+        self.assertEqual(account_risk_cap("USD", {}), Decimal("5"))
+        self.assertEqual(account_risk_cap("USD", {RISK_CAP_ENV: "300"}), Decimal("300"))
+        minimum = InstrumentSpec(Decimal("1"), Decimal("0.01"), 5, Decimal("1000"), Decimal("1"))
+        skipped, reason = size_for_cap(Decimal("30086"), Decimal("30086"), Decimal("2"), Decimal("1"), minimum, "USC",
+                                       env={RISK_CAP_ENV: "300"})
+        self.assertEqual((skipped, reason), (Decimal("0"), "min_volume_over_cap"))
+        with self.assertNoLogs("ai_floor.exness", level="WARNING"):
+            self.assertEqual(account_risk_cap("USC", {RISK_CAP_ENV: "  "}), Decimal("100"))
+        with self.assertLogs("ai_floor.exness", level="WARNING") as caught:
+            for bad in ("nope", "0", "-5", "inf", "nan"):
+                self.assertEqual(account_risk_cap("USC", {RISK_CAP_ENV: bad}), Decimal("100"))
+                self.assertEqual(account_risk_cap("USD", {RISK_CAP_ENV: bad}), Decimal("5"))
+        self.assertTrue(all("RISK_CAP_INVALID" in line for line in caught.output))
+        self.assertNotIn("nope", " ".join(caught.output))
+        fallback, reason = size_for_cap(Decimal("30086"), Decimal("30086"), Decimal("2"), Decimal("1"), spec, "USC",
+                                        env={RISK_CAP_ENV: "nope"})
+        self.assertEqual((fallback, reason), (Decimal("100"), None))
 
     def test_live_tick_and_candle_shapes(self):
         parsed = parse_tick_frame({"instrument": "USDJPY", "bid": 159.6, "ask": 159.601, "timestamp": "2026-11-12T00:15:00+00:00"})

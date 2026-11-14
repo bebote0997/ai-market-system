@@ -2,6 +2,8 @@
 
 **Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
 
+2026-11-14, DEC-EXNESS-LAUNCH-1, solo preparado y apilado sobre el ritmo de entrada: el tope por trade puede salir de `AI_FLOOR_EXNESS_RISK_CAP` y, si no, sigue en 100 USC o 5 USD. El reinicio de lanzamiento está apagado. Con token, el arranque copia y corta por fecha; no borra. Sin merge ni deploy.
+
 Demo iniciado con GO del owner sobre la DB actual (sin DB nueva ni sealed genesis); ver DEC-13.1 y el runbook.
 
 2026-11-07, DEC-EMA-1, solo preparado: el cruce EMA 10/21 puede añadirse al demo con `AI_FLOOR_EMA_CROSS=1` y no está activado. El demo en curso y DEC-FX-SL-3 no cambian. Ver `docs/ema_cross.md`.

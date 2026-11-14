@@ -184,9 +184,9 @@ def fix_signal(bars, symbol, at):
     return side, move, entry_at
 
 
-def size_for_cap(equity, balance, entry, stop, spec, currency="USD"):
+def size_for_cap(equity, balance, entry, stop, spec, currency="USD", env=None):
     """Budget is the lesser of 1% of equity, 1% of balance, and the currency cap. ``entry`` is the fill."""
-    cap = account_risk_cap(currency)
+    cap = account_risk_cap(currency, env)
     if cap is None:
         return Decimal(0), "currency_unsupported"
     return capped_lots(equity, balance, entry, stop, spec, usd_cap=cap)
@@ -481,11 +481,12 @@ class SessionCombo:
         except Exception:  # noqa: BLE001
             _log("SIZE_SKIP", symbol=symbol, reason="book_unread")
             return None, None
-        if book.balance is None or account_risk_cap(book.balance.currency) is None:
+        broker_env = getattr(self._broker, "_env", None)
+        if book.balance is None or account_risk_cap(book.balance.currency, broker_env) is None:
             _log("SIZE_SKIP", symbol=symbol, reason="currency_unsupported")
             return None, None
         lots, reason = size_for_cap(book.balance.equity, book.balance.balance, entry, stop, book.specs.get(symbol),
-                                    book.balance.currency)
+                                    book.balance.currency, env=broker_env)
         if reason:
             _log("SIZE_SKIP", symbol=symbol, reason=reason)
             return None, None

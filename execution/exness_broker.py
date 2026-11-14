@@ -422,7 +422,7 @@ class ExnessBroker:
         slot = again.quotes.quote(symbol)
         spec = again.specs.get(symbol)
         price = None if slot is None else (slot.ask if side == "LONG" else slot.bid)
-        cap = None if again.balance is None else account_risk_cap(again.balance.currency)
+        cap = None if again.balance is None else account_risk_cap(again.balance.currency, self._env)
         if spec is None or again.balance is None or price is None or cap is None:
             return self._refuse(client_id, "sizing_invalid" if cap is not None else "currency_unsupported")
         allowed, why = capped_lots(again.balance.equity, again.balance.balance, price, stop, spec, fraction, cap)
