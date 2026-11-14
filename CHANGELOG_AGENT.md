@@ -1,5 +1,63 @@
 # Agent Changelog
 
+## 2026-11-14 — DEC-EXNESS-LAUNCH-1: tope por trade configurable y reinicio de lanzamiento, apagados
+
+- `AI_FLOOR_EXNESS_RISK_CAP` vacío deja el tope en 100 USC o 5 USD. Un decimal positivo finito, en la divisa de la cuenta, sustituye ese tope. El tamaño sigue siendo el menor entre el 1 % del equity, el 1 % del balance y ese tope. El lote se trunca al `volume_step` y no se sube a `volume_min`. Si el lote mínimo pasa el tope, no hay orden. Un valor inválido se anota y se deja el tope de serie.
+- `AI_FLOOR_LAUNCH_RESET_TOKEN` vacío no hace nada. Con un token nuevo, el arranque lee el equity vivo. Si no puede, no copia y no guarda el token. Si puede, copia primero las bases de trading, del broker y de Exness. Si la copia falla, no guarda el token. Si guardar el token falla, el siguiente arranque reutiliza esa copia. Si sale bien, archiva por fecha de corte (las filas siguen en el fichero), pone `exness_brake_start` y la base del día en ese equity, levanta un freno dejado por equity 0 o por una base inservible, pone el día de sesión y el contador de trades en 0, y guarda el token. El panel y el resumen diario no leen esos dos contadores: usan el corte.
+- Una pata del session combo con 0 velas no se cierra mientras la ventana siga abierta. La lectura vacía se reintenta a 0,1 s, 0,2 s y 0,4 s, por encima del hueco de 100 ms. El rango asiático pide al menos la mitad de las velas, no solo la primera y la última.
+- Los frenos diarios y de drawdown siguen en sus variables. Las dos claves reales, `AI_FLOOR_BROKER` y `REAL_EXECUTION_ENABLED` no se tocan. Sin merge, sin deploy, sin Render.
+
+## 2026-11-12 — DEC-EXNESS-PACE-1: hueco, reconexión y cadencia del combo, apagado
+
+- El hueco de 100 ms espera. Una ráfaga de GET ya no sale `floor_min_interval` ni `BrokerUnavailable`. Un HTTP 429 sigue sin reintento. Un `manage` reutiliza una sola lectura de cuenta; la orden sigue leyendo dos veces.
+- El contador del socket ya no se pone a cero al aceptar la conexión. Solo se pone a cero cuando ha llegado un tick y el socket lleva 5 s abierto. Un cierre inmediato espera 1, 2, 4, 8, 16 y 30 s. No firma un handshake cada segundo.
+- De 02:00 a 03:00 ET el combo recibe el reloj real, no el inicio del bloque de 15 minutos. De 03:00 a 05:00 ET, y en los 5 minutos del fix, `manage` corre como mucho cada 30 s (el tick y el sondeo de 5 s comparten esa espera). No hay una petición por sondeo.
+- `candles()` queda cubierto por el camino real: `ExnessClient.get_json` y `candle_request_path`.
+- Frenos USC 200/1000 y tope 100 sin cambios. USD sigue en 5/10/50. Las dos claves reales, `AI_FLOOR_BROKER` y `AI_FLOOR_EXNESS_M5_FEED` no se tocan. Sin merge, sin deploy, sin Render.
+
+## 2026-11-12 — DEC-EXNESS-STREAM-1: socket, velas M5 y candado del motor, apagado
+
+- Con `AI_FLOOR_BROKER=exness` el proceso abre y mantiene el WebSocket de ticks (GET firmado, subscribe, silencio de 15 s, reintento). Sin ese socket cada entrada o cierre salía `quote_stale`. Un transporte de prueba no abre red.
+- `ExnessBroker.candles()` hace `GET /v1/market-data/accounts/{id}/candles` (`instrument`, `timeframe=M5`, `price_type=bid`, `from`, `to`) y devuelve velas `{time, open, high, low, close, volume}`. El session combo las usa para el rango asiático aunque `AI_FLOOR_EXNESS_M5_FEED` siga apagado. La bandera del feed no cambia.
+- `cryptography==50.0.2` está en `requirements.txt` y en `requirements-ci.txt`, que es lo que instala Render. `websockets==17.2` queda como dependencia directa; el lock ya lo traía.
+- `ExnessSession.on_cycle` sigue llamando a `manage()` (ahí opera el session combo) y después rechaza cualquier plan del motor con `session_combo_only`. No llama a `submit_plan`. EMA-only sigue en la cuenta practice de OANDA. Las dos claves reales y `REAL_EXECUTION_ENABLED` no cambian. Frenos USC 200/1000 y tope 100 tampoco. Sin merge, sin deploy, sin Render.
+
+## 2026-11-12 — DEC-EXNESS-USC-1: cuenta centavo USC
+
+- La divisa sale de `settings.currency`. El saldo del snapshot ya no queda vacío por falta de `account.currency`.
+- El contrato es `contract_size`. No hay `profitRate`: USD en cuenta USC vale 100; JPY en cuenta USC vale `100 / USDJPY` solo con ese precio ya en el libro.
+- Sobre 10,000 USC, los frenos por defecto son 200 USC al día y 1000 USC desde el inicio. El tope de riesgo es 100 USC. USD sigue en 10, 50 y 5.
+- Posiciones usan `direction` y `position_id`. Órdenes usan `type`. El SL/TP de una posición es `type=sltp`. El tick acepta `timestamp` y números. La vela usa `time`.
+- `POST /positions` manda `comment` con el client id. Un host de discovery sin esquema recibe `https://`. La comprobación de solo lectura no arma ni frena.
+
+## 2026-11-11 — DEC-EXNESS-M5-1: velas M5 de Exness, apagadas
+
+- `AI_FLOOR_EXNESS_M5_FEED` exacto `1` y solo con `AI_FLOOR_BROKER=exness`. No toca las dos claves de ejecución real.
+- Libro de precios por símbolo. Velas M5 de bid alineadas a 5 minutos UTC. Al cerrar el reloj, la vela de las 01:55 existe para la decisión de las 02:00.
+- Caída del socket: tick viejo al momento, reintento 1, 2, 4, 8, 16, 30 s, y relleno con `GET .../candles` si el JSON encaja con el fixture. Si no, hueco y el combo puede saltar el día.
+- El frame del tick y el objeto de la vela no están publicados. El parseo vive en `execution/exness_m5.py`. No hay librería WebSocket pinada, así que el socket real no se abre.
+
+## 2026-11-11 — DEC-SESSION-COMBO-1: rango de Londres y fade del fix, apagado
+
+- `AI_FLOOR_SESSION_COMBO` exacto `1` y solo con `AI_FLOOR_BROKER=exness`. La bandera no envía órdenes: siguen las dos claves de ejecución real.
+- USDJPY: rango M5 19:00–02:00 Nueva York, stops emulados (el campo JSON de la orden stop no está documentado), salto si una vela cruza los dos lados, cancelación a las 05:00, SL al otro lado, TP 2R, salida a las 11:00.
+- GBPUSD y después EURUSD: movimiento 15:45–16:00 Londres, entrada en contra si hay 15 pips, SL 30, sin TP, salida a los 30 minutos. Una sola posición.
+- Riesgo el menor entre 1 % y 5 USD; el lote mínimo que pase el tope se salta. Frenos de 10/50 USD y tick viejo sin cambios.
+- La entrada de Londres solo vive en `[02:00, 05:00)` ET y solo con la vela M5 abierta en ese instante. A las 05:00 se cancela aunque haya cruces viejos. El fix solo entra en los primeros 5 minutos de las 16:00 Londres.
+- El rango incompleto se reintenta hasta las 02:00; si falta, `range_incomplete` y ese día no se reabre. GBPUSD y EURUSD usan cada uno sus velas.
+- SL/TP y el tope de 5 USD salen del fill real (ask/bid), no del nivel del rango. TP = 2 veces esa distancia.
+- El estado del día queda en el almacén de flags (`combo_lon_*`, `combo_fix_*`). Un reinicio, un stop o la salida por tiempo no reenvían el mismo trade.
+- La salida por tiempo cierra el id de posición devuelto en el fill. Sin ese id, busca símbolo, lado, volumen y hora. No da el día por cerrado mientras la posición siga abierta. El cuerpo de la orden de mercado no lleva client id: la página oficial no lo publica.
+- Si la segunda lectura del precio rompe el tope de 1 % o 5 USD, `open_market` reduce el lote o no envía.
+
+## 2026-11-11 — DEC-EXNESS-1: adaptador Exness API, apagado
+
+- El broker por defecto sigue siendo OANDA. `AI_FLOOR_BROKER=exness` construye `ExnessBroker` y no el router de práctica.
+- REST firmado (`EXN-*`, Ed25519) y libro de ticks. Sin tick fresco no hay orden nueva y salta la alerta existente.
+- Tamaño con `contractSize` y `ProfitRate` de la página de fórmulas; por debajo de `volume_min` no se manda. Frenos 10 USD / 50 USD hasta `RESUME_EXNESS`.
+- Las dos claves de ejecución real vienen apagadas. `REAL_EXECUTION_ENABLED` no cambia. Sin merge, sin deploy, sin Render.
+- Huecos de la documentación oficial listados en `docs/exness_api.md`.
+
 ## 2026-11-11 — DEC-EMA-ONLY-1: solo EMA en practice, apagado por defecto
 
 - `AI_FLOOR_EMA_ONLY` exacto `1` (cuenta OANDA practice, leído en cada ciclo): la ruta del motor en el router demo no envía ni la LIMIT de retroceso ni la orden de mercado. El diario anota `NOT_ROUTED` con motivo `ema_only`.

@@ -67,6 +67,8 @@ MESSAGES = {
     "LIMIT_CANCELLED": "Orden límite cancelada",
     "PARTIAL_CLOSE": "Cierre parcial",
     "TRAIL": "Stop de seguimiento movido (a 1R)",
+    "EXNESS_DISCONNECTED": "Exness sin precio reciente: no se abren operaciones",
+    "EXNESS_BRAKE_HALT": "Freno de la cuenta Exness: entradas detenidas",
 }
 _SAFE = re.compile(r"[^A-Za-z0-9_:.\-]")
 _LONG_DIGITS = re.compile(r"\d{5,}")
@@ -113,7 +115,8 @@ def build_message(kind, detail):
     label = MESSAGES.get(kind)
     if label is None:
         return None
-    parts = [f"{PREFIX} {label}"]
+    prefix = "[Exness]" if str(kind).startswith("EXNESS_") else PREFIX
+    parts = [f"{prefix} {label}"]
     if isinstance(detail, str):
         text = _LONG_DIGITS.sub("#", _URL.sub("", detail)).strip()[:160]
         return " · ".join(parts + ([text] if text else []))

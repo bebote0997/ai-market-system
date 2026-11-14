@@ -1,0 +1,88 @@
+# API de Exness (Trader API) — preparado, apagado
+
+_2026-11-11. No es MetaTrader. No hay puente en el PC ni en Render. El Floor firma peticiones REST y, cuando haya
+credenciales, abre el WebSocket de precios. Nada de esto se envía hasta que el owner ponga las dos claves de
+ejecución real. `REAL_EXECUTION_ENABLED` sigue `False`._
+
+Fuente: [portal](https://www.exness-api.com/trading/get-started), [ayuda](https://get.exness.help/hc/en-us/articles/27866287512476-Exness-API),
+[firma](https://www.exness-api.com/authentication/request-signing),
+[descubrimiento](https://www.exness-api.com/trading/get-started/access-point-host-discovery),
+[claves](https://www.exness-api.com/authentication/api-key-and-host-setup),
+[WebSocket](https://www.exness-api.com/trading/get-started/subscribe-to-websocket-events),
+[semántica](https://www.exness-api.com/trading/guides/runtime-semantics),
+[fórmulas](https://www.exness-api.com/trading/guides/formulas-calculations).
+
+## Qué hace el Floor
+
+| Módulo | Papel |
+|---|---|
+| `execution/exness_sign.py` | Cabeceras `EXN-*`. Ed25519 firma los bytes de `EXN-DATA`, no el texto base64url. |
+| `execution/exness_client.py` | REST firmado. Descubre el Access Point una vez y lo guarda. La misma clave de idempotencia no se reenvía. |
+| `execution/exness_stream.py` | Libro del último tick. Si el socket cae, el tick se borra al momento. Reintento 1, 2, 4, 8, 16, 30 s (política del Floor: el portal solo dice «backoff»). |
+| `execution/exness_transport.py` | `FakeExnessTransport` y `RestExnessTransport`. El adaptador solo llama `read_state` y `submit`. |
+| `execution/exness_broker.py` | `ExnessBroker`. Mercado = `POST .../positions` con `instrument`, `side`, `volume` y, si hay, `stop_loss_price` / `take_profit_price`. La página no publica comentario ni client id; la clave va en `EXN-IDEMPOTENCY-KEY`. Límite = `POST .../orders`. Cancelar = `DELETE .../orders/{id}`. Cerrar = `DELETE .../positions/{id}`. |
+| `execution/exness_brakes.py` | Pérdida diaria y drawdown en la divisa de la cuenta, hasta `RESUME_EXNESS`. USD: 10 y 50. USC: 200 y 1000. |
+| `execution/exness_check.py` | Lectura de cuenta, especificación y tick. No envía órdenes. |
+
+`AI_FLOOR_BROKER` vacío o `oanda` deja el router de práctica como está. Solo el valor exacto `exness` construye esta sesión, y entonces no construye también el router de OANDA.
+
+Un ACK HTTP 202 no es un fill. El resultado queda `UNKNOWN` hasta un `transaction_event` o el estado de la operación. Un 429 no se reintenta (página de troubleshooting: `REQUEST_RATE_LIMIT` no es reintentable). Un corte de red después de enviar guarda la misma clave.
+
+Sin tick fresco (por defecto 5 s, `AI_FLOOR_EXNESS_QUOTE_STALE_SECONDS`) no hay orden nueva y se avisa `EXNESS_DISCONNECTED` por el mismo canal de alertas del router.
+
+## Credenciales que tiene que crear el owner
+
+Cuenta de la plataforma Exness, no una cuenta MetaTrader. KYC completo (identidad y, si aplica, domicilio). Personal Area → Key Management (el centro de ayuda lo llama también «API page»).
+
+| Variable | Dónde sale | Permiso |
+|---|---|---|
+| `EXN_API_KEY` | Identificador público de la clave (`exnsk-…` en los ejemplos). No es la clave privada. | Fase 1: el ejemplo oficial pide **Trading read access**. No uses una Info API key para operar: la guía «Place your first trade» dice usar una Exness API key, no una Info API key. |
+| `EXN_PRIVATE_KEY` | Si Exness genera el par: 128 hex (32 bytes de semilla + 32 de pública), se enseña una vez. Si eliges «I'll use my own public key»: el PEM PKCS#8 de `private.pem` se queda en el servidor; en Key Management se pega solo la pública SPKI en Base64 con padding. | La privada no se sube cuando el par es tuyo. No va al repo ni a Render en este cambio. |
+| `EXN_ACCOUNT_ID` | Cuenta de trading elegida al crear la clave. Entero sin signo, en texto. | La clave solo ve esa cuenta (y las IP permitidas, si el formulario las pide). |
+| `EXN_DISCOVERY_BASE_URL` | Host HTTPS del widget DNS de Key Management, sin barra final. Es el Gateway, no el Access Point. | Sirve para `GET /v1/trading/access-point?account_id=`. El `access_point` devuelto es el host de REST y WebSocket. No copies `https://api.exness.com` ni `https://api.exness-api.com`: el portal dice que son ejemplos de revisión, no hosts de respaldo. |
+
+Para la comprobación de solo lectura basta la clave con Trading read access. Para órdenes hace falta una clave con derecho a operar. Los términos piden el mínimo privilegio: no actives trading en la clave que solo lee. Los nombres exactos de las casillas del formulario no están en las páginas leídas (ver TODO).
+
+Comprobación, sin órdenes:
+
+```
+python -m execution.exness_check
+```
+
+Reanudar un freno, también sin órdenes (la frase no se queda puesta):
+
+```
+AI_FLOOR_EXNESS_RESUME=RESUME_EXNESS python -m execution.exness_check --resume
+```
+
+Ejecución real, las dos a la vez, y si no el adaptador solo lee:
+
+- `AI_FLOOR_EXNESS_REAL_EXECUTION=1`
+- `AI_FLOOR_EXNESS_REAL_CONFIRM=EXNESS_REAL_AUTHORIZED`
+
+Frenos, en la divisa de la cuenta. Si las variables van vacías: USD 10 y 50; USC 200 y 1000 (2 USD y 10 USD sobre 10,000 USC). Otra divisa no opera. `AI_FLOOR_EXNESS_DAILY_LOSS_USD`, `AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD`, `AI_FLOOR_EXNESS_START_BALANCE` (si falta, el primer equity). Estado en `AI_FLOOR_EXNESS_STATE_DB_PATH` (si falta, `data/runtime/exness_state.db`). El tope por trade es 5 USD o 100 USC, salvo `AI_FLOOR_EXNESS_RISK_CAP` (decimal positivo en la divisa de la cuenta). Vacío deja el de serie. Un valor que no es un decimal positivo finito se anota y también deja el de serie. El lote se trunca al `volume_step` y no se sube a `volume_min`. Si el lote mínimo pasa el tope, no hay orden.
+
+## Reinicio de lanzamiento
+
+`AI_FLOOR_LAUNCH_RESET_TOKEN` vacío no hace nada. Con un token nuevo, el arranque lee primero el equity vivo de la cuenta. Si no puede (cero, divisa distinta de USD/USC, o la lectura falla), no copia nada y no guarda el token. Si puede, copia las bases que ya existan (trading, estado del broker y estado de Exness) a ficheros con fecha en `launch_backups`, en el mismo disco. Solo si esa copia sale bien pone el inicio del lanzamiento en ese momento, `exness_brake_start` y la base del día del freno en ese equity, el contador de día y el de trades en 0, y guarda el token. Un freno dejado por equity 0 o por una base que no es un importe positivo se levanta. Un freno de pérdida diaria o de drawdown con una base positiva se queda. No hay SQL a mano y no se borra ninguna fila. El panel y el resumen diario no leen esos dos contadores: usan el inicio como corte, y lo anterior sigue en el fichero. El mismo token no se vuelve a aplicar. Si la copia falla, el token no se guarda. Si la copia sale bien y guardar el token falla, el siguiente arranque reutiliza esa copia y no hace otra. Las claves de ejecución real no cambian.
+
+Comisión por lote y lado que el owner copia de la cuenta mientras el JSON no tenga un campo documentado: `AI_FLOOR_EXNESS_COMMISSION_PER_LOT_SIDE` (vacío = 0). El spread sale del tick.
+
+La firma en vivo usa el paquete `cryptography` (el ejemplo oficial de Python). Está pinado en `requirements.txt` y en `requirements-ci.txt` (`cryptography==50.0.2`), que es el fichero que instala Render. Sin él, el transporte real no arranca.
+
+## Tamaño
+
+`lots = floor_to_step(balance * risk / (|entrada − stop| * contractSize * ProfitRate))`. Si queda por debajo de `volume_min`, no hay orden. `contractSize` y `profitRate` son los nombres de la página de fórmulas. Si el JSON real usa otros nombres, el tamaño sale `contract_size_unavailable` o `profit_rate_unavailable` y no se inventa un contrato de 100 000.
+
+## TODO (las páginas no lo fijan)
+
+1. Orden canónico del JSON dentro de `EXN-DATA`. Aquí se usa el orden del ejemplo y separadores compactos.
+2. La comisión dentro de instrument conditions sigue sin campo. El contrato vivo es `contract_size`. No hay `profitRate`: USD contra USC vale 100; JPY contra USC vale `100 / USDJPY` solo si ese precio ya está en el libro.
+3. `POST /orders` usa `type` (`limit` / `stop` / `sltp`). El SL/TP de una posición es una orden `type=sltp` con `position_id`. `PATCH /orders/{id}` solo cambia una orden pendiente.
+4. El cierre parcial es `DELETE /positions/{id}?volume=`. `close_units` lo manda si el volumen es menor o igual al de la posición.
+5. Forma JSON de `GET .../limits`. Mientras tanto hay un hueco mínimo de 100 ms (`AI_FLOOR_EXNESS_MIN_INTERVAL_MS`): la llamada espera, no se rechaza. Un HTTP 429 sigue sin reintento y bloquea el envío hasta `Retry-After`. Un `manage` lee la cuenta una vez; la orden de mercado sigue leyendo dos veces.
+6. El tick vivo es `{instrument, bid, ask, timestamp}`. `bid` y `ask` pueden ser números. `parse_tick_frame` los acepta.
+7. Velas: query `instrument`, `timeframe=M5`, `price_type=bid`, `from`, `to`. El objeto es `{time, open, high, low, close, volume}`. `time` es ISO con zona. Los precios pueden ser números.
+8. No hay host de sandbox. Un demo de MetaTrader no vale. No está escrito si una cuenta demo de la plataforma Exness puede crear claves.
+9. Nombres exactos de los permisos en el formulario (además de «Trading read access» y de la advertencia de no usar una Info API key para operar).
+10. El camino de OANDA (retroceso 12,5 pips, parciales, trail) no está reescrito para Exness. `ExnessSession.on_cycle` no lo manda: con las dos claves reales solo el session combo puede abrir una orden Exness. Un plan del motor, incluido EMA-only, sale `session_combo_only` y no llama a `submit_plan`. EMA-only sigue en la practice de OANDA, con `AI_FLOOR_BROKER` vacío.

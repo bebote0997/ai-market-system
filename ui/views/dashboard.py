@@ -61,19 +61,21 @@ TIME_KEYS = ("as_of", "started_at", "timestamp", "timestamp_utc", "opened_at", "
 
 def demo_since():
     """The demo epoch (aware UTC) while broker-demo routing is ON / the results source is OANDA_DEMO; None otherwise
-    (PAPER screens unchanged). Unreadable epoch in demo mode => ``FAR_FUTURE``. Never raises."""
+    (PAPER screens unchanged). Unreadable epoch in demo mode => ``FAR_FUTURE``. A recorded launch cutoff hides
+    anything earlier, including when the demo filter is off. Never raises."""
     try:
         from execution.results_source import demo_results
         on = demo_results(os.environ)
     except Exception:  # noqa: BLE001 - unreadable source flag: the routing flag alone
         on = os.environ.get("AI_FLOOR_BROKER_DEMO_ROUTING") == "1"
-    if not on:
-        return None
-
-    def read():
-        from execution.demo_epoch import demo_epoch
-        return demo_epoch(os.environ)
-    return epoch_or_far(read)
+    since = None
+    if on:
+        def read():
+            from execution.demo_epoch import demo_epoch
+            return demo_epoch(os.environ)
+        since = epoch_or_far(read)
+    from execution.launch_reset import effective_since
+    return effective_since(since, os.environ)
 
 
 def epoch_or_far(read):

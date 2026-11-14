@@ -304,6 +304,12 @@ def serve():
         archive_pre_demo_db(RuntimeConfig.from_env().db_path)
     except Exception:  # noqa: BLE001 - the archive never blocks startup
         pass
+    try:  # Opt-in launch reset. Unset token: no-op. A failed backup does not record the token and does not stop startup.
+        from execution.launch_reset import apply_launch_reset
+        apply_launch_reset(os.environ)
+    except Exception:  # noqa: BLE001 - the reset must not take the service down; an unrecorded token retries next start
+        logging.getLogger("ai_floor.launch_reset").warning(
+            "component=launch_reset event=RESET_ABORTED reason=startup_error")
     children = []
     stop = False
 

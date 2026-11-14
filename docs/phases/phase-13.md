@@ -2,11 +2,25 @@
 
 **Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
 
+2026-11-14, DEC-EXNESS-LAUNCH-1, solo preparado y apilado sobre el ritmo de entrada: el tope por trade puede salir de `AI_FLOOR_EXNESS_RISK_CAP` y, si no, sigue en 100 USC o 5 USD. El reinicio de lanzamiento está apagado. Con token, el arranque copia y corta por fecha; no borra. Sin merge ni deploy.
+
 Demo iniciado con GO del owner sobre la DB actual (sin DB nueva ni sealed genesis); ver DEC-13.1 y el runbook.
 
 2026-11-07, DEC-EMA-1, solo preparado: el cruce EMA 10/21 puede añadirse al demo con `AI_FLOOR_EMA_CROSS=1` y no está activado. El demo en curso y DEC-FX-SL-3 no cambian. Ver `docs/ema_cross.md`.
 
 2026-11-07, DEC-XAI-1, solo preparado y apilado encima: xAI no cambia el proveedor en marcha. El owner puede pedir el paso desde el panel; el runner lo anota solo con la cuenta plana, y el arranque no lo hace. Ver `docs/provider_migration.md`.
+
+2026-11-12, DEC-EXNESS-PACE-1, solo preparado y apilado sobre la preparación en vivo: el hueco de 100 ms espera, la reconexión no firma cada segundo, y el combo de 02:00 a 05:00 ET mira el reloj real como mucho cada 30 s. Sigue apagado. Sin merge ni deploy.
+
+2026-11-12, DEC-EXNESS-STREAM-1, solo preparado y apilado sobre la cuenta USC: el proceso abre el socket de ticks, `candles()` devuelve velas M5, y un plan del motor no puede mandar una orden Exness. `cryptography` está en el lock de Render. Sigue apagado. Sin merge ni deploy.
+
+2026-11-12, DEC-EXNESS-USC-1, solo preparado y apilado sobre el feed M5: la cuenta centavo USC usa sus campos vivos. Frenos 200/1000 USC y tope 100 USC sobre 10,000 USC. La ejecución real sigue apagada. Ver `docs/exness_api.md`.
+
+2026-11-11, DEC-EXNESS-M5-1, solo preparado y apilado sobre el session combo: velas M5 desde ticks de Exness, apagadas. `AI_FLOOR_EXNESS_M5_FEED` no arma órdenes reales. Ver `docs/exness_m5.md`.
+
+2026-11-11, DEC-SESSION-COMBO-1, solo preparado y apilado sobre el adaptador Exness: rango asiático USDJPY y fade del fix de Londres. `AI_FLOOR_SESSION_COMBO` apagado. No envía órdenes sin las dos claves reales. Ver `docs/session_combo.md`.
+
+2026-11-11, DEC-EXNESS-1, solo preparado: adaptador de la API oficial de Exness, apagado. No sustituye al demo OANDA. Ver `docs/exness_api.md`.
 
 2026-11-11, DEC-EMA-ONLY-1, solo preparado: `AI_FLOOR_EMA_ONLY` apagado. Con `1` en practice el router no envía el plan del motor y cancela una LIMIT de retroceso sin fill (`EMA_ONLY`). EMA y la gestión no cambian. Sin merge ni deploy.
 

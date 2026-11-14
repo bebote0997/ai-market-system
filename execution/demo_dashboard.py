@@ -45,7 +45,8 @@ def demo_snapshot(now, env=None, *, trades_reader=None, account_reader=None):
     (DEC-DEMO-READ-RETRY-1; ``trades_as_of`` is that read's own time). ``read_codes``: non-secret diagnostics of both reads (``account``: AccountView status / error
     code, ``trades``: the read's error code or ``unavailable``; None = read OK). Never raises."""
     env = os.environ if env is None else env
-    epoch = demo_epoch(env)
+    from execution.launch_reset import effective_since
+    epoch = effective_since(demo_epoch(env), env)
     snapshot = {"epoch": epoch, "stats": None, "curve": [], "open_rows": [], "closed_rows": [], "nav": None,
                 "balance": None, "currency": None, "capital": {"start": None, "change": None}, "stale": False,
                 "as_of": None, "trades_as_of": None, "trades_error": None, "trades_stale": False, "daily_loss": daily_loss_view(None, None, now, {}),
@@ -113,11 +114,12 @@ def _account_code(view):
 
 def demo_progress(now, env=None):
     """(epoch, first routed trade opened_at or None, day number or None). The day counts from the EPOCH's New York
-    date (``execution.demo_epoch.demo_day_from_epoch``, the same rule as the Floor / Overview), with or without a
-    routed trade; NOT capped (> 30 = the demo is complete; display via ``ui.i18n_es.demo_day_text``); None only when
-    the epoch is unknown or ``now`` is before it. Never raises."""
+    date (``execution.demo_epoch.demo_day_from_epoch``, the same rule as the Floor / Overview), or from the launch
+    cutoff when that is later. NOT capped (> 30 = the demo is complete; display via ``ui.i18n_es.demo_day_text``);
+    None only when the epoch is unknown or ``now`` is before it. Never raises."""
     env = os.environ if env is None else env
-    epoch = demo_epoch(env)
+    from execution.launch_reset import effective_since
+    epoch = effective_since(demo_epoch(env), env)
     first = first_demo_open(_risk_rows(env), epoch)
     try:
         day = demo_day_from_epoch(epoch, now)
