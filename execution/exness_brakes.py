@@ -17,6 +17,7 @@ from execution.daily_loss_limit import day_key
 
 
 LOG = logging.getLogger("ai_floor.exness")
+BRAKE_LOG = logging.getLogger("ai_floor.exness_brakes")
 DAILY_ENV, DRAWDOWN_ENV = "AI_FLOOR_EXNESS_DAILY_LOSS_USD", "AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD"
 START_ENV = "AI_FLOOR_EXNESS_START_BALANCE"
 DEFAULT_DAILY, DEFAULT_DRAWDOWN = Decimal("10"), Decimal("50")
@@ -190,3 +191,44 @@ class ExnessBrakes:
             self._halt("drawdown")
             return BrakeStatus(False, True, "drawdown")
         return BrakeStatus(True, False, None)
+
+
+def _stored(store, key):
+    try:
+        value = store.get_flag(key)
+    except Exception:  # noqa: BLE001 - the startup log must not raise
+        return "none"
+    if not isinstance(value, str):
+        return "none"
+    text = value.strip()
+    if not text or any(ch.isspace() for ch in text):
+        return "none"
+    return text
+
+
+def _equity_fields(reader):
+    try:
+        got = reader() if reader is not None else None
+    except Exception:  # noqa: BLE001 - a failed equity read still logs the stored brakes
+        return "none", "none"
+    if not isinstance(got, tuple) or len(got) != 2:
+        return "none", "none"
+    amount = _money(got[0])
+    code = got[1].strip().upper() if isinstance(got[1], str) else ""
+    equity = "none" if amount is None else format(amount, "f")
+    currency = code if code in ACCOUNT_CURRENCIES else "none"
+    return equity, currency
+
+
+def log_brake_state(store, equity_reader):
+    """One INFO line of the stored brakes plus one equity read. No writes. Never raises."""
+    try:
+        equity, currency = _equity_fields(equity_reader)
+        BRAKE_LOG.info(
+            "component=exness_brakes event=BRAKE_STATE equity=%s currency=%s brake_start=%s "
+            "day_base=%s day=%s halt=%s halt_reason=%s",
+            equity, currency, _stored(store, START_FLAG), _stored(store, DAY_EQUITY_FLAG),
+            _stored(store, DAY_FLAG), "true" if _stored(store, HALT_FLAG) == "1" else "false",
+            _stored(store, REASON_FLAG))
+    except Exception:  # noqa: BLE001 - startup continues when the log itself fails
+        return
