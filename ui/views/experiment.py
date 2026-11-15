@@ -11,7 +11,13 @@ DEMO_NO_DATA = "Demo OANDA: sin datos"
 
 def demo_progress_text(now=None):
     """"Cuenta de práctica OANDA Demo desde <epoch ET>; Día N de 30" while broker-demo routing is ON or the results
-    source is OANDA_DEMO (day 1 = the epoch's New York date, ``ui.demo_clock``); None otherwise. Never raises."""
+    source is OANDA_DEMO (day 1 = the epoch's New York date, ``ui.demo_clock``); None otherwise. Never raises.
+
+    With the Exness broker the line is the cent account and the first real order, not the OANDA epoch.
+    """
+    from ui.exness_present import LABEL, broker_is_exness, clock_line, session_clock
+    if broker_is_exness():
+        return f"{LABEL} · {clock_line(session_clock(now=now))}"
     from execution.results_source import demo_results
     if not demo_results(os.environ):
         return None
@@ -41,7 +47,17 @@ def demo_numbers(st, now=None):
 
 
 def render(st, vm, enabled_symbols):
+    from ui.exness_present import HISTORICAL, broker_is_exness, panel_html
+    from ui.views.luxury import html
     st.header(tr("EXPERIMENT"))
+    if broker_is_exness():
+        st.info(demo_progress_text())
+        html(st, panel_html())
+        with st.expander(HISTORICAL):
+            demo_numbers(st)
+        st.write("Símbolos del experimento:", es.enabled_caption(enabled_symbols))
+        st.write("Soportados pero no activos:", ", ".join(s for s in MARKETS if s not in enabled_symbols) or "—")
+        return
     progress = demo_progress_text()
     st.info(progress if progress is not None else tr("30-DAY DEMO IN PROGRESS"))
     demo_numbers(st)

@@ -596,10 +596,13 @@ def render(st, snapshot=None):
     left, right = st.columns([1.3, 1])
     with left:
         html(st, '<h3 style="margin:4px 0">Cuentas</h3>')
+        from ui.exness_present import HISTORICAL, broker_is_exness
+        exness = broker_is_exness()
         for key, icon in (("broker_demo", "🧪"), ("real", "🔒")):
             account = accounts[key]
             text, kind = account_status(account, snapshot, routing["state"], read_ok, stale)
-            st.toggle(f"{icon} {account.get('label') or LABELS[key]}", value=bool(account.get("enabled")),
+            shown = HISTORICAL if exness and key == "broker_demo" else (account.get("label") or LABELS[key])
+            st.toggle(f"{icon} {shown}", value=bool(account.get("enabled")),
                       disabled=True, key=f"control-{key}")
             html(st, f'<span class="chip {kind}">{escape(text)}</span>'
                      f'<span class="small" style="margin-left:8px" title="{escape(str(account.get("mode") or "OFF"), quote=True)}">'
@@ -612,7 +615,15 @@ def render(st, snapshot=None):
         render_emergency(st, snapshot, api)
     render_drift(st, api)
     render_provider_transition(st, api)
-    html(st, '<h3 style="margin:12px 0 4px">🔀 Enrutado a broker demo</h3>')
-    render_router(st, routing, since)
-    render_accounts_view(st)
-    render_history(st)
+    from ui.exness_present import HISTORICAL, broker_is_exness, panel_html
+    if broker_is_exness():
+        html(st, panel_html())
+        box = st.expander(HISTORICAL)
+    else:
+        from contextlib import nullcontext
+        box = nullcontext()
+    with box:
+        html(st, '<h3 style="margin:12px 0 4px">🔀 Enrutado a broker demo</h3>')
+        render_router(st, routing, since)
+        render_accounts_view(st)
+        render_history(st)

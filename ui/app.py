@@ -24,7 +24,9 @@ from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
 
-st.set_page_config(page_title="AI Trading Floor · OANDA Demo", layout="wide", page_icon="📊",
+from ui.exness_present import LABEL, broker_is_exness
+st.set_page_config(page_title="AI Trading Floor · OANDA Demo" if not broker_is_exness() else "AI Trading Floor · " + LABEL,
+                   layout="wide", page_icon="📊",
                    initial_sidebar_state="expanded")  # mounted, never slid off-screen; the pill collapses in CSS
 require_dashboard_access(st)
 if "ui_theme" not in st.session_state:

@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-14 (rama `cursor/exness-brake-state-log-ca6d`). Al arrancar el camino Exness, después del reinicio de lanzamiento, una línea INFO lee el equity vivo y el estado guardado de los frenos. No escribe. Sin merge, sin deploy, sin cambio de flags ni de Render._
+_Última actualización: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Con `AI_FLOOR_BROKER=exness` el panel y el resumen en español dicen Exness Standard Cent (USC), muestran saldo y equity (USC y USD = USC/100) y los frenos guardados, en solo lectura. El día 1 y el contador de operaciones empiezan en la primera orden real de Exness posterior al corte; antes, «Esperando primera operación real», día 0 y 0 operaciones. Lo de OANDA práctica queda en «Histórico OANDA práctica». No cambia ejecución, frenos, flags ni el reinicio. Sin merge, sin deploy._
+
+_Anterior: 2026-11-14 (rama `cursor/exness-brake-state-log-ca6d`). Al arrancar el camino Exness, después del reinicio de lanzamiento, una línea INFO lee el equity vivo y el estado guardado de los frenos. No escribe. Sin merge, sin deploy, sin cambio de flags ni de Render._
 
 _Anterior: 2026-11-14 (rama `cursor/exness-risk-cap-launch-reset-12c0`, apilada sobre el ritmo de entrada). El tope por trade lee `AI_FLOOR_EXNESS_RISK_CAP` si es un decimal positivo en la divisa de la cuenta; si falta o no vale, sigue en 100 USC o 5 USD. `AI_FLOOR_LAUNCH_RESET_TOKEN` vacío no hace nada. Con un token, el arranque lee el equity vivo y, solo si puede, copia las bases y deja un corte de fecha; no borra filas. El panel usa ese corte, no los contadores guardados en 0. El mismo token no se repite. Las claves reales no cambian. Sin merge, sin deploy, sin cambio de Render. Ver `docs/exness_api.md`._
 

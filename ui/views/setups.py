@@ -161,7 +161,9 @@ def render(st, db):
             try:
                 source = row['bars'][0].get('source')
                 if source == 'oanda_practice':
-                    st.caption('Velas de 5 min con mecha · OANDA practice · 4 horas (al menos 3) · '
+                    from ui.exness_present import HISTORICAL, broker_is_exness
+                    prefix = f'{HISTORICAL} · ' if broker_is_exness() else ''
+                    st.caption(prefix + 'Velas de 5 min con mecha · OANDA practice · 4 horas (al menos 3) · '
                                'entrada, stop y objetivo del plan.')
                 elif source == 'candle_cache':
                     st.caption('Velas de 5 min · 4 horas · precios de cierre de 5 min · sin velas completas: '

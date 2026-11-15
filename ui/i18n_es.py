@@ -552,6 +552,9 @@ MONTHS_LONG = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
 
 def safety_label():
     """Safety caption for the effective results source; no execution settings are changed."""
+    from ui.exness_present import LABEL, broker_is_exness
+    if broker_is_exness():
+        return f"{LABEL} · sin dinero real · ejecución real desactivada"
     from ui.views.luxury import demo_results_on
     source = "Cuenta de práctica OANDA Demo" if demo_results_on() else "práctica interna"
     return f"{source} · sin dinero real · ejecución real desactivada"
@@ -561,6 +564,9 @@ def tr(text):
     if text in ("PAPER · REAL EXECUTION DISABLED", "PAPER · REAL EXECUTION DISABLED · NO REAL MONEY",
                 "PAPER MODE · REAL EXECUTION DISABLED · NO REAL MONEY"):
         return safety_label()
+    from ui.exness_present import LABEL, broker_is_exness
+    if text == "PAPER · V2" and broker_is_exness():
+        return f"{LABEL} · V2.1"
     return TEXT.get(text, text)
 
 
