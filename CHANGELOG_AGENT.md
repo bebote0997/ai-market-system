@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-11-15 — insignias de ejecución y pares del session combo (solo presentación)
+
+- Con el broker Exness, las insignias «sin dinero real · ejecución real desactivada» y «Solo observación · no envía órdenes reales» leen `real_execution_armed` sin cambiarlo. Las dos claves exactas muestran «Ejecución real activa · Exness». Cualquier otra combinación deja el texto de apagado.
+- El selector «Mercado» y «Activos en el experimento» no se muestran. En su lugar aparecen los pares del session combo, en el orden de `LONDON_SYMBOL` y `FIX_SYMBOLS`.
+
 ## 2026-11-15 — panel Exness: rótulos y contador (solo presentación)
 
 - Con `AI_FLOOR_BROKER=exness` el dashboard y el resumen en español dejan de decir OANDA y muestran «Exness Standard Cent (USC)».

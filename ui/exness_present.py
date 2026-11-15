@@ -14,6 +14,8 @@ import sqlite3
 LABEL = "Exness Standard Cent (USC)"
 WAITING = "Esperando primera operación real"
 HISTORICAL = "Histórico OANDA práctica"
+ACTIVE_BADGE = "Ejecución real activa · Exness"
+OFF_SAFETY = "sin dinero real · ejecución real desactivada"
 _USC = Decimal("100")
 _REAL = frozenset({"filled", "submitted", "done"})
 _COMBO = ("combo_lon_", "combo_fix_")
@@ -26,6 +28,48 @@ def broker_is_exness(env=None):
     except Exception:  # noqa: BLE001 - a broken mapping is not Exness
         return False
     return isinstance(raw, str) and raw.strip().lower() == "exness"
+
+
+def live_execution(env=None):
+    """True only when the Exness adapter would arm, and the broker is Exness.
+
+    Uses ``execution.exness_broker.real_execution_armed`` unchanged: both
+    ``AI_FLOOR_EXNESS_REAL_EXECUTION`` and ``AI_FLOOR_EXNESS_REAL_CONFIRM`` must match.
+    """
+    env = os.environ if env is None else env
+    if not broker_is_exness(env):
+        return False
+    try:
+        from execution.exness_broker import real_execution_armed
+        return real_execution_armed(env) is True
+    except Exception:  # noqa: BLE001 - a broken read stays on the off badge; nothing is logged
+        return False
+
+
+def live_badge(env=None):
+    """The active badge, or None when execution is not armed."""
+    return ACTIVE_BADGE if live_execution(env) else None
+
+
+def combo_symbols():
+    """Session-combo instruments in definition order: London pair, then the fix pairs."""
+    from execution.session_combo import FIX_SYMBOLS, LONDON_SYMBOL
+    ordered = []
+    for symbol in (LONDON_SYMBOL, *tuple(FIX_SYMBOLS)):
+        if isinstance(symbol, str) and symbol and symbol not in ordered:
+            ordered.append(symbol)
+    return tuple(ordered)
+
+
+def combo_caption():
+    symbols = ", ".join(combo_symbols())
+    pairs = symbols or "sin datos"
+    return f"Estrategia 1 (session combo) · pares: {pairs}"
+
+
+def show_experiment_market(env=None):
+    """The old experiment selector stays only while the broker is not Exness."""
+    return not broker_is_exness(env)
 
 
 def _waiting():

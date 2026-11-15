@@ -12,7 +12,11 @@ from unittest.mock import patch
 
 from execution.exness_brakes import ExnessBrakes, SqliteFlags
 from ui import i18n_es as es
-from ui.exness_present import LABEL, WAITING, panel_html, session_clock, usd_equivalent
+from execution.exness_broker import REAL_CONFIRM, REAL_CONFIRM_ENV, REAL_FLAG
+from execution.session_combo import FIX_SYMBOLS, LONDON_SYMBOL
+from ui.exness_present import (
+    ACTIVE_BADGE, LABEL, OFF_SAFETY, WAITING, combo_caption, combo_symbols, panel_html, session_clock,
+    show_experiment_market, usd_equivalent)
 from ui.nav_menu import chrome
 from ui.views.luxury import hero_subline
 
@@ -81,6 +85,41 @@ class ExnessDashboardTests(unittest.TestCase):
         self.assertNotIn("OANDA", safety)
         with patch.dict(os.environ, {"AI_FLOOR_BROKER": "oanda"}, clear=False):
             self.assertEqual(hero_subline(True, 3), "V2.1 · OANDA Demo · Día 3 de 30")
+
+    def test_execution_badge_follows_the_adapter_arming_check(self):
+        off = f"{LABEL} · {OFF_SAFETY}"
+        observe = "Solo observación · no envía órdenes reales"
+        cases = (
+            ({REAL_FLAG: "", REAL_CONFIRM_ENV: ""}, off, observe),
+            ({REAL_FLAG: "1", REAL_CONFIRM_ENV: ""}, off, observe),
+            ({REAL_FLAG: "", REAL_CONFIRM_ENV: REAL_CONFIRM}, off, observe),
+            ({REAL_FLAG: "true", REAL_CONFIRM_ENV: REAL_CONFIRM}, off, observe),
+            ({REAL_FLAG: "1", REAL_CONFIRM_ENV: "yes"}, off, observe),
+            ({REAL_FLAG: "1", REAL_CONFIRM_ENV: REAL_CONFIRM}, ACTIVE_BADGE, ACTIVE_BADGE),
+        )
+        for extra, safety, watch in cases:
+            with self.subTest(extra=extra), self._patch(), patch.dict(os.environ, extra, clear=False):
+                self.assertEqual(es.safety_label(), safety)
+                self.assertEqual(es.tr("Observation only · no live orders"), watch)
+                self.assertEqual(es.tr("PAPER · REAL EXECUTION DISABLED"), safety)
+        with patch.dict(os.environ, {"AI_FLOOR_BROKER": "oanda", REAL_FLAG: "1",
+                                     REAL_CONFIRM_ENV: REAL_CONFIRM}, clear=False):
+            self.assertIn(OFF_SAFETY, es.safety_label())
+            self.assertNotIn(ACTIVE_BADGE, es.safety_label())
+
+    def test_sidebar_lists_session_combo_symbols_and_hides_the_experiment_market(self):
+        self.assertFalse(show_experiment_market(self.env))
+        self.assertTrue(show_experiment_market({"AI_FLOOR_BROKER": "oanda"}))
+        caption = combo_caption()
+        self.assertEqual(combo_symbols(), (LONDON_SYMBOL, *FIX_SYMBOLS))
+        self.assertEqual(caption, "Estrategia 1 (session combo) · pares: " + ", ".join(combo_symbols()))
+        self.assertNotIn("Activos en el experimento", caption)
+        self.assertNotIn("Mercado", caption)
+        with patch("execution.session_combo.LONDON_SYMBOL", "ZZZUSD"), \
+                patch("execution.session_combo.FIX_SYMBOLS", ("AAAUSD", "BBBUSD")):
+            shown = combo_caption()
+        self.assertIn("ZZZUSD, AAAUSD, BBBUSD", shown)
+        self.assertNotIn("USDJPY", shown)
 
     def test_brake_panel_reads_caps_and_stored_state_without_writing(self):
         self._seed()

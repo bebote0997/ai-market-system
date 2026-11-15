@@ -45,10 +45,16 @@ with st.sidebar:
                     + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation",
                     format_func=lambda key: floor_view.LABEL if key == floor_view.PAGE else es.page_label(key))
     enabled_symbols = enabled_market_symbols()
+    from ui.exness_present import combo_caption, combo_symbols, show_experiment_market
     with st.container(key="aif-ajustes"):
-        symbol = st.selectbox(tr("Market"), MARKETS, index=default_market_index(enabled_symbols),
-                              format_func=lambda market: f"{market} · {es.symbol_status(market, enabled_symbols)}")
-        st.caption(tr("Enabled for experiment: ") + es.enabled_caption(enabled_symbols))
+        if show_experiment_market():
+            symbol = st.selectbox(tr("Market"), MARKETS, index=default_market_index(enabled_symbols),
+                                  format_func=lambda market: f"{market} · {es.symbol_status(market, enabled_symbols)}")
+            st.caption(tr("Enabled for experiment: ") + es.enabled_caption(enabled_symbols))
+        else:
+            pairs = combo_symbols()
+            symbol = pairs[0] if pairs else (enabled_symbols[0] if enabled_symbols else MARKETS[0])
+            st.caption(combo_caption())
         st.toggle(tr("SAMPLE / DEMO · FLOOR, MARKETS, JOURNAL, SYSTEM"), value=not remote_dashboard_enabled(),
                   key="sample_mode")
         refresh = st.toggle(tr("Auto-refresh · every 60s"), value=True, key="auto_refresh")

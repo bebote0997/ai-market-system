@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Con `AI_FLOOR_BROKER=exness` el panel y el resumen en español dicen Exness Standard Cent (USC), muestran saldo y equity (USC y USD = USC/100) y los frenos guardados, en solo lectura. El día 1 y el contador de operaciones empiezan en la primera orden real de Exness posterior al corte; antes, «Esperando primera operación real», día 0 y 0 operaciones. Lo de OANDA práctica queda en «Histórico OANDA práctica». No cambia ejecución, frenos, flags ni el reinicio. Sin merge, sin deploy._
+_Última actualización: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Las insignias de ejecución del panel leen el mismo armado que el adaptador Exness, sin cambiarlo. Con las dos claves exactas dicen «Ejecución real activa · Exness». El lateral deja el experimento y muestra los pares del session combo. Sigue sin cambio de ejecución, frenos, flags ni reinicio. Sin merge, sin deploy._
+
+_Anterior: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Con `AI_FLOOR_BROKER=exness` el panel y el resumen en español dicen Exness Standard Cent (USC), muestran saldo y equity (USC y USD = USC/100) y los frenos guardados, en solo lectura. El día 1 y el contador de operaciones empiezan en la primera orden real de Exness posterior al corte; antes, «Esperando primera operación real», día 0 y 0 operaciones. Lo de OANDA práctica queda en «Histórico OANDA práctica». No cambia ejecución, frenos, flags ni el reinicio. Sin merge, sin deploy._
 
 _Anterior: 2026-11-14 (rama `cursor/exness-brake-state-log-ca6d`). Al arrancar el camino Exness, después del reinicio de lanzamiento, una línea INFO lee el equity vivo y el estado guardado de los frenos. No escribe. Sin merge, sin deploy, sin cambio de flags ni de Render._
 
