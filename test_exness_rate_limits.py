@@ -4,7 +4,6 @@ Before this, three candle GETs 100 ms apart made the third one (EURUSD) HTTP 429
 then the 1 s block failed the account read: M5_GAP candles_unavailable + MANAGE_FAILED BrokerUnavailable.
 """
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import unittest
 
 from execution.exness_brakes import ExnessBrakes
