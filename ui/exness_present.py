@@ -257,25 +257,23 @@ _account_reader = None
 
 
 def set_account_reader(reader):
-    """Test and screenshot hook. ``None`` restores the live read. Does not touch the broker flags."""
+    """Test and screenshot hook. ``None`` restores the stored read (no network). Does not touch the broker flags."""
     global _account_reader
     _account_reader = reader
 
 
-def _live_account(env):
-    """Balance and equity from the same two GETs as the startup equity read. No flag store."""
-    from execution.exness_client import ExnessClient
-    from execution.exness_live import signer_from_env, urllib_caller
-    from execution.exness_transport import _account_currency, _dec
-    client = ExnessClient(env, caller=urllib_caller, sign=signer_from_env(env))
-    account_id = client.account_id
-    account = client.get_json(f"/v1/configuration/accounts/{account_id}/account")
-    snapshot = client.get_json(f"/v1/trading/accounts/{account_id}/snapshot")
-    state = snapshot.get("account_state") if isinstance(snapshot, dict) else None
-    state = state if isinstance(state, dict) else {}
-    account = account if isinstance(account, dict) else {}
-    return {"balance": _dec(state.get("balance")), "equity": _dec(state.get("equity")),
-            "currency": _account_currency(account, state)}
+def _stored_account(env, flags=None):
+    """The equity the trading process stored at the 17:00 ET day roll (``exness_brake_day_equity``).
+
+    The dashboard runs in its own process and does not call the Exness API: a second client there would not share
+    the trading process limiter and could push it into HTTP 429. Live balance is not stored, so it is not shown.
+    """
+    from execution.exness_brakes import DAY_EQUITY_FLAG
+    found = _flags(env) if flags is None else dict(flags)
+    equity = _money(found.get(DAY_EQUITY_FLAG))
+    if equity is None:
+        return None
+    return {"balance": None, "equity": equity, "currency": "USC"}
 
 
 def _normalize(raw):
@@ -296,18 +294,32 @@ def _normalize(raw):
     return {"balance": _money(balance), "equity": _money(equity), "currency": code}
 
 
-def read_account(env=None, reader=None):
-    """Balance and equity. A failed read is empty. The exception text is never kept."""
+def read_account(env=None, reader=None, flags=None):
+    """Balance and equity. Without a reader hook this is the stored day-base equity: no network call.
+
+    ``stored`` is True when the numbers come from the flag store. A failed read is empty.
+    """
     env = os.environ if env is None else env
     reader = _account_reader if reader is None else reader
     try:
-        raw = reader(env) if reader is not None else _live_account(env)
+        raw = reader(env) if reader is not None else _stored_account(env, flags)
     except Exception:  # noqa: BLE001 - show "sin datos"; do not log the host or the account
-        return _blank_account()
+        return {**_blank_account(), "stored": reader is None}
     try:
-        return _normalize(raw)
+        return {**_normalize(raw), "stored": reader is None}
     except Exception:  # noqa: BLE001
-        return _blank_account()
+        return {**_blank_account(), "stored": reader is None}
+
+
+STORED_EQUITY = "Equity (base del día, 17:00 ET)"
+NOT_LIVE = "no se consulta en vivo"
+
+
+def _account_pairs(account):
+    if account.get("stored"):
+        return [("Balance", NOT_LIVE), (STORED_EQUITY, money_line(account["equity"], account["currency"]))]
+    return [("Balance", money_line(account["balance"], account["currency"])),
+            ("Equity", money_line(account["equity"], account["currency"]))]
 
 
 def usd_equivalent(amount, currency):
@@ -348,13 +360,10 @@ def panel_html(env=None, now=None, reader=None, flags=None):
     from html import escape
     env = os.environ if env is None else env
     clock = session_clock(env, now=now, flags=flags)
-    account = read_account(env, reader=reader)
+    account = read_account(env, reader=reader, flags=flags)
     brakes = brake_view(env, flags=flags)
     currency = account["currency"] or "USC"
-    account_rows = [
-        ("Balance", money_line(account["balance"], account["currency"])),
-        ("Equity", money_line(account["equity"], account["currency"])),
-    ]
+    account_rows = _account_pairs(account)
     brake_rows = [
         ("Tope por operación", _cap_line(brakes["cap"])),
         ("Pérdida diaria", _cap_line(brakes["daily"])),
@@ -384,8 +393,7 @@ def summary_lines(env=None, now=None, reader=None):
         LABEL,
         clock_line(clock),
         "Operaciones: " + ("0" if clock["waiting"] else str(clock["trades"])),
-        "Balance: " + money_line(account["balance"], account["currency"]),
-        "Equity: " + money_line(account["equity"], account["currency"]),
+        *(f"{label}: {value}" for label, value in _account_pairs(account)),
         "Tope por operación: " + _cap_line(brakes["cap"]),
         "Pérdida diaria: " + _cap_line(brakes["daily"]),
         "Caída máxima: " + _cap_line(brakes["drawdown"]),
@@ -409,7 +417,9 @@ def floor_overlay(payload, now=None, env=None, reader=None):
     if account["equity"] is not None:
         header["equity"] = float(account["equity"])
         header["balance"] = None if account["balance"] is None else float(account["balance"])
-        header["equity_stale"] = False
+        header["equity_stale"] = bool(account.get("stored"))
+        if account.get("stored"):
+            header["equity_as_of"] = "base del día 17:00"
     agents = payload.get("agents")
     if isinstance(agents, dict):
         agents = dict(agents)

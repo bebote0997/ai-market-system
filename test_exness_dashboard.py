@@ -188,3 +188,51 @@ class ExnessDashboardTests(unittest.TestCase):
         self.assertIn(WAITING, shown["header"]["day_text"])
         self.assertEqual(shown["header"]["equity"], 30086.0)
         self.assertEqual(usd_equivalent(Decimal("30086"), "USC"), Decimal("300.86"))
+
+
+class NoExnessCallsFromTheDashboardTests(unittest.TestCase):
+    """The dashboard is its own process. It must not open an Exness client: that client would not share the
+    trading process rate limiter (candles/snapshot 2/s) and could make the trading reads HTTP 429."""
+
+    setUp = ExnessDashboardTests.setUp
+    _seed = ExnessDashboardTests._seed
+    _patch = ExnessDashboardTests._patch
+
+    def _no_network(self):
+        boom = AssertionError("network")
+        return (patch("execution.exness_client.ExnessClient.__init__", side_effect=boom),
+                patch("execution.exness_live.urllib_caller", side_effect=boom),
+                patch("urllib.request.urlopen", side_effect=boom),
+                patch("socket.create_connection", side_effect=boom))
+
+    def test_render_paths_make_no_exness_call_and_show_the_stored_day_base(self):
+        self._seed()
+        guards = self._no_network()
+        with self._patch(), guards[0], guards[1], guards[2], guards[3]:
+            from ui.exness_present import floor_overlay, read_account, summary_lines
+            account = read_account(self.env)
+            html = panel_html(self.env, now=BEFORE)
+            lines = summary_lines(self.env, now=BEFORE)
+            shown = floor_overlay({"header": {}}, now=BEFORE, env=self.env)
+        self.assertTrue(account["stored"])
+        self.assertEqual((account["equity"], account["balance"], account["currency"]), (Decimal("30086"), None, "USC"))
+        self.assertIn("Equity (base del día, 17:00 ET)", html)
+        self.assertIn("30,086.00 USC · 300.86 USD", html)
+        self.assertIn("no se consulta en vivo", html)
+        self.assertIn("Equity (base del día, 17:00 ET): 30,086.00 USC · 300.86 USD", lines)
+        self.assertEqual(shown["header"]["equity"], 30086.0)
+        self.assertTrue(shown["header"]["equity_stale"])
+        self.assertIsNone(shown["header"]["balance"])
+
+    def test_without_a_stored_day_base_the_panel_says_no_data_and_still_calls_nothing(self):
+        guards = self._no_network()
+        with self._patch(), guards[0], guards[1], guards[2], guards[3]:
+            html = panel_html(self.env, now=BEFORE)
+        self.assertIn("sin datos", html)
+
+    def test_the_module_has_no_live_account_reader(self):
+        import ui.exness_present as present
+        self.assertFalse(hasattr(present, "_live_account"))
+        source = Path(present.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("ExnessClient", source)
+        self.assertNotIn("urllib_caller", source)
