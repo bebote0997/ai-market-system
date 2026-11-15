@@ -360,7 +360,13 @@ def banner_uri():
 
 
 def hero_subline(demo, day):
-    """"V2.1 · OANDA Demo · Día N de 30" (no counted day yet => "Esperando el primer ciclo")."""
+    """"V2.1 · OANDA Demo · Día N de 30" (no counted day yet => "Esperando el primer ciclo").
+
+    With the Exness broker the line is the cent account and the order clock, not the OANDA epoch.
+    """
+    from ui.exness_present import broker_is_exness, hero_line
+    if broker_is_exness():
+        return hero_line()
     if not demo:
         return f'{VERSION} · práctica interna'
     known = isinstance(day, int) and not isinstance(day, bool) and day >= 1
@@ -390,7 +396,26 @@ def open_floor_button(st):
         st.rerun(scope='app')
 
 
+def exness_home(st, db, now):
+    """Exness account on the start page. OANDA practice, when present, stays in a collapsed section."""
+    from ui.exness_present import HISTORICAL, panel_html
+    start_hero(st, now, demo=True)
+    html(st, panel_html(now=now))
+    states = {r['key']: r['value'] for r in records(db, 'system_state')}
+    side_panel(st, now, states, demo_since(demo_api()))
+    demo = demo_api()
+    if demo is None:
+        return
+    with st.expander(HISTORICAL):
+        day = demo_day(demo, now)
+        demo_overview(st, db, now, demo['snapshot'](now), day=day)
+
+
 def overview(st, db, now):
+    from ui.exness_present import broker_is_exness
+    if broker_is_exness():
+        exness_home(st, db, now)
+        return
     demo = demo_api()
     if demo is not None:
         day = demo_day(demo, now)
@@ -694,6 +719,15 @@ def current_snapshots(db, since):
     return {r['symbol']: r for r in since_epoch(payloads(db, 'ui_snapshots'), since, ('as_of',))}
 
 
+def open_position_text(hidden, opened):
+    from ui.exness_present import HISTORICAL, broker_is_exness
+    if hidden and broker_is_exness():
+        return f'ver Trades · {HISTORICAL}'
+    if hidden:
+        return 'ver La mesa animada / Trades (demo OANDA)'
+    return ', '.join(es.status_text(p.get('side')) + ' · abierta' for p in opened) or tr('No open position')
+
+
 def floor(st, db, symbols):
     since = demo_since(demo_api())
     snapshots = current_snapshots(db, since)
@@ -716,8 +750,7 @@ def floor(st, db, symbols):
                  ('Lado', state_chip(vm.setup_side) if vm and vm.setup_side else MISSING),
                  (es.column('freshness'), state_chip(vm.freshness if vm else None)),
                  ('Última actualización', vm.as_of if vm else None),
-                 ('Posición abierta', 'ver La mesa animada / Trades (demo OANDA)' if hidden else
-                  ', '.join(es.status_text(p.get('side')) + ' · abierta' for p in opened) or tr('No open position'))])
+                 ('Posición abierta', open_position_text(hidden, opened))])
     for symbol in symbols:
         snapshot = snapshots.get(symbol)
         if paused(symbol):
@@ -803,6 +836,14 @@ def demo_trades(st, demo):
 
 
 def trades(st, db):
+    from ui.exness_present import HISTORICAL, broker_is_exness, panel_html
+    if broker_is_exness():
+        html(st, panel_html())
+        demo = demo_api()
+        if demo is not None:
+            with st.expander(HISTORICAL):
+                demo_trades(st, demo['snapshot'](datetime.now(timezone.utc)))
+        return
     demo = demo_api()
     if demo is not None:
         demo_trades(st, demo['snapshot'](datetime.now(timezone.utc)))

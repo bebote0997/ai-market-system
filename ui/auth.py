@@ -180,12 +180,18 @@ def _login_form(st, *, expired, password, now, state, limiter, ttl, sleep):
     markdown = getattr(st, "markdown", None)
     if callable(markdown):
         light = bool(state.get("ui_theme"))
+        from ui.exness_present import LABEL, broker_is_exness
+        account = LABEL if broker_is_exness() else "OANDA Demo (práctica)"
         markdown(_LOGIN_CSS + ('<div id="tf-theme-light" hidden></div>' if light else '')
                  + '<div class="aif-login"><h1>AI Trading Floor</h1>'
-                 '<p>Panel privado · OANDA Demo (práctica). La contraseña no se guarda en el navegador.</p></div>',
+                 f'<p>Panel privado · {account}. La contraseña no se guarda en el navegador.</p></div>',
                  unsafe_allow_html=True)
     else:
-        st.title("AI Trading Floor · panel privado · OANDA Demo (práctica)")
+        from ui.exness_present import LABEL, broker_is_exness
+        if broker_is_exness():
+            st.title("AI Trading Floor · panel privado · " + LABEL)
+        else:
+            st.title("AI Trading Floor · panel privado · OANDA Demo (práctica)")
     if expired:
         st.info("La sesión expiró; vuelve a entrar.")
     toggle = getattr(st, "toggle", None)

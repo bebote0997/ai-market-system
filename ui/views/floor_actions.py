@@ -73,6 +73,15 @@ def target_text(target):
 
 def render_manual_close(st, api=None, owner=None):
     """«Cerrar operación» with a confirmation step. ``api``/``owner`` are injectable for tests."""
+    from ui.exness_present import HISTORICAL, broker_is_exness
+    if broker_is_exness():
+        with st.expander(HISTORICAL):
+            _render_manual_close(st, api, owner)
+        return
+    _render_manual_close(st, api, owner)
+
+
+def _render_manual_close(st, api=None, owner=None):
     from ui.auth import owner_authenticated
     state = st.session_state
     api = manual_close_api() if api is None else api

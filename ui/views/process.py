@@ -11,6 +11,15 @@ STEPS = ('Data intake', 'Agent outputs', 'Setup reviewer + deterministic setup',
 OANDA_LABELS = {'Paper Broker entry': 'Entrada en la demo OANDA', 'Paper Broker exit': 'Salida en la demo OANDA'}
 
 
+def _step_label(step, oanda):
+    from ui.i18n_es import STEPS as labels
+    label = OANDA_LABELS.get(step, labels[step]) if oanda else labels[step]
+    if not oanda or step not in OANDA_LABELS:
+        return label
+    from ui.exness_present import HISTORICAL, broker_is_exness
+    return f'{HISTORICAL} · {label}' if broker_is_exness() else label
+
+
 def decoded(row):
     result = dict(row)
     for key in ('payload', 'plan', 'evidence', 'provider_metadata', 'warnings'):
@@ -146,7 +155,7 @@ def render(st, db):
     if since is not None:
         evidence = {step: scrub_paper_sizing(rows) for step, rows in evidence.items()}
     oanda = paper_hidden()
-    step_labels = {step: OANDA_LABELS.get(step, LABELS[step]) if oanda else LABELS[step] for step in STEPS}
+    step_labels = {step: _step_label(step, oanda) for step in STEPS}
     html(st, step_strip([(step_labels.get(step, step), bool(rows)) for step, rows in evidence.items()]))
     st.caption(tr('Timestamps below are persisted record timestamps; absent step timestamps are not inferred.'))
     for index, (step, rows) in enumerate(evidence.items(), 1):
@@ -164,7 +173,7 @@ def render(st, db):
             statuses.extend(str(value[k]) for k in ('status', 'final_status', 'decision', 'execution_status') if value.get(k))
         status = ', '.join(status_text(s) for s in dict.fromkeys(statuses)) or (tr('Persisted evidence') if rows else pending)
         from ui.views.luxury import display
-        label = OANDA_LABELS.get(step, LABELS[step]) if paper_hidden() else LABELS[step]
+        label = _step_label(step, paper_hidden())
         card(st, f'{index}. {label}', [('Estado', status),
              ('Hora', ', '.join(dict.fromkeys(display(t) for t in timestamps)) or pending)],
              summary=rows or pending)

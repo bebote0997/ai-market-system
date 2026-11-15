@@ -138,6 +138,11 @@ def _version():
     return tr("PAPER · V2")
 
 
+def subtitle():
+    from ui.exness_present import LABEL, broker_is_exness
+    return LABEL if broker_is_exness() else SUBTITLE
+
+
 def chrome(open_count):
     """Header of the rail: logo, title and the chevron that opens or closes it. No external assets."""
     count = ""
@@ -146,7 +151,7 @@ def chrome(open_count):
     return (
         f'<div class="aif-chrome"{count}>'
         f'<div class="aif-brand"><span class="aif-logo">{_LOGO}</span>'
-        f'<span class="aif-brand-text"><b>{escape(TITLE)}</b><small>{escape(SUBTITLE)}</small>'
+        f'<span class="aif-brand-text"><b>{escape(TITLE)}</b><small>{escape(subtitle())}</small>'
         f'<small class="aif-version">{escape(_version())}</small></span></div>'
         f'<div class="aif-switch">'
         f'<button type="button" class="aif-expand" aria-label="Abrir menú">{_CHEVRON_RIGHT}</button>'

@@ -810,6 +810,9 @@ def build_floor_payload(*, sample_mode=False, now=None, db=None, demo=None, enab
         trade.pop('_run_id', None)
     payload["real_fields"] = real_field_paths(payload)
     payload["example_fields"] = apply_examples(payload) if sample_mode else []
+    from ui.exness_present import broker_is_exness, floor_overlay
+    if broker_is_exness():
+        payload = floor_overlay(payload, now)
     return payload
 
 

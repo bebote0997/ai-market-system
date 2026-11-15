@@ -204,6 +204,13 @@ def paper_summary_text(summary):
 def oanda_demo_daily_alert(timestamp_utc=None, window_start_utc=None, sent_at=None, sleep=None):
     """``runtime.trade_alerts.DailyAlert`` of the OANDA demo summary (same figures as ``oanda_demo_summary_text``)."""
     from runtime.trade_alert_source import daily_alert
+    from ui.exness_present import broker_is_exness, session_clock, summary_lines
+    if broker_is_exness():
+        from datetime import datetime
+        now = sent_at if isinstance(sent_at, datetime) else None
+        clock = session_clock(now=now)
+        day = None if clock["waiting"] else clock["day"]
+        return daily_alert(summary_lines(now=sent_at), os.environ, demo_day=day)
     meta = {}
     try:
         lines = _demo_lines(timestamp_utc, window_start_utc, sent_at, meta, sleep)
@@ -253,6 +260,12 @@ def oanda_demo_summary_text(timestamp_utc=None, window_start_utc=None, sent_at=N
     ``timestamp_utc`` (17:00 NY), from ``window_start_utc`` (default: the previous 17:00 NY). NAV, balance, open
     trades and the demo day counter are the snapshot at ``sent_at`` (default: now), labelled with its ET time (a
     catch-up summary of an older day is sent later). A failed read reads "sin datos"; no ids or tokens."""
+    from ui.exness_present import broker_is_exness, summary_lines
+    if broker_is_exness():
+        try:
+            return "\n".join(summary_lines(now=sent_at))
+        except Exception:  # noqa: BLE001 - the summary stays Spanish and never falls back to OANDA numbers
+            return "Exness Standard Cent (USC)\nsin datos"
     header = "AI Market System OANDA DEMO DAILY_SUMMARY"
     try:
         return "\n".join([header, *_demo_lines(timestamp_utc, window_start_utc, sent_at, sleep=sleep)])

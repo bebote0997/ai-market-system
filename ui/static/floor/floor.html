@@ -128,12 +128,13 @@ const NOTR=HD.trades===0;  // stats known and no closed trade yet
 const CURVE_SOON='la curva aparece con 2 operaciones cerradas';  // trades known, fewer than 2 curve points
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ok=v=>typeof v==='number'&&isFinite(v);
-const money=(v,signed)=>ok(v)?(v<0?'−':signed&&v>0?'+':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):NA;
+const EXNESS=DATA.broker_label==='Exness Standard Cent (USC)';
+const money=(v,signed)=>{if(!ok(v))return NA;const n=Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});const sign=v<0?'−':signed&&v>0?'+':'';return EXNESS?sign+n+' USC':sign+'$'+n;};
 const fR=v=>ok(v)?(v<0?'−':v>0?'+':'')+Math.abs(v).toFixed(2)+' R':NA;
 const px=v=>ok(v)?v.toFixed(5):NA;
 const pct=(v,d=1)=>ok(v)?v.toFixed(d)+'%':NA;
 const tone=v=>ok(v)?(v>0?'pos':v<0?'neg':''):'na';
-const SRC={OANDA_DEMO:'OANDA Demo',PAPER:'Práctica interna'}[DATA.source]||null;
+const SRC=DATA.broker_label||({OANDA_DEMO:'OANDA Demo',PAPER:'Práctica interna'}[DATA.source])||null;
 const SIDE={LONG:'Long',SHORT:'Short'};
 const UNITS=v=>ok(v)?v.toLocaleString('en-US',{maximumFractionDigits:0})+' unidades':NA+' unidades';
 let TR=TRADES.find(t=>t.status==='OPEN')||TRADES[0]||null;

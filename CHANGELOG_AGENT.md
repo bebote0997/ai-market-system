@@ -1,5 +1,18 @@
 # Agent Changelog
 
+## 2026-11-15 — insignias de ejecución y pares del session combo (solo presentación)
+
+- Con el broker Exness, las insignias «sin dinero real · ejecución real desactivada» y «Solo observación · no envía órdenes reales» leen `real_execution_armed` sin cambiarlo. Las dos claves exactas muestran «Ejecución real activa · Exness». Cualquier otra combinación deja el texto de apagado.
+- El selector «Mercado» y «Activos en el experimento» no se muestran. En su lugar aparecen los pares del session combo, en el orden de `LONDON_SYMBOL` y `FIX_SYMBOLS`.
+
+## 2026-11-15 — panel Exness: rótulos y contador (solo presentación)
+
+- Con `AI_FLOOR_BROKER=exness` el dashboard y el resumen en español dejan de decir OANDA y muestran «Exness Standard Cent (USC)».
+- Saldo y equity salen de la lectura de cuenta que ya existía (dos GET, sin crear el almacén de frenos). El equivalente es USC/100. El panel de frenos relee el tope, la pérdida diaria, la caída máxima y el estado guardado (`brake_start`, `day_base`, `halt`, `halt_reason`). No escribe.
+- El día 1 y el número de operaciones salen de la primera orden o fill de Exness guardado después del corte de lanzamiento. Antes de esa orden: «Esperando primera operación real», día 0 y 0 operaciones. No se usan los contadores guardados en 0.
+- Lo que sigue siendo de la práctica OANDA queda en un bloque plegado, «Histórico OANDA práctica».
+- Sin cambio de ejecución, tamaño, frenos, flags reales, `AI_FLOOR_GIT_COMMIT`, preflight, fingerprint ni `launch_reset`. Sin merge y sin deploy.
+
 ## 2026-11-14 — registro de frenos Exness al arrancar (solo lectura)
 
 - Al cargar los frenos del camino Exness, una línea INFO `BRAKE_STATE` anota el equity vivo (o `none`) y los valores ya guardados: inicio, base del día, día, freno y motivo. No escribe flags ni cambia órdenes, riesgo ni claves. Si la lectura del equity falla, el arranque sigue. Sin merge, sin deploy, sin Render.

@@ -102,7 +102,9 @@ def render(st, symbols):
             agents_html(st, RIGHT_AGENTS, payload, "Revisión y ejecución")
     render_manual_close(st)
     install_close_bridge(st)
-    st.caption("Floor · solo lectura salvo «Cerrar operación» (owner, demo OANDA de práctica) · ninguna orden nueva "
+    from ui.exness_present import HISTORICAL, LABEL, broker_is_exness
+    venue = f"{LABEL}. El cierre manual queda en «{HISTORICAL}»" if broker_is_exness() else "demo OANDA de práctica"
+    st.caption(f"Floor · solo lectura salvo «Cerrar operación» (owner, {venue}) · ninguna orden nueva "
                "se envía desde esta vista. "
                "«—» = sin datos aún" + (" · «EJEMPLO» = datos de ejemplo (modo muestra)" if payload["example_fields"]
                                         else ""))
