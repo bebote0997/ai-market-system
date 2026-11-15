@@ -206,3 +206,55 @@ class LimiterClockAndLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowFromResponseTests(unittest.TestCase):
+    """The server counts a call when it arrives. A slow first connection used to let the third candle GET land
+    inside the same server second (live 429s on EURUSD after the send-time window was deployed)."""
+
+    def test_a_slow_first_arrival_does_not_let_the_third_candle_call_hit_429(self):
+        now = [1_000_000]
+        arrivals = []
+        statuses = []
+        delays = iter([400, 20, 20, 20])  # send -> arrival: the first call opens a slow connection
+
+        def caller(method, url, headers, body):
+            del method, headers, body
+            if "access-point" in url:
+                now[0] += 20
+                return 200, {"access_point": "https://ap.example"}, {}
+            now[0] += next(delays)
+            recent = [t for t in arrivals if now[0] - t < 1000]
+            status = 429 if len(recent) >= 2 else 200
+            if status == 200:
+                arrivals.append(now[0])
+            statuses.append(status)
+            now[0] += 20  # arrival -> response
+            return status, ({"candles": []} if status == 200 else {"code": 3015}), {}
+
+        def sleep(seconds):
+            now[0] += int(round(seconds * 1000))
+
+        client = ExnessClient(ENV, caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+        for symbol in ("USDJPY", "GBPUSD", "EURUSD"):
+            client.get_json(f"/v1/market-data/accounts/123456/candles?instrument={symbol}")
+        self.assertEqual(statuses, [200, 200, 200])
+        self.assertGreaterEqual(arrivals[2] - arrivals[0], 1000)
+
+    def test_a_failed_call_still_moves_its_stamp_to_the_end_of_the_call(self):
+        now = [1_000_000]
+
+        def caller(method, url, headers, body):
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            now[0] += 300
+            raise OSError("reset")
+
+        def sleep(seconds):
+            now[0] += int(round(seconds * 1000))
+
+        client = ExnessClient(ENV, caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+        client.discover()
+        with self.assertRaises(OSError):
+            client.get_json("/v1/market-data/accounts/123456/candles?instrument=EURUSD")
+        self.assertEqual(list(client._recent["candles"]), [now[0]])

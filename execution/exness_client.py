@@ -115,7 +115,11 @@ class ExnessClient:
         signed = headers(self.api_key, idempotency_key, self._now_ms(), method, path, raw, self._sign)
         if body is not None:
             signed["Content-Type"] = "application/json"
-        status, payload, response_headers = self._caller(method, base + path, signed, raw)
+        operation = operation_limit(method, path)
+        try:
+            status, payload, response_headers = self._caller(method, base + path, signed, raw)
+        finally:
+            self._mark_done(operation)
         if status == 429:
             retry = response_headers.get("Retry-After") if isinstance(response_headers, dict) else None
             wait = int(retry) if isinstance(retry, str) and retry.isdigit() else 1
@@ -133,6 +137,22 @@ class ExnessClient:
         if self._acquire_slot() != "ready":
             raise RuntimeError("rate_limited")
         return headers(self.api_key, "", self._now_ms(), "GET", path, b"", self._sign)
+
+    def _mark_done(self, operation):
+        """Move this call's window stamp from the send time to the response time.
+
+        The server counts a call when the request reaches it, which can be hundreds of milliseconds after the
+        send (each call opens a new TLS connection). The response time is never earlier than that arrival, so
+        a window measured from it cannot let two calls land inside one server second. Live evidence after
+        deploying the send-time window: EURUSD candles still got HTTP 429 at 23:42:45Z, 23:45:58Z, 23:46:30Z.
+        """
+        if operation is None:
+            return
+        name, _limit = operation
+        with self._lock:
+            recent = self._recent.get(name)
+            if recent:
+                recent[-1] = max(recent[-1], self._mono_ms())
 
     def _slot_wait_locked(self, operation):
         """``("blocked"|"ready"|"wait", wait_ms)``. Called with the lock held; never sleeps."""
