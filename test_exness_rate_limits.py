@@ -4,12 +4,13 @@ Before this, three candle GETs 100 ms apart made the third one (EURUSD) HTTP 429
 then the 1 s block failed the account read: M5_GAP candles_unavailable + MANAGE_FAILED BrokerUnavailable.
 """
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import unittest
 
 from execution.exness_brakes import ExnessBrakes
 from execution.exness_broker import ExnessBroker
 from execution.exness_client import OPERATION_WINDOW_MS, ExnessClient, operation_limit
-from execution.exness_transport import RestExnessTransport
+from execution.exness_transport import Command, RestExnessTransport
 
 
 ENV = {"AI_FLOOR_BROKER": "exness", "EXN_API_KEY": "exnsk-public-key-value", "EXN_ACCOUNT_ID": "123456",
@@ -120,6 +121,87 @@ class OperationLimitTests(unittest.TestCase):
                 self.assertEqual(client.get_json(f"/v1/configuration/accounts/123456/instruments/{name}/conditions"),
                                  {"ok": True})
             self.assertEqual(client.get_json("/v1/trading/accounts/123456/snapshot"), {"ok": True})
+
+
+class LimiterClockAndLockTests(unittest.TestCase):
+    def test_the_window_uses_the_monotonic_clock_and_the_signature_uses_the_wall_clock(self):
+        wall = [5_000_000]
+        mono = [1_000]
+        sent = []
+
+        def caller(method, url, headers, body):
+            del method, body
+            sent.append((url, headers["EXN-TIMESTAMP"], mono[0]))
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            return 200, {"candles": []}, {}
+
+        def sleep(seconds):
+            mono[0] += int(round(seconds * 1000))
+            wall[0] -= 3_600_000  # the wall clock steps back an hour while we wait
+
+        client = ExnessClient(ENV, caller=caller, sign=lambda data: b"sig", now_ms=lambda: wall[0],
+                              monotonic_ms=lambda: mono[0], sleep=sleep)
+        for symbol in ("USDJPY", "GBPUSD", "EURUSD"):
+            client.get_json(f"/v1/market-data/accounts/123456/candles?instrument={symbol}")
+        candles = [row for row in sent if "/candles" in row[0]]
+        self.assertGreaterEqual(candles[2][2] - candles[0][2], OPERATION_WINDOW_MS)
+        self.assertEqual(candles[2][1], str(wall[0]))  # signed with the wall clock at send time
+
+    def test_the_lock_is_free_while_the_limiter_sleeps(self):
+        server = FakeServer()
+        client = server.client()
+        free = []
+
+        def sleep(seconds):
+            got = client._lock.acquire(blocking=False)
+            free.append(got)
+            if got:
+                client._lock.release()
+            server.sleep(seconds)
+
+        client._sleep = sleep
+        for symbol in ("USDJPY", "GBPUSD", "EURUSD"):
+            client.get_json(f"/v1/market-data/accounts/123456/candles?instrument={symbol}")
+        self.assertTrue(free)
+        self.assertTrue(all(free))
+
+    def test_one_sleep_never_exceeds_one_window(self):
+        server = FakeServer()
+        client = server.client()
+        naps = []
+
+        def sleep(seconds):
+            naps.append(seconds)
+            server.sleep(seconds)
+
+        client._sleep = sleep
+        for _ in range(5):
+            client.get_json("/v1/market-data/accounts/123456/candles?instrument=EURUSD")
+        self.assertTrue(naps)
+        self.assertTrue(all(0 < nap <= OPERATION_WINDOW_MS / 1000 for nap in naps))
+
+    def test_an_order_that_gets_429_stays_rejected_and_is_not_resent(self):
+        server = FakeServer()
+        posts = []
+
+        def caller(method, url, headers, body):
+            server.now[0] += 20
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            posts.append((method, url))
+            return 429, {"code": 3015, "error_message": "REQUEST_RATE_LIMIT"}, {}
+
+        client = ExnessClient(ENV, caller=caller, sign=lambda data: b"sig", now_ms=lambda: server.now[0],
+                              sleep=server.sleep)
+        transport = RestExnessTransport(client)
+        command = Command("combo-fix-2026-11-16-GBPUSD", "MARKET", "GBPUSD", side="SHORT",
+                          volume=Decimal("0.01"), stop=Decimal("1.3000"))
+        first = transport.submit(command)
+        second = transport.submit(command)
+        self.assertEqual((first.status, first.reason), ("REJECTED", "rate_limited"))
+        self.assertEqual((second.status, second.reason), ("REJECTED", "rate_limited"))
+        self.assertEqual(len(posts), 1)
 
 
 if __name__ == "__main__":
