@@ -329,8 +329,8 @@ class ClientTests(unittest.TestCase):
 
         client = ExnessClient(armed(), caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
         self.assertEqual(client.discover(), "https://ap.example")
-        for _ in range(8):
-            self.assertEqual(client.get_json("/v1/configuration/accounts/123456/account"), {"ok": True})
+        for _ in range(8):  # 10/s operation status: only the Floor gap applies, not a per-operation window
+            self.assertEqual(client.get_json("/v1/trading/accounts/123456/operations/op-1"), {"ok": True})
         self.assertEqual(len(calls), 9)
         self.assertTrue(slept)
         self.assertTrue(all(0 < delay <= 0.1 for delay in slept))

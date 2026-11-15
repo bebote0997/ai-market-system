@@ -7,8 +7,10 @@ between calls (``AI_FLOOR_EXNESS_MIN_INTERVAL_MS``, default 100). A call inside 
 It is not rejected, and the wait is not a retry of HTTP 429. TODO: parse
 ``GET /v1/configuration/accounts/{account_id}/limits`` once its field names are confirmed.
 """
+from collections import deque
 from datetime import datetime, timezone
 import json
+import re
 from threading import Lock
 import time
 from urllib.parse import urlsplit
@@ -18,6 +20,30 @@ from execution.exness_sign import headers
 
 MIN_INTERVAL_ENV = "AI_FLOOR_EXNESS_MIN_INTERVAL_MS"
 DEFAULT_MIN_INTERVAL_MS = 100
+# Per-operation REST limits read from GET /v1/configuration/accounts/{account_id}/limits on 2026-11-15
+# (every window is 1 s). The 100 ms gap alone allows 10 calls a second, so three candle GETs in one manage
+# hit the 2/s candle limit: the third one (EURUSD) got HTTP 429 REQUEST_RATE_LIMIT and the 1 s block that
+# follows failed the account read. A call waits until its operation has room; it is never retried.
+OPERATION_WINDOW_MS = 1050  # 1 s window plus a margin for clock jitter between the Floor and the server
+MAX_WAIT_STEP_MS = OPERATION_WINDOW_MS  # one sleep never exceeds one window; the slot is re-checked after it
+_OPERATION_LIMITS = (
+    (re.compile(r"^/v1/market-data/accounts/[0-9]+/candles(?:\?|$)"), "candles", 2),
+    (re.compile(r"^/v1/trading/accounts/[0-9]+/snapshot(?:\?|$)"), "snapshot", 2),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/instruments(?:\?|$)"), "instruments", 2),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/instruments/[^/?]+/conditions(?:\?|$)"), "conditions", 4),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/account(?:\?|$)"), "account", 4),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/limits(?:\?|$)"), "limits", 2),
+)
+
+
+def operation_limit(method, path):
+    """``(name, calls_per_window)`` for a rate-limited GET, else None."""
+    if str(method).upper() != "GET" or not isinstance(path, str):
+        return None
+    for pattern, name, limit in _OPERATION_LIMITS:
+        if pattern.match(path):
+            return name, limit
+    return None
 
 
 def _interval_ms(env):
@@ -43,18 +69,28 @@ def _host_ok(url):
 
 
 class ExnessClient:
-    def __init__(self, env, *, caller, sign, clock=None, now_ms=None, sleep=None):
+    def __init__(self, env, *, caller, sign, clock=None, now_ms=None, sleep=None, monotonic_ms=None):
         self._env = env
         self._caller = caller
         self._sign = sign
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        # Wall-clock milliseconds go into the signature (EXN-TIMESTAMP) only.
         self._now_ms = now_ms or (lambda: int(self._clock().timestamp() * 1000))
+        # The rate limiter measures gaps on a monotonic clock, so a wall-clock step cannot open or close a window.
+        # A test that injects ``now_ms`` and no monotonic clock drives both from the same fake time.
+        if monotonic_ms is not None:
+            self._mono_ms = monotonic_ms
+        elif now_ms is not None:
+            self._mono_ms = now_ms
+        else:
+            self._mono_ms = lambda: int(time.monotonic() * 1000)
         self._sleep = sleep or time.sleep
         self._interval = _interval_ms(env)
         self.access_point = None
         self._last_ms = None
         self._blocked_until_ms = None
         self._sent = {}
+        self._recent = {}
         self._lock = Lock()
         key = env.get("EXN_API_KEY")
         account = env.get("EXN_ACCOUNT_ID")
@@ -70,8 +106,22 @@ class ExnessClient:
         self.gateway = gateway
 
     def _request(self, base, method, path, body=None, idempotency_key=""):
-        with self._lock:
-            return self._request_locked(base, method, path, body, idempotency_key)
+        state = self._acquire_slot(operation_limit(method, path))
+        if state == "blocked":
+            return 429, {"error_message": "REQUEST_RATE_LIMIT"}, {}, False
+        if state != "ready":
+            return 429, {"error_message": "floor_min_interval"}, {}, False
+        raw = b"" if body is None else json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        signed = headers(self.api_key, idempotency_key, self._now_ms(), method, path, raw, self._sign)
+        if body is not None:
+            signed["Content-Type"] = "application/json"
+        status, payload, response_headers = self._caller(method, base + path, signed, raw)
+        if status == 429:
+            retry = response_headers.get("Retry-After") if isinstance(response_headers, dict) else None
+            wait = int(retry) if isinstance(retry, str) and retry.isdigit() else 1
+            with self._lock:
+                self._blocked_until_ms = self._mono_ms() + wait * 1000
+        return status, payload if isinstance(payload, dict) else {}, response_headers or {}, True
 
     def signed_headers(self, method, path):
         """Headers for a signed GET that is not sent through the HTTP caller.
@@ -80,47 +130,46 @@ class ExnessClient:
         """
         if method.upper() != "GET":
             raise ValueError("signed_headers is only for GET")
-        with self._lock:
-            state, now = self._acquire_slot_locked()
-            if state != "ready":
-                raise RuntimeError("rate_limited")
-            return headers(self.api_key, "", now, "GET", path, b"", self._sign)
+        if self._acquire_slot() != "ready":
+            raise RuntimeError("rate_limited")
+        return headers(self.api_key, "", self._now_ms(), "GET", path, b"", self._sign)
 
-    def _acquire_slot_locked(self):
-        """``("ready", timestamp)`` once the local gap has elapsed.
+    def _slot_wait_locked(self, operation):
+        """``("blocked"|"ready"|"wait", wait_ms)``. Called with the lock held; never sleeps."""
+        now = self._mono_ms()
+        if self._blocked_until_ms is not None and now < self._blocked_until_ms:
+            return "blocked", 0
+        elapsed = None if self._last_ms is None else now - self._last_ms
+        wait = 0 if elapsed is None or elapsed >= self._interval else self._interval - elapsed
+        recent = None
+        if operation is not None:
+            name, limit = operation
+            recent = self._recent.setdefault(name, deque(maxlen=limit))
+            if len(recent) >= limit:
+                wait = max(wait, OPERATION_WINDOW_MS - (now - recent[0]))
+        if wait <= 0:
+            self._last_ms = now
+            if recent is not None:
+                recent.append(now)
+            return "ready", 0
+        return "wait", min(wait, MAX_WAIT_STEP_MS)
 
-        A server 429 returns ``("blocked", now)`` at once. REQUEST_RATE_LIMIT is not retried.
-        The local gap is not that 429: a manage cycle and the tick handshake issue several GETs
-        in a row, and rejecting them makes the cycle ``BrokerUnavailable``.
+    def _acquire_slot(self, operation=None):
+        """``"ready"`` once the local gap and the operation window allow a call.
+
+        The wait is computed under the lock and slept outside it, then the slot is checked again, so the tick
+        handshake is never stuck behind a sleeping candle call. A server 429 returns ``"blocked"`` at once:
+        REQUEST_RATE_LIMIT is not retried, and an order that gets it stays REJECTED.
         """
         while True:
-            now = self._now_ms()
-            if self._blocked_until_ms is not None and now < self._blocked_until_ms:
-                return "blocked", now
-            elapsed = None if self._last_ms is None else now - self._last_ms
-            if elapsed is None or elapsed >= self._interval:
-                self._last_ms = now
-                return "ready", now
-            self._sleep((self._interval - elapsed) / 1000)
-            if self._now_ms() <= now:
-                return "stalled", now
-
-    def _request_locked(self, base, method, path, body, idempotency_key):
-        state, now = self._acquire_slot_locked()
-        if state == "blocked":
-            return 429, {"error_message": "REQUEST_RATE_LIMIT"}, {}, False
-        if state != "ready":
-            return 429, {"error_message": "floor_min_interval"}, {}, False
-        raw = b"" if body is None else json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        signed = headers(self.api_key, idempotency_key, now, method, path, raw, self._sign)
-        if body is not None:
-            signed["Content-Type"] = "application/json"
-        status, payload, response_headers = self._caller(method, base + path, signed, raw)
-        if status == 429:
-            retry = response_headers.get("Retry-After") if isinstance(response_headers, dict) else None
-            wait = int(retry) if isinstance(retry, str) and retry.isdigit() else 1
-            self._blocked_until_ms = now + wait * 1000
-        return status, payload if isinstance(payload, dict) else {}, response_headers or {}, True
+            with self._lock:
+                state, wait = self._slot_wait_locked(operation)
+                before = self._mono_ms()
+            if state != "wait":
+                return state
+            self._sleep(wait / 1000)
+            if self._mono_ms() <= before:
+                return "stalled"
 
     def discover(self):
         if self.access_point:
