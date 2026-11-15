@@ -7,8 +7,10 @@ between calls (``AI_FLOOR_EXNESS_MIN_INTERVAL_MS``, default 100). A call inside 
 It is not rejected, and the wait is not a retry of HTTP 429. TODO: parse
 ``GET /v1/configuration/accounts/{account_id}/limits`` once its field names are confirmed.
 """
+from collections import deque
 from datetime import datetime, timezone
 import json
+import re
 from threading import Lock
 import time
 from urllib.parse import urlsplit
@@ -18,6 +20,29 @@ from execution.exness_sign import headers
 
 MIN_INTERVAL_ENV = "AI_FLOOR_EXNESS_MIN_INTERVAL_MS"
 DEFAULT_MIN_INTERVAL_MS = 100
+# Per-operation REST limits read from GET /v1/configuration/accounts/{account_id}/limits on 2026-11-15
+# (every window is 1 s). The 100 ms gap alone allows 10 calls a second, so three candle GETs in one manage
+# hit the 2/s candle limit: the third one (EURUSD) got HTTP 429 REQUEST_RATE_LIMIT and the 1 s block that
+# follows failed the account read. A call waits until its operation has room; it is never retried.
+OPERATION_WINDOW_MS = 1050  # 1 s window plus a margin for clock jitter between the Floor and the server
+_OPERATION_LIMITS = (
+    (re.compile(r"^/v1/market-data/accounts/[0-9]+/candles(?:\?|$)"), "candles", 2),
+    (re.compile(r"^/v1/trading/accounts/[0-9]+/snapshot(?:\?|$)"), "snapshot", 2),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/instruments(?:\?|$)"), "instruments", 2),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/instruments/[^/?]+/conditions(?:\?|$)"), "conditions", 4),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/account(?:\?|$)"), "account", 4),
+    (re.compile(r"^/v1/configuration/accounts/[0-9]+/limits(?:\?|$)"), "limits", 2),
+)
+
+
+def operation_limit(method, path):
+    """``(name, calls_per_window)`` for a rate-limited GET, else None."""
+    if str(method).upper() != "GET" or not isinstance(path, str):
+        return None
+    for pattern, name, limit in _OPERATION_LIMITS:
+        if pattern.match(path):
+            return name, limit
+    return None
 
 
 def _interval_ms(env):
@@ -55,6 +80,7 @@ class ExnessClient:
         self._last_ms = None
         self._blocked_until_ms = None
         self._sent = {}
+        self._recent = {}
         self._lock = Lock()
         key = env.get("EXN_API_KEY")
         account = env.get("EXN_ACCOUNT_ID")
@@ -86,7 +112,7 @@ class ExnessClient:
                 raise RuntimeError("rate_limited")
             return headers(self.api_key, "", now, "GET", path, b"", self._sign)
 
-    def _acquire_slot_locked(self):
+    def _acquire_slot_locked(self, operation=None):
         """``("ready", timestamp)`` once the local gap has elapsed.
 
         A server 429 returns ``("blocked", now)`` at once. REQUEST_RATE_LIMIT is not retried.
@@ -98,15 +124,24 @@ class ExnessClient:
             if self._blocked_until_ms is not None and now < self._blocked_until_ms:
                 return "blocked", now
             elapsed = None if self._last_ms is None else now - self._last_ms
-            if elapsed is None or elapsed >= self._interval:
+            wait = 0 if elapsed is None or elapsed >= self._interval else self._interval - elapsed
+            recent = None
+            if operation is not None:
+                name, limit = operation
+                recent = self._recent.setdefault(name, deque(maxlen=limit))
+                if len(recent) >= limit:
+                    wait = max(wait, OPERATION_WINDOW_MS - (now - recent[0]))
+            if wait <= 0:
                 self._last_ms = now
+                if recent is not None:
+                    recent.append(now)
                 return "ready", now
-            self._sleep((self._interval - elapsed) / 1000)
+            self._sleep(wait / 1000)
             if self._now_ms() <= now:
                 return "stalled", now
 
     def _request_locked(self, base, method, path, body, idempotency_key):
-        state, now = self._acquire_slot_locked()
+        state, now = self._acquire_slot_locked(operation_limit(method, path))
         if state == "blocked":
             return 429, {"error_message": "REQUEST_RATE_LIMIT"}, {}, False
         if state != "ready":
