@@ -9,7 +9,8 @@ import unittest
 
 from execution.exness_brakes import ExnessBrakes
 from execution.exness_broker import ExnessBroker
-from execution.exness_client import OPERATION_WINDOW_MS, ExnessClient, operation_limit
+from execution.exness_client import (OPERATION_WINDOW_MS, TWO_PER_SECOND_WINDOW_MS, ExnessClient, operation_limit,
+                                     safe_detail)
 from execution.exness_transport import Command, RestExnessTransport
 
 
@@ -206,3 +207,158 @@ class LimiterClockAndLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowFromResponseTests(unittest.TestCase):
+    """The server counts a call when it arrives. A slow first connection used to let the third candle GET land
+    inside the same server second (live 429s on EURUSD after the send-time window was deployed)."""
+
+    def test_a_slow_first_arrival_does_not_let_the_third_candle_call_hit_429(self):
+        now = [1_000_000]
+        arrivals = []
+        statuses = []
+        delays = iter([400, 20, 20, 20])  # send -> arrival: the first call opens a slow connection
+
+        def caller(method, url, headers, body):
+            del method, headers, body
+            if "access-point" in url:
+                now[0] += 20
+                return 200, {"access_point": "https://ap.example"}, {}
+            now[0] += next(delays)
+            recent = [t for t in arrivals if now[0] - t < 1000]
+            status = 429 if len(recent) >= 2 else 200
+            if status == 200:
+                arrivals.append(now[0])
+            statuses.append(status)
+            now[0] += 20  # arrival -> response
+            return status, ({"candles": []} if status == 200 else {"code": 3015}), {}
+
+        def sleep(seconds):
+            now[0] += int(round(seconds * 1000))
+
+        client = ExnessClient(ENV, caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+        for symbol in ("USDJPY", "GBPUSD", "EURUSD"):
+            client.get_json(f"/v1/market-data/accounts/123456/candles?instrument={symbol}")
+        self.assertEqual(statuses, [200, 200, 200])
+        self.assertGreaterEqual(arrivals[2] - arrivals[0], 1000)
+
+    def test_a_failed_call_still_moves_its_stamp_to_the_end_of_the_call(self):
+        now = [1_000_000]
+
+        def caller(method, url, headers, body):
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            now[0] += 300
+            raise OSError("reset")
+
+        def sleep(seconds):
+            now[0] += int(round(seconds * 1000))
+
+        client = ExnessClient(ENV, caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+        client.discover()
+        with self.assertRaises(OSError):
+            client.get_json("/v1/market-data/accounts/123456/candles?instrument=EURUSD")
+        self.assertEqual(list(client._recent["candles"]), [now[0]])
+
+
+class ErrorDetailTests(unittest.TestCase):
+    """M5_GAP / MANAGE_FAILED carry status, Exness code and endpoint; never the host, key or account."""
+
+    SECRETS = ("ap.example", "gateway.example", "123456", "exnsk-public-key-value", "sig")
+
+    def _client(self, answers):
+        now = [1_000_000]
+
+        def caller(method, url, headers, body):
+            now[0] += 20
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            return answers(url)
+
+        def sleep(seconds):
+            now[0] += int(round(seconds * 1000))
+
+        return ExnessClient(ENV, caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+
+    def _clean(self, text):
+        for secret in self.SECRETS:
+            self.assertNotIn(secret, text)
+
+    def test_a_server_429_names_status_code_and_endpoint_then_the_local_block(self):
+        client = self._client(lambda url: (429, {"code": 3015, "error_message": "REQUEST_RATE_LIMIT"}, {}))
+        with self.assertRaises(RuntimeError) as first:
+            client.get_json("/v1/market-data/accounts/123456/candles?instrument=EURUSD")
+        self.assertEqual(str(first.exception), "read_failed:429:3015:REQUEST_RATE_LIMIT:candles")
+        with self.assertRaises(RuntimeError) as second:
+            client.get_json("/v1/trading/accounts/123456/snapshot")
+        self.assertEqual(str(second.exception), "rate_limited:local_block:snapshot")
+
+    def test_an_unexpected_body_never_reaches_the_message(self):
+        client = self._client(lambda url: (500, {"code": "x y", "error_message": "see https://ap.example/123456"}, {}))
+        with self.assertRaises(RuntimeError) as caught:
+            client.get_json("/v1/configuration/accounts/123456/account")
+        self.assertEqual(str(caught.exception), "read_failed:500:none:none:account")
+
+    def test_safe_detail_only_passes_floor_built_messages(self):
+        self.assertEqual(safe_detail(RuntimeError("read_failed:429:3015:REQUEST_RATE_LIMIT:candles")),
+                         "read_failed:429:3015:REQUEST_RATE_LIMIT:candles")
+        for exc in (OSError("connect to https://ap.example failed"), ValueError("account 123456 bad"),
+                    RuntimeError("read_failed:ap.example"), KeyError("x"), RuntimeError("")):
+            with self.subTest(exc=exc):
+                self.assertEqual(safe_detail(exc), "none")
+
+    def test_m5_gap_and_manage_failed_log_the_detail(self):
+        def answers(url):
+            if "/candles" in url and "EURUSD" in url:
+                return 429, {"code": 3015, "error_message": "REQUEST_RATE_LIMIT"}, {}
+            if "/candles" in url:
+                return 200, {"candles": []}, {}
+            return 200, {}, {}
+
+        client = self._client(answers)
+        transport = RestExnessTransport(client)
+        broker = ExnessBroker(transport, env=ENV, brakes=ExnessBrakes.from_env(transport, ENV), clock=lambda: NOW)
+        with self.assertLogs("ai_floor.exness", level="WARNING") as gap:
+            broker.candles("EURUSD", "M5", NOW - timedelta(hours=1), NOW)
+        line = "\n".join(gap.output)
+        self.assertIn("event=M5_GAP symbol=EURUSD reason=candles_unavailable error_type=RuntimeError "
+                      "detail=read_failed:429:3015:REQUEST_RATE_LIMIT:candles", line)
+        self._clean(line)
+        from execution.exness_session import ExnessSession
+        session = ExnessSession(broker, env=ENV, clock=lambda: NOW)
+        with self.assertLogs("ai_floor.exness", level="WARNING") as failed:
+            session.manage(NOW)
+        line = "\n".join(failed.output)
+        self.assertIn("event=MANAGE_FAILED error_type=BrokerUnavailable "
+                      "detail=RuntimeError:rate_limited:local_block:account", line)
+        self._clean(line)
+
+
+class TwoPerSecondMarginTests(unittest.TestCase):
+    def _sends(self, path, count):
+        server = FakeServer()
+        client = server.client()
+        sent_at = []
+        inner = server.caller
+
+        def stamp(method, url, headers, body):
+            sent_at.append(server.now[0])
+            out = inner(method, url, headers, body)
+            sent_at[-1] = (sent_at[-1], server.now[0])  # (send, response)
+            return out
+
+        client._caller = stamp
+        for _ in range(count):
+            client.get_json(path)
+        return sent_at[1:]
+
+    def test_two_per_second_operations_keep_150_ms_of_margin_after_the_response(self):
+        self.assertEqual(TWO_PER_SECOND_WINDOW_MS, 1150)
+        calls = self._sends("/v1/trading/accounts/123456/snapshot", 3)
+        self.assertGreaterEqual(calls[2][0] - calls[0][1], TWO_PER_SECOND_WINDOW_MS)
+
+    def test_four_per_second_operations_keep_the_50_ms_margin(self):
+        calls = self._sends("/v1/configuration/accounts/123456/account", 5)
+        gap = calls[4][0] - calls[0][1]
+        self.assertGreaterEqual(gap, OPERATION_WINDOW_MS)
+        self.assertLess(gap, TWO_PER_SECOND_WINDOW_MS)
