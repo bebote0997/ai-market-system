@@ -525,6 +525,68 @@ class TestSmtpCleanupAndClassification(NoNetwork):
             self.assertEqual(alerts.ledger.status("evt-1")["email"]["error_type"], "REJECTED")
 
 
+class ScriptedSMTP(smtplib.SMTP):
+    """A real smtplib.SMTP talking to a scripted server reply stream (no socket); EOF = the server hung up."""
+    def __init__(self, script):
+        super().__init__(local_hostname="test.invalid")
+        self.sent = []
+        self.sock = mock.Mock(sendall=lambda data: self.sent.append(data))
+        self.file = io.BytesIO(script)
+
+
+EHLO = b"220 ready\r\n250-fake\r\n250-AUTH LOGIN PLAIN\r\n250 SMTPUTF8\r\n"
+
+
+class TestSmtpHangupKeepsReplyCode(NoNetwork):
+    """Gmail can answer AUTH/EHLO with a 4xx/5xx and hang up; smtplib then raises SMTPServerDisconnected (from its
+    AUTH LOGIN fallback), which used to hide the real code as CONNECTION_ERROR."""
+
+    def send(self, script):
+        channel = GmailEmailChannel(password="secret-pw", sender="a@example.invalid", recipient="b@example.invalid",
+                                    environ={}, smtp_factory=lambda *a, **k: ScriptedSMTP(script))
+        with self.assertLogs("runtime.alert_channels", "WARNING") as logs, \
+                self.assertRaises(AlertChannelError) as ctx:
+            channel.send(trade_event())
+        text = "\n".join(logs.output)
+        for secret in ("secret-pw", "a@example.invalid", "b@example.invalid", "bad", "later"):
+            self.assertNotIn(secret, text)
+        return ctx.exception, text
+
+    def test_auth_rejected_then_hangup_is_auth_error_not_retried(self):
+        error, logs = self.send(EHLO.replace(b"220 ready\r\n", b"") + b"535 5.7.8 bad\r\n")
+        self.assertEqual((error.code, error.retryable), ("AUTH_ERROR", False))
+        self.assertIn("event=SMTP_FAILED stage=login error_type=SMTPServerDisconnected smtp_code=None "
+                      "last_reply_code=535 code=AUTH_ERROR", logs)
+
+    def test_temporary_auth_or_ehlo_reply_then_hangup_stays_retryable(self):
+        for script in (EHLO.replace(b"220 ready\r\n", b"") + b"454 4.7.0 later\r\n",
+                       b"421 4.7.0 later\r\n"):
+            with self.subTest(script=script[:12]):
+                error, logs = self.send(script)
+                self.assertEqual((error.code, error.retryable), ("TEMPORARY_FAILURE", True))
+                self.assertIn("stage=login", logs)
+
+    def test_hangup_without_error_reply_stays_connection_error(self):
+        cases = ((b"", "login", "None"),
+                 (EHLO.replace(b"220 ready\r\n", b"") + b"235 ok\r\n", "send", "235"),
+                 (EHLO.replace(b"220 ready\r\n", b"") + b"235 ok\r\n250 ok\r\n250 ok\r\n354 go\r\n", "send", "354"))
+        for script, stage, last in cases:
+            with self.subTest(stage=stage, last=last):
+                error, logs = self.send(script)
+                self.assertEqual((error.code, error.retryable), ("CONNECTION_ERROR", True))
+                self.assertIn(f"stage={stage} error_type=SMTPServerDisconnected smtp_code=None last_reply_code={last} "
+                              "code=CONNECTION_ERROR", logs)
+                self.assertIn("SMTP_CLEANUP_FAILED error_type=SMTPServerDisconnected", logs)
+
+    def test_classifier_uses_last_code_only_for_codeless_disconnects(self):
+        classify = alert_channels.classify_smtp_error
+        self.assertEqual(classify(smtplib.SMTPServerDisconnected("x"), last_code=535, stage="login"), "AUTH_ERROR")
+        self.assertEqual(classify(smtplib.SMTPServerDisconnected("x"), last_code=554, stage="send"), "REJECTED")
+        self.assertEqual(classify(smtplib.SMTPServerDisconnected("x"), last_code=250, stage="send"), "CONNECTION_ERROR")
+        self.assertEqual(classify(smtplib.SMTPDataError(451, b"x"), last_code=535, stage="send"), "TEMPORARY_FAILURE")
+        self.assertEqual(classify(TimeoutError(), last_code=535, stage="login"), "CONNECTION_ERROR")
+
+
 class Clock:
     def __init__(self, seconds=0):
         self.seconds = seconds
