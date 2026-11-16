@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from execution.broker_port import APPROVED
 from execution.exness_broker import broker_from_env
+from execution.exness_client import safe_detail
 from execution.friday_close import OPEN, friday_window, minutes_from_env
 from execution.exness_m5 import BAR, FEED_SYMBOLS, M5Feed, floor_m5_utc, m5_feed_enabled
 from execution.session_combo import SessionCombo, combo_enabled, range_window
@@ -102,8 +103,8 @@ class ExnessSession:
             try:
                 bars.extend(self.broker.candles(symbol, "M5", start, end) or ())
             except Exception as exc:  # noqa: BLE001 - the next manage retries; the message can contain the host
-                LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s",
-                            symbol, type(exc).__name__)
+                LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s "
+                            "detail=%s", symbol, type(exc).__name__, safe_detail(exc))
         return tuple(bars)
 
     def _bars(self, at):
@@ -155,7 +156,8 @@ class ExnessSession:
             self._run_combo(at, bars)
             return results
         except Exception as exc:  # noqa: BLE001
-            LOG.warning("component=exness event=MANAGE_FAILED error_type=%s", type(exc).__name__)
+            LOG.warning("component=exness event=MANAGE_FAILED error_type=%s detail=%s", type(exc).__name__,
+                        safe_detail(exc))
             return {"_": type(exc).__name__}
 
     def _run_combo(self, at, bars):

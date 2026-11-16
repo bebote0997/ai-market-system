@@ -15,6 +15,7 @@ from execution.broker_port import (ACCEPTED, REJECTED, UNKNOWN, BrokerGuardError
                                    approval_problem)
 from execution.dxtrade_broker import real_execution_enabled
 from execution.exness_brakes import ExnessBrakes, log_brake_state
+from execution.exness_client import safe_detail
 from execution.exness_sizing import RISK_FRACTION_CAP, account_risk_cap, capped_lots, on_step, size_lots, spread_cost
 from execution.exness_transport import Command
 from execution.friday_close import OPEN, friday_window, minutes_from_env
@@ -156,7 +157,7 @@ class ExnessBroker:
         try:
             book = self._transport.read_state()
         except Exception as exc:  # noqa: BLE001
-            raise BrokerUnavailable(type(exc).__name__) from None
+            raise BrokerUnavailable(f"{type(exc).__name__}:{safe_detail(exc)}") from None
         if self._cache_reads and not fresh:
             self._read_cache = book
         return book
@@ -244,8 +245,8 @@ class ExnessBroker:
                     try:
                         payload = client.get_json(path)
                     except Exception as exc:  # noqa: BLE001 - the message can contain the host
-                        LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s",
-                                    symbol, type(exc).__name__)
+                        LOG.warning("component=exness_m5 event=M5_GAP symbol=%s reason=candles_unavailable error_type=%s "
+                                    "detail=%s", symbol, type(exc).__name__, safe_detail(exc))
                         continue
                 else:
                     payload = getter(symbol, span_start, span_end)

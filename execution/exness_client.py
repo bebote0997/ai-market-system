@@ -25,7 +25,9 @@ DEFAULT_MIN_INTERVAL_MS = 100
 # hit the 2/s candle limit: the third one (EURUSD) got HTTP 429 REQUEST_RATE_LIMIT and the 1 s block that
 # follows failed the account read. A call waits until its operation has room; it is never retried.
 OPERATION_WINDOW_MS = 1050  # 1 s window plus a margin for clock jitter between the Floor and the server
-MAX_WAIT_STEP_MS = OPERATION_WINDOW_MS  # one sleep never exceeds one window; the slot is re-checked after it
+# The 2/s operations (candles, snapshot, instruments, limits) get 150 ms of margin for a server clock offset.
+TWO_PER_SECOND_WINDOW_MS = 1150
+MAX_WAIT_STEP_MS = TWO_PER_SECOND_WINDOW_MS  # one sleep never exceeds one window; the slot is re-checked after it
 _OPERATION_LIMITS = (
     (re.compile(r"^/v1/market-data/accounts/[0-9]+/candles(?:\?|$)"), "candles", 2),
     (re.compile(r"^/v1/trading/accounts/[0-9]+/snapshot(?:\?|$)"), "snapshot", 2),
@@ -44,6 +46,43 @@ def operation_limit(method, path):
         if pattern.match(path):
             return name, limit
     return None
+
+
+def operation_name(path):
+    """Short endpoint name for logs (``candles``, ``snapshot``...). Never the path, host or account."""
+    found = operation_limit("GET", path)
+    if found is not None:
+        return found[0]
+    if isinstance(path, str) and path.startswith("/v1/trading/access-point"):
+        return "access_point"
+    return "other"
+
+
+_CODE = re.compile(r"^[A-Za-z0-9_]{1,40}$")
+
+
+def _error_code(payload):
+    """``3015:REQUEST_RATE_LIMIT`` from an Exness error body; ``none`` for anything unexpected."""
+    payload = payload if isinstance(payload, dict) else {}
+    code, message = payload.get("code"), payload.get("error_message")
+    code = str(code) if isinstance(code, int) and not isinstance(code, bool) else "none"
+    message = message if isinstance(message, str) and _CODE.match(message) else "none"
+    return f"{code}:{message}"
+
+
+_SAFE_DETAIL = re.compile(r"^[A-Za-z_]{1,40}(?::[A-Za-z0-9_]{1,40}){0,7}$")
+
+
+def safe_detail(exc):
+    """The message of a Floor-built read error (``read_failed:429:3015:REQUEST_RATE_LIMIT:candles``), else ``none``.
+
+    Only colon-separated words and numbers pass, so a host, a URL, a key or free text is never logged.
+    """
+    try:
+        text = str(exc)
+    except Exception:  # noqa: BLE001
+        return "none"
+    return text if len(text) <= 200 and _SAFE_DETAIL.match(text) else "none"
 
 
 def _interval_ms(env):
@@ -66,6 +105,12 @@ def normalize_gateway(raw):
 def _host_ok(url):
     parts = urlsplit(url if isinstance(url, str) else "")
     return parts.scheme == "https" and bool(parts.hostname) and not parts.username and not parts.password and not parts.query and not parts.fragment
+
+
+def _local_reason(payload):
+    """Why the Floor did not send: ``local_block`` after a server 429, ``local_stall`` when the clock stood still."""
+    message = payload.get("error_message") if isinstance(payload, dict) else None
+    return "local_block" if message == "REQUEST_RATE_LIMIT" else "local_stall"
 
 
 class ExnessClient:
@@ -166,7 +211,8 @@ class ExnessClient:
             name, limit = operation
             recent = self._recent.setdefault(name, deque(maxlen=limit))
             if len(recent) >= limit:
-                wait = max(wait, OPERATION_WINDOW_MS - (now - recent[0]))
+                window = TWO_PER_SECOND_WINDOW_MS if limit <= 2 else OPERATION_WINDOW_MS
+                wait = max(wait, window - (now - recent[0]))
         if wait <= 0:
             self._last_ms = now
             if recent is not None:
@@ -197,10 +243,10 @@ class ExnessClient:
         path = f"/v1/trading/access-point?account_id={self.account_id}"
         status, payload, _headers, sent = self._request(self.gateway, "GET", path, None, "")
         if not sent:
-            raise RuntimeError("rate_limited")
+            raise RuntimeError(f"rate_limited:{_local_reason(payload)}:access_point")
         point = payload.get("access_point") if status == 200 else None
         if not _host_ok(point):
-            raise RuntimeError("access_point_unavailable")
+            raise RuntimeError(f"access_point_unavailable:{status}:{_error_code(payload)}")
         self.access_point = point.rstrip("/")
         return self.access_point
 
@@ -208,9 +254,9 @@ class ExnessClient:
         base = self.discover()
         status, payload, _headers, sent = self._request(base, "GET", path, None, "")
         if not sent:
-            raise RuntimeError("rate_limited")
+            raise RuntimeError(f"rate_limited:{_local_reason(payload)}:{operation_name(path)}")
         if status != 200:
-            raise RuntimeError(f"read_failed:{status}")
+            raise RuntimeError(f"read_failed:{status}:{_error_code(payload)}:{operation_name(path)}")
         return payload
 
     def mutate(self, method, path, body, idempotency_key):

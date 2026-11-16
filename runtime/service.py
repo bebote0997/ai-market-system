@@ -667,7 +667,7 @@ class OperationalRuntime:
                 # The scheduler passes the 15-minute boundary. The open M5 bar follows the real clock.
                 self.exness_session.manage(self._exness_manage_at(at))
             except Exception as exc:  # noqa: BLE001
-                LOG.warning("component=exness event=MANAGE_FAILED error_type=%s", type(exc).__name__)
+                LOG.warning("component=exness event=MANAGE_FAILED error_type=%s detail=%s", type(exc).__name__, _exness_detail(exc))
         results = {}
         if not self.paper_enabled:
             return results
@@ -760,7 +760,7 @@ class OperationalRuntime:
             session.last_manage_at = when
             return session.manage(when)
         except Exception as exc:  # noqa: BLE001
-            LOG.warning("component=exness event=MANAGE_FAILED error_type=%s", type(exc).__name__)
+            LOG.warning("component=exness event=MANAGE_FAILED error_type=%s detail=%s", type(exc).__name__, _exness_detail(exc))
             return None
 
     def process_operator_requests(self, at):
@@ -1607,3 +1607,9 @@ class OperationalRuntime:
                     except Exception:  # noqa: BLE001 - missing bars skip the EMA entry; the paper cycle is unchanged
                         cycle_context["_ema_m15"] = None
                         cycle_context["_ema_h1"] = None
+
+
+def _exness_detail(exc):
+    """Status, Exness code and endpoint of a failed Exness read (never host, key or account)."""
+    from execution.exness_client import safe_detail
+    return safe_detail(exc)
