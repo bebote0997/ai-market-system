@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 TICKS_PATH = "/v1/server-events/accounts/{account_id}/ws/ticks"
 EVENTS_PATH = "/v1/server-events/accounts/{account_id}/ws/events"
 BACKOFF_CAP_SECONDS = 30
+# Broker tick stamps and the Floor clock are separate clocks; a tick up to this far ahead is not stale.
+FUTURE_TICK_TOLERANCE_SECONDS = 2
 
 
 def ticks_path(account_id):
@@ -116,7 +118,8 @@ class QuoteBook:
             if slot is None or slot.tick_at is None:
                 return False
             age = (now - slot.tick_at).total_seconds()
-            return 0 <= age <= stale_seconds
+            # A tick stamped slightly after ``now`` (read in flight, or broker clock a little ahead) is fresh.
+            return -FUTURE_TICK_TOLERANCE_SECONDS <= age <= stale_seconds
 
 
 def subscribe_ticks(instruments):
