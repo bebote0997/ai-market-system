@@ -299,7 +299,7 @@ class ExnessBroker:
     def _entry_blocked(self, plan, book, now):
         if plan.symbol not in ALLOWED or plan.symbol not in book.instruments:
             return "symbol_not_supported" if plan.symbol not in ALLOWED else "symbol_unresolved"
-        if not book.quotes.fresh(now, _stale_seconds(self._env), plan.symbol):
+        if not book.quotes.fresh(self._now(), _stale_seconds(self._env), plan.symbol):
             self.note_link(book)
             return "quote_stale"
         try:
@@ -409,7 +409,9 @@ class ExnessBroker:
             return SubmitResult(UNKNOWN, client_id, reason=f"read_failed:{exc}")
         if symbol not in ALLOWED or symbol not in book.instruments:
             return self._refuse(client_id, "symbol_not_supported" if symbol not in ALLOWED else "symbol_unresolved")
-        if not book.quotes.fresh(now, _stale_seconds(self._env), symbol):
+        # The quote age is measured when it is checked. ``now`` was taken before the REST read, and a tick
+        # that arrived during that read is newer than ``now``: it used to count as stale (negative age).
+        if not book.quotes.fresh(self._now(), _stale_seconds(self._env), symbol):
             self.note_link(book)
             return self._refuse(client_id, "quote_stale")
         try:
@@ -418,7 +420,7 @@ class ExnessBroker:
             return self._refuse(client_id, "reread_failed")
         if _exposure(again) != _exposure(book):
             return self._refuse(client_id, "reread_changed")
-        if not again.quotes.fresh(now, _stale_seconds(self._env), symbol):
+        if not again.quotes.fresh(self._now(), _stale_seconds(self._env), symbol):
             self.note_link(again)
             return self._refuse(client_id, "quote_stale")
         owned = [row.ticket for row in again.positions if row.comment == client_id]
