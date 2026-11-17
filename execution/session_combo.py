@@ -18,7 +18,7 @@ from that fill (fix). Take-profit, when there is one, is twice the actual fill-t
 lot would risk more than the lesser of 1% and $5 at that distance, the trade is not sent.
 """
 from datetime import datetime, time, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 import json
 import logging
 from zoneinfo import ZoneInfo
@@ -39,7 +39,9 @@ PIP = {"USDJPY": Decimal("0.01"), "EURUSD": Decimal("0.0001"), "GBPUSD": Decimal
 LONDON_SYMBOL = "USDJPY"
 FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
-           "position_id", "volume", "opened_at")
+           "position_id", "volume", "opened_at", "stop", "protection_after", "protection_retry_done",
+           "protection_close_done")
+_TIME_FIELDS = ("exit_at", "opened_at", "protection_after")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
 # The 7-hour window is 84 M5 bars. The first and the last alone are not a range.
@@ -196,6 +198,14 @@ def size_for_cap(equity, balance, entry, stop, spec, currency="USD", env=None):
     return capped_lots(equity, balance, entry, stop, spec, usd_cap=cap)
 
 
+def _stop_price(raw):
+    try:
+        value = Decimal(str(raw)) if raw is not None else None
+    except (ArithmeticError, ValueError):
+        return None
+    return value if value is not None and value.is_finite() and value > 0 else None
+
+
 def _log(event, **detail):
     parts = " ".join(f"{key}={value}" for key, value in detail.items() if value is not None)
     LOG.info("component=session_combo event=%s%s%s", event, " " if parts else "", parts)
@@ -204,7 +214,8 @@ def _log(event, **detail):
 def _blank():
     return {"status": "pending", "client_id": None, "exit_at": None, "exited": False,
             "symbol": None, "side": None, "logged_range": False, "position_id": None,
-            "volume": None, "opened_at": None}
+            "volume": None, "opened_at": None, "stop": None, "protection_after": None,
+            "protection_retry_done": False, "protection_close_done": False}
 
 
 def london_key(day):
@@ -267,11 +278,12 @@ class SessionCombo:
             for field in _FIELDS:
                 if field in parsed:
                     state[field] = parsed[field]
-            if isinstance(state["exit_at"], str):
-                state["exit_at"] = datetime.fromisoformat(state["exit_at"])
-            if isinstance(state["opened_at"], str):
-                state["opened_at"] = datetime.fromisoformat(state["opened_at"])
+            for field in _TIME_FIELDS:
+                if isinstance(state[field], str):
+                    state[field] = datetime.fromisoformat(state[field])
             state["exited"] = bool(state["exited"])
+            state["protection_retry_done"] = bool(state["protection_retry_done"])
+            state["protection_close_done"] = bool(state["protection_close_done"])
             state["logged_range"] = bool(state["logged_range"])
         self._phase[key] = state
         return state
@@ -284,7 +296,7 @@ class SessionCombo:
 
     def _put(self, key, state):
         payload = dict(state)
-        for field in ("exit_at", "opened_at"):
+        for field in _TIME_FIELDS:
             if isinstance(payload.get(field), datetime):
                 payload[field] = payload[field].isoformat()
         self._store.set_flag(key, json.dumps(payload, sort_keys=True))
@@ -455,7 +467,8 @@ class SessionCombo:
         if state["status"] in _TERMINAL:
             return False
         state.update(status="submitted", client_id=client_id, exit_at=exit_at, symbol=symbol, side=side,
-                     exited=False, opened_at=opened_at, position_id=None)
+                     exited=False, opened_at=opened_at, position_id=None, stop=format(stop, "f"),
+                     protection_after=opened_at, protection_retry_done=False, protection_close_done=False)
         self._put(key, state)
         result, lots = self._send(day, symbol, side, entry, stop, target, client_id)
         if lots is not None:
@@ -475,7 +488,7 @@ class SessionCombo:
             self._put(key, state)
             return True
         state.update(status="armed", client_id=None, exit_at=None, symbol=None, side=None, position_id=None,
-                     volume=None, opened_at=None)
+                     volume=None, opened_at=None, stop=None, protection_after=None)
         self._put(key, state)
         return False
 
@@ -566,6 +579,60 @@ class SessionCombo:
             return "ambiguous", None
         return "unknown", None
 
+    def _protect(self, key, state, row, at):
+        """Stop-loss check on a held leg. True when this tick sent the protection close.
+
+        Runs from ``_exits`` on the reads the tick already made. The SL arrives as a separate ``sltp`` order
+        after the ACK, so the manage that sent the order (``protection_after``) is never the one that checks.
+        Missing once: one ``replace_protection``. Still missing on a later manage: one close.
+        """
+        if getattr(row, "stop", None) is not None or state.get("protection_close_done"):
+            return False
+        after = state.get("protection_after")
+        if isinstance(after, datetime) and at <= after:
+            return False
+        ticket = state.get("position_id")
+        client = state.get("client_id")
+        if not ticket or not client:
+            return False
+        if not state.get("protection_retry_done"):
+            stop = _stop_price(state.get("stop"))
+            _log("PROTECTION_MISSING", symbol=state.get("symbol"), position_id=ticket, retry=stop is not None)
+            state["protection_retry_done"] = True
+            self._put(key, state)
+            if stop is None:
+                return False
+            stop = self._rounded(state.get("symbol"), stop)
+            try:
+                result = self._broker.replace_protection(ticket, stop, None, client_id=f"{client}-protect")
+            except Exception as exc:  # noqa: BLE001 - the next manage decides on the close
+                _log("PROTECTION_RETRY", symbol=state.get("symbol"), status="error", reason=type(exc).__name__)
+                return False
+            _log("PROTECTION_RETRY", symbol=state.get("symbol"), status=getattr(result, "status", None),
+                 reason=getattr(result, "reason", None))
+            return False
+        state["protection_close_done"] = True
+        self._put(key, state)
+        try:
+            result = self._broker.close_market(ticket, reason="protection_missing",
+                                               client_id=f"{client}-protect-exit")
+        except Exception as exc:  # noqa: BLE001 - the time exit still applies
+            _log("PROTECTION_CLOSE", symbol=state.get("symbol"), position_id=ticket, status="error",
+                 reason=type(exc).__name__)
+            return True
+        _log("PROTECTION_CLOSE", symbol=state.get("symbol"), position_id=ticket,
+             status=getattr(result, "status", None), reason=getattr(result, "reason", None))
+        return True
+
+    def _rounded(self, symbol, stop):
+        try:
+            spec = self._broker._read().specs.get(symbol)
+        except Exception:  # noqa: BLE001
+            spec = None
+        if spec is None:
+            return stop
+        return stop.quantize(Decimal(1).scaleb(-spec.point_digits), rounding=ROUND_HALF_UP)
+
     def _exits(self, at):
         for key, state in list(self._phase.items()):
             if state.get("exited") or state.get("status") != "filled":
@@ -577,6 +644,8 @@ class SessionCombo:
             if kind == "held":
                 self._adopt(state, row)
                 self._put(key, state)
+                if self._protect(key, state, row, at):
+                    continue
             elif kind == "gone":
                 state["exited"] = True
                 state["status"] = "done"
