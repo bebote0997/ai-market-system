@@ -527,14 +527,40 @@ class ExnessBroker:
         return self.replace_protection(position_ref, new_stop, None, client_id=client_id)
 
     def replace_protection(self, position_ref, stop, target, *, client_id):
+        """Place an ``sltp`` order. The stop has to sit on the losing side of the fill, rounded to ``point_digits``."""
         refused = self._readonly(client_id, ModifyResult)
         if refused is not None:
             return refused
         if not isinstance(stop, Decimal) or not stop.is_finite() or stop <= 0:
             return ModifyResult(REJECTED, client_id, reason="stop_invalid")
+        if target is not None and (not isinstance(target, Decimal) or not target.is_finite() or target <= 0):
+            return ModifyResult(REJECTED, client_id, reason="target_invalid")
+        try:
+            book = self._read()
+        except BrokerUnavailable as exc:
+            return ModifyResult(REJECTED, client_id, reason=f"read_failed:{exc}")
+        match = next((row for row in book.positions if row.ticket == str(position_ref)), None)
+        if match is None:
+            return ModifyResult(REJECTED, client_id, reason="position_not_found")
+        spec = book.specs.get(match.symbol)
+        if spec is None:
+            return ModifyResult(REJECTED, client_id, reason="spec_missing")
+        try:
+            stop_r = _round(stop, spec.point_digits)
+            target_r = None if target is None else _round(target, spec.point_digits)
+        except (ArithmeticError, ValueError):
+            return ModifyResult(REJECTED, client_id, reason="price_rounding")
+        if match.side == "LONG" and not stop_r < match.price:
+            return ModifyResult(REJECTED, client_id, reason="stop_side")
+        if match.side == "SHORT" and not stop_r > match.price:
+            return ModifyResult(REJECTED, client_id, reason="stop_side")
+        if target_r is not None and match.side == "LONG" and not target_r > match.price:
+            return ModifyResult(REJECTED, client_id, reason="target_side")
+        if target_r is not None and match.side == "SHORT" and not target_r < match.price:
+            return ModifyResult(REJECTED, client_id, reason="target_side")
         if not self.note_link():
             return ModifyResult(REJECTED, client_id, reason="quote_stale")
-        return self._send(Command(f"modify-{position_ref}-{client_id}", "MODIFY", "", stop=stop, target=target,
+        return self._send(Command(f"modify-{position_ref}-{client_id}", "MODIFY", "", stop=stop_r, target=target_r,
                                  position_ref=str(position_ref)), client_id, ModifyResult)
 
     def connectivity_report(self):
