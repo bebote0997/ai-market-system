@@ -47,7 +47,8 @@ LONDON_SYMBOL = "USDJPY"
 FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
            "position_id", "volume", "opened_at", "stop", "target", "sltp_sent",
-           "protection_after", "protection_retry_done", "protection_close_done")
+           "protection_after", "protection_retry_done", "protection_close_done",
+           "protection_miss_reads")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
 _FILL_POLLS = 5
@@ -217,7 +218,8 @@ def _blank():
     return {"status": "pending", "client_id": None, "exit_at": None, "exited": False,
             "symbol": None, "side": None, "logged_range": False, "position_id": None,
             "volume": None, "opened_at": None, "stop": None, "target": None, "sltp_sent": None,
-            "protection_after": None, "protection_retry_done": False, "protection_close_done": False}
+            "protection_after": None, "protection_retry_done": False, "protection_close_done": False,
+            "protection_miss_reads": 0}
 
 
 class _SendResult:
@@ -682,13 +684,37 @@ class SessionCombo:
         except Exception:  # noqa: BLE001 - the leg flag still carries sltp_sent
             pass
 
+    def _orders_snapshot_ok(self):
+        """True only when this read's book carries a real ``orders`` list. A missing field is not 'no stop'."""
+        try:
+            book = self._broker._read(fresh=True)
+        except Exception:  # noqa: BLE001
+            return False
+        if getattr(book, "orders_present", True) is False:
+            return False
+        return isinstance(getattr(book, "orders", None), (list, tuple))
+
     def _protect_followup(self, key, state, row, at, asked):
-        """One replace on a later manage if the stop is still missing, then one close. Not on the send manage."""
-        if getattr(row, "stop", None) is not None or state.get("protection_close_done"):
+        """One replace on a later manage if the stop is still missing.
+
+        Closing for ``protection_missing`` needs two consecutive reads that both show no stop and a
+        valid ``orders`` list. A snapshot with no ``orders`` field resets that streak and never closes.
+        The check does not run on the manage that sent the first sltp (``at <= protection_after``).
+        """
+        if state.get("protection_close_done"):
+            return
+        if getattr(row, "stop", None) is not None:
+            state["protection_miss_reads"] = 0
             return
         sent = state.get("protection_after")
         if not isinstance(sent, datetime) or not isinstance(at, datetime) or at <= sent:
             return
+        if not self._orders_snapshot_ok():
+            state["protection_miss_reads"] = 0
+            _log("PROTECTION_ORDERS_ABSENT", symbol=state.get("symbol"))
+            return
+        misses = int(state.get("protection_miss_reads") or 0) + 1
+        state["protection_miss_reads"] = misses
         ticket = getattr(row, "ticket", None)
         if not ticket:
             return
@@ -705,6 +731,8 @@ class SessionCombo:
             state["protection_retry_done"] = True
             _log("PROTECTION_REPLACE", symbol=state.get("symbol"), status=getattr(result, "status", None),
                  reason=getattr(result, "reason", None))
+            return
+        if misses < 2:
             return
         state["protection_close_done"] = True
         done = self._finish_close(ticket, "protection_missing", f"protect-{ticket}", state.get("symbol"), asked)

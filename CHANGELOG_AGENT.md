@@ -8,7 +8,8 @@
 - `replace_protection` redondea al `point_digits` y rechaza un stop (o un target) del lado que no pierde.
 - Una orden `sltp` que quedó suelta no cuenta como orden pendiente en `_position_open`.
 - Si el libro no se puede leer antes de enviar, el resultado es `UNKNOWN` / `book_unread` y el día sigue armado. No es `SIZE_SKIP`.
-- El chequeo de #96 entra aquí: en un manage posterior al envío, un solo replace si falta el stop; en el siguiente, un cierre `protection_missing`. No hay bucle.
+- El chequeo de #96 entra aquí: en un manage posterior al envío, un solo replace si falta el stop. El cierre `protection_missing` espera dos lecturas seguidas sin stop y con el campo `orders` presente. Si el snapshot no trae `orders`, no cierra. El replace cancela las `sltp` viejas de esa posición antes de mandar otra, y si aun así quedan dos, deja una.
+- Un stop en el precio de entrada (breakeven) no pasa la comprobación de lado (`stop` estrictamente por debajo del fill en LONG, por encima en SHORT). Esa regla se deja así: es una limitación conocida.
 - Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy.
 
 ## 2026-11-20 — fill Exness tras ACK, SL/TP y salida de las 11:00

@@ -124,6 +124,44 @@ class ProtectionTests(unittest.TestCase):
         self.assertEqual([c.kind for c in fake.commands], ["MODIFY", "CLOSE"])
         self.assertEqual(json.loads(fake.get_flag(london_key(sent.date())))["status"], "done")
 
+    def test_missing_orders_never_closes_and_two_valid_reads_do(self):
+        sent = ny(2026, 1, 16, 2, 10)
+        _clock, fake, _broker, combo = world(sent)
+        fake.orders_present = False
+        fake.positions.append(Position("4", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.20"),
+                                       comment="combo-lon-2026-01-16-LONG", opened_at=sent))
+        fake.set_flag(london_key(sent.date()), json.dumps({
+            "status": "filled", "position_id": "4", "stop": "149.80", "target": "151.00",
+            "symbol": "USDJPY", "side": "LONG", "exited": False, "sltp_sent": "4",
+            "protection_after": sent.isoformat(), "protection_retry_done": True,
+            "exit_at": ny(2026, 1, 16, 11, 0).isoformat(),
+            "opened_at": sent.isoformat()}))
+        fake.set_flag("sltp_sent_4", "1")
+        combo.tick(sent + timedelta(minutes=30), [])
+        combo.tick(sent + timedelta(minutes=60), [])
+        self.assertEqual([c.kind for c in fake.commands if c.kind == "CLOSE"], [])
+        fake.orders_present = True
+        combo.tick(sent + timedelta(minutes=90), [])
+        self.assertEqual([c.kind for c in fake.commands if c.kind == "CLOSE"], [])
+        combo.tick(sent + timedelta(minutes=120), [])
+        self.assertEqual([c.position_ref for c in fake.commands if c.kind == "CLOSE"], ["4"])
+
+    def test_replace_cancels_existing_sltp_orders_before_sending_another(self):
+        at = ny(2026, 1, 16, 2, 10)
+        _clock, fake, broker, _combo = world(at)
+        fake.positions.append(Position("4", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.200"),
+                                       comment="combo-lon-2026-01-16-LONG"))
+        fake.orders.append(WorkingOrder("a", "USDJPY", "LONG", Decimal("0.01"), Decimal("149.8"),
+                                        kind="sltp", position_id="4"))
+        fake.orders.append(WorkingOrder("b", "USDJPY", "LONG", Decimal("0.01"), Decimal("149.8"),
+                                        kind="sltp", position_id="4"))
+        result = broker.replace_protection("4", Decimal("149.80"), Decimal("151.00"), client_id="sltp-4-2")
+        self.assertNotEqual(result.status, "REJECTED")
+        kinds = [c.kind for c in fake.commands]
+        self.assertEqual(kinds[:2], ["CANCEL", "CANCEL"])
+        self.assertIn("MODIFY", kinds)
+        self.assertEqual([o.ticket for o in fake.orders if o.kind == "sltp"], [])
+
 
 class CloseAckTests(unittest.TestCase):
     def test_http_202_close_is_closed_once_the_position_is_gone(self):

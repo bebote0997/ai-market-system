@@ -91,6 +91,22 @@ def _fraction(value):
     return value
 
 
+def _sltp_ids(book, position_ref):
+    """Order ids of sltp rows linked to this position. Unlinked working orders are left alone."""
+    ref = str(position_ref)
+    found = []
+    for order_id, linked in getattr(book, "sltp_ids", ()) or ():
+        if str(linked) == ref and str(order_id) not in found:
+            found.append(str(order_id))
+    for order in getattr(book, "orders", ()) or ():
+        if str(getattr(order, "kind", "")).lower() != "sltp":
+            continue
+        linked = getattr(order, "position_id", None)
+        if linked is not None and str(linked) == ref and str(order.ticket) not in found:
+            found.append(str(order.ticket))
+    return found
+
+
 def _round(value, digits):
     return value.quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
 
@@ -550,6 +566,8 @@ class ExnessBroker:
             target_r = None if target is None else _round(target, spec.point_digits)
         except (ArithmeticError, ValueError):
             return ModifyResult(REJECTED, client_id, reason="price_rounding")
+        # Known limit: a breakeven stop sits on the fill. ``stop_r < price`` (LONG) and
+        # ``stop_r > price`` (SHORT) reject that stop. This rule is unchanged on purpose.
         if match.side == "LONG" and not stop_r < match.price:
             return ModifyResult(REJECTED, client_id, reason="stop_side")
         if match.side == "SHORT" and not stop_r > match.price:
@@ -560,8 +578,27 @@ class ExnessBroker:
             return ModifyResult(REJECTED, client_id, reason="target_side")
         if not self.note_link():
             return ModifyResult(REJECTED, client_id, reason="quote_stale")
-        return self._send(Command(f"modify-{position_ref}-{client_id}", "MODIFY", "", stop=stop_r, target=target_r,
+        for order_id in _sltp_ids(book, position_ref):
+            cancelled = self._send(Command(f"cancel-sltp-{order_id}-{client_id}", "CANCEL", "",
+                                           position_ref=str(order_id)), client_id, ModifyResult)
+            if getattr(cancelled, "status", None) == "REJECTED":
+                return ModifyResult(REJECTED, client_id, reason="sltp_cancel_failed")
+        sent = self._send(Command(f"modify-{position_ref}-{client_id}", "MODIFY", "", stop=stop_r, target=target_r,
                                  position_ref=str(position_ref)), client_id, ModifyResult)
+        if getattr(sent, "status", None) != "REJECTED":
+            self._leave_one_sltp(position_ref, client_id)
+        return sent
+
+    def _leave_one_sltp(self, position_ref, client_id):
+        """A replace is a new sltp order. Drop every older one so the position never keeps two."""
+        try:
+            book = self._read(fresh=True)
+        except BrokerUnavailable:
+            return
+        linked = _sltp_ids(book, position_ref)
+        for order_id in linked[:-1]:
+            self._send(Command(f"cancel-extra-{order_id}-{client_id}", "CANCEL", "", position_ref=str(order_id)),
+                       client_id, ModifyResult)
 
     def connectivity_report(self):
         book = self._read()

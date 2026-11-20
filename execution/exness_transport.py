@@ -42,6 +42,7 @@ class WorkingOrder:
     stop: Optional[Decimal] = None
     target: Optional[Decimal] = None
     kind: str = "limit"
+    position_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,8 @@ class Book:
     specs: dict
     quotes: QuoteBook
     currency: str = ""
+    orders_present: bool = True
+    sltp_ids: tuple = ()
 
     def token(self):
         positions = tuple((p.ticket, p.side, format(p.volume, "f")) for p in self.positions)
@@ -141,6 +144,25 @@ def _order_kind(item):
     return ""
 
 
+def _snapshot_orders(snapshot):
+    """``(orders, sltp_ids)``. ``orders`` is None when the field is missing or not a list.
+
+    ``sltp_ids`` is ``(order_id, position_id)`` for every sltp row, including one with no side.
+    Those rows never become working orders, but a replace still has to cancel them.
+    """
+    if not isinstance(snapshot, dict) or "orders" not in snapshot or not isinstance(snapshot.get("orders"), list):
+        return None, ()
+    ids = []
+    for item in snapshot["orders"]:
+        if not isinstance(item, dict) or _order_kind(item) != "sltp":
+            continue
+        order_id = _ticket(item.get("order_id") if item.get("order_id") is not None else item.get("id"))
+        position_id = _ticket(item.get("position_id"))
+        if order_id and position_id:
+            ids.append((order_id, position_id))
+    return snapshot["orders"], tuple(ids)
+
+
 def _sltp_by_position(items):
     """``{position_id: (stop, target)}`` from active ``sltp`` orders.
 
@@ -202,7 +224,8 @@ class FakeExnessTransport:
             if spec is not None:
                 specs[name] = spec
         return Book(self.balance, tuple(self.positions), tuple(self.orders), tuple(self.instruments), specs,
-                    self.quotes, currency or "")
+                    self.quotes, currency or "", orders_present=getattr(self, "orders_present", True),
+                    sltp_ids=tuple(getattr(self, "sltp_ids", ())))
 
     def submit(self, command):
         prior = self._done.get(command.idempotency_key)
@@ -301,7 +324,8 @@ class RestExnessTransport:
             if spec is not None:
                 specs[name] = spec
         positions, orders = [], []
-        protection = _sltp_by_position(snapshot.get("orders") or [])
+        raw_orders, sltp_ids = _snapshot_orders(snapshot)
+        protection = _sltp_by_position(raw_orders or [])
         for item in snapshot.get("positions") or []:
             if not isinstance(item, dict):
                 continue
@@ -334,7 +358,8 @@ class RestExnessTransport:
             orders.append(WorkingOrder(ticket, str(item.get("instrument") or ""), side, volume, price,
                                        _dec(item.get("stop_loss_price")), _dec(item.get("take_profit_price")), kind))
         return Book(money, tuple(positions), tuple(orders), instruments, specs, self.quotes,
-                    "" if money is None else money.currency)
+                    "" if money is None else money.currency,
+                    orders_present=raw_orders is not None, sltp_ids=sltp_ids)
 
     def submit(self, command):
         account = self._client.account_id
