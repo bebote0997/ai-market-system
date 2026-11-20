@@ -247,16 +247,21 @@ def sidecar_status(path):
 
 
 # --- F01-T12 persistent disk ---------------------------------------------------------------------------------------
-def probe_disk(runtime_dir, health, *, now, expected_files=("trading_floor.db",)):
-    """Existence, permissions and raw free space. Writes nothing to the runtime directory."""
+def probe_disk(runtime_dir, health, *, now, expected_files=("trading_floor.db",), disk_usage=shutil.disk_usage):
+    """Existence, permissions and free space. Writes nothing to the runtime directory.
+
+    Used space at or above 80% is DEGRADED (``DISK_USAGE_WARNING``). Below that, the probe stays a success
+    when the directory is usable and the expected files are present.
+    """
     path = Path(runtime_dir)
     oid = observation_id("disk", str(path), now.isoformat())
     try:
         if not path.is_dir():
             raise FileNotFoundError("runtime path missing or not a directory")
-        usage = shutil.disk_usage(path)
+        usage = disk_usage(path)
+        ratio = (usage.total - usage.free) / usage.total if usage.total else 0
         details = {"readable": os.access(path, os.R_OK), "writable": os.access(path, os.W_OK),
-                   "free_bytes": usage.free, "total_bytes": usage.total,
+                   "free_bytes": usage.free, "total_bytes": usage.total, "used_ratio": ratio,
                    "expected_files_present": all((path / name).is_file() for name in expected_files)}
     except Exception as exc:  # noqa: BLE001 - observational boundary
         health.record_error("persistent_disk", at=now, observation_id=oid, component_error=ComponentErrorType.DISK_ERROR,
@@ -268,7 +273,10 @@ def probe_disk(runtime_dir, health, *, now, expected_files=("trading_floor.db",)
     elif not details["expected_files_present"]:
         health.record_state("persistent_disk", at=now, observation_id=oid, status=HealthStatus.DEGRADED,
                             reason="expected runtime files not visible", details=details)
-    else:  # No free-space threshold exists: raw evidence only (OWNER DECISION REQUIRED).
+    elif details["used_ratio"] >= 0.80:
+        health.record_state("persistent_disk", at=now, observation_id=oid, status=HealthStatus.DEGRADED,
+                            reason="disk usage at or above 80 percent", details=details)
+    else:
         health.record_success("persistent_disk", at=now, observation_id=oid, details=details)
     return details
 

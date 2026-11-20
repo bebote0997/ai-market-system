@@ -208,8 +208,19 @@ class OperationalRuntime:
         """Process start. With the halt gate every write is a STARTUP site (``startup_write``): refused after T_h,
         and on POSIX a halt signal is deferred across each check + write. OFF: unchanged."""
         gate = self.halt_gate
+        try:
+            from storage.disk_guard import maintain_disk
+            maintain_disk(self.store)
+        except Exception:  # noqa: BLE001 - retention never blocks startup
+            pass
         with startup_write(gate, "recover"):
-            self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
+            try:
+                self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
+            except sqlite3.OperationalError as exc:
+                from storage.disk_guard import is_disk_full, log_disk_full
+                if not is_disk_full(exc):
+                    raise
+                log_disk_full("recover")
         if self.sealed_context is not None:  # V2 P2b gate steps 2-5, before any economic write
             from runtime.genesis import seal_check
             with startup_write(gate, "genesis_seal_check"):

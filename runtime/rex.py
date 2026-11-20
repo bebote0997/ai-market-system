@@ -191,6 +191,10 @@ class RexRecorder:
             self.failures.append({"where": str(where), "error_type": _error_name(exc)})
             LOG.warning("run_id=%s symbol=%s component=rex event=REX_FAILURE where=%s error_type=%s",
                         self.run_id, self.symbol, where, _error_name(exc))
+            from storage.disk_guard import is_disk_full, log_disk_full
+            if is_disk_full(exc):
+                log_disk_full(f"rex:{where}")
+                return  # another journal insert would fail the same way and must not escape
             if self.halt_gate is not None and self.halt_gate.halted:
                 return  # V2 P4a: REX_FAILURE is not R evidence; after T_h it is logged only (the run stays incomplete)
             with self.store.transaction():
@@ -424,6 +428,10 @@ class RexStore:
             changes = _total_changes(self._store)
             _isolated(lambda exc=exc: self._recorder.after_write(token, broker, None, error=_error_name(exc),
                                                          total_changes_after_save=changes))
+            from storage.disk_guard import is_disk_full, log_disk_full
+            if is_disk_full(exc):
+                log_disk_full("rex:save_paper")
+                return False
             raise
         t_stop = self._t_stop_ns()
         _isolated(lambda: self._recorder.save_returned(t_stop))

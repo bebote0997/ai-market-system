@@ -54,8 +54,11 @@ def scheduler_health_detail(path, now=None, limit_seconds=WATCHDOG_STALE_SECONDS
             detail["scheduler"] = store.get_state("scheduler")
             if heartbeat:
                 age = (now - parse_utc(heartbeat)).total_seconds()
-                detail["heartbeat_age_seconds"] = int(age)
-                detail["healthy"] = detail["scheduler"] == "RUNNING" and 0 <= age <= limit_seconds
+                # int(-0.4) is 0. The old lower bound `0 <= age` then logged SCHEDULER_STALE with
+                # heartbeat_age_s=0 for a heartbeat that had just been written on a slightly faster clock.
+                detail["heartbeat_age_seconds"] = 0 if age < 0 else int(age)
+                detail["healthy"] = (detail["scheduler"] == "RUNNING"
+                                     and -2 <= age <= limit_seconds)
         finally:
             store.close()
     except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
@@ -76,6 +79,11 @@ def check_scheduler_or_raise(path):
         _sleep(WATCHDOG_RETRY_SECONDS)
         detail = scheduler_health_detail(path)
     if detail["healthy"]:
+        try:
+            from storage.disk_guard import warn_if_tight
+            warn_if_tight(Path(path).parent)
+        except Exception:  # noqa: BLE001 - a usage check never restarts the service
+            pass
         return detail
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.INFO, stream=sys.stdout)

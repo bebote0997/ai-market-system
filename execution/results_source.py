@@ -38,3 +38,17 @@ def demo_results(env=None):
         return oanda_only(env) or env.get("AI_FLOOR_BROKER_DEMO_ROUTING") == "1"
     except Exception:  # noqa: BLE001
         return False
+
+
+def results_label(env=None):
+    """Broker label for logs and the daily summary. Exness wins over a leftover ``OANDA_DEMO`` results source."""
+    env = _env(env)
+    try:
+        raw = env.get("AI_FLOOR_BROKER")
+        if isinstance(raw, str) and raw.strip().lower() == "exness":
+            return "EXNESS"
+    except Exception:  # noqa: BLE001
+        pass
+    if demo_results(env):
+        return "OANDA_DEMO"
+    return "PAPER"

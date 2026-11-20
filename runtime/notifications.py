@@ -52,11 +52,20 @@ PROVIDER_FAILURE_EVENTS = frozenset({"PROVIDER_FAILURE", "AUTH_ERROR", "ENTITLEM
 def provider_failure_execution(payload):
     """``{"reason": "provider=openai http_status=429 error_code=…", ...}`` or None when no field is available.
 
-    Only allow-listed, token-shaped fields are copied (never a body, URL, header or key)."""
-    from ai.outcomes import provider_failure_reason, sanitize_provider_detail
+    Only allow-listed, token-shaped fields are copied (never a body, URL, header or key).
+    ``outcome`` is included when it is a short token (``TIMEOUT``), so a soft failure can be told from a hard one.
+    """
+    from ai.outcomes import _token, provider_failure_reason, sanitize_provider_detail
     detail = sanitize_provider_detail(payload)
+    outcome = _token(payload.get("outcome")) if isinstance(payload, dict) else None
+    if outcome:
+        detail["outcome"] = outcome
     reason = provider_failure_reason(detail)
-    return None if reason is None else {"reason": reason, **detail}
+    if reason is None and outcome is None:
+        return None
+    if reason is None:
+        return {"reason": f"outcome={outcome}", "outcome": outcome}
+    return {"reason": reason, **detail}
 
 
 class NotificationSink(Protocol):
@@ -132,7 +141,7 @@ class SlackNotificationSink:
         Slack and the OANDA demo email are attempted independently (each once): the email goes out with a Gmail-only
         setup and after a Slack failure; the delivery record (raised error) reflects the Slack outcome, the email
         outcome is logged on its own."""
-        source = "OANDA_DEMO" if _routing_on() else "PAPER"
+        source = _summary_source()
         if not self.webhook_url and (source == "PAPER" or not _daily_email_configured()):
             raise SlackNotificationError("NOT_CONFIGURED")  # no channel: no OANDA read
         summary = event.daily_summary or {}
@@ -174,8 +183,13 @@ PAPER_LABELS = {"EXECUTION_DECISION": "Decisión de ejecución PAPER", "POSITION
 
 def compact_payload(event):
     """Compact Floor-style Slack payload for a non-summary event, or None when it is not sent: macro / per-agent
-    events are folded; PAPER trade events are not sent in OANDA-demo results mode (no PAPER numbers ever)."""
+    events are folded; PAPER trade events are not sent in OANDA-demo results mode (no PAPER numbers ever).
+    An xAI TIMEOUT or an fxmacro provider failure is folded into the daily count instead of an immediate alert.
+    """
+    from runtime.alert_catalog import soft_provider_failure
     from runtime.trade_alerts import SYSTEM_LABELS, system_slack_payload
+    if soft_provider_failure(event):
+        return None
     if event.type in FOLDED_TYPES:
         return None
     execution = event.execution or {}
@@ -236,6 +250,17 @@ def _email_daily_summary(alert, event_id, date="-"):
             LOG.info("component=notifications event=DAILY_SUMMARY_EMAIL_SENT date=%s", date)
     except Exception as exc:  # noqa: BLE001
         LOG.warning("component=notifications event=DAILY_SUMMARY_EMAIL_FAILED error_type=%s", type(exc).__name__)
+
+
+def _summary_source():
+    """``EXNESS`` when that broker is selected, even if ``AI_FLOOR_RESULTS_SOURCE`` is still ``OANDA_DEMO``."""
+    try:
+        raw = os.environ.get("AI_FLOOR_BROKER")
+        if isinstance(raw, str) and raw.strip().lower() == "exness":
+            return "EXNESS"
+    except Exception:  # noqa: BLE001 - unreadable env: the previous PAPER / OANDA split
+        pass
+    return "OANDA_DEMO" if _routing_on() else "PAPER"
 
 
 def _routing_on():

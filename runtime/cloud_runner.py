@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import sqlite3
 import sys
 import time
 
@@ -145,8 +146,15 @@ def main():
                 started = time.monotonic()
                 _arm_stall_dump()
                 try:
-                    runner.tick()
-                    runner.daily_summary(datetime.now(timezone.utc))
+                    try:
+                        runner.tick()
+                        runner.daily_summary(datetime.now(timezone.utc))
+                    except sqlite3.OperationalError as exc:
+                        from storage.disk_guard import is_disk_full, log_disk_full
+                        if not is_disk_full(exc):
+                            raise
+                        # A full disk must not exit the process: Render would restart it into the same error.
+                        log_disk_full("tick")
                 finally:
                     _disarm_stall_dump(started)
                 _idle(runner, lambda: stop)

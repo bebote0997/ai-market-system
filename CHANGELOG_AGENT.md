@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-11-20 — endurecimiento de operación (alertas, disco, etiqueta, reintento, adopt)
+
+- Un `PROVIDER_FAILURE` de xAI con resultado `TIMEOUT`, y un fallo del proveedor fxmacro/fxmacrodata, no se envían como HIGH. Siguen en el diario y en el conteo del resumen. `RUN_FAILED` y `TICK_FAILED` siguen en HIGH.
+- `database or disk is full` no tumba el proceso: `recover` al arrancar lo anota y sigue, el tick del runner lo anota y sigue, y `RexStore.save_paper` devuelve falso. `storage/database.py` no se toca (su hash sigue fijado). El registro REX no intenta otra escritura. Al arrancar se borran filas REX de más de 14 días y archivos viejos de `archive/`, menos el más nuevo. A partir del 80 % de disco hay un aviso `DISK_USAGE_WARNING`.
+- El resumen diario anota `source=EXNESS` cuando `AI_FLOOR_BROKER=exness`, aunque `AI_FLOOR_RESULTS_SOURCE` siga en `OANDA_DEMO`.
+- Exness no usa un token con caducidad. La firma es `EXN-API-KEY` + `EXN-TIMESTAMP` + HMAC. El 401 `AUTH_INVALID_API_KEY` del 19 de noviembre (~17:02 ET, recuperado hacia las 17:10 sin cambiar la clave) encaja con un rechazo transitorio o un access point cacheado. Hay un solo reintento tras olvidar ese access point. No se rota ninguna clave.
+- `python -m execution.combo_admin` lista las patas. `--adopt` escribe `combo_lon` solo con `AI_FLOOR_COMBO_ADOPT_CONFIRM=COMBO_ADOPT_AUTHORIZED`, deja una fila de auditoría y no añade botones al panel.
+- Un latido hasta 2 s por delante del reloj del watchdog es sano. Antes, `int` de una edad negativa daba `heartbeat_age_s=0` y `SCHEDULER_STALE`.
+- Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy.
+
 ## 2026-11-20 — seguimientos del session combo (sobre #97)
 
 - `_await_held` espera 0,2 s, 0,4 s, 0,8 s y 1,6 s entre lecturas. La primera es inmediata.

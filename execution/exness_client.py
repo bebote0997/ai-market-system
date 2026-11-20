@@ -10,10 +10,16 @@ It is not rejected, and the wait is not a retry of HTTP 429. TODO: parse
 from collections import deque
 from datetime import datetime, timezone
 import json
+import logging
 import re
 from threading import Lock
 import time
 from urllib.parse import urlsplit
+
+# Auth is a signed header (EXN-API-KEY + EXN-TIMESTAMP + HMAC), not a bearer token and not a refresh token.
+# There is nothing to expire in this process. A single HTTP 401 AUTH_INVALID_API_KEY (seen once on
+# 2026-11-19 ~17:02 ET, gone by 17:10 without a key change) is retried once after the cached access point
+# is dropped. That covers a stale trading host. It does not rotate the key and it does not retry any other 401.
 
 from execution.exness_sign import headers
 
@@ -105,6 +111,13 @@ def normalize_gateway(raw):
 def _host_ok(url):
     parts = urlsplit(url if isinstance(url, str) else "")
     return parts.scheme == "https" and bool(parts.hostname) and not parts.username and not parts.password and not parts.query and not parts.fragment
+
+
+LOG = logging.getLogger("ai_floor.exness")
+
+
+def _auth_invalid(status, payload):
+    return status == 401 and isinstance(payload, dict) and payload.get("error_message") == "AUTH_INVALID_API_KEY"
 
 
 def _local_reason(payload):
@@ -237,25 +250,42 @@ class ExnessClient:
             if self._mono_ms() <= before:
                 return "stalled"
 
+    def _drop_access_point(self):
+        """One line, no host and no key. The next call discovers again."""
+        LOG.warning("component=exness event=AUTH_RETRY code=AUTH_INVALID_API_KEY")
+        self.access_point = None
+
     def discover(self):
         if self.access_point:
             return self.access_point
+        return self._discover(True)
+
+    def _discover(self, retry):
         path = f"/v1/trading/access-point?account_id={self.account_id}"
         status, payload, _headers, sent = self._request(self.gateway, "GET", path, None, "")
         if not sent:
             raise RuntimeError(f"rate_limited:{_local_reason(payload)}:access_point")
         point = payload.get("access_point") if status == 200 else None
         if not _host_ok(point):
+            if retry and _auth_invalid(status, payload):
+                self._drop_access_point()
+                return self._discover(False)
             raise RuntimeError(f"access_point_unavailable:{status}:{_error_code(payload)}")
         self.access_point = point.rstrip("/")
         return self.access_point
 
     def get_json(self, path):
+        return self._get(path, True)
+
+    def _get(self, path, retry):
         base = self.discover()
         status, payload, _headers, sent = self._request(base, "GET", path, None, "")
         if not sent:
             raise RuntimeError(f"rate_limited:{_local_reason(payload)}:{operation_name(path)}")
         if status != 200:
+            if retry and _auth_invalid(status, payload):
+                self._drop_access_point()
+                return self._get(path, False)
             raise RuntimeError(f"read_failed:{status}:{_error_code(payload)}:{operation_name(path)}")
         return payload
 
@@ -265,6 +295,9 @@ class ExnessClient:
         prior = self._sent.get(idempotency_key)
         if prior is not None:
             return prior
+        return self._mutate(method, path, body, idempotency_key, True)
+
+    def _mutate(self, method, path, body, idempotency_key, retry):
         base = self.discover()
         try:
             status, payload, _headers, sent = self._request(base, method, path, body, idempotency_key)
@@ -275,6 +308,9 @@ class ExnessClient:
             return result
         if not sent:
             return {"status": status, "payload": payload, "uncertain": False}
+        if retry and _auth_invalid(status, payload):
+            self._drop_access_point()
+            return self._mutate(method, path, body, idempotency_key, False)
         result = {"status": status, "payload": payload, "uncertain": status >= 500 or status == 0}
         self._sent[idempotency_key] = result
         return result
