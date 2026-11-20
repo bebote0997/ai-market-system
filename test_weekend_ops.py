@@ -89,6 +89,11 @@ class DiskTests(unittest.TestCase):
         self.store.event(old, "r", "EURUSD", "runtime", "RUN_FAILED", "ERROR", {})
         removed = prune_rex_journal(self.store, now=NOW)
         self.assertEqual(removed, 1)
+        with patch.dict(os.environ, {"AI_FLOOR_V2_SEALED_GENESIS": "1"}):
+            with self.assertLogs("ai_floor.disk", "INFO") as logs:
+                self.assertEqual(prune_rex_journal(self.store, now=NOW), 0)
+        self.assertIn("REX_PRUNE_SKIPPED", logs.output[0])
+        self.assertEqual([row["event_type"] for row in self.store.journal(limit=10)].count("REX_WRITE"), 1)
         kinds = [row["event_type"] for row in self.store.journal(limit=10)]
         self.assertEqual(kinds.count("REX_WRITE"), 1)
         self.assertIn("RUN_FAILED", kinds)
@@ -187,6 +192,34 @@ class AuthRetryTests(unittest.TestCase):
             client.get_json("/v1/trading/accounts/100/snapshot")
         self.assertEqual(sum(1 for url in calls if url.endswith("/snapshot")), 2)
 
+    def test_post_401_is_retried_once_and_opens_one_position(self):
+        posts = []
+        opened = []
+
+        def caller(method, url, headers, body):
+            if "access-point" in url:
+                return 200, {"access_point": "https://trade.example"}, {}
+            if method == "POST" and url.endswith("/positions"):
+                posts.append(headers.get("EXN-IDEMPOTENCY-KEY"))
+                if len(posts) == 1:
+                    return 401, {"error_message": "AUTH_INVALID_API_KEY"}, {}
+                opened.append(json.loads(body))
+                return 200, {"position_id": "77"}, {}
+            return 200, {}, {}
+
+        client = _client(caller)
+        body = {"instrument": "USDJPY", "side": "buy", "volume": "0.01"}
+        with self.assertLogs("ai_floor.exness", "WARNING"):
+            result = client.mutate("POST", "/v1/trading/accounts/100/positions", body, "open-1")
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(len(set(posts)), 1)
+        self.assertEqual(opened, [body])
+        again = client.mutate("POST", "/v1/trading/accounts/100/positions", body, "open-1")
+        self.assertEqual(again["status"], 200)
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(len(opened), 1)
+
 
 class AdoptTests(unittest.TestCase):
     def test_adopt_is_read_only_until_the_confirm_token(self):
@@ -196,7 +229,9 @@ class AdoptTests(unittest.TestCase):
         self.assertFalse(plan["wrote"])
         self.assertEqual(plan["reason"], "confirm_required")
         self.assertEqual(inspect_flags(store), [])
-        done = adopt_position(store, day=day, position_id="998877", symbol="USDJPY", side="LONG", confirm=CONFIRM)
+        book = [{"ticket": "998877", "symbol": "USDJPY", "side": "LONG"}]
+        done = adopt_position(store, day=day, position_id="998877", symbol="USDJPY", side="LONG",
+                              confirm=CONFIRM, positions=book)
         self.assertTrue(done["wrote"])
         saved = json.loads(store.get_flag("combo_lon_2026-11-18"))
         self.assertEqual(saved["status"], "filled")
@@ -204,6 +239,27 @@ class AdoptTests(unittest.TestCase):
         audit = json.loads(store.get_flag("combo_admin_audit"))
         self.assertEqual(audit[0]["position_tail"], "8877")
         self.assertNotIn("998877", json.dumps(audit))
+
+    def test_adopt_rejects_a_different_fill_a_closed_flag_and_a_missing_ticket(self):
+        store = MemoryFlags()
+        day = datetime(2026, 11, 18, tzinfo=timezone.utc).date()
+        key = "combo_lon_2026-11-18"
+        book = [{"ticket": "111", "symbol": "USDJPY", "side": "LONG"}]
+        store.set_flag(key, json.dumps({"status": "filled", "position_id": "222", "exited": False}))
+        clash = adopt_position(store, day=day, position_id="111", symbol="USDJPY", side="LONG",
+                               confirm=CONFIRM, positions=book)
+        self.assertEqual(clash["reason"], "position_conflict")
+        self.assertEqual(json.loads(store.get_flag(key))["position_id"], "222")
+        store.set_flag(key, json.dumps({"status": "done", "position_id": "111", "exited": True}))
+        closed = adopt_position(store, day=day, position_id="111", symbol="USDJPY", side="LONG",
+                                confirm=CONFIRM, positions=book)
+        self.assertEqual(closed["reason"], "already_closed")
+        self.assertTrue(json.loads(store.get_flag(key))["exited"])
+        store.set_flag(key, json.dumps({"status": "pending", "exited": False}))
+        missing = adopt_position(store, day=day, position_id="111", symbol="EURUSD", side="LONG",
+                                 confirm=CONFIRM, positions=book)
+        self.assertEqual(missing["reason"], "not_in_book")
+        self.assertEqual(json.loads(store.get_flag(key))["status"], "pending")
 
     def test_cli_default_prints_status_only(self):
         tmp = tempfile.TemporaryDirectory()

@@ -61,7 +61,27 @@ def _audit(store, entry):
     store.set_flag(AUDIT_KEY, json.dumps(prior[-_AUDIT_CAP:], sort_keys=True))
 
 
-def adopt_position(store, *, day, position_id, symbol, side, confirm=None, now=None):
+def _book_matches(positions, ticket, symbol, side):
+    """True when the open-position snapshot has this ticket with the same symbol and side."""
+    if positions is None:
+        return False
+    try:
+        rows = list(positions)
+    except TypeError:
+        return False
+    for row in rows:
+        if isinstance(row, dict):
+            got_ticket, got_symbol, got_side = row.get("ticket"), row.get("symbol"), row.get("side")
+        else:
+            got_ticket = getattr(row, "ticket", None)
+            got_symbol = getattr(row, "symbol", None)
+            got_side = getattr(row, "side", None)
+        if str(got_ticket) == ticket:
+            return str(got_symbol) == symbol and str(got_side) == side
+    return False
+
+
+def adopt_position(store, *, day, position_id, symbol, side, confirm=None, now=None, positions=None):
     """Plan by default. Writes the ``combo_lon`` flag only when ``confirm`` is the exact token.
 
     The returned dict never includes a host, a key, or an account id. ``wrote`` is false unless the flag changed.
@@ -93,9 +113,20 @@ def adopt_position(store, *, day, position_id, symbol, side, confirm=None, now=N
             parsed = None
         if isinstance(parsed, dict):
             state.update({field: parsed.get(field, state[field]) for field in state})
+    if state.get("exited") or state.get("status") in ("done", "cancelled"):
+        plan["reason"] = "already_closed"
+        return plan
+    held = state.get("position_id")
+    if state.get("status") == "filled" and held and str(held) != ticket:
+        plan["reason"] = "position_conflict"
+        return plan
+    if not _book_matches(positions, ticket, symbol, side):
+        plan["reason"] = "not_in_book"
+        return plan
     state.update(status="filled", symbol=symbol, side=side, position_id=ticket,
-                 client_id=state.get("client_id") or f"combo-lon-{day.isoformat()}-{side}",
-                 exited=False)
+                 client_id=state.get("client_id") or f"combo-lon-{day.isoformat()}-{side}")
+    if "exited" not in state:
+        state["exited"] = False
     payload = dict(state)
     store.set_flag(key, json.dumps(payload, sort_keys=True, default=str))
     _audit(store, {"at": now.isoformat(), "event": "ADOPT", "key": key, "symbol": symbol, "side": side,

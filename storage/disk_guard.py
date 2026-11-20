@@ -6,6 +6,7 @@ copies. It never runs a purge and never deletes the newest archive.
 """
 from datetime import datetime, timedelta, timezone
 import logging
+import os
 import shutil
 import sqlite3
 import time
@@ -79,8 +80,23 @@ def reset_disk_warning():
     _warned = False
 
 
-def prune_rex_journal(store, *, keep_days=REX_KEEP_DAYS, now=None):
-    """Delete REX journal rows older than ``keep_days``. Returns the number removed. Other rows stay."""
+def _sealed_genesis_on(env):
+    """True when ``AI_FLOOR_V2_SEALED_GENESIS`` is set to anything other than empty or ``0``."""
+    try:
+        raw = (os.environ if env is None else env).get("AI_FLOOR_V2_SEALED_GENESIS", "")
+    except Exception:  # noqa: BLE001
+        return False
+    return str(raw).strip() not in ("", "0")
+
+
+def prune_rex_journal(store, *, keep_days=REX_KEEP_DAYS, now=None, env=None):
+    """Delete REX journal rows older than ``keep_days``. Returns the number removed. Other rows stay.
+
+    A sealed genesis treats the REX journal as part of the chain. Pruning is skipped entirely.
+    """
+    if _sealed_genesis_on(env):
+        LOG.info("component=storage event=REX_PRUNE_SKIPPED reason=sealed_genesis")
+        return 0
     now = now or datetime.now(timezone.utc)
     cutoff = utc(now - timedelta(days=keep_days))
     with store.transaction():
