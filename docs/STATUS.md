@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Las insignias de ejecución del panel leen el mismo armado que el adaptador Exness, sin cambiarlo. Con las dos claves exactas dicen «Ejecución real activa · Exness». El lateral deja el experimento y muestra los pares del session combo. Sigue sin cambio de ejecución, frenos, flags ni reinicio. Sin merge, sin deploy._
+_Última actualización: 2026-11-20 (rama `cursor/exness-ack-fill-sltp-exit-a8ed`). El ack HTTP 200/202 de Exness (transporte `UNKNOWN`) se adopta releyendo la posición; no queda `SIZE_SKIP` ni unfilled sin esa confirmación. Si la posición no trae SL/TP, se coloca la orden `sltp` aunque falle la adopción. `read_state` lee el SL/TP de la orden `sltp` (issue #95). La salida `london_1100` cierra por el ticket vivo aunque `combo_lon` no tenga id. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos, disco, dashboard, OANDA ni #96. Sin merge, sin deploy._
+
+_Anterior: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Las insignias de ejecución del panel leen el mismo armado que el adaptador Exness, sin cambiarlo. Con las dos claves exactas dicen «Ejecución real activa · Exness». El lateral deja el experimento y muestra los pares del session combo. Sigue sin cambio de ejecución, frenos, flags ni reinicio. Sin merge, sin deploy._
 
 _Anterior: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Con `AI_FLOOR_BROKER=exness` el panel y el resumen en español dicen Exness Standard Cent (USC), muestran saldo y equity (USC y USD = USC/100) y los frenos guardados, en solo lectura. El día 1 y el contador de operaciones empiezan en la primera orden real de Exness posterior al corte; antes, «Esperando primera operación real», día 0 y 0 operaciones. Lo de OANDA práctica queda en «Histórico OANDA práctica». No cambia ejecución, frenos, flags ni el reinicio. Sin merge, sin deploy._
 

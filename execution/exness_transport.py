@@ -130,6 +130,39 @@ def _jpy_price(quotes):
     return slot.bid
 
 
+_SLTP_DONE = ("filled", "cancelled", "canceled", "rejected")
+
+
+def _order_kind(item):
+    for key in ("order_type", "type"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return ""
+
+
+def _sltp_by_position(items):
+    """``{position_id: (stop, target)}`` from active ``sltp`` orders.
+
+    The OpenAPI Position object has no stop or take-profit. Those prices live on a separate order with
+    ``order_type`` or ``type`` ``sltp`` and ``position_id``. Its direction, price and volume may be omitted.
+    """
+    found = {}
+    for item in items:
+        if not isinstance(item, dict) or _order_kind(item) != "sltp":
+            continue
+        state = item.get("state")
+        if isinstance(state, str) and state.strip().lower() in _SLTP_DONE:
+            continue
+        ref = _ticket(item.get("position_id"))
+        if ref is None:
+            continue
+        stop, target = _dec(item.get("stop_loss_price")), _dec(item.get("take_profit_price"))
+        prior_stop, prior_target = found.get(ref, (None, None))
+        found[ref] = (stop if stop is not None else prior_stop, target if target is not None else prior_target)
+    return found
+
+
 class FakeExnessTransport:
     """In-memory terminal. The same idempotency key never opens a second position."""
 
@@ -268,6 +301,7 @@ class RestExnessTransport:
             if spec is not None:
                 specs[name] = spec
         positions, orders = [], []
+        protection = _sltp_by_position(snapshot.get("orders") or [])
         for item in snapshot.get("positions") or []:
             if not isinstance(item, dict):
                 continue
@@ -280,8 +314,11 @@ class RestExnessTransport:
             if volume is None or price is None or ticket is None:
                 continue
             comment = item.get("comment") if isinstance(item.get("comment"), str) and item.get("comment") else item.get("client_request_id")
+            linked_stop, linked_target = protection.get(ticket, (None, None))
+            stop, target = _dec(item.get("stop_loss_price")), _dec(item.get("take_profit_price"))
             positions.append(Position(ticket, str(item.get("instrument") or ""), side, volume, price,
-                                      _dec(item.get("stop_loss_price")), _dec(item.get("take_profit_price")),
+                                      stop if stop is not None else linked_stop,
+                                      target if target is not None else linked_target,
                                       comment if isinstance(comment, str) else ""))
         for item in snapshot.get("orders") or []:
             if not isinstance(item, dict):

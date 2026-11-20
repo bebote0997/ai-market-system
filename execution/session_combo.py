@@ -16,6 +16,12 @@ day's trade again.
 The fill is the live ask (LONG) or bid (SHORT). Stop stays at the other side of the range (London) or 30 pips
 from that fill (fix). Take-profit, when there is one, is twice the actual fill-to-stop distance. If the minimum
 lot would risk more than the lesser of 1% and $5 at that distance, the trade is not sent.
+
+An HTTP 200/202 from Exness is ``UNKNOWN`` (the body is an ack, not a fill). That ack is not a skip: the
+position is read again until it is visible, and only then is the leg ``filled``. Until that read confirms
+it, the leg stays ``submitted`` and nothing is logged as ``SIZE_SKIP`` or unfilled. A position that is open
+still gets an ``sltp`` order when its stop (and take-profit, when the leg has one) is missing, even if the
+position id was not stored. The 11:00 ET exit closes the live ticket, including when ``combo_lon`` has no id.
 """
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -39,9 +45,11 @@ PIP = {"USDJPY": Decimal("0.01"), "EURUSD": Decimal("0.0001"), "GBPUSD": Decimal
 LONDON_SYMBOL = "USDJPY"
 FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
-           "position_id", "volume", "opened_at")
+           "position_id", "volume", "opened_at", "stop", "target")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
+_FILL_POLLS = 5
+_SLTP_ATTEMPTS = 3
 # The 7-hour window is 84 M5 bars. The first and the last alone are not a range.
 MIN_RANGE_BARS = 3
 
@@ -204,7 +212,32 @@ def _log(event, **detail):
 def _blank():
     return {"status": "pending", "client_id": None, "exit_at": None, "exited": False,
             "symbol": None, "side": None, "logged_range": False, "position_id": None,
-            "volume": None, "opened_at": None}
+            "volume": None, "opened_at": None, "stop": None, "target": None}
+
+
+def _as_decimal(value):
+    if isinstance(value, Decimal):
+        return value if value.is_finite() else None
+    if value is None or value == "":
+        return None
+    try:
+        out = Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        return None
+    return out if out.is_finite() else None
+
+
+def _london_exit_due(comment, at):
+    """True when ``comment`` is ``combo-lon-YYYY-MM-DD-...`` and ``at`` is at or after 11:00 ET that day."""
+    text = str(comment or "")
+    marker = "combo-lon-"
+    if not text.startswith(marker):
+        return False
+    try:
+        day = datetime.strptime(text[len(marker):len(marker) + 10], "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return at >= datetime.combine(day, time(11, 0), tzinfo=NY)
 
 
 def london_key(day):
@@ -221,6 +254,8 @@ class SessionCombo:
         self._store = store if store is not None else broker.flag_store
         self._phase = {}
         self._logged_bars = False
+        self._sltp_attempts = {}
+        self._sltp_sent = set()
 
     def tick(self, at, bars):
         if not _aware(at):
@@ -298,20 +333,16 @@ class SessionCombo:
             except Exception:  # noqa: BLE001
                 continue
             if kind == "held":
-                self._adopt(state, row)
+                self._settle_fill(state, row)
                 state["status"] = "filled"
                 self._put(key, state)
                 continue
-            if kind != "gone":
+            if kind == "gone":
                 state["status"] = "done"
                 state["exited"] = True
                 self._put(key, state)
-                _log("SIZE_SKIP", symbol=state.get("symbol"), reason="restart_unconfirmed")
                 continue
-            state["status"] = "done"
-            state["exited"] = True
-            self._put(key, state)
-            _log("SIZE_SKIP", symbol=state.get("symbol"), reason="restart_unconfirmed")
+            # Not confirmed. Stay submitted: do not SIZE_SKIP and do not mark the leg unfilled.
 
     def _fresh(self):
         try:
@@ -455,27 +486,39 @@ class SessionCombo:
         if state["status"] in _TERMINAL:
             return False
         state.update(status="submitted", client_id=client_id, exit_at=exit_at, symbol=symbol, side=side,
-                     exited=False, opened_at=opened_at, position_id=None)
+                     exited=False, opened_at=opened_at, position_id=None, stop=format(stop, "f"),
+                     target=None if target is None else format(target, "f"))
         self._put(key, state)
         result, lots = self._send(day, symbol, side, entry, stop, target, client_id)
         if lots is not None:
             state["volume"] = format(lots, "f")
-        if getattr(result, "status", None) == "ACCEPTED":
-            self._adopt(state, None, ticket=getattr(result, "broker_ref", None), lots=lots, opened_at=opened_at)
+        status = getattr(result, "status", None)
+        if status == "ACCEPTED":
+            self._settle_fill(state, None, ticket=getattr(result, "broker_ref", None), lots=lots, opened_at=opened_at)
             state["status"] = "filled"
             self._put(key, state)
             return True
+        if status == "UNKNOWN":
+            kind, row = self._await_held(state)
+            if kind == "held":
+                self._settle_fill(state, row, lots=lots, opened_at=opened_at)
+                state["status"] = "filled"
+                self._put(key, state)
+                return True
+            # Ack without a visible position yet. Keep the submitted leg and do not call it unfilled.
+            self._put(key, state)
+            return False
         try:
             kind, row = self._locate(state)
         except Exception:  # noqa: BLE001
             kind, row = "unknown", None
         if kind == "held":
-            self._adopt(state, row)
+            self._settle_fill(state, row, lots=lots, opened_at=opened_at)
             state["status"] = "filled"
             self._put(key, state)
             return True
         state.update(status="armed", client_id=None, exit_at=None, symbol=None, side=None, position_id=None,
-                     volume=None, opened_at=None)
+                     volume=None, opened_at=None, stop=None, target=None)
         self._put(key, state)
         return False
 
@@ -497,9 +540,8 @@ class SessionCombo:
         result = self._broker.open_market(symbol=symbol, side=side, quantity=lots, entry=entry, stop=stop,
                                            target=target, client_id=client_id,
                                            source_run_id=f"session-combo-{day}", risk_fraction=RISK_FRACTION_CAP)
-        if getattr(result, "status", None) != "ACCEPTED":
+        if getattr(result, "status", None) == "REJECTED":
             _log("SIZE_SKIP", symbol=symbol, reason=getattr(result, "reason", None) or "not_accepted")
-            return result, lots
         return result, lots
 
     def _adopt(self, state, row, ticket=None, lots=None, opened_at=None):
@@ -510,7 +552,7 @@ class SessionCombo:
             state["volume"] = format(row.volume, "f")
             if getattr(row, "opened_at", None) is not None:
                 state["opened_at"] = row.opened_at
-            return
+            return row
         if ticket:
             state["position_id"] = ticket
         if lots is not None:
@@ -518,23 +560,76 @@ class SessionCombo:
         if opened_at is not None and state.get("opened_at") is None:
             state["opened_at"] = opened_at
         if not state.get("position_id"):
-            return
+            return None
         try:
-            trades = self._broker.open_trades()
+            trades = self._positions()
         except Exception:  # noqa: BLE001
-            return
+            return None
         for item in trades:
             if item.ticket == state["position_id"]:
-                self._adopt(state, item)
-                return
+                return self._adopt(state, item)
+        return None
 
-    def _locate(self, state):
+    def _positions(self, fresh=False):
+        """Open positions. ``fresh`` bypasses the manage-cycle cache after an ack that just cleared it."""
+        if fresh:
+            read = getattr(self._broker, "_read", None)
+            if read is not None:
+                return list(read(fresh=True).positions)
+        return list(self._broker.open_trades())
+
+    def _await_held(self, state):
+        """Re-read until the position is visible. ``gone`` is only returned when a stored id is absent."""
+        last = ("unknown", None)
+        for _ in range(_FILL_POLLS):
+            try:
+                kind, row = self._locate(state, fresh=True)
+            except Exception:  # noqa: BLE001
+                return "unknown", None
+            if kind in ("held", "gone"):
+                return kind, row
+            last = (kind, row)
+        return last
+
+    def _settle_fill(self, state, row, ticket=None, lots=None, opened_at=None):
+        bound = row
+        try:
+            bound = self._adopt(state, row, ticket=ticket, lots=lots, opened_at=opened_at) or row
+        except Exception:  # noqa: BLE001 - protection does not wait for the flag write
+            if row is not None and not state.get("position_id"):
+                state["position_id"] = getattr(row, "ticket", None)
+            bound = row
+        self._ensure_protection(state, bound)
+
+    def _ensure_protection(self, state, row):
+        """Place the ``sltp`` order when the open position has no stop, or no target the leg required."""
+        stop = _as_decimal(state.get("stop"))
+        target = _as_decimal(state.get("target"))
+        ticket = getattr(row, "ticket", None) if row is not None else state.get("position_id")
+        if not ticket or stop is None:
+            return
+        seen_stop = getattr(row, "stop", None) if row is not None else None
+        seen_target = getattr(row, "target", None) if row is not None else None
+        if seen_stop is not None and (target is None or seen_target is not None):
+            return
+        if ticket in self._sltp_sent or self._sltp_attempts.get(ticket, 0) >= _SLTP_ATTEMPTS:
+            return
+        attempt = self._sltp_attempts.get(ticket, 0) + 1
+        self._sltp_attempts[ticket] = attempt
+        try:
+            result = self._broker.replace_protection(ticket, stop, target, client_id=f"sltp-{ticket}-{attempt}")
+        except Exception:  # noqa: BLE001
+            return
+        if getattr(result, "status", None) != "REJECTED":
+            self._sltp_sent.add(ticket)
+
+    def _locate(self, state, fresh=False):
         """``(held, row)``, ``(gone, None)``, ``(unknown, None)`` or ``(ambiguous, None)``.
 
         A known position id that a successful read does not show is gone. No id and no single
         symbol/side/volume/time match is not proof the position is gone.
         """
-        trades = self._broker.open_trades()
+        trades = self._positions(fresh=fresh)
         ticket = state.get("position_id")
         if ticket:
             found = next((row for row in trades if row.ticket == ticket), None)
@@ -567,41 +662,97 @@ class SessionCombo:
         return "unknown", None
 
     def _exits(self, at):
+        asked = set()
         for key, state in list(self._phase.items()):
-            if state.get("exited") or state.get("status") != "filled":
+            if state.get("exited") or state.get("status") not in ("filled", "submitted"):
                 continue
+            exit_at = state.get("exit_at")
+            due = isinstance(exit_at, datetime) and at >= exit_at
             try:
                 kind, row = self._locate(state)
             except Exception:  # noqa: BLE001
-                continue
-            if kind == "held":
-                self._adopt(state, row)
-                self._put(key, state)
+                kind, row = "unknown", None
+            if kind == "held" and row is not None:
+                try:
+                    self._adopt(state, row)
+                except Exception:  # noqa: BLE001
+                    if not state.get("position_id"):
+                        state["position_id"] = row.ticket
+                self._ensure_protection(state, row)
+                try:
+                    self._put(key, state)
+                except Exception:  # noqa: BLE001
+                    pass
             elif kind == "gone":
                 state["exited"] = True
                 state["status"] = "done"
                 self._put(key, state)
                 continue
-            else:
+            elif not due:
                 continue
-            exit_at = state.get("exit_at")
-            if not isinstance(exit_at, datetime) or at < exit_at:
+            if not due:
                 continue
-            ticket = state.get("position_id")
+            ticket = getattr(row, "ticket", None) if row is not None else None
+            if not ticket and kind != "gone":
+                ticket = state.get("position_id")
             if not ticket:
                 continue
-            client = state.get("client_id")
-            reason = "london_1100" if str(client or "").startswith("combo-lon-") else "fix_30m"
-            result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
-            _log("TIME_EXIT", symbol=state.get("symbol"), reason=reason, status=getattr(result, "status", None))
-            if getattr(result, "status", None) not in ("ACCEPTED", "REJECTED"):
+            self._close_leg(key, state, ticket, row, asked)
+        self._close_london_without_flag(at, asked)
+
+    def _exit_reason(self, key, state, row):
+        client = state.get("client_id") or getattr(row, "comment", None) or ""
+        if str(client).startswith("combo-lon-") or str(key).startswith("combo_lon_"):
+            return "london_1100"
+        return "fix_30m"
+
+    def _close_leg(self, key, state, ticket, row, asked):
+        if not self._finish_close(ticket, self._exit_reason(key, state, row), state.get("client_id"), state.get("symbol"), asked):
+            return
+        state["exited"] = True
+        state["status"] = "done"
+        if not state.get("position_id"):
+            state["position_id"] = ticket
+        self._put(key, state)
+
+    def _finish_close(self, ticket, reason, client, symbol, asked):
+        """Close ``ticket`` once this tick. True when a later read no longer shows it."""
+        if not ticket or ticket in asked:
+            return False
+        asked.add(ticket)
+        result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
+        _log("TIME_EXIT", symbol=symbol, reason=reason, status=getattr(result, "status", None))
+        if getattr(result, "status", None) not in ("ACCEPTED", "REJECTED"):
+            return False
+        try:
+            return not any(item.ticket == ticket for item in self._positions())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _close_london_without_flag(self, at, asked):
+        """11:00 ET closes the live ``combo-lon-`` ticket even when the day flag has no position id."""
+        try:
+            trades = self._positions()
+        except Exception:  # noqa: BLE001
+            return
+        for row in trades:
+            if not _london_exit_due(getattr(row, "comment", None), at):
                 continue
-            try:
-                still = any(item.ticket == ticket for item in self._broker.open_trades())
-            except Exception:  # noqa: BLE001
+            if not self._finish_close(row.ticket, "london_1100", row.comment, row.symbol, asked):
                 continue
-            if still:
-                continue
-            state["exited"] = True
-            state["status"] = "done"
-            self._put(key, state)
+            self._mark_london_done(row.comment, row.ticket)
+
+    def _mark_london_done(self, comment, ticket):
+        try:
+            day = datetime.strptime(str(comment)[len("combo-lon-"):len("combo-lon-") + 10], "%Y-%m-%d").date()
+        except ValueError:
+            return
+        key = london_key(day)
+        state = self._leg(key)
+        if state.get("exited"):
+            return
+        state["exited"] = True
+        state["status"] = "done"
+        if not state.get("position_id"):
+            state["position_id"] = ticket
+        self._put(key, state)

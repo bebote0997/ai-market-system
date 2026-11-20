@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-20 — fill Exness tras ACK, SL/TP y salida de las 11:00
+
+- Un HTTP 200/202 de Exness sigue siendo `UNKNOWN` en el transporte. El session combo lo trata como ack: relee la posición y solo entonces la marca `filled`. No anota `SIZE_SKIP` ni unfilled mientras esa lectura no confirme que no está. Si no aparece, la pata sigue `submitted` y no se reenvía.
+- Si la posición queda abierta sin SL, o sin TP cuando la pata lo tiene, se coloca la orden `sltp` aunque adoptar el id falle.
+- `read_state` toma el SL/TP de la orden `sltp` ligada por `position_id`. El objeto Position del snapshot no trae esos precios (issue #95).
+- A las 11:00 ET el cierre de Londres usa el ticket de la posición en Exness, también cuando `combo_lon` no guardó el id.
+- Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos, disco, dashboard, OANDA ni #96. Sin merge y sin deploy.
+
 ## 2026-11-15 — insignias de ejecución y pares del session combo (solo presentación)
 
 - Con el broker Exness, las insignias «sin dinero real · ejecución real desactivada» y «Solo observación · no envía órdenes reales» leen `real_execution_armed` sin cambiarlo. Las dos claves exactas muestran «Ejecución real activa · Exness». Cualquier otra combinación deja el texto de apagado.
