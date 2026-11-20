@@ -333,6 +333,9 @@ class OperationalRuntime:
         V2 P4a: with the halt gate, every attempt (each STALE retry included) is admitted at L(W) before its load and
         read again immediately before ``save_paper``; a refusal raises HaltRefused (no call, no effect).
         """
+        if self._exness_live_symbol(symbol):
+            LOG.info("component=runtime event=PAPER_WRITE_SKIPPED symbol=%s reason=exness_live", symbol)
+            return self._broker(symbol), None
         writer = self.store if store is None else store
         for _ in range(2):
             admission = None if self.halt_gate is None else self.halt_gate.admit(kind)
@@ -467,10 +470,26 @@ class OperationalRuntime:
         # Explicit ON scopes (DEC-8.14) and their Evidence Store policy remain unchanged.
         return not self.config.v2_position_catch_up and symbol in ("XAUUSD", "EURUSD")
 
+    def _exness_live_symbol(self, symbol):
+        """EURUSD, GBPUSD and USDJPY are Exness session-combo symbols. They must not write paper state."""
+        if symbol not in {"EURUSD", "GBPUSD", "USDJPY"}:
+            return False
+        if getattr(self, "exness_session", None) is not None:
+            return True
+        try:
+            return str(os.environ.get("AI_FLOOR_BROKER") or "").strip().lower() == "exness"
+        except Exception:  # noqa: BLE001
+            return False
+
     def _catch_up_positions(self, symbol, slot, key, store=None, observer=None, frame=None):
         """B2.3B: every committed closed 5m bar after the open position's durable watermark, oldest
         first, through the accepted B2.1 catch-up (guarded save per bar). Never a newest-bar fallback.
-        Returns None, or the reason PAPER economics are blocked for this cycle."""
+        Returns None, or the reason PAPER economics are blocked for this cycle.
+        An Exness live symbol does not catch up: that path was writing EURUSD on the 15m cycle.
+        """
+        if self._exness_live_symbol(symbol):
+            LOG.info("component=runtime event=PAPER_CATCHUP_SKIPPED symbol=%s reason=exness_live", symbol)
+            return None
         for _ in range(2):  # A STALE result resumes from the durable watermark once.
             try:
                 result = catch_up_position(self.store if store is None else store,

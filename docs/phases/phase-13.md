@@ -2,6 +2,8 @@
 
 **Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
 
+2026-11-20, purga paper (sobre #100, sin merge ni deploy): el ciclo Exness no escribe paper para EURUSD, GBPUSD ni USDJPY. La purga es un comando en seco por defecto; con confirmación copia la base, borra las tablas paper y hace VACUUM. No corre al desplegar.
+
 2026-11-20, endurecimiento de operación (sobre #98, sin merge ni deploy): alertas suaves de xAI/fxmacro, disco lleno sin tumbar el proceso, etiqueta `EXNESS` en el resumen, un reintento ante 401 de clave, adopt de `combo_lon` por comando confirmado, y el watchdog ya no marca obsoleto un latido de edad 0.
 
 2026-11-21, la `sltp` nueva se manda antes de cancelar la vieja. Un cierre de protección que falla no se da por hecho: se reintenta y avisa en HIGH. Sin merge ni deploy.
