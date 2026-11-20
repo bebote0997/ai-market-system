@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-20 — panel Liquid Glass (solo presentación)
+
+- Pantalla de solo lectura con el layout del owner: inicio, posiciones, historial (las dos variantes en una página), riesgo y sistema. Barra lateral en escritorio y pestañas en el teléfono. Claro y oscuro, sin animación. Configuración solo muestra valores.
+- Cifras solo de las lecturas que ya existían. Si una no está, dice «sin datos». El SL/TP de una posición sale de la orden `sltp` con el mismo `position_id` (bug #95); los campos de la posición no se usan.
+- No escribe flags, frenos, órdenes ni `AI_FLOOR_GIT_COMMIT`. Sin merge y sin deploy.
+
 ## 2026-11-20 — copia y purga paper, y el ciclo Exness ya no escribe paper
 
 - `python -m runtime.exness_purge` en seco no copia ni borra. `--apply` solo actúa con `AI_FLOOR_PURGE_CONFIRM=EXNESS_PURGE_AUTHORIZED`. La copia usa el backup en línea de SQLite (incluye el WAL). Si el espacio libre es menor que el doble del tamaño de la base, no borra nada. Después exporta las tablas paper, las vacía y hace `VACUUM`. Hay que parar el servicio antes, o reiniciarlo justo después. No está en el arranque, en el scheduler ni en el deploy.

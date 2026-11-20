@@ -1,5 +1,7 @@
 # Fase 10 — Command Center / Display V2
 
+**Adenda 2026-11-20 (presentación, no recertifica):** el panel Liquid Glass (`ui/liquid/`) es otra vista de solo lectura. No cambia el estado CERTIFIED de esta fase, ni órdenes, ni frenos, ni flags.
+
 **Estado:** CERTIFIED (ligera, PLAN_RAPIDO; 2026-10-11, control delegado a Grok Bot, pendiente de confirmación del owner).
 
 Extensión de `ui/`: Overview; posiciones abiertas y órdenes pendientes de todos los símbolos; últimos setups por símbolo; decisiones AI y Risk Engine; salud, provider/API y scheduler; entregas recientes; historial con búsqueda exacta por run_id/setup_id; errores. Se conservan FLOOR, MARKETS, JOURNAL, EXPERIMENT y SYSTEM.

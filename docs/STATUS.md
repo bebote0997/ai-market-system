@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-20 (rama `cursor/exness-purge-paper-oanda-5ce5`, sobre #100). La purga es un comando aparte, en seco si no se confirma. La copia usa el backup en línea de SQLite e incluye el WAL; si no hay el doble de espacio libre, no borra. Después vacía las tablas paper y hace VACUUM. Hay que parar el servicio antes, o reiniciarlo justo después. No corre al desplegar y no se ejecuta sin orden del CEO. Los módulos OANDA y paper siguen en el árbol. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
+_Última actualización: 2026-11-20 (rama `cursor/liquid-glass-dashboard-8910`). Panel Liquid Glass, solo lectura, sobre las lecturas Exness y de sistema que ya existían. Claro/oscuro, cinco secciones en español, sin animación. El SL/TP visible sale de la orden `sltp` ligada por `position_id`. No cambia ejecución, frenos, flags, `AI_FLOOR_GIT_COMMIT` ni Render. Sin merge, sin deploy._
+
+_Anterior: 2026-11-20 (rama `cursor/exness-purge-paper-oanda-5ce5`, sobre #100). La purga es un comando aparte, en seco si no se confirma. La copia usa el backup en línea de SQLite e incluye el WAL; si no hay el doble de espacio libre, no borra. Después vacía las tablas paper y hace VACUUM. Hay que parar el servicio antes, o reiniciarlo justo después. No corre al desplegar y no se ejecuta sin orden del CEO. Los módulos OANDA y paper siguen en el árbol. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
 
 _Anterior: 2026-11-21 (rama `cursor/ops-hardening-weekend-5ce5`, sobre #98). Un TIMEOUT de xAI y un fallo de fxmacro que no paran el ciclo no salen como alerta HIGH. Un disco lleno en `recover` se anota y manda una alerta HIGH, sin tumbar el proceso. El resumen diario sigue por el correo de siempre. `--adopt` sin libro de posiciones queda para más adelante. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
 

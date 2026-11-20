@@ -113,6 +113,7 @@ class RenderedScreensTests(unittest.TestCase):
                 patch("execution.oanda_readonly.cached_account_view", return_value=None):
             self.scan()
             app = self.case.app()
+            app.radio[0].set_value("Overview").run()
             content = self.texts(app)
             self.assertIn('class="hero"', content)
             self.assertIn("<h1>Inicio</h1>", content)
@@ -121,10 +122,12 @@ class RenderedScreensTests(unittest.TestCase):
             self.assertIn("OANDA Demo · V2.1", content)  # sidebar brand
             self.assertIn("Solo práctica · solo observación", content)
 
-    def test_start_page_is_default_and_opens_the_floor(self):
+    def test_start_page_is_the_liquid_panel_and_overview_still_opens_the_floor(self):
         app = self.case.app()
-        self.assertEqual(app.radio[0].value, "Overview")
+        self.assertEqual(app.radio[0].value, "Inicio")
         self.assertEqual(app.radio[0].options[0], es.page_label("Overview"))
+        self.assertIn("Solo lectura", self.texts(app))
+        app.radio[0].set_value("Overview").run()
         button = app.button(key="open-floor")
         self.assertEqual(button.label, luxury.FLOOR_BUTTON)
         button.click().run()

@@ -136,6 +136,7 @@ class LuxuryDashboardTests(unittest.TestCase):
         with patch.dict(os.environ, {'V2_PLANNER_POLICY': '<b>V2_F3</b>',
                                      'V2_OPPOSITE_SETUP_POLICY': 'BLOCK', 'UNRELATED_SECRET': 'never-display-this'}):
             app = self.app()
+            app.radio[0].set_value('Overview').run()
             content = '\n'.join(m.value for m in app.markdown)
             self.assertIn('&lt;b&gt;V2_F3&lt;/b&gt;', content)
             self.assertIn('origen: configuración del servidor', content)
