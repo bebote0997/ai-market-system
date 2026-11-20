@@ -1,9 +1,15 @@
 """One-off backup and paper purge. Dry-run unless ``--apply`` and the confirm token match.
 
-Nothing here runs at startup, on deploy, or from the scheduler. It copies the trading database and a
-JSON export of the paper tables, then deletes those rows and runs ``VACUUM``. OANDA and paper modules
-stay in the tree: the test suite and a non-Exness process still use them. The live Exness cycle does
-not write paper state for EURUSD, GBPUSD or USDJPY.
+Nothing here runs at startup, on deploy, or from the scheduler. The backup is a SQLite online backup
+(``Connection.backup``), so the WAL is included. It refuses to run when free disk space is under twice
+the database size (main file plus ``-wal``). Then it exports the paper tables, deletes those rows and
+runs ``VACUUM``.
+
+Stop the service before ``--apply``, or restart it immediately after. A process that still has the
+file open can write into the pre-VACUUM pages.
+
+OANDA and paper modules stay in the tree: the test suite and a non-Exness process still use them.
+The live Exness cycle does not write paper state for EURUSD, GBPUSD or USDJPY.
 """
 from datetime import datetime, timezone
 import argparse
@@ -43,13 +49,41 @@ def plan(db_path):
     return {"dry_run": True, "exists": True, "counts": counts, "backup": None, "vacuum": False}
 
 
+def _db_bytes(path):
+    """Main file plus the WAL. A plain copy of the main file would drop uncheckpointed pages."""
+    size = path.stat().st_size
+    wal = path.with_name(path.name + "-wal")
+    if wal.is_file():
+        size += wal.stat().st_size
+    return size
+
+
+def _room_for_backup(path, disk_usage):
+    usage = disk_usage(path.parent)
+    return usage.free >= 2 * _db_bytes(path)
+
+
+def _online_backup(path, target):
+    """Consistent snapshot, WAL included. The result is one file (``journal_mode=DELETE``)."""
+    src = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)
+    try:
+        dst = sqlite3.connect(target, timeout=5.0)
+        try:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    os.chmod(target, 0o600)
+
+
 def _backup(path, backup_dir):
     folder = Path(backup_dir)
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = folder / f"{path.stem}-{stamp}.db"
-    shutil.copy2(path, target)
-    os.chmod(target, 0o600)
+    _online_backup(path, target)
     db = sqlite3.connect(target)
     try:
         export = {}
@@ -64,8 +98,12 @@ def _backup(path, backup_dir):
     return str(target)
 
 
-def apply_purge(db_path, *, confirm, backup_dir):
-    """Copy first, then delete paper rows and VACUUM. Refuses without the exact confirm token."""
+def apply_purge(db_path, *, confirm, backup_dir, disk_usage=shutil.disk_usage):
+    """Back up first, then delete paper rows and VACUUM. Refuses without the exact confirm token.
+
+    Aborts, with nothing deleted, when free space is under twice the database size.
+    Stop the service before this, or restart it immediately after.
+    """
     if confirm != CONFIRM:
         refused = plan(db_path)
         refused["reason"] = "confirm_required"
@@ -74,6 +112,10 @@ def apply_purge(db_path, *, confirm, backup_dir):
     path = Path(db_path)
     if not path.is_file():
         return {"dry_run": False, "exists": False, "deleted": False, "reason": "missing"}
+    if not _room_for_backup(path, disk_usage):
+        LOG.warning("component=purge event=PURGE_ABORTED reason=low_space")
+        return {"dry_run": False, "exists": True, "deleted": False, "reason": "low_space",
+                "vacuum": False, "backup": None, "restart_required": False}
     backup = _backup(path, backup_dir)
     db = sqlite3.connect(path, isolation_level=None)
     try:
@@ -93,7 +135,8 @@ def apply_purge(db_path, *, confirm, backup_dir):
         db.close()
     LOG.info("component=purge event=PAPER_PURGED tables=%s", ",".join(PAPER_TABLES))
     return {"dry_run": False, "exists": True, "deleted": True, "backup": backup,
-            "counts_before": before, "counts_after": after, "vacuum": True, "reason": "purged"}
+            "counts_before": before, "counts_after": after, "vacuum": True, "reason": "purged",
+            "restart_required": True}
 
 
 def main(argv=None):
@@ -110,6 +153,8 @@ def main(argv=None):
         return 0
     report = apply_purge(args.db, confirm=os.environ.get(CONFIRM_ENV), backup_dir=args.backup_dir)
     print(f"dry_run=false deleted={str(report.get('deleted')).lower()} reason={report.get('reason')}")
+    if report.get("restart_required"):
+        print("restart_required=true")
     return 0 if report.get("deleted") else 2
 
 

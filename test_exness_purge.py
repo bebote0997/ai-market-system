@@ -58,6 +58,28 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(live.execute("SELECT COUNT(*) FROM paper_accounts").fetchone()[0], 0)
         self.assertEqual(live.execute("SELECT COUNT(*) FROM paper_positions").fetchone()[0], 0)
 
+    def test_low_space_aborts_before_any_delete(self):
+        report = apply_purge(self.db, confirm=CONFIRM, backup_dir=self.root / "bak",
+                             disk_usage=lambda _path: type("U", (), {"free": 1})())
+        self.assertEqual(report["reason"], "low_space")
+        self.assertFalse(report["deleted"])
+        self.assertFalse((self.root / "bak").exists())
+        self.assertEqual(sqlite3.connect(self.db).execute("SELECT COUNT(*) FROM paper_accounts").fetchone()[0], 1)
+
+    def test_online_backup_keeps_an_uncheckpointed_wal_row(self):
+        live = sqlite3.connect(self.db)
+        live.execute("PRAGMA journal_mode=WAL")
+        live.execute("INSERT INTO paper_orders VALUES ('wal-only', '{\"from\": \"wal\"}')")
+        live.commit()
+        report = apply_purge(self.db, confirm=CONFIRM, backup_dir=self.root / "bak")
+        live.close()
+        self.assertTrue(report["deleted"])
+        self.assertTrue(report["restart_required"])
+        backup = sqlite3.connect(report["backup"])
+        row = backup.execute("SELECT payload FROM paper_orders WHERE order_id='wal-only'").fetchone()
+        self.assertEqual(row[0], '{"from": "wal"}')
+        backup.close()
+
     def test_purge_is_not_wired_into_startup_or_deploy(self):
         root = Path(__file__).resolve().parent
         for name in ("runtime/cloud.py", "runtime/cloud_runner.py", "runtime/service.py", "render.yaml"):
