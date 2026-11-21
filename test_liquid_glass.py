@@ -192,7 +192,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(view["strategy"]["london"]["pill"], "En curso")
         self.assertEqual(view["strategy"]["steps"][1]["state"], "Hecha")
         self.assertEqual(view["strategy"]["pairs"][1]["state"], MISSING)
-        self.assertEqual(view["history"]["stats"]["count"], "1")
+        self.assertEqual(view["history"]["stats"]["count"], "0")
         self.assertEqual(view["history"]["stats"]["net"], MISSING)
         self.assertEqual(view["strategy"]["fix"]["state"], MISSING)
 

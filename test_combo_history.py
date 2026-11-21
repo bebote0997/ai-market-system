@@ -274,3 +274,62 @@ class HistorialViewTests(unittest.TestCase):
         self.assertEqual(skipped["reason"], MISSING)
         self.assertEqual(skipped["pnl"], MISSING)
         self.assertEqual(_exit_label({"exit_reason": "hq_manual"}), "cierre manual HQ")
+
+
+    def test_stats_use_only_rows_with_pnl(self):
+        flags = {
+            "combo_lon_2026-11-18": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "side": "SHORT",
+                "position_id": "341984", "volume": "0.93", "entry": "159.15",
+                "exit_price": "159.294", "pnl": "-84.08", "exit_reason": "london_1100",
+                "opened_at": "2026-11-18T09:04:25+00:00",
+            }),
+            "combo_lon_2026-11-19": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "side": "LONG",
+                "position_id": "357063", "volume": "1.32", "entry": "159.628",
+                "exit_price": "159.805", "pnl": "146.19", "exit_reason": "london_1100",
+                "opened_at": "2026-11-19T07:05:08+00:00",
+            }),
+            "combo_lon_2026-11-20": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "side": "SHORT",
+                "position_id": "375978", "volume": "0.6", "entry": "159.046",
+                "exit_price": "158.738", "pnl": "116.42", "exit_reason": "london_1100",
+                "opened_at": "2026-11-20T07:32:23+00:00",
+            }),
+            "combo_fix_2026-11-20": json.dumps({
+                "status": "done", "exited": True, "symbol": "GBPUSD", "side": "LONG",
+                "position_id": "382026", "volume": "1", "entry": "1.31016",
+                "exit_price": "1.31007", "pnl": "-9", "exit_reason": "hq_manual",
+                "opened_at": "2026-11-20T16:00:13+00:00",
+            }),
+            "combo_fix_2026-11-19": json.dumps({"status": "done", "exited": False}),
+            "combo_fix_2026-11-18": json.dumps({"status": "done"}),
+            "combo_lon_2026-11-17": json.dumps({"status": "skipped"}),
+        }
+        view = _view(now=datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc), flags=flags)
+        stats = view["history"]["stats"]
+        self.assertEqual(stats["count"], "4")
+        self.assertEqual(stats["winners"], "2")
+        self.assertEqual(stats["losers"], "2")
+        self.assertIn("169.53", stats["net"])
+        self.assertEqual(stats["net_tone"], "pos")
+        self.assertNotEqual(stats["profit_factor"], MISSING)
+        tickets = [row["ticket"] for row in view["history"]["rows"]]
+        self.assertEqual(tickets.count(MISSING), 3)
+        self.assertIn("341984", tickets)
+        self.assertIn("382026", tickets)
+
+    def test_stats_stay_blank_when_no_row_has_pnl(self):
+        flags = {
+            "combo_fix_2026-11-19": json.dumps({"status": "done", "exited": False}),
+            "combo_lon_2026-11-18": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "position_id": "1",
+            }),
+        }
+        view = _view(now=datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc), flags=flags)
+        stats = view["history"]["stats"]
+        self.assertEqual(len(view["history"]["rows"]), 2)
+        self.assertEqual(stats["count"], "0")
+        self.assertEqual(stats["winners"], MISSING)
+        self.assertEqual(stats["net"], MISSING)
+        self.assertEqual(stats["profit_factor"], MISSING)

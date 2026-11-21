@@ -1,5 +1,10 @@
 # Agent Changelog
 
+## 2026-11-21 — historial: estadísticas solo con P/L real
+
+- El resumen y las estadísticas del Historial (ganadoras, neto, profit factor y demás) se calculan solo con las filas que tienen P/L. Las filas sin deal siguen visibles y no cuentan. Si ninguna fila tiene P/L, se muestra «sin datos».
+- Sin cambio de órdenes, frenos, variables ni Render. Sin merge y sin deploy.
+
 ## 2026-11-21 — historial: deals de Exness y precio/P-L en patas nuevas
 
 - Un backfill de solo lectura (GET `/v1/history/accounts/{id}/deals`) rellena entrada, salida y resultado de las patas combo ya cerradas que no los guardaron. Cruza `position_id` con el ticket. No pisa valores que ya existen. Si Exness no responde, las banderas quedan igual y la sesión sigue. No hay `mutate`. Corre al arrancar la sesión Exness y, si aún falta algo, en el ciclo de lectura.
