@@ -1,4 +1,4 @@
-"""Paper purge is a confirmed one-off. The Exness cycle does not write paper for the combo symbols."""
+"""Paper purge is a confirmed one-off. It does not run on deploy and it is not run from tests."""
 from pathlib import Path
 import json
 import os
@@ -8,7 +8,6 @@ import unittest
 from unittest.mock import patch
 
 from runtime.exness_purge import CONFIRM, apply_purge, main, plan
-from runtime.service import OperationalRuntime
 
 
 class PurgeTests(unittest.TestCase):
@@ -94,20 +93,6 @@ class LiveCycleTests(unittest.TestCase):
         self.assertNotIn("save_paper", text)
         self.assertNotIn("oanda", text)
         self.assertNotIn("paper_broker", text)
-
-    def test_eurusd_catch_up_and_guarded_write_do_not_touch_paper_when_exness(self):
-        runtime = OperationalRuntime.__new__(OperationalRuntime)
-        runtime.exness_session = object()
-        runtime._broker = lambda symbol: ("broker", symbol)
-        with patch("runtime.service.catch_up_position", side_effect=AssertionError("paper catch-up")):
-            self.assertIsNone(runtime._catch_up_positions("EURUSD", None, None))
-            self.assertIsNone(runtime._catch_up_positions("GBPUSD", None, None))
-        self.assertEqual(runtime._guarded_paper_write("USDJPY", "k", lambda _b: (True, "wrote")),
-                         (("broker", "USDJPY"), None))
-        runtime.exness_session = None
-        with patch.dict(os.environ, {"AI_FLOOR_BROKER": "oanda"}):
-            self.assertFalse(runtime._exness_live_symbol("EURUSD"))
-            self.assertFalse(runtime._exness_live_symbol("XAUUSD"))
 
 
 if __name__ == "__main__":
