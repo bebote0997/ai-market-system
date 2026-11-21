@@ -141,7 +141,7 @@ class SlackNotificationSink:
         Slack and the OANDA demo email are attempted independently (each once): the email goes out with a Gmail-only
         setup and after a Slack failure; the delivery record (raised error) reflects the Slack outcome, the email
         outcome is logged on its own."""
-        source = _summary_source()
+        source = "OANDA_DEMO" if _routing_on() else "PAPER"
         if not self.webhook_url and (source == "PAPER" or not _daily_email_configured()):
             raise SlackNotificationError("NOT_CONFIGURED")  # no channel: no OANDA read
         summary = event.daily_summary or {}
@@ -250,17 +250,6 @@ def _email_daily_summary(alert, event_id, date="-"):
             LOG.info("component=notifications event=DAILY_SUMMARY_EMAIL_SENT date=%s", date)
     except Exception as exc:  # noqa: BLE001
         LOG.warning("component=notifications event=DAILY_SUMMARY_EMAIL_FAILED error_type=%s", type(exc).__name__)
-
-
-def _summary_source():
-    """``EXNESS`` when that broker is selected, even if ``AI_FLOOR_RESULTS_SOURCE`` is still ``OANDA_DEMO``."""
-    try:
-        raw = os.environ.get("AI_FLOOR_BROKER")
-        if isinstance(raw, str) and raw.strip().lower() == "exness":
-            return "EXNESS"
-    except Exception:  # noqa: BLE001 - unreadable env: the previous PAPER / OANDA split
-        pass
-    return "OANDA_DEMO" if _routing_on() else "PAPER"
 
 
 def _routing_on():

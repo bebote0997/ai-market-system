@@ -16,7 +16,8 @@ from execution.results_source import results_label
 from runtime.alert_catalog import from_notification, soft_provider_failure
 from runtime.cloud import scheduler_health_detail
 from runtime.health_probes import probe_disk
-from runtime.notifications import NotificationEvent, _summary_source, compact_payload, provider_failure_execution
+from runtime.broker_alerts import notify_high
+from runtime.notifications import NotificationEvent, compact_payload, provider_failure_execution
 from runtime.system_health import HealthPolicy, HealthStatus, SystemHealth
 from storage.database import Store
 from storage.disk_guard import (is_disk_full, maintain_disk, prune_old_archives, prune_rex_journal,
@@ -140,8 +141,28 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(results_label(env), "EXNESS")
         self.assertEqual(results_label({"AI_FLOOR_BROKER_DEMO_ROUTING": "1"}), "OANDA_DEMO")
         self.assertEqual(results_label({}), "PAPER")
-        with patch.dict(os.environ, env, clear=True):
-            self.assertEqual(_summary_source(), "EXNESS")
+
+    def test_recover_disk_full_sends_a_high_alert(self):
+        from runtime.service import OperationalRuntime
+        runtime = OperationalRuntime.__new__(OperationalRuntime)
+        runtime.clock = lambda: NOW
+        runtime.store = SimpleNamespace(
+            recover=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                sqlite3.OperationalError("database or disk is full")))
+        sent = []
+        with patch("runtime.broker_alerts.notify_high",
+                   side_effect=lambda kind, detail=None, sink=None: sent.append((kind, detail))):
+            with self.assertLogs("ai_floor.disk", "ERROR"):
+                runtime._recover_open_state(120)
+        self.assertEqual(sent, [("DISK_FULL", {"reason": "recover"})])
+
+    def test_notify_high_logs_and_calls_the_sink(self):
+        sent = []
+        with self.assertLogs("ai_floor.broker.alerts", "ERROR") as logs:
+            notify_high("DISK_FULL", {"reason": "recover"}, sink=lambda kind, detail: sent.append((kind, detail)))
+        self.assertEqual(sent[0][0], "DISK_FULL")
+        self.assertEqual(sent[0][1]["severity"], "HIGH")
+        self.assertIn("severity=HIGH", logs.output[0])
 
 
 def _client(caller):

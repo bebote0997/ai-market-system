@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-20 (rama `cursor/ops-hardening-weekend-5ce5`, sobre #98). Un TIMEOUT de xAI y un fallo de fxmacro que no paran el ciclo no salen como alerta HIGH: quedan en el resumen. Un disco lleno en `save_paper`, `recover` o el registro REX se anota y no tumba el proceso. El resumen diario dice `EXNESS` cuando el broker es Exness. Un 401 `AUTH_INVALID_API_KEY` se reintenta una vez, sin rotar la clave. Adoptar `combo_lon` es un comando con confirmación, no un botón. Un latido apenas futuro ya no dispara `SCHEDULER_STALE`. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
+_Última actualización: 2026-11-21 (rama `cursor/ops-hardening-weekend-5ce5`, sobre #98). Un TIMEOUT de xAI y un fallo de fxmacro que no paran el ciclo no salen como alerta HIGH. Un disco lleno en `recover` se anota y manda una alerta HIGH, sin tumbar el proceso. El resumen diario sigue por el correo de siempre. `--adopt` sin libro de posiciones queda para más adelante. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
 
 _Anterior: 2026-11-21 (rama `cursor/session-combo-followups-5ce5`). `replace_protection` manda la `sltp` nueva y después cancela las anteriores; si la nueva es `REJECTED`, conserva las viejas y manda una alerta HIGH. El cierre por falta de stop no se marca hecho si no cerró: se reintenta y avisa en HIGH. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
 
