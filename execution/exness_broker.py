@@ -688,5 +688,8 @@ def broker_from_env(env, *, transport=None, clock=None, on_alert=None):
     currency = None if reading is None else reading[2]
     log_brake_state(brakes._store, lambda: (equity, currency))
     when = clock() if clock is not None else broker._now()
-    _remember_startup_account(brakes._store, reading, when)
+    try:
+        _remember_startup_account(brakes._store, reading, when)
+    except Exception as exc:  # noqa: BLE001 - a flag write must not stop the session from starting
+        LOG.warning("component=exness event=DESK_REMEMBER_FAILED error_type=%s", type(exc).__name__)
     return broker

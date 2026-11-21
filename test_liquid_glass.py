@@ -90,7 +90,8 @@ class ModelTests(unittest.TestCase):
                  })}
         view = _view(now=saturday, flags=flags, health={
             "status": "DEGRADED", "scheduler": "RUNNING", "last_cycle_status": "COMPLETED",
-            "freshness": "NO_DATA", "runtime_heartbeat": "2026-11-21T15:59:00+00:00"}, errors=[])
+            "freshness": "NO_DATA", "market_data": "exness",
+            "runtime_heartbeat": "2026-11-21T15:59:00+00:00"}, errors=[])
         self.assertIn("30,200.00 USC", view["kpis"]["balance"]["text"])
         self.assertIn("30,255.46 USC", view["kpis"]["equity"]["text"])
         self.assertIn("última lectura", view["kpis"]["equity"]["sub"])
@@ -105,7 +106,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(london["reason"], "cierre 11:00 ET")
         older = next(row for row in view["history"]["rows"] if row["symbol"] == "USDJPY")
         self.assertEqual(older["entry"], MISSING)
-        self.assertEqual(older["reason"], "cierre 11:00 ET")
+        self.assertEqual(older["reason"], MISSING)
         self.assertEqual(older["pnl"], MISSING)
         html = fragment(view, section="Historial")
         self.assertIn("1.251", html)
@@ -117,6 +118,20 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(shown["system"]["deploy"], "abcdef1")
         ignored = _view(env=dict(ENV, AI_FLOOR_GIT_COMMIT="deadbeef"))
         self.assertEqual(ignored["system"]["deploy"], MISSING)
+
+    def test_weekend_health_stays_degraded_without_a_fresh_heartbeat_or_provider(self):
+        saturday = datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc)
+        base = {"status": "DEGRADED", "scheduler": "RUNNING", "last_cycle_status": "COMPLETED",
+                "freshness": "STALE_DATA", "market_data": "exness"}
+        missing = _view(now=saturday, health=dict(base, runtime_heartbeat="NO_DATA"))
+        self.assertEqual(missing["system"]["status"], "Degradado")
+        stale = _view(now=saturday, health=dict(base, runtime_heartbeat="2026-11-20T15:00:00+00:00"))
+        self.assertEqual(stale["system"]["status"], "Degradado")
+        unconfigured = _view(now=saturday, health=dict(
+            base, market_data="NOT CONFIGURED", runtime_heartbeat="2026-11-21T15:59:30+00:00"))
+        self.assertEqual(unconfigured["system"]["status"], "Degradado")
+        closed = _view(now=saturday, health=dict(base, runtime_heartbeat="2026-11-21T15:59:30+00:00"))
+        self.assertEqual(closed["system"]["status"], "Mercado cerrado")
 
     def test_live_equity_builds_pnl_and_brake_use(self):
         view = _view(flags={"exness_brake_day_equity": "10000", "exness_brake_start": "10000"},

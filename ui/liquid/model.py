@@ -215,15 +215,13 @@ def _leg_row(leg, currency):
 
 
 def _exit_label(leg):
-    """The close rule already stored on the leg, or the one its key records."""
+    """The close reason stored on the leg. Nothing is inferred from the key."""
     text = leg.get("exit_reason")
     labels = {"london_1100": "cierre 11:00 ET", "fix_30m": "30 min", "protection_missing": "sin protección"}
     if isinstance(text, str) and text.strip() in labels:
         return labels[text.strip()]
     if isinstance(text, str) and re.fullmatch(r"[A-Za-z0-9_]{1,32}", text.strip()):
         return text.strip().replace("_", " ")
-    if leg.get("status") in ("done",) or leg.get("exited"):
-        return "cierre 11:00 ET" if leg.get("kind") == "london" else "30 min"
     return MISSING
 
 
@@ -562,13 +560,31 @@ def _saved_account(flags):
     return {"balance": None, "equity": day, "currency": "USC", "stored": True, "kind": "day", "at": None}
 
 
+def _heartbeat_fresh(health, now):
+    stamp = _aware(health.get("runtime_heartbeat"))
+    if stamp is None:
+        return False
+    age = (now - stamp).total_seconds()
+    return 0 <= age <= 60
+
+
 def _panel_health(health, now):
-    """A stale book while the market is shut is not a degraded process."""
+    """On a closed market, only a stale snapshot becomes «Mercado cerrado».
+
+    A missing or old heartbeat, or a market provider that was never configured, stays degraded.
+    """
     if not isinstance(health, dict) or health.get("status") != "DEGRADED" or not _market_closed(now):
         return health
     if health.get("last_cycle_status") == "FAILED":
         return health
     if health.get("scheduler") in {"STOPPED", "DISABLED", "NOT STARTED"}:
+        return health
+    if not _heartbeat_fresh(health, now):
+        return health
+    provider = health.get("market_data")
+    if not isinstance(provider, str) or provider.strip() in ("", "NOT CONFIGURED"):
+        return health
+    if health.get("freshness") not in {"STALE_DATA", "NO_DATA"}:
         return health
     shown = dict(health)
     shown["status"] = "MARKET_CLOSED"

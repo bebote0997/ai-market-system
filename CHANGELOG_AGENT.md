@@ -9,7 +9,7 @@
 
 ## 2026-11-21 — panel con el mercado cerrado (solo lectura)
 
-- Balance y equity salen de la última lectura que el arranque ya hizo (`exness_last_*`) o, si no está, de la base del día. No hay otra llamada a Exness. El P/L y el consumo salen de esa equity y de las bases ya guardadas. Si no hay lectura y el mercado está cerrado, dice «mercado cerrado».
+- Balance y equity salen de la última lectura que el arranque ya hizo (`exness_last_*`) o, si no está, de la base del día. No hay otra llamada a Exness. Si guardar esa lectura falla, el arranque sigue. El P/L y el consumo salen de esa equity y de las bases ya guardadas. Si no hay lectura y el mercado está cerrado, dice «mercado cerrado».
 - El historial muestra la entrada y el motivo solo si la pata los guardó. Sin motivo, «sin datos». El precio de salida y el resultado siguen en «sin datos» si nunca se guardaron.
 - «Último despliegue» es `RENDER_GIT_COMMIT`. Con el mercado cerrado, un libro viejo no deja la salud en «Degradado». Un latido viejo o un proveedor sin configurar sí.
 - Sin merge y sin deploy.
