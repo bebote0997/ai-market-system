@@ -60,10 +60,12 @@ class Clock:
         return self.at
 
 
-def world(at, env=None, store=None):
+def world(at, env=None, store=None, transport=None):
     env = env_armed() if env is None else env
     clock = Clock(at)
-    fake = FakeExnessTransport(clock=clock)
+    fake = FakeExnessTransport(clock=clock) if transport is None else transport
+    if transport is not None:
+        transport._clock = clock
     fake.balance = BrokerBalance(Decimal("500"), Decimal("500"), Decimal("0"), "USD")
     fake.instruments = ("EURUSD", "GBPUSD", "USDJPY")
     fake.conditions = {"USDJPY": payload(spec_jpy()), "EURUSD": payload(spec_usd()), "GBPUSD": payload(spec_usd())}
@@ -441,10 +443,11 @@ class ProgressionTests(unittest.TestCase):
         fake.set_flag(london_key(at.date()),
                       '{"client_id": "combo-lon-2026-01-15-LONG", "exit_at": null, "exited": false, '
                       '"logged_range": true, "side": "LONG", "status": "submitted", "symbol": "USDJPY"}')
-        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+        with self.assertNoLogs("ai_floor.session_combo", level=logging.INFO):
             SessionCombo(broker).tick(clock.at, bars)
-        self.assertIn("reason=restart_unconfirmed", "\n".join(logs.output))
         self.assertEqual(fake.commands, [])
+        saved = json.loads(fake.get_flag(london_key(at.date())))
+        self.assertEqual(saved["status"], "submitted")
 
     def test_session_rebuild_uses_the_same_day_state(self):
         at = ny(2026, 1, 15, 2, 0)
