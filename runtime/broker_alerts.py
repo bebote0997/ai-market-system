@@ -71,6 +71,7 @@ MESSAGES = {
     "EXNESS_BRAKE_HALT": "Freno de la cuenta Exness: entradas detenidas",
     "EXNESS_SLTP_REJECTED": "Protección nueva rechazada: se conserva la orden anterior",
     "EXNESS_PROTECTION_CLOSE_FAILED": "No se pudo cerrar la posición sin stop: se reintenta",
+    "DISK_FULL": "Disco lleno al recuperar el estado",
 }
 _SAFE = re.compile(r"[^A-Za-z0-9_:.\-]")
 _LONG_DIGITS = re.compile(r"\d{5,}")
@@ -288,6 +289,26 @@ class BrokerAlertSink:
         return not self._queue.unfinished_tasks
 
 
+def notify_high(kind, detail=None, sink=None):
+    """Log a HIGH alert and hand it to the broker sink when one is configured. Never raises."""
+    detail = dict(detail or {})
+    detail.setdefault("severity", "HIGH")
+    detail.setdefault("reason", kind)
+    LOG.error("component=broker_alerts event=%s severity=HIGH reason=%s", kind, detail.get("reason"))
+    target = sink
+    if target is None:
+        try:
+            target = broker_alert_sink_from_env()
+        except Exception:  # noqa: BLE001 - alerting never blocks startup
+            target = None
+    if target is None:
+        return
+    try:
+        target(kind, detail)
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("component=broker_alerts event=SEND_FAILED error_type=%s", type(exc).__name__)
+
+
 def broker_alert_sink_from_env(env=None, transport=None, clock=None, rich=None):
     """BrokerAlertSink when alerts are ON and Slack (valid webhook) and/or Gmail is configured; else None.
 
@@ -315,4 +336,5 @@ def broker_alert_sink_from_env(env=None, transport=None, clock=None, rich=None):
                            email=email)
 
 
-__all__ = ["MESSAGES", "BrokerAlertSink", "broker_alert_sink_from_env", "build_message", "mask_id"]
+__all__ = ["MESSAGES", "BrokerAlertSink", "broker_alert_sink_from_env", "build_message", "mask_id",
+           "notify_high"]

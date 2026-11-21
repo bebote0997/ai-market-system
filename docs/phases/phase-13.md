@@ -2,6 +2,8 @@
 
 **Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
 
+2026-11-20, endurecimiento de operación (sobre #98, sin merge ni deploy): alertas suaves de xAI/fxmacro, disco lleno sin tumbar el proceso, etiqueta `EXNESS` en el resumen, un reintento ante 401 de clave, adopt de `combo_lon` por comando confirmado, y el watchdog ya no marca obsoleto un latido de edad 0.
+
 2026-11-21, la `sltp` nueva se manda antes de cancelar la vieja. Un cierre de protección que falla no se da por hecho: se reintenta y avisa en HIGH. Sin merge ni deploy.
 
 2026-11-20, seguimientos del session combo (apilados sobre #97, sin merge ni deploy): pausa real entre lecturas del fill, cierre 202 confirmado por relectura, `sltp` recordado entre reinicios, redondeo y lado del stop, y el chequeo de protección de #96 (un replace y luego un cierre).

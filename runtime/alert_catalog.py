@@ -132,14 +132,38 @@ _NOTIFICATION_MAP = MappingProxyType({
     "PROVIDER_FAILURE": "PROVIDER_FAILURE", "AUTH_ERROR": "PROVIDER_FAILURE",
     "ENTITLEMENT_ERROR": "PROVIDER_FAILURE", "RATE_LIMITED": "PROVIDER_FAILURE",
     "AI_PROVIDER_FAILED": "PROVIDER_FAILURE", "AI_PROVIDER_RECOVERED": "RECOVERY",
-    "RUN_FAILED": "SYSTEM_DEGRADED", "STATE_INCONSISTENCY": "SYSTEM_CRITICAL",
+    "RUN_FAILED": "SYSTEM_DEGRADED", "TICK_FAILED": "SYSTEM_DEGRADED",
+    "STATE_INCONSISTENCY": "SYSTEM_CRITICAL",
     "RECOVERY_COMPLETED": "RECOVERY",
     "AI_REVIEW_UNHEALTHY": "SYSTEM_DEGRADED", "AI_REVIEW_RECOVERED": "RECOVERY",
 })
 
 
+def soft_provider_failure(event):
+    """True for an xAI ``TIMEOUT`` or an fxmacro provider failure. Those do not block the cycle.
+
+    They stay in the journal and in the daily ``provider_problems`` count. They are not a HIGH alert.
+    A market-data failure, ``RUN_FAILED`` and ``TICK_FAILED`` are not soft.
+    """
+    if getattr(event, "type", None) != "PROVIDER_FAILURE":
+        return False
+    execution = getattr(event, "execution", None) or {}
+    provider = str(execution.get("provider") or "").strip().lower()
+    outcome = str(execution.get("outcome") or "").strip().upper()
+    code = str(execution.get("error_code") or "").strip().upper()
+    reason = str(execution.get("reason") or "")
+    lowered = reason.lower()
+    if provider in {"fxmacro", "fxmacrodata"} or "provider=fxmacro" in lowered:
+        return True
+    xai = provider == "xai" or "provider=xai" in lowered
+    timeout = outcome == "TIMEOUT" or code == "TIMEOUT" or "TIMEOUT" in reason.upper()
+    return bool(xai and timeout)
+
+
 def from_notification(event):
     """Map a persisted ``NotificationEvent`` to an AlertEvent, or None when it is not an alert."""
+    if soft_provider_failure(event):
+        return None
     event_type = _NOTIFICATION_MAP.get(event.type)
     execution = event.execution or {}
     # The reverse alert is already durable with its order; the ordinary execution projection
@@ -167,4 +191,5 @@ def from_notification(event):
 
 
 __all__ = ["AlertEvent", "AlertKind", "CATALOG", "NO_DATA", "PRIORITY_RANK", "TEST_KIND", "TRADE_FIELDS",
-           "alert_event", "alert_event_id", "display", "from_notification", "make_test_alert"]
+           "alert_event", "alert_event_id", "display", "from_notification", "make_test_alert",
+           "soft_provider_failure"]

@@ -204,12 +204,29 @@ class OperationalRuntime:
         if broker_router is not None:  # DEC-DEMO-GATE-1: evidence of the gate's source (no amounts, no ids)
             LOG.info("component=risk event=PAPER_DRAWDOWN_GATE source=OANDA_DEMO")
 
+    def _recover_open_state(self, recovery_stale_after_seconds):
+        """``recover`` at startup. A full disk is logged and raised as a HIGH alert; the process keeps going."""
+        try:
+            self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
+        except sqlite3.OperationalError as exc:
+            from storage.disk_guard import is_disk_full, log_disk_full
+            if not is_disk_full(exc):
+                raise
+            log_disk_full("recover")
+            from runtime.broker_alerts import notify_high
+            notify_high("DISK_FULL", {"reason": "recover"})
+
     def _startup(self, market_provider, recovery_stale_after_seconds):
         """Process start. With the halt gate every write is a STARTUP site (``startup_write``): refused after T_h,
         and on POSIX a halt signal is deferred across each check + write. OFF: unchanged."""
         gate = self.halt_gate
         with startup_write(gate, "recover"):
-            self.store.recover(self.clock(), stale_after_seconds=recovery_stale_after_seconds)
+            try:
+                from storage.disk_guard import maintain_disk
+                maintain_disk(self.store)
+            except Exception:  # noqa: BLE001 - retention never blocks startup
+                pass
+            self._recover_open_state(recovery_stale_after_seconds)
         if self.sealed_context is not None:  # V2 P2b gate steps 2-5, before any economic write
             from runtime.genesis import seal_check
             with startup_write(gate, "genesis_seal_check"):

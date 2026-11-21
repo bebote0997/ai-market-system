@@ -17,7 +17,7 @@ Fuente: [portal](https://www.exness-api.com/trading/get-started), [ayuda](https:
 | Módulo | Papel |
 |---|---|
 | `execution/exness_sign.py` | Cabeceras `EXN-*`. Ed25519 firma los bytes de `EXN-DATA`, no el texto base64url. |
-| `execution/exness_client.py` | REST firmado. Descubre el Access Point una vez y lo guarda. La misma clave de idempotencia no se reenvía. |
+| `execution/exness_client.py` | REST firmado. Descubre el Access Point y lo guarda. Un 401 `AUTH_INVALID_API_KEY` olvida ese punto y reintenta una vez. La misma clave de idempotencia no se reenvía. |
 | `execution/exness_stream.py` | Libro del último tick. Si el socket cae, el tick se borra al momento. Reintento 1, 2, 4, 8, 16, 30 s (política del Floor: el portal solo dice «backoff»). |
 | `execution/exness_transport.py` | `FakeExnessTransport` y `RestExnessTransport`. El adaptador solo llama `read_state` y `submit`. |
 | `execution/exness_broker.py` | `ExnessBroker`. Mercado = `POST .../positions` con `instrument`, `side`, `volume` y, si hay, `stop_loss_price` / `take_profit_price`. La página no publica comentario ni client id; la clave va en `EXN-IDEMPOTENCY-KEY`. Límite = `POST .../orders`. Cancelar = `DELETE .../orders/{id}`. Cerrar = `DELETE .../positions/{id}`. |
