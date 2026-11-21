@@ -901,7 +901,8 @@ class SessionCombo:
 
         Otherwise close the one USDJPY whose side matches the flag, whose open time is inside
         02:00-05:00 ET, and which is within two minutes of the flag or linked by an ``sltp`` order.
-        Zero matches or more than one: a HIGH alert, and no close.
+        Zero matches or more than one: a HIGH alert, and no close. If the stored ticket, or any
+        ticket already asked this tick, is still in the book, return without a close and without an alert.
         """
         if not _aware(at):
             return
@@ -921,6 +922,12 @@ class SessionCombo:
             book = self._broker._read()
         except Exception:  # noqa: BLE001
             self._high_alert("EXNESS_LONDON_BOOK", "book_unread")
+            return
+        # A stored ticket, or one this tick already tried to close, that is still open owns the
+        # exit. Do not fall through and close a different USDJPY, and do not alert.
+        open_tickets = {row.ticket for row in book.positions}
+        stored = state.get("position_id")
+        if (stored and stored in open_tickets) or any(ticket in open_tickets for ticket in asked):
             return
         linked = set()
         for item in getattr(book, "sltp_ids", ()) or ():

@@ -119,6 +119,46 @@ class LondonBookExitTests(unittest.TestCase):
         combo.tick(at, [])
         self.assertEqual(fake.commands, [])
 
+    def test_unknown_close_of_the_stored_ticket_does_not_close_a_manual_position(self):
+        """A 202 on the stored ticket leaves it in the book. The 03:00 manual USDJPY stays open, with no HIGH alert."""
+        at = ny(2026, 1, 16, 11, 0)
+        opened = ny(2026, 1, 16, 3, 0)
+        _clock, fake, broker, combo = world(at, transport=UnknownClose())
+        alerts = []
+        broker._on_alert = lambda kind, detail: alerts.append((kind, detail.get("severity")))
+        fake.positions = [
+            Position("stored", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.20"),
+                     Decimal("149.50"), None, "", opened),
+            Position("manual", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.40"),
+                     Decimal("149.80"), None, "", opened),
+        ]
+        fake.set_flag(london_key(at.date()), _flag(at.date(), position_id="stored", opened_at=opened.isoformat()))
+        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+            combo.tick(at, [])
+        text = "\n".join(logs.output)
+        self.assertNotIn("EXNESS_LONDON_BOOK", text)
+        self.assertEqual(alerts, [])
+        self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["stored"])
+        self.assertEqual({row.ticket for row in fake.positions}, {"stored", "manual"})
+        self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
+
+    def test_unknown_close_of_the_only_ticket_does_not_raise_a_high_alert(self):
+        at = ny(2026, 1, 16, 11, 0)
+        _clock, fake, broker, combo = world(at, transport=UnknownClose())
+        alerts = []
+        broker._on_alert = lambda kind, detail: alerts.append(kind)
+        fake.positions = [Position("stored", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.20"),
+                                   Decimal("149.50"), None, "", ny(2026, 1, 16, 3, 0))]
+        fake.set_flag(london_key(at.date()), _flag(
+            at.date(), position_id="stored", opened_at=ny(2026, 1, 16, 3, 0).isoformat()))
+        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+            combo.tick(at, [])
+        self.assertNotIn("EXNESS_LONDON_BOOK", "\n".join(logs.output))
+        self.assertEqual(alerts, [])
+        self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["stored"])
+        self.assertEqual([row.ticket for row in fake.positions], ["stored"])
+        self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
+
     def test_unknown_close_leaves_the_position_open(self):
         at = ny(2026, 1, 16, 11, 0)
         _clock, fake, broker, combo = world(at, transport=UnknownClose())
