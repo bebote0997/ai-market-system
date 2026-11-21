@@ -470,7 +470,8 @@ class OperationalRuntime:
     def _catch_up_positions(self, symbol, slot, key, store=None, observer=None, frame=None):
         """B2.3B: every committed closed 5m bar after the open position's durable watermark, oldest
         first, through the accepted B2.1 catch-up (guarded save per bar). Never a newest-bar fallback.
-        Returns None, or the reason PAPER economics are blocked for this cycle."""
+        Returns None, or the reason PAPER economics are blocked for this cycle.
+        """
         for _ in range(2):  # A STALE result resumes from the durable watermark once.
             try:
                 result = catch_up_position(self.store if store is None else store,

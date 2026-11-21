@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-20 — copia y purga paper, y el ciclo Exness ya no escribe paper
+
+- `python -m runtime.exness_purge` en seco no copia ni borra. `--apply` solo actúa con `AI_FLOOR_PURGE_CONFIRM=EXNESS_PURGE_AUTHORIZED`. La copia usa el backup en línea de SQLite (incluye el WAL). Si el espacio libre es menor que el doble del tamaño de la base, no borra nada. Después exporta las tablas paper, las vacía y hace `VACUUM`. Hay que parar el servicio antes, o reiniciarlo justo después. No está en el arranque, en el scheduler ni en el deploy.
+- El catch-up y `_guarded_paper_write` siguen escribiendo paper. Saltarlos quedó fuera de alcance. `--apply` no se ejecuta sin orden del CEO y no está en el arranque ni en el deploy.
+- El session combo no llama a `save_paper` ni a OANDA. Los módulos de paper y de OANDA siguen: los usan la suite y un proceso que no es Exness. Borrarles el código rompería esa suite. La purga limpia las filas, no el programa.
+- Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy.
+
 ## 2026-11-20 — endurecimiento de operación (alertas, disco, etiqueta, reintento, adopt)
 
 - Un `PROVIDER_FAILURE` de xAI con resultado `TIMEOUT`, y un fallo del proveedor fxmacro/fxmacrodata, no se envían como HIGH. Siguen en el diario y en el conteo del resumen. `RUN_FAILED` y `TICK_FAILED` siguen en HIGH.
