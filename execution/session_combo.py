@@ -695,14 +695,17 @@ class SessionCombo:
             return False
         return isinstance(getattr(book, "orders", None), (list, tuple))
 
-    def _high_alert(self, kind, reason):
+    def _high_alert(self, kind, reason, symbol=None):
         """Immediate operator alert. The broker sink delivers it when alerts are on."""
-        _log(kind, severity="HIGH", reason=reason)
+        _log(kind, severity="HIGH", reason=reason, symbol=symbol)
         alert = getattr(self._broker, "_alert", None)
         if not callable(alert):
             return
+        detail = {"reason": reason, "severity": "HIGH"}
+        if symbol:
+            detail["symbol"] = symbol
         try:
-            alert(kind, {"reason": reason, "severity": "HIGH"})
+            alert(kind, detail)
         except Exception:  # noqa: BLE001 - an alert never changes the close
             _log("ALERT_FAILED", reason=kind)
 
@@ -845,13 +848,15 @@ class SessionCombo:
         return "fix_30m"
 
     def _close_leg(self, key, state, ticket, row, asked):
-        if not self._finish_close(ticket, self._exit_reason(key, state, row), state.get("client_id"), state.get("symbol"), asked):
+        if self._finish_close(ticket, self._exit_reason(key, state, row), state.get("client_id"), state.get("symbol"), asked):
+            state["exited"] = True
+            state["status"] = "done"
+            if not state.get("position_id"):
+                state["position_id"] = ticket
+            self._put(key, state)
             return
-        state["exited"] = True
-        state["status"] = "done"
-        if not state.get("position_id"):
-            state["position_id"] = ticket
-        self._put(key, state)
+        self._high_alert("EXNESS_EXIT_FAILED", getattr(self, "_close_status", None) or "close_failed",
+                         state.get("symbol"))
 
     def _finish_close(self, ticket, reason, client, symbol, asked):
         """Close ``ticket`` once this tick. True when a later read no longer shows it.
@@ -861,14 +866,17 @@ class SessionCombo:
         ``UNKNOWN`` because the 202 returned before the position disappeared).
         """
         if not ticket or ticket in asked:
+            self._close_status = "already_asked"
             return False
         asked.add(ticket)
         try:
             result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
         except Exception:  # noqa: BLE001
+            self._close_status = "close_failed"
             _log("TIME_EXIT", symbol=symbol, reason=reason, status="UNKNOWN")
             return False
         status = getattr(result, "status", None)
+        self._close_status = getattr(result, "reason", None) or status or "close_failed"
         if status == "REJECTED":
             _log("TIME_EXIT", symbol=symbol, reason=reason, status="REJECTED")
             return False
@@ -901,8 +909,8 @@ class SessionCombo:
 
         Otherwise close the one USDJPY whose side matches the flag, whose open time is inside
         02:00-05:00 ET, and which is within two minutes of the flag or linked by an ``sltp`` order.
-        Zero matches or more than one: a HIGH alert, and no close. If the stored ticket, or any
-        ticket already asked this tick, is still in the book, return without a close and without an alert.
+        Zero matches or more than one: a HIGH alert, and no close. If the stored ticket, or a
+        USDJPY ticket already asked this tick, is still in the book, alert and do not close another one.
         """
         if not _aware(at):
             return
@@ -923,11 +931,13 @@ class SessionCombo:
         except Exception:  # noqa: BLE001
             self._high_alert("EXNESS_LONDON_BOOK", "book_unread")
             return
-        # A stored ticket, or one this tick already tried to close, that is still open owns the
-        # exit. Do not fall through and close a different USDJPY, and do not alert.
-        open_tickets = {row.ticket for row in book.positions}
+        # A stored USDJPY, or a USDJPY this tick already tried to close, that is still open owns
+        # the exit. Do not close a different one. A Fix-leg ticket in ``asked`` does not block this.
+        usdjpy_open = {row.ticket for row in book.positions if row.symbol == LONDON_SYMBOL}
         stored = state.get("position_id")
-        if (stored and stored in open_tickets) or any(ticket in open_tickets for ticket in asked):
+        if (stored and stored in usdjpy_open) or any(ticket in usdjpy_open for ticket in asked):
+            self._high_alert("EXNESS_EXIT_FAILED", getattr(self, "_close_status", None) or "still_open",
+                             state.get("symbol"))
             return
         linked = set()
         for item in getattr(book, "sltp_ids", ()) or ():

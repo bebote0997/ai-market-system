@@ -4,8 +4,9 @@ import json
 import logging
 import unittest
 
+from execution.exness_client import ExnessClient
 from execution.exness_transport import CommandResult, FakeExnessTransport, Position
-from execution.session_combo import SessionCombo, london_key
+from execution.session_combo import SessionCombo, fix_key, london_key
 from test_session_combo import ny, world
 
 
@@ -27,6 +28,14 @@ class UnknownClose(FakeExnessTransport):
         if command.kind == "CLOSE":
             self.commands.append(command)
             return CommandResult("UNKNOWN", command.idempotency_key, command.position_ref, "accepted")
+        return super().submit(command)
+
+
+class RejectedClose(FakeExnessTransport):
+    def submit(self, command):
+        if command.kind == "CLOSE":
+            self.commands.append(command)
+            return CommandResult("REJECTED", command.idempotency_key, None, "rejected")
         return super().submit(command)
 
 
@@ -137,7 +146,10 @@ class LondonBookExitTests(unittest.TestCase):
             combo.tick(at, [])
         text = "\n".join(logs.output)
         self.assertNotIn("EXNESS_LONDON_BOOK", text)
-        self.assertEqual(alerts, [])
+        self.assertIn("EXNESS_EXIT_FAILED", text)
+        self.assertTrue(alerts)
+        self.assertTrue(all(item[0] == "EXNESS_EXIT_FAILED" and item[1] == "HIGH" for item in alerts))
+        self.assertEqual(alerts[0][0], "EXNESS_EXIT_FAILED")
         self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["stored"])
         self.assertEqual({row.ticket for row in fake.positions}, {"stored", "manual"})
         self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
@@ -154,7 +166,7 @@ class LondonBookExitTests(unittest.TestCase):
         with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
             combo.tick(at, [])
         self.assertNotIn("EXNESS_LONDON_BOOK", "\n".join(logs.output))
-        self.assertEqual(alerts, [])
+        self.assertIn("EXNESS_EXIT_FAILED", alerts)
         self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["stored"])
         self.assertEqual([row.ticket for row in fake.positions], ["stored"])
         self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
@@ -172,6 +184,112 @@ class LondonBookExitTests(unittest.TestCase):
         self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["early"])
         self.assertEqual({row.ticket for row in fake.positions}, {"early", "late"})
         self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
+
+    def test_a_failed_close_keeps_alerting_and_sending_until_1300(self):
+        for transport in (RejectedClose, UnknownClose):
+            with self.subTest(transport=transport.__name__):
+                at = ny(2026, 1, 16, 11, 0)
+                clock, fake, broker, combo = world(at, transport=transport())
+                alerts = []
+                broker._on_alert = lambda kind, detail: alerts.append(kind)
+                opened = ny(2026, 1, 16, 2, 10)
+                fake.positions = [Position("stored", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.20"),
+                                           Decimal("149.50"), None, "", opened)]
+                fake.set_flag(london_key(at.date()), _flag(at.date(), position_id="stored",
+                                                           opened_at=opened.isoformat()))
+                for hour in (11, 12, 13):
+                    clock.at = ny(2026, 1, 16, hour, 0)
+                    fake.push_tick(Decimal("150.30"), Decimal("150.31"), clock.at)
+                    combo.tick(clock.at, [])
+                closes = [command for command in fake.commands if command.kind == "CLOSE"]
+                self.assertGreater(len(closes), 1)
+                self.assertTrue(all(command.position_ref == "stored" for command in closes))
+                self.assertIn("EXNESS_EXIT_FAILED", alerts)
+                self.assertNotIn("EXNESS_LONDON_BOOK", alerts)
+                self.assertEqual([row.ticket for row in fake.positions], ["stored"])
+
+    def test_a_fix_ticket_in_flight_does_not_block_the_london_fallback(self):
+        at = ny(2026, 1, 16, 11, 0)
+        _clock, fake, broker, combo = world(at)
+
+        def submit(command):
+            if command.kind == "CLOSE" and command.position_ref == "fix":
+                fake.commands.append(command)
+                return CommandResult("REJECTED", command.idempotency_key, None, "rejected")
+            return FakeExnessTransport.submit(fake, command)
+
+        fake.submit = submit
+        fake.positions = [_pos("early", ny(2026, 1, 16, 2, 10)),
+                          Position("fix", "GBPUSD", "SHORT", Decimal("0.01"), Decimal("1.25000"),
+                                   comment="", opened_at=ny(2026, 1, 16, 10, 0))]
+        fake.set_flag(london_key(at.date()), _flag(at.date()))
+        fake.set_flag(fix_key(at.date()), json.dumps({
+            "status": "filled", "exited": False, "symbol": "GBPUSD", "side": "SHORT",
+            "position_id": "fix", "client_id": "combo-fix-2026-01-16-SHORT",
+            "exit_at": at.isoformat(), "opened_at": ny(2026, 1, 16, 10, 0).isoformat()}))
+        combo.tick(at, [])
+        closed = [command.position_ref for command in fake.commands if command.kind == "CLOSE"]
+        self.assertIn("fix", closed)
+        self.assertIn("early", closed)
+        self.assertEqual([row.ticket for row in fake.positions], ["fix"])
+
+
+class CloseRetryTests(unittest.TestCase):
+    def _client(self, caller):
+        now = [1_000_000]
+
+        def sleep(seconds):
+            now[0] += int(seconds * 1000) + 1
+
+        return ExnessClient(
+            {"EXN_API_KEY": "exnsk-public-key-value", "EXN_ACCOUNT_ID": "123456",
+             "EXN_DISCOVERY_BASE_URL": "https://gateway.example"},
+            caller=caller, sign=lambda data: b"sig", now_ms=lambda: now[0], sleep=sleep)
+
+    def test_a_rejected_close_is_sent_again_and_an_unknown_that_closed_is_not(self):
+        positions = [{"position_id": "stored", "state": "open"}]
+        deletes = []
+
+        def caller(method, url, headers, body):
+            del headers, body
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            if method == "GET" and url.endswith("/snapshot"):
+                return 200, {"positions": list(positions)}, {}
+            if method == "DELETE":
+                deletes.append(url)
+                return 400, {"error_message": "REJECTED"}, {}
+            return 200, {}, {}
+
+        client = self._client(caller)
+        path = "/v1/trading/accounts/123456/positions/stored"
+        client.mutate("DELETE", path, None, "close-stored-exit")
+        client.mutate("DELETE", path, None, "close-stored-exit")
+        self.assertEqual(len(deletes), 2)
+
+        deletes.clear()
+        positions.clear()
+        unknown = {"n": 0}
+
+        def caller_unknown(method, url, headers, body):
+            del headers, body
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            if method == "GET" and url.endswith("/snapshot"):
+                return 200, {"positions": list(positions)}, {}
+            if method == "DELETE":
+                deletes.append(url)
+                unknown["n"] += 1
+                if unknown["n"] == 1:
+                    positions.clear()
+                return 202, {"operation_id": "1", "status": "accepted"}, {}
+            return 200, {}, {}
+
+        client = self._client(caller_unknown)
+        client.mutate("DELETE", path, None, "close-stored-exit")
+        client.mutate("DELETE", path, None, "close-stored-exit")
+        self.assertEqual(len(deletes), 1)
+        self.assertTrue(deletes[0].endswith("/positions/stored"))
 
 
 if __name__ == "__main__":

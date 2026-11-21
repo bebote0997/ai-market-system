@@ -73,6 +73,7 @@ MESSAGES = {
     "EXNESS_PROTECTION_CLOSE_FAILED": "No se pudo cerrar la posición sin stop: se reintenta",
     "DISK_FULL": "Disco lleno al recuperar el estado",
     "EXNESS_LONDON_BOOK": "Salida de Londres sin un único ticket en el libro: no se cierra",
+    "EXNESS_EXIT_FAILED": "La salida no cerró la posición: se reintenta",
 }
 _SAFE = re.compile(r"[^A-Za-z0-9_:.\-]")
 _LONG_DIGITS = re.compile(r"\d{5,}")

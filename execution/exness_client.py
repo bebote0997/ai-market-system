@@ -54,6 +54,29 @@ def operation_limit(method, path):
     return None
 
 
+def _position_close(method, path):
+    return str(method).upper() == "DELETE" and isinstance(path, str) and "/positions/" in path
+
+
+def _close_target(path):
+    """``(account, ticket)`` from ``/v1/trading/accounts/{account}/positions/{ticket}``."""
+    if not isinstance(path, str) or "/accounts/" not in path or "/positions/" not in path:
+        return None, None
+    account = path.split("/accounts/", 1)[1].split("/", 1)[0]
+    ticket = path.split("/positions/", 1)[1].split("?", 1)[0].strip("/")
+    return (account or None), (ticket or None)
+
+
+def _close_outcome(result):
+    """``unknown`` for an ack or a transport failure. Anything else the server answered is ``rejected``."""
+    if not isinstance(result, dict):
+        return "unknown"
+    status = result.get("status")
+    if result.get("uncertain") or status in (None, 0) or status in (200, 202) or (isinstance(status, int) and status >= 500):
+        return "unknown"
+    return "rejected"
+
+
 def operation_name(path):
     """Short endpoint name for logs (``candles``, ``snapshot``...). Never the path, host or account."""
     found = operation_limit("GET", path)
@@ -294,8 +317,39 @@ class ExnessClient:
             raise ValueError("mutating requests require a non-empty idempotency key")
         prior = self._sent.get(idempotency_key)
         if prior is not None:
-            return prior
+            if _position_close(method, path) and _close_outcome(prior) == "unknown":
+                still = self._position_still_open(path)
+                if still is True:
+                    self._sent.pop(idempotency_key, None)
+                else:
+                    return prior
+            else:
+                return prior
         return self._mutate(method, path, body, idempotency_key, True)
+
+    def _position_still_open(self, path):
+        """True when the close's ticket is still in the snapshot. False when it is gone. None if the read fails."""
+        account, ticket = _close_target(path)
+        if not account or not ticket:
+            return None
+        try:
+            snapshot = self.get_json(f"/v1/trading/accounts/{account}/snapshot")
+        except Exception:  # noqa: BLE001 - an unreadable book must not send a second close
+            return None
+        rows = snapshot.get("positions") if isinstance(snapshot, dict) else None
+        if not isinstance(rows, list):
+            return None
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            pid = item.get("position_id") if item.get("position_id") is not None else item.get("id")
+            if str(pid) != ticket:
+                continue
+            state = item.get("state")
+            if isinstance(state, str) and state.strip().lower() == "closed":
+                return False
+            return True
+        return False
 
     def _mutate(self, method, path, body, idempotency_key, retry):
         base = self.discover()
@@ -312,5 +366,6 @@ class ExnessClient:
             self._drop_access_point()
             return self._mutate(method, path, body, idempotency_key, False)
         result = {"status": status, "payload": payload, "uncertain": status >= 500 or status == 0}
-        self._sent[idempotency_key] = result
+        if not (_position_close(method, path) and _close_outcome(result) == "rejected"):
+            self._sent[idempotency_key] = result
         return result

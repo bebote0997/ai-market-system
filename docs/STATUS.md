@@ -1,6 +1,6 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-21 (rama `cursor/london-book-exit-5ce5`, base `main`). A las 11:00 ET se cierra un único USDJPY del libro solo si el ticket guardado ya no está abierto. Un cierre 202/UNKNOWN de ese ticket no cierra otra posición y no manda alerta. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
+_Última actualización: 2026-11-21 (rama `cursor/london-book-exit-5ce5`, base `main`). Si la salida no cierra, hay una alerta HIGH y el cierre se reintenta. Un 202 que ya cerró no se reenvía. Un ticket de la pata Fix no bloquea la salida de Londres. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
 
 _Anterior: 2026-11-21 (rama `cursor/liquid-glass-dashboard-8910`). Revisión HQ del panel Liquid Glass, sin merge. El ciclo deja en la instantánea la cuenta, posiciones y órdenes que ya leyó. De 900px hacia abajo hay tarjetas y una sola columna en Riesgo. Sin otra llamada al broker, sin cambio de órdenes, frenos, flags, `AI_FLOOR_GIT_COMMIT` ni Render. Sin deploy._
 
