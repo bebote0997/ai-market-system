@@ -66,13 +66,57 @@ class ModelTests(unittest.TestCase):
         self.assertIn("1,500.00 USC", view["brakes"]["total"]["cap"])
         self.assertNotIn("200.00 USC", view["brakes"]["daily"]["cap"])
 
-    def test_missing_snapshot_does_not_invent_equity(self):
+    def test_missing_snapshot_shows_the_day_base_and_not_a_made_up_pnl(self):
         view = _view(flags={"exness_brake_day_equity": "10000", "exness_brake_start": "10000"})
         self.assertEqual(view["kpis"]["balance"]["text"], MISSING)
-        self.assertEqual(view["kpis"]["equity"]["text"], MISSING)
+        self.assertIn("10,000.00 USC", view["kpis"]["equity"]["text"])
+        self.assertEqual(view["kpis"]["equity"]["sub"], "Base del día, 17:00 ET")
         self.assertEqual(view["kpis"]["today"]["text"], MISSING)
         self.assertEqual(view["kpis"]["total"]["text"], MISSING)
         self.assertIn("Consumo de frenos", view["unavailable"])
+
+    def test_closed_market_uses_the_last_reading_and_does_not_look_degraded(self):
+        from ui.liquid.model import CLOSED
+        saturday = datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc)
+        flags = {"exness_last_balance": "30200", "exness_last_equity": "30255.46",
+                 "exness_last_currency": "USC", "exness_last_read_at": "2026-11-21T21:00:00+00:00",
+                 "exness_brake_day_equity": "30000", "exness_brake_start": "25000",
+                 "combo_lon_2026-11-20": json.dumps({
+                     "status": "done", "symbol": "GBPUSD", "side": "buy", "volume": "1", "exited": True,
+                     "entry": "1.2510", "exit_reason": "london_1100",
+                 }),
+                 "combo_lon_2026-11-19": json.dumps({
+                     "status": "done", "symbol": "USDJPY", "side": "buy", "volume": "1.32", "exited": True,
+                 })}
+        view = _view(now=saturday, flags=flags, health={
+            "status": "DEGRADED", "scheduler": "RUNNING", "last_cycle_status": "COMPLETED",
+            "freshness": "NO_DATA", "runtime_heartbeat": "2026-11-21T15:59:00+00:00"}, errors=[])
+        self.assertIn("30,200.00 USC", view["kpis"]["balance"]["text"])
+        self.assertIn("30,255.46 USC", view["kpis"]["equity"]["text"])
+        self.assertIn("última lectura", view["kpis"]["equity"]["sub"])
+        self.assertIn("255.46 USC", view["kpis"]["today"]["text"])
+        self.assertNotEqual(view["brakes"]["daily"]["text"], CLOSED)
+        self.assertEqual(view["positions"]["state"], "closed")
+        self.assertEqual(view["positions"]["note"], CLOSED)
+        self.assertEqual(view["system"]["status"], "Mercado cerrado")
+        self.assertEqual(view["system"]["connection"], CLOSED)
+        london = view["history"]["rows"][0]
+        self.assertEqual(london["entry"], "1.251")
+        self.assertEqual(london["reason"], "cierre 11:00 ET")
+        older = next(row for row in view["history"]["rows"] if row["symbol"] == "USDJPY")
+        self.assertEqual(older["entry"], MISSING)
+        self.assertEqual(older["reason"], "cierre 11:00 ET")
+        self.assertEqual(older["pnl"], MISSING)
+        html = fragment(view, section="Historial")
+        self.assertIn("1.251", html)
+        self.assertIn("cierre 11:00 ET", html)
+        self.assertNotIn("Degradado", fragment(view, section="Sistema"))
+
+    def test_deploy_label_is_the_render_commit_only(self):
+        shown = _view(env=dict(ENV, RENDER_GIT_COMMIT="abcdef1234567890"))
+        self.assertEqual(shown["system"]["deploy"], "abcdef1")
+        ignored = _view(env=dict(ENV, AI_FLOOR_GIT_COMMIT="deadbeef"))
+        self.assertEqual(ignored["system"]["deploy"], MISSING)
 
     def test_live_equity_builds_pnl_and_brake_use(self):
         view = _view(flags={"exness_brake_day_equity": "10000", "exness_brake_start": "10000"},

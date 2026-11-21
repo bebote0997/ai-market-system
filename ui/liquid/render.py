@@ -3,7 +3,7 @@ from decimal import Decimal
 from html import escape
 from pathlib import Path
 
-from ui.liquid.model import MISSING
+from ui.liquid.model import CLOSED, MISSING
 
 _ROOT = Path(__file__).resolve().parents[1] / "static" / "liquid"
 SECTIONS = ("Inicio", "Posiciones", "Historial", "Riesgo", "Sistema")
@@ -123,7 +123,7 @@ def _trade_cards(rows):
     for row in rows:
         title = f'{_e(row["day"])} {_e(row["symbol"])} {_side(row)}'
         cards.append(_mini(title, (
-            ("Lotes", _e(row["lots"])), ("Entrada", _e(MISSING)), ("Salida", _e(row["exit_price"])),
+            ("Lotes", _e(row["lots"])), ("Entrada", _e(row.get("entry", MISSING))), ("Salida", _e(row["exit_price"])),
             ("Motivo de salida", _e(row["reason"])),
             ("Resultado", f'<span class="{_e(row["pnl_tone"])}">{_e(row["pnl"])}</span>'),
         )))
@@ -155,7 +155,7 @@ def _trade_table(rows, tagged=False):
             pairs = (("epoch", "epoch"), ("fecha", "day"), ("par", "symbol"), ("lado", "side"), ("lotes", "lots"),
                      ("entrada", "entry"), ("salida", "exit_price"), ("motivo", "reason"), ("resultado", "pnl"))
             attrs = " data-trade=\"1\" " + " ".join(f'data-{name}="{_e(row.get(key, MISSING))}"' for name, key in pairs)
-        cells = (_e(row["day"]), _e(row["symbol"]), _side(row), _e(row["lots"]), _e(MISSING),
+        cells = (_e(row["day"]), _e(row["symbol"]), _side(row), _e(row["lots"]), _e(row.get("entry", MISSING)),
                  _e(row["exit_price"]), _e(row["reason"]),
                  f'<span class="{_e(row["pnl_tone"])}">{_e(row["pnl"])}</span>')
         built.append((attrs, "".join(f"<td>{cell}</td>" for cell in cells)))
@@ -169,6 +169,8 @@ def _positions_card(view, link=False):
     block = view["positions"]
     if block["state"] == "empty":
         body = "<p class=\"hint\">Sin posiciones abiertas.</p>"
+    elif block["state"] == "closed":
+        body = f'<p class="hint">{_e(block["note"])}</p>'
     elif block["state"] != "rows":
         body = f'<p class="na">{_e(MISSING)}</p><p class="hint">{_e(block["note"])}</p>'
     else:
@@ -251,7 +253,8 @@ def _system_card(view, compact=False):
         headline = "Sistema operativo y estable" if stable else system["status"]
         scheduler = "Sí" if system["scheduler"] == "En marcha" else (MISSING if system["scheduler"] == MISSING else "No")
         rows = [("Programador en marcha", scheduler, scheduler == "Sí"), ("Último ciclo", system["last_cycle"], system["last_cycle"] != MISSING),
-                ("Conexión Exness", MISSING, False), ("Último despliegue", MISSING, False)]
+                ("Conexión Exness", system.get("connection", MISSING), system.get("connection") not in (MISSING, CLOSED)),
+                ("Último despliegue", system.get("deploy", MISSING), system.get("deploy", MISSING) != MISSING)]
         if not compact:
             rows.append(("Latido", system["heartbeat"], system["heartbeat"] != MISSING))
         checks = "".join(
@@ -314,6 +317,8 @@ def _positions_page(view):
             f'{_kpi("Operaciones activas", {"text": view["active"], "main": view["active"], "sub": "Libro del panel", "tone": "", "minor": ""})}</div>')
     if block["state"] == "empty":
         body = '<article class="card"><h2>Posiciones</h2><p class="hint">Sin posiciones abiertas.</p></article>'
+    elif block["state"] == "closed":
+        body = f'<article class="card"><h2>Posiciones</h2><p class="hint">{_e(block["note"])}</p></article>'
     elif block["state"] != "rows":
         body = f'<article class="card"><h2>Posiciones</h2><p class="na">{_e(MISSING)}</p><p class="hint">{_e(block["note"])}</p></article>'
     else:

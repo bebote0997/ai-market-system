@@ -18,6 +18,7 @@ from ui.exness_present import LABEL, OFF_SAFETY, broker_is_exness, brake_view, c
 from ui.i18n_es import datetime_et, long_date_et
 
 MISSING = "sin datos"
+CLOSED = "mercado cerrado"
 VERSION = "V2.1"
 _STATUSES = ("pending", "armed", "submitted", "filled", "skipped", "cancelled", "done")
 _LEG_TEXT = {
@@ -26,7 +27,8 @@ _LEG_TEXT = {
 }
 _SIDES = {"buy": ("Compra", "buy"), "long": ("Compra", "buy"), "sell": ("Venta", "sell"), "short": ("Venta", "sell")}
 _SYS = {
-    "ONLINE": "En línea", "DEGRADED": "Degradado", "STOPPED": "Detenido", "RUNNING": "En marcha",
+    "ONLINE": "En línea", "DEGRADED": "Degradado", "MARKET_CLOSED": "Mercado cerrado",
+    "STOPPED": "Detenido", "RUNNING": "En marcha",
     "DISABLED": "Apagado", "NOT STARTED": "Sin arrancar", "COMPLETED": "Completado", "FAILED": "Fallido",
     "ERROR": "Error", "NO_DATA": MISSING, "NOT CONFIGURED": "Sin configurar", "CURRENT": "Al día",
     "STALE_DATA": "Datos viejos",
@@ -188,6 +190,9 @@ def _legs(flags, now):
             "status": parsed.get("status"), "symbol": _symbol(parsed.get("symbol")), "side": _side(parsed.get("side")),
             "position_id": _ident(parsed.get("position_id")), "volume": _money(parsed.get("volume")),
             "opened_at": opened, "exit_at": exit_at, "exited": parsed.get("exited") is True,
+            "entry": _money(_get(parsed, "entry", "fill", "open_price")),
+            "exit_price": _money(_get(parsed, "exit_price", "close_price")),
+            "exit_reason": parsed.get("exit_reason") if isinstance(parsed.get("exit_reason"), str) else None,
             "pnl": _money(parsed.get("pnl") if parsed.get("pnl") is not None else parsed.get("profit")),
         })
     return rows
@@ -203,9 +208,23 @@ def _leg_row(leg, currency):
         "opened": datetime_et(leg["opened_at"]) if leg["opened_at"] else MISSING,
         "close": datetime_et(leg["exit_at"]) if leg["exit_at"] else MISSING,
         "ticket": leg["position_id"] or MISSING, "pnl": pnl, "pnl_tone": tone,
-        "lots": _plain(leg["volume"]), "exit_price": MISSING, "reason": MISSING,
+        "lots": _plain(leg["volume"]), "entry": _plain(leg.get("entry")),
+        "exit_price": _plain(leg.get("exit_price")), "reason": _exit_label(leg),
         "epoch": "" if leg["opened_at"] is None else str(int(leg["opened_at"].timestamp())),
     }
+
+
+def _exit_label(leg):
+    """The close rule already stored on the leg, or the one its key records."""
+    text = leg.get("exit_reason")
+    labels = {"london_1100": "cierre 11:00 ET", "fix_30m": "30 min", "protection_missing": "sin protección"}
+    if isinstance(text, str) and text.strip() in labels:
+        return labels[text.strip()]
+    if isinstance(text, str) and re.fullmatch(r"[A-Za-z0-9_]{1,32}", text.strip()):
+        return text.strip().replace("_", " ")
+    if leg.get("status") in ("done",) or leg.get("exited"):
+        return "cierre 11:00 ET" if leg.get("kind") == "london" else "30 min"
+    return MISSING
 
 
 def _day_text(day):
@@ -242,7 +261,7 @@ def _position_row(position, orders, closes, currency):
     }
 
 
-def _positions(book, legs, currency):
+def _positions(book, legs, currency, now):
     closes = _close_index(legs)
     if book is None:
         rows = []
@@ -256,6 +275,8 @@ def _positions(book, legs, currency):
                     "close": datetime_et(leg["exit_at"]) if leg["exit_at"] else MISSING, "_profit": None,
                 })
         if not rows:
+            if _market_closed(now):
+                return {"state": "closed", "rows": [], "note": CLOSED, "floating": CLOSED, "floating_tone": ""}
             return {"state": "sin datos", "rows": [], "note": "El libro de posiciones no está en el panel.", "floating": MISSING, "floating_tone": ""}
         return {"state": "rows", "rows": rows, "note": "Entrada, precio, SL y TP: sin datos. No hay libro del broker en el panel.",
                 "floating": MISSING, "floating_tone": ""}
@@ -498,6 +519,62 @@ def _pair(fix, symbol):
     return {"symbol": symbol, "state": state, "tone": tone}
 
 
+def _market_closed(now):
+    from execution.trade_duration import entries_blocked
+    try:
+        return entries_blocked(now) is True
+    except Exception:  # noqa: BLE001 - an unreadable clock stays on the explicit missing label
+        return False
+
+
+def _gap(now):
+    return CLOSED if _market_closed(now) else MISSING
+
+
+def _when(stamp):
+    parsed = _aware(stamp)
+    if parsed is None:
+        return None
+    return f"última lectura {datetime_et(parsed)}"
+
+
+def _deploy_label(env):
+    raw = env.get("RENDER_GIT_COMMIT") if hasattr(env, "get") else None
+    if isinstance(raw, str) and re.fullmatch(r"[0-9a-fA-F]{7,40}", raw.strip()):
+        return raw.strip()[:7]
+    return MISSING
+
+
+def _saved_account(flags):
+    """Last startup reading, else the day-base equity. Neither is a live broker call."""
+    from execution.exness_brakes import (
+        DAY_EQUITY_FLAG, LAST_BALANCE_FLAG, LAST_CURRENCY_FLAG, LAST_EQUITY_FLAG, LAST_READ_FLAG)
+    equity = _money(flags.get(LAST_EQUITY_FLAG))
+    balance = _money(flags.get(LAST_BALANCE_FLAG))
+    code = flags.get(LAST_CURRENCY_FLAG)
+    code = code.strip().upper() if isinstance(code, str) else ""
+    if equity is not None and code in ("USC", "USD"):
+        return {"balance": balance, "equity": equity, "currency": code, "stored": True,
+                "kind": "last", "at": flags.get(LAST_READ_FLAG)}
+    day = _money(flags.get(DAY_EQUITY_FLAG))
+    if day is None:
+        return None
+    return {"balance": None, "equity": day, "currency": "USC", "stored": True, "kind": "day", "at": None}
+
+
+def _panel_health(health, now):
+    """A stale book while the market is shut is not a degraded process."""
+    if not isinstance(health, dict) or health.get("status") != "DEGRADED" or not _market_closed(now):
+        return health
+    if health.get("last_cycle_status") == "FAILED":
+        return health
+    if health.get("scheduler") in {"STOPPED", "DISABLED", "NOT STARTED"}:
+        return health
+    shown = dict(health)
+    shown["status"] = "MARKET_CLOSED"
+    return shown
+
+
 def _account_from_snapshot(snapshot):
     """Balance and equity only from keys the stored snapshot actually has."""
     if not isinstance(snapshot, dict):
@@ -534,25 +611,30 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     flags = {} if flags is None else flags
     snap = snapshot if isinstance(snapshot, dict) else {}
     account = _account_from_snapshot(snap)
-    if account is None:
-        account = read_account(env, reader=account_reader, flags=flags)
-        if account_reader is None:
-            account = {**account, "balance": None, "equity": None, "stored": True}
+    if account is not None:
+        account = {**account, "kind": "snapshot", "at": snap.get("as_of")}
+    elif account_reader is not None:
+        account = {**read_account(env, reader=account_reader, flags=flags), "kind": "reader", "at": None}
+    else:
+        account = _saved_account(flags) or {
+            "balance": None, "equity": None, "currency": "USC", "stored": True, "kind": "none", "at": None}
     brakes = brake_view(env, flags=flags)
     clock = session_clock(env, now=now, flags=flags)
     currency = account.get("currency") or "USC"
-    equity = account.get("equity") if not account.get("stored") else None
-    stored_equity = account.get("equity") if account.get("stored") else None
-    live = equity if equity is not None else None
-    today_amount = None if live is None else (None if _money(brakes.get("day_base")) is None else live - _money(brakes["day_base"]))
-    total_amount = None if live is None else (None if _money(brakes.get("brake_start")) is None else live - _money(brakes["brake_start"]))
+    known = account.get("equity") if account.get("kind") in ("snapshot", "reader", "last") else None
+    today_amount = None if known is None else (None if _money(brakes.get("day_base")) is None else known - _money(brakes["day_base"]))
+    total_amount = None if known is None else (None if _money(brakes.get("brake_start")) is None else known - _money(brakes["brake_start"]))
     today_text, today_tone = _signed(today_amount, currency)
     total_text, total_tone = _signed(total_amount, currency)
+    if today_amount is None:
+        today_text, today_tone = _gap(now), ""
+    if total_amount is None:
+        total_text, total_tone = _gap(now), ""
     legs = _legs(flags, now)
     book = _book_from_snapshot(snap, book)
     if curve is None and isinstance(snap.get("curve"), (list, tuple)):
         curve = snap.get("curve")
-    positions = _positions(book, legs, currency)
+    positions = _positions(book, legs, currency, now)
     for row in positions["rows"]:
         row.pop("_profit", None)
     day = clock.get("day") if clock.get("waiting") is False else 0
@@ -562,8 +644,11 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     cycle_pct = 0 if day == 0 else 100 if day > 30 else float(Decimal(day) / Decimal(30) * 100)
     daily_cap = brakes.get("daily") if brakes.get("daily") is not None else USC_DAILY
     total_cap = brakes.get("drawdown") if brakes.get("drawdown") is not None else USC_DRAWDOWN
-    daily = _brake_line(daily_cap, None if live is None else _used(brakes.get("day_base"), live), "USC")
-    total_brake = _brake_line(total_cap, None if live is None else _used(brakes.get("brake_start"), live), "USC")
+    daily = _brake_line(daily_cap, None if known is None else _used(brakes.get("day_base"), known), "USC")
+    total_brake = _brake_line(total_cap, None if known is None else _used(brakes.get("brake_start"), known), "USC")
+    if known is None:
+        daily = {**daily, "used": _gap(now), "text": _gap(now)}
+        total_brake = {**total_brake, "used": _gap(now), "text": _gap(now)}
     reason = brakes.get("halt_reason")
     reasons = {"daily_loss": "pérdida diaria", "drawdown": "caída máxima", "none": "ninguno"}
     if not isinstance(reason, str) or reason.strip() in ("", "none"):
@@ -574,15 +659,29 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         reason_text = reason.strip().replace("_", " ")
     else:
         reason_text = "ninguno"
-    system = _system(health, errors)
+    system = _system(_panel_health(health, now), errors)
+    system["connection"] = _gap(now)
+    system["deploy"] = _deploy_label(env)
     curve_view = _curve(curve, now, currency)
-    equity_text = money_line(live if live is not None else stored_equity, currency)
+    equity_text = money_line(account.get("equity"), currency)
+    if account.get("equity") is None:
+        equity_text = _gap(now)
+    balance_text = money_line(account.get("balance"), currency)
+    if account.get("balance") is None:
+        balance_text = _gap(now)
+    read_at = _when(account.get("at"))
+    if account.get("kind") == "day":
+        equity_sub = "Base del día, 17:00 ET"
+    elif read_at:
+        equity_sub = read_at
+    elif account.get("kind") in ("snapshot", "last", "reader"):
+        equity_sub = "Equity vivo" if account.get("kind") == "reader" else _gap(now)
+    else:
+        equity_sub = _gap(now)
     unavailable = []
     if account.get("balance") is None:
         unavailable.append("Balance")
-    if live is None:
-        unavailable.append("Equity vivo")
-    if stored_equity is None and live is None:
+    if account.get("equity") is None:
         unavailable.append("Equity")
     if today_amount is None:
         unavailable.append("P/L de hoy")
@@ -590,15 +689,15 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         unavailable.append("P/L total")
     if positions["state"] == "sin datos":
         unavailable.append("Posiciones")
-    elif any(row["sl"] == MISSING or row["tp"] == MISSING for row in positions["rows"]):
+    elif positions["state"] == "rows" and any(row["sl"] == MISSING or row["tp"] == MISSING for row in positions["rows"]):
         unavailable.append("SL/TP de alguna posición")
-    if any(row["current"] == MISSING for row in positions["rows"]) or positions["state"] != "rows":
+    if positions["state"] == "rows" and any(row["current"] == MISSING for row in positions["rows"]):
         unavailable.append("Precio actual")
     if positions["floating"] == MISSING:
         unavailable.append("P/L flotante")
     if curve_view["state"] != "ok":
         unavailable.append("Curva de equity")
-    if daily["used"] == MISSING or total_brake["used"] == MISSING:
+    if daily["used"] in (MISSING, CLOSED) or total_brake["used"] in (MISSING, CLOSED):
         unavailable.append("Consumo de frenos")
     if system["state"] != "ok":
         unavailable.append("Estado del sistema")
@@ -609,7 +708,11 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
             unavailable.append("Último ciclo")
         if system["errors_state"] == "sin datos":
             unavailable.append("Errores")
-    for name in ("Conexión Exness", "Ping", "Tiempo activo", "Último despliegue"):
+    if system.get("connection") == MISSING:
+        unavailable.append("Conexión Exness")
+    if system.get("deploy") == MISSING:
+        unavailable.append("Último despliegue")
+    for name in ("Ping", "Tiempo activo"):
         unavailable.append(name)
     title = LABEL if broker_is_exness(env) else "Jt Trading Floor"
     armed = real_execution_armed(env) is True
@@ -619,14 +722,14 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         "live": armed, "safety_short": "Ejecución real activa" if armed else "Ejecución real desactivada",
         "clock": long_date_et(now), "now_epoch": str(int(now.timestamp())), "currency": currency,
         "kpis": {
-            "balance": _kpi(money_line(account.get("balance"), currency), "Saldo de la cuenta" if account.get("balance") is not None else MISSING),
-            "equity": _kpi(equity_text, "Equity vivo" if live is not None else "Base del día, 17:00 ET" if stored_equity is not None else MISSING),
+            "balance": _kpi(balance_text, "Saldo de la cuenta" if account.get("balance") is not None else (read_at or _gap(now))),
+            "equity": _kpi(equity_text, equity_sub),
             "today": _kpi(today_text, "Respecto a la base del día" if today_amount is not None else MISSING, today_tone),
             "total": _kpi(total_text, "Desde el inicio del ciclo" if total_amount is not None else MISSING, total_tone),
             "cycle": _kpi(f"Día {shown_day} de 30", clock_line(clock), ""),
             "trades": _kpi(trades, "Operaciones del ciclo"),
         },
-        "cycle_pct": cycle_pct, "active": MISSING if positions["state"] == "sin datos" else str(len(positions["rows"])),
+        "cycle_pct": cycle_pct, "active": "0" if positions["state"] == "closed" else (MISSING if positions["state"] == "sin datos" else str(len(positions["rows"]))),
         "positions": positions, "curve": curve_view, "strategy": _strategy(legs, now),
         "brakes": {"daily": daily, "total": total_brake, "trade_cap": money_line(brakes.get("cap"), "USC"),
                    "halt": "Activo" if brakes.get("halt") else "No",

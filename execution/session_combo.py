@@ -49,7 +49,7 @@ FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
            "position_id", "volume", "opened_at", "stop", "target", "sltp_sent",
            "protection_after", "protection_retry_done", "protection_close_done",
-           "protection_miss_reads")
+           "protection_miss_reads", "entry", "exit_reason", "exit_unknown_seen")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
 _FILL_POLLS = 5
@@ -218,7 +218,8 @@ def _log(event, **detail):
 def _blank():
     return {"status": "pending", "client_id": None, "exit_at": None, "exited": False,
             "symbol": None, "side": None, "logged_range": False, "position_id": None,
-            "volume": None, "opened_at": None, "stop": None, "target": None, "sltp_sent": None,
+            "volume": None, "opened_at": None, "stop": None, "target": None, "entry": None,
+            "exit_reason": None, "exit_unknown_seen": False, "sltp_sent": None,
             "protection_after": None, "protection_retry_done": False, "protection_close_done": False,
             "protection_miss_reads": 0}
 
@@ -516,6 +517,7 @@ class SessionCombo:
             return False
         state.update(status="submitted", client_id=client_id, exit_at=exit_at, symbol=symbol, side=side,
                      exited=False, opened_at=opened_at, position_id=None, stop=format(stop, "f"),
+                     entry=format(entry, "f"),
                      target=None if target is None else format(target, "f"))
         self._put(key, state)
         result, lots = self._send(day, symbol, side, entry, stop, target, client_id)
@@ -640,6 +642,9 @@ class SessionCombo:
             if row is not None and not state.get("position_id"):
                 state["position_id"] = getattr(row, "ticket", None)
             bound = row
+        price = getattr(bound, "price", None)
+        if isinstance(price, Decimal) and price.is_finite():
+            state["entry"] = format(price, "f")
         self._ensure_protection(state, bound)
 
     def _ensure_protection(self, state, row):
@@ -759,6 +764,7 @@ class SessionCombo:
         state["protection_close_done"] = True
         state["exited"] = True
         state["status"] = "done"
+        state["exit_reason"] = "protection_missing"
         self._put(key, state)
 
     def _locate(self, state, fresh=False):
@@ -850,9 +856,11 @@ class SessionCombo:
         return "fix_30m"
 
     def _close_leg(self, key, state, ticket, row, asked, at):
-        if self._finish_close(ticket, self._exit_reason(key, state, row), state.get("client_id"), state.get("symbol"), asked):
+        reason = self._exit_reason(key, state, row)
+        if self._finish_close(ticket, reason, state.get("client_id"), state.get("symbol"), asked):
             state["exited"] = True
             state["status"] = "done"
+            state["exit_reason"] = reason
             if not state.get("position_id"):
                 state["position_id"] = ticket
             self._put(key, state)
@@ -997,6 +1005,7 @@ class SessionCombo:
             return
         state["exited"] = True
         state["status"] = "done"
+        state["exit_reason"] = "london_1100"
         state["position_id"] = row.ticket
         self._put(key, state)
 
@@ -1011,6 +1020,7 @@ class SessionCombo:
             return
         state["exited"] = True
         state["status"] = "done"
+        state["exit_reason"] = "london_1100"
         if not state.get("position_id"):
             state["position_id"] = ticket
         self._put(key, state)

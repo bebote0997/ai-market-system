@@ -310,6 +310,8 @@ class ProgressionTests(unittest.TestCase):
         SessionCombo(broker).tick(clock.at, bars)
         self.assertEqual(len(_markets(fake)), 1)
         self.assertIn('"status": "done"', fake.get_flag(london_key(day)))
+        saved = json.loads(fake.get_flag(london_key(day)))
+        self.assertEqual(saved["entry"], "150.20")
 
     def test_a_late_first_tick_does_not_enter_on_history_and_a_restart_still_exits(self):
         day = ny(2026, 1, 15, 5, 0).date()

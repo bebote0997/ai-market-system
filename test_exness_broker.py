@@ -424,7 +424,13 @@ class BrakeStateLogTests(unittest.TestCase):
         self.assertNotIn("gateway.example", line)
         self.assertNotIn("exnsk", line)
         self.assertEqual(fake.commands, [])
-        self.assertEqual(self.rows(), before)
+        after = self.rows()
+        for key in (HALT_FLAG, REASON_FLAG, START_FLAG, DAY_EQUITY_FLAG, DAY_FLAG):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(after["exness_last_equity"], "24800.25")
+        self.assertEqual(after["exness_last_balance"], "25000")
+        self.assertEqual(after["exness_last_currency"], "USC")
+        self.assertEqual(after["exness_last_read_at"], NOW.isoformat())
 
     def test_a_failed_equity_read_logs_none_and_startup_continues(self):
         before = self.rows()

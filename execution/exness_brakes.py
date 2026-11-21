@@ -26,6 +26,10 @@ ACCOUNT_CURRENCIES = ("USD", "USC")
 RESUME_PHRASE = "RESUME_EXNESS"
 HALT_FLAG, REASON_FLAG = "exness_brake_halt", "exness_brake_reason"
 DAY_FLAG, DAY_EQUITY_FLAG = "exness_brake_day", "exness_brake_day_equity"
+LAST_BALANCE_FLAG = "exness_last_balance"
+LAST_EQUITY_FLAG = "exness_last_equity"
+LAST_CURRENCY_FLAG = "exness_last_currency"
+LAST_READ_FLAG = "exness_last_read_at"
 START_FLAG = "exness_brake_start"
 
 
