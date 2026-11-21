@@ -40,20 +40,36 @@ def _chart(points):
         return ""
     low, high = min(values), max(values)
     span = high - low or Decimal(1)
-    width, height, pad = 640, 180, 16
-    step = Decimal(width - 2 * pad) / Decimal(len(values) - 1)
-    coords, last_x, last_y = [], Decimal(pad), Decimal(pad)
+    width, height, left, right, top, bottom = 640, 220, 78, 12, 22, 28
+    step = Decimal(width - left - right) / Decimal(len(values) - 1)
+    coords, last_x, last_y = [], Decimal(left), Decimal(top)
     for index, value in enumerate(values):
-        last_x = Decimal(pad) + step * Decimal(index)
-        last_y = Decimal(pad) + (high - value) / span * Decimal(height - 2 * pad)
+        last_x = Decimal(left) + step * Decimal(index)
+        last_y = Decimal(top) + (high - value) / span * Decimal(height - top - bottom)
         coords.append(f"{last_x:.1f},{last_y:.1f}")
-    area = f"{pad:.1f},{height - pad:.1f} " + " ".join(coords) + f" {last_x:.1f},{height - pad:.1f}"
-    return (f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
-            f'<polygon points="{area}" fill="rgba(37,99,235,.12)"/>'
-            f'<polyline points="{" ".join(coords)}" fill="none" stroke="var(--lg-chart)" stroke-width="2.5" '
-            f'stroke-linecap="round" stroke-linejoin="round"/>'
-            f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="4" fill="var(--lg-chart)"/></svg>'
-            f'<p class="chart-note">{_e(points[-1]["text"])}</p>')
+    floor = height - bottom
+    area = f"{left:.1f},{floor:.1f} " + " ".join(coords) + f" {last_x:.1f},{floor:.1f}"
+    hi = max(range(len(values)), key=lambda index: values[index])
+    lo = min(range(len(values)), key=lambda index: values[index])
+    y_hi, y_lo = _e(points[hi].get("y") or values[hi]), _e(points[lo].get("y") or values[lo])
+    x0, x1 = _e(points[0].get("axis") or ""), _e(points[-1].get("axis") or "")
+    label = _e(points[-1].get("text") or points[-1].get("y") or "")
+    label_y = last_y - 8 if last_y - 8 > 12 else Decimal(12)
+    return (
+        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
+        f'<defs><linearGradient id="lg-area" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0" stop-color="#2563eb" stop-opacity="0.35"/>'
+        f'<stop offset="1" stop-color="#2563eb" stop-opacity="0.02"/></linearGradient></defs>'
+        f'<polygon points="{area}" fill="url(#lg-area)"/>'
+        f'<polyline points="{" ".join(coords)}" fill="none" stroke="var(--lg-chart)" stroke-width="2.5" '
+        f'stroke-linecap="round" stroke-linejoin="round"/>'
+        + "".join(f'<circle cx="{xy.split(",")[0]}" cy="{xy.split(",")[1]}" r="3.5" fill="var(--lg-chart)"/>' for xy in coords) +
+        f'<text class="axis" x="4" y="{top + 4:.0f}">{y_hi}</text>'
+        f'<text class="axis" x="4" y="{floor:.0f}">{y_lo}</text>'
+        f'<text class="axis" x="{left:.0f}" y="{height - 8}">{x0}</text>'
+        f'<text class="axis" x="{last_x:.0f}" y="{height - 8}" text-anchor="end">{x1}</text>'
+        f'<text class="chart-label" x="{last_x:.1f}" y="{label_y:.1f}" text-anchor="end">{label}</text>'
+        f'</svg>')
 
 
 def _pill(text, tone):
@@ -84,6 +100,36 @@ def _td(value, desk=False):
     return f"<td{klass}>{value}</td>"
 
 
+def _mini(title, pairs):
+    lines = "".join(f'<div class="kv-row"><span>{_e(label)}</span><b>{value}</b></div>' for label, value in pairs)
+    return f'<article class="mini"><header>{title}</header>{lines}</article>'
+
+
+def _position_cards(rows):
+    cards = []
+    for row in rows:
+        title = f'{_e(row["symbol"])} {_side(row)}'
+        cards.append(_mini(title, (
+            ("Lotes", _e(row["lots"])), ("Entrada", _e(row["entry"])), ("Precio actual", _e(row["current"])),
+            ("SL", _e(row["sl"])), ("TP", _e(row["tp"])),
+            ("P/L flotante", f'<span class="{_e(row["floating_tone"])}">{_e(row["floating"])}</span>'),
+            ("Ticket", _e(row["ticket"])), ("Cierre programado", _e(row["close"])),
+        )))
+    return f'<div class="row-cards">{"".join(cards)}</div>'
+
+
+def _trade_cards(rows):
+    cards = []
+    for row in rows:
+        title = f'{_e(row["day"])} {_e(row["symbol"])} {_side(row)}'
+        cards.append(_mini(title, (
+            ("Lotes", _e(row["lots"])), ("Entrada", _e(MISSING)), ("Salida", _e(row["exit_price"])),
+            ("Motivo de salida", _e(row["reason"])),
+            ("Resultado", f'<span class="{_e(row["pnl_tone"])}">{_e(row["pnl"])}</span>'),
+        )))
+    return f'<div class="row-cards">{"".join(cards)}</div>'
+
+
 def _positions_table(rows, trades=False):
     headers = [("PAR", False), ("LADO", False), ("LOTES", False), ("ENTRADA", False), ("PRECIO ACTUAL", False),
                ("SL", False), ("TP", False), ("P/L FLOTANTE", False)]
@@ -97,7 +143,7 @@ def _positions_table(rows, trades=False):
         if not trades:
             cells += [_td(_e(row["ticket"]), True), _td(_e(row["close"]), True)]
         built.append(cells)
-    return _table(headers, built)
+    return _table(headers, built) + _position_cards(rows)
 
 
 def _trade_table(rows, tagged=False):
@@ -115,7 +161,8 @@ def _trade_table(rows, tagged=False):
         built.append((attrs, "".join(f"<td>{cell}</td>" for cell in cells)))
     head = "".join(f"<th>{_e(name)}</th>" for name in headers)
     body = "".join(f"<tr{attrs}>{cells}</tr>" for attrs, cells in built)
-    return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+    return (f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+            + _trade_cards(rows))
 
 
 def _positions_card(view, link=False):
@@ -287,10 +334,12 @@ def _stat(label, value, tone=""):
 
 def _history_page(view):
     stats = view["history"]["stats"]
-    ranges = "".join(
+    has_curve = view["curve"].get("state") == "ok"
+    ranges = "" if not has_curve else "".join(
         f'<button type="button" data-range="{key}"{" aria-current=\"page\"" if key == "30" else ""}>{_e(label)}</button>'
         for key, label in RANGES)
-    charts = "".join(_chart_card(view, key, "Rendimiento") for key in ("30", "90", "365", "all"))
+    charts = "".join(_chart_card(view, key, "Rendimiento") for key in ("30", "90", "365", "all")) if has_curve else (
+        f'<p class="na">{_e(MISSING)}</p><p class="hint">No hay una serie de equity guardada.</p>')
     custom = f'<div data-chart="custom" hidden><p class="na">{_e(MISSING)}</p><p class="hint">El rango personalizado filtra la tabla. El gráfico no se inventa.</p></div>'
     table = _trade_table(view["history"]["rows"], tagged=True) if view["history"]["rows"] else '<p class="hint">Sin operaciones cerradas en el registro.</p>'
     resumen = f'<div class="stats">{_stat("Operaciones", stats["count"])}{_stat("Ganadoras", stats["winners"])}{_stat("Perdedoras", stats["losers"])}{_stat("Beneficio neto", stats["net"], stats["net_tone"])}</div>'
@@ -338,13 +387,13 @@ def fragment(view, *, section="Inicio", theme=None):
     return (
         f'<div class="lg"{theme_attr} data-now="{_e(view.get("now_epoch"))}" data-page="0">'
         f'<style>{_css()}</style>{banner}<div class="shell"><aside class="side"><div class="logo">'
-        f'<b>AI Trading Floor</b><span>{_e(view["title"])}</span></div><nav aria-label="Secciones">{nav}</nav>'
+        f'<b>Jt Trading Floor</b><span>{_e(view["title"])}</span></div><nav aria-label="Secciones">{nav}</nav>'
         f'<div class="foot"><b>JT GROUP HOLDINGS</b><span>v2.0.0</span></div></aside><div class="main">'
         f'<header class="mob-bar"><button type="button" class="burger" data-menu="1" aria-label="Abrir menú">☰</button>'
-        f'<div class="titles"><h1>AI Trading Floor</h1><p>{_e(view["title"])}</p></div>'
+        f'<div class="titles"><h1>Jt Trading Floor</h1><p>{_e(view["title"])}</p></div>'
         f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
         f'<button type="button" class="theme" data-theme-toggle="1" aria-label="Cambiar tema claro u oscuro">Tema</button></div></header>'
-        f'<header class="desk-head"><div><h1>AI Trading Floor · {_e(view["title"])}</h1><p>{_e(view["clock"])}</p></div>'
+        f'<header class="desk-head"><div><h1>Jt Trading Floor · {_e(view["title"])}</h1><p>{_e(view["clock"])}</p></div>'
         f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
         f'<button type="button" class="theme" data-theme-toggle="1" aria-label="Cambiar tema claro u oscuro">Tema</button>'
         f'</div></header>{body}'
@@ -357,5 +406,5 @@ def document(view, *, section="Inicio", theme=None):
     """Full page for a screenshot. The Streamlit panel uses ``fragment``."""
     return ("<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            "<title>AI Trading Floor</title></head><body style=\"margin:0\">"
+            "<title>Jt Trading Floor</title></head><body style=\"margin:0\">"
             + fragment(view, section=section, theme=theme) + "</body></html>")

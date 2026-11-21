@@ -38,15 +38,16 @@ def _system(now):
 
 
 def load(env=None, now=None, book=None, account_reader=None, curve=None):
-    """Live view. No network client and no sample book. ``book`` and ``curve`` stay empty unless a caller has them."""
+    """Live view. Reads the stored cycle snapshot only. No network client and no sample book."""
     import os
     from ui.exness_present import _flags
     from ui.liquid.model import build_dashboard
+    from ui.liquid.snapshot import latest
     env = os.environ if env is None else env
     now = now or datetime.now(timezone.utc)
-    snapshot, errors = _system(now)
+    health, errors = _system(now)
     return build_dashboard(env=env, now=now, flags=_flags(env), account_reader=account_reader, book=book,
-                           health=snapshot, errors=errors, curve=curve)
+                           health=health, errors=errors, curve=curve, snapshot=latest(env))
 
 
 def render(st, section):

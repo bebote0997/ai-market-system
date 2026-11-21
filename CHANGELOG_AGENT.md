@@ -2,7 +2,7 @@
 
 ## 2026-11-20 — panel Liquid Glass (solo presentación)
 
-- Pantalla de solo lectura con el layout del owner: inicio, posiciones, historial (las dos variantes en una página), riesgo y sistema. Barra lateral en escritorio y pestañas en el teléfono. Claro y oscuro, sin animación. Configuración solo muestra valores.
+- El panel Riesgo muestra los topes activos del entorno (`AI_FLOOR_EXNESS_RISK_CAP`, pérdida diaria y caída máxima). Si la variable falta, queda el mismo respaldo que usa el runtime. No se pinta el defecto del código cuando la variable está puesta.
 - Cifras solo de las lecturas que ya existían. Si una no está, dice «sin datos». El SL/TP de una posición sale de la orden `sltp` con el mismo `position_id` (bug #95); los campos de la posición no se usan.
 - No escribe flags, frenos, órdenes ni `AI_FLOOR_GIT_COMMIT`. Sin merge y sin deploy.
 

@@ -52,13 +52,24 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(view["brakes"]["daily"]["used"], MISSING)
         self.assertEqual(view["brakes"]["halt"], "No")
         self.assertIsNone(view["banner"])
-        self.assertIn("P/L de hoy", view["unavailable"])
-        self.assertIn("Curva de equity", view["unavailable"])
 
-    def test_stored_equity_is_not_turned_into_pnl(self):
+    def test_caps_follow_the_runtime_env_not_the_code_default(self):
+        from execution.exness_brakes import DAILY_ENV, DRAWDOWN_ENV
+        from execution.exness_sizing import RISK_CAP_ENV, USC_RISK_CAP
+        bare = _view()
+        self.assertIn(f"{USC_RISK_CAP:,.2f} USC", bare["brakes"]["trade_cap"])
+        env = dict(ENV, **{RISK_CAP_ENV: "300", DAILY_ENV: "250", DRAWDOWN_ENV: "1500"})
+        view = _view(env=env)
+        self.assertIn("300.00 USC", view["brakes"]["trade_cap"])
+        self.assertNotIn("100.00 USC", view["brakes"]["trade_cap"])
+        self.assertIn("250.00 USC", view["brakes"]["daily"]["cap"])
+        self.assertIn("1,500.00 USC", view["brakes"]["total"]["cap"])
+        self.assertNotIn("200.00 USC", view["brakes"]["daily"]["cap"])
+
+    def test_missing_snapshot_does_not_invent_equity(self):
         view = _view(flags={"exness_brake_day_equity": "10000", "exness_brake_start": "10000"})
-        self.assertIn("10,000.00 USC", view["kpis"]["equity"]["text"])
         self.assertEqual(view["kpis"]["balance"]["text"], MISSING)
+        self.assertEqual(view["kpis"]["equity"]["text"], MISSING)
         self.assertEqual(view["kpis"]["today"]["text"], MISSING)
         self.assertEqual(view["kpis"]["total"]["text"], MISSING)
         self.assertIn("Consumo de frenos", view["unavailable"])
@@ -165,12 +176,14 @@ class RenderSmokeTests(unittest.TestCase):
             self.assertIn(f'data-nav="{name}"', html)
             self.assertIn(f'data-panel="{name}"', html)
         self.assertIn("sin datos", html)
-        self.assertIn("blur(18px)", html)
+        self.assertIn("blur(24px)", html)
         self.assertIn("prefers-color-scheme", html)
         self.assertIn("max-width:390px", html)
         self.assertIn("localStorage", html)
         self.assertIn("aif-liquid-theme", html)
-        self.assertIn("Solo lectura", html)
+        self.assertIn("Jt Trading Floor", html)
+        self.assertIn("row-cards", html)
+        self.assertNotIn("DATOS DE EJEMPLO", html)
         self.assertIn("JT GROUP HOLDINGS", html)
         self.assertIn("v2.0.0", html)
         self.assertIn("Exportar CSV", html)

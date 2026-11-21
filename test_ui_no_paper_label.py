@@ -28,7 +28,7 @@ class SpanishValuesTests(unittest.TestCase):
                         self.assertNotIn(WORD, value)
 
     def test_page_title_login_heading_and_start_page_labels(self):
-        self.assertIn('page_title="AI Trading Floor · OANDA Demo"', (ROOT / "ui/app.py").read_text(encoding="utf-8"))
+        self.assertIn('page_title="Jt Trading Floor"', (ROOT / "ui/app.py").read_text(encoding="utf-8"))
         self.assertIn('st.title("AI Trading Floor · panel privado · OANDA Demo (práctica)")',
                       (ROOT / "ui/auth.py").read_text(encoding="utf-8"))
         self.assertEqual(luxury.PAGES[0], "Overview")

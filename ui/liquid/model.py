@@ -368,8 +368,9 @@ def _curve(curve, now, currency):
         if len(picked) < 2:
             return {"state": "sin datos", "points": []}
         return {"state": "ok", "points": [
-            {"at": datetime_et(stamp), "equity": format(equity, "f"), "text": money_line(equity, currency),
-             "epoch": str(int(stamp.timestamp()))}
+        {"at": datetime_et(stamp), "equity": format(equity, "f"), "text": money_line(equity, currency),
+         "epoch": str(int(stamp.timestamp())), "axis": f"{stamp.day:02d}/{stamp.month:02d}",
+         "y": f"{equity:,.2f}"}
             for stamp, equity in picked]}
 
     full = pack(points)
@@ -497,13 +498,46 @@ def _pair(fix, symbol):
     return {"symbol": symbol, "state": state, "tone": tone}
 
 
-def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book=None, health=None, errors=None, curve=None):
-    """One read-only view. ``book`` is a raw snapshot (positions + orders), not parsed position stops."""
+def _account_from_snapshot(snapshot):
+    """Balance and equity only from keys the stored snapshot actually has."""
+    if not isinstance(snapshot, dict):
+        return None
+    state = snapshot.get("account_state") if isinstance(snapshot.get("account_state"), dict) else {}
+    account = snapshot.get("account") if isinstance(snapshot.get("account"), dict) else {}
+    balance = state.get("balance", snapshot.get("balance", account.get("balance")))
+    equity = state.get("equity", snapshot.get("equity", account.get("equity")))
+    currency = state.get("currency", snapshot.get("currency", account.get("currency")))
+    bal, eq = _money(balance), _money(equity)
+    if bal is None and eq is None:
+        return None
+    code = currency.strip().upper() if isinstance(currency, str) else ""
+    if code not in ("USC", "USD"):
+        code = "USC"
+    return {"balance": bal, "equity": eq, "currency": code, "stored": False}
+
+
+def _book_from_snapshot(snapshot, book):
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("positions"), (list, tuple)):
+        orders = snapshot.get("orders") if isinstance(snapshot.get("orders"), (list, tuple)) else ()
+        floating = snapshot.get("floating_pnl")
+        return {"positions": list(snapshot["positions"]), "orders": list(orders), "floating_pnl": floating}
+    return book
+
+
+def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book=None, health=None,
+                    errors=None, curve=None, snapshot=None):
+    """One read-only view. Positions' SL/TP come from the linked ``sltp`` order, not the position fields."""
     import os
+    from execution.exness_broker import real_execution_armed
     env = os.environ if env is None else env
     now = _now(now)
     flags = {} if flags is None else flags
-    account = read_account(env, reader=account_reader, flags=flags)
+    snap = snapshot if isinstance(snapshot, dict) else {}
+    account = _account_from_snapshot(snap)
+    if account is None:
+        account = read_account(env, reader=account_reader, flags=flags)
+        if account_reader is None:
+            account = {**account, "balance": None, "equity": None, "stored": True}
     brakes = brake_view(env, flags=flags)
     clock = session_clock(env, now=now, flags=flags)
     currency = account.get("currency") or "USC"
@@ -515,6 +549,9 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     today_text, today_tone = _signed(today_amount, currency)
     total_text, total_tone = _signed(total_amount, currency)
     legs = _legs(flags, now)
+    book = _book_from_snapshot(snap, book)
+    if curve is None and isinstance(snap.get("curve"), (list, tuple)):
+        curve = snap.get("curve")
     positions = _positions(book, legs, currency)
     for row in positions["rows"]:
         row.pop("_profit", None)
@@ -574,8 +611,8 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
             unavailable.append("Errores")
     for name in ("Conexión Exness", "Ping", "Tiempo activo", "Último despliegue"):
         unavailable.append(name)
-    title = LABEL if broker_is_exness(env) else "AI Trading Floor"
-    armed = live_badge(env) is not None
+    title = LABEL if broker_is_exness(env) else "Jt Trading Floor"
+    armed = real_execution_armed(env) is True
     trades = "0" if clock.get("waiting") is not False else str(clock.get("trades") or 0)
     return {
         "title": title, "version": VERSION, "safety": live_badge(env) or OFF_SAFETY,

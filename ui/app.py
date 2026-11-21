@@ -22,10 +22,8 @@ from ui.views import floor_view
 from ui import demo_refresher
 from ui import i18n_es as es
 from ui.i18n_es import tr
-from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
-
-from ui.exness_present import LABEL, broker_is_exness
-st.set_page_config(page_title="AI Trading Floor · OANDA Demo" if not broker_is_exness() else "AI Trading Floor · " + LABEL,
+from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store  # noqa: F401 - kept for callers that read the broker label beside this module
+st.set_page_config(page_title="Jt Trading Floor",
                    layout="wide", page_icon="📊",
                    initial_sidebar_state="expanded")  # mounted, never slid off-screen; the pill collapses in CSS
 require_dashboard_access(st)
