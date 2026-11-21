@@ -303,19 +303,21 @@ def _history(legs, currency):
 
 
 def _stats(legs, currency):
-    count = len(legs)
-    known = [leg["pnl"] for leg in legs if leg["pnl"] is not None]
+    """Summary over legs that have a real P/L. Rows without a deal stay visible but do not count."""
+    counted = [leg for leg in legs if leg["pnl"] is not None]
+    known = [leg["pnl"] for leg in counted]
+    count = len(known)
     blank = {"count": str(count), "winners": MISSING, "win_pct": MISSING, "losers": MISSING, "loss_pct": MISSING,
              "gross_win": MISSING, "gross_loss": MISSING, "net": MISSING, "net_tone": "",
              "profit_factor": MISSING, "drawdown": MISSING, "avg_win": MISSING, "avg_loss": MISSING}
-    if len(known) != count or count == 0:
+    if count == 0:
         return blank
     winners = [item for item in known if item > 0]
     losers = [item for item in known if item < 0]
     gross_win = sum(winners, Decimal(0))
     gross_loss = sum((abs(item) for item in losers), Decimal(0))
     net, net_tone = _signed(sum(known, Decimal(0)), currency)
-    ordered = sorted(legs, key=lambda leg: leg["opened_at"] or datetime.min.replace(tzinfo=timezone.utc))
+    ordered = sorted(counted, key=lambda leg: leg["opened_at"] or datetime.min.replace(tzinfo=timezone.utc))
     equity = peak = worst = Decimal(0)
     for leg in ordered:
         equity += leg["pnl"]
