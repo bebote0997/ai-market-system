@@ -129,7 +129,7 @@ class LondonBookExitTests(unittest.TestCase):
         self.assertEqual(fake.commands, [])
 
     def test_unknown_close_of_the_stored_ticket_does_not_close_a_manual_position(self):
-        """A 202 on the stored ticket leaves it in the book. The 03:00 manual USDJPY stays open, with no HIGH alert."""
+        """A first 202 leaves the stored ticket open. The 03:00 manual USDJPY stays open, and there is no HIGH alert yet."""
         at = ny(2026, 1, 16, 11, 0)
         opened = ny(2026, 1, 16, 3, 0)
         _clock, fake, broker, combo = world(at, transport=UnknownClose())
@@ -146,10 +146,8 @@ class LondonBookExitTests(unittest.TestCase):
             combo.tick(at, [])
         text = "\n".join(logs.output)
         self.assertNotIn("EXNESS_LONDON_BOOK", text)
-        self.assertIn("EXNESS_EXIT_FAILED", text)
-        self.assertTrue(alerts)
-        self.assertTrue(all(item[0] == "EXNESS_EXIT_FAILED" and item[1] == "HIGH" for item in alerts))
-        self.assertEqual(alerts[0][0], "EXNESS_EXIT_FAILED")
+        self.assertNotIn("EXNESS_EXIT_FAILED", text)
+        self.assertEqual(alerts, [])
         self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["stored"])
         self.assertEqual({row.ticket for row in fake.positions}, {"stored", "manual"})
         self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
@@ -166,7 +164,8 @@ class LondonBookExitTests(unittest.TestCase):
         with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
             combo.tick(at, [])
         self.assertNotIn("EXNESS_LONDON_BOOK", "\n".join(logs.output))
-        self.assertIn("EXNESS_EXIT_FAILED", alerts)
+        self.assertNotIn("EXNESS_EXIT_FAILED", "\n".join(logs.output))
+        self.assertEqual(alerts, [])
         self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["stored"])
         self.assertEqual([row.ticket for row in fake.positions], ["stored"])
         self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
@@ -184,6 +183,29 @@ class LondonBookExitTests(unittest.TestCase):
         self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["early"])
         self.assertEqual({row.ticket for row in fake.positions}, {"early", "late"})
         self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
+
+    def test_a_202_that_closes_a_moment_later_raises_no_high_and_ends_done(self):
+        at = ny(2026, 1, 16, 11, 0)
+        clock, fake, broker, combo = world(at, transport=UnknownClose())
+        alerts = []
+        broker._on_alert = lambda kind, detail: alerts.append(kind)
+        opened = ny(2026, 1, 16, 2, 10)
+        fake.positions = [Position("stored", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.20"),
+                                   Decimal("149.50"), None, "", opened)]
+        fake.set_flag(london_key(at.date()), _flag(at.date(), position_id="stored", opened_at=opened.isoformat()))
+        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+            combo.tick(at, [])
+        self.assertNotIn("EXNESS_EXIT_FAILED", "\n".join(logs.output))
+        self.assertNotIn("EXNESS_LONDON_BOOK", "\n".join(logs.output))
+        self.assertEqual(alerts, [])
+        self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
+        fake.positions = []
+        clock.at = ny(2026, 1, 16, 11, 1)
+        fake.push_tick(Decimal("150.30"), Decimal("150.31"), clock.at)
+        combo.tick(clock.at, [])
+        self.assertEqual(alerts, [])
+        self.assertEqual([command.position_ref for command in fake.commands if command.kind == "CLOSE"], ["stored"])
+        self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "done")
 
     def test_a_failed_close_keeps_alerting_and_sending_until_1300(self):
         for transport in (RejectedClose, UnknownClose):
@@ -290,6 +312,36 @@ class CloseRetryTests(unittest.TestCase):
         client.mutate("DELETE", path, None, "close-stored-exit")
         self.assertEqual(len(deletes), 1)
         self.assertTrue(deletes[0].endswith("/positions/stored"))
+
+        deletes.clear()
+        positions.append({"position_id": "stored", "state": "open"})
+        unknown["n"] = 0
+
+        def caller_still_open(method, url, headers, body):
+            del headers, body
+            if "access-point" in url:
+                return 200, {"access_point": "https://ap.example"}, {}
+            if method == "GET" and url.endswith("/snapshot"):
+                return 200, {"positions": list(positions)}, {}
+            if method == "DELETE" and "?volume=" in url:
+                deletes.append(url)
+                return 202, {"operation_id": "partial", "status": "accepted"}, {}
+            if method == "DELETE":
+                deletes.append(url)
+                return 202, {"operation_id": "2", "status": "accepted"}, {}
+            return 200, {}, {}
+
+        client = self._client(caller_still_open)
+        client.mutate("DELETE", path, None, "close-stored-exit")
+        client.mutate("DELETE", path, None, "close-stored-exit")
+        full = [url for url in deletes if "?volume=" not in url]
+        self.assertEqual(len(full), 2)
+        deletes.clear()
+        partial = path + "?volume=0.01"
+        client.mutate("DELETE", partial, None, "close-stored-partial")
+        client.mutate("DELETE", partial, None, "close-stored-partial")
+        self.assertEqual(len(deletes), 1)
+        self.assertIn("?volume=", deletes[0])
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 ## 2026-11-21 — salida de Londres por el libro del broker
 
 - A las 11:00 ET, si el día no está hecho, `_close_london_by_book` cierra el único USDJPY cuyo lado coincide con la bandera, cuya apertura está entre 02:00 y 05:00 ET, y que está a menos de dos minutos de la bandera o ligado por `sltp`. Cero coincidencias o más de una: alerta HIGH y no cierra. Un día ya hecho no cierra nada. Usa `sltp_ids` de #98, pares `(order_id, position_id)`.
-- Si el ticket guardado, o un USDJPY que este tick ya intentó cerrar, sigue en el libro, no se cierra otra posición. Un ticket de la pata Fix no bloquea esa salida. Cuando la hora de salida ya pasó y el cierre no entra, sale una alerta HIGH `EXNESS_EXIT_FAILED`.
+- El primer HTTP 202 no dispara una alerta HIGH. La alerta sale si el cierre es `REJECTED`, si hay una excepción, o si en un tick posterior, al menos 2 minutos después de la salida, el ticket sigue abierto. Si ese ticket ya no está en el libro, no se cierra otra posición y no hay alerta: el tick siguiente marca el día hecho.
 - Un cierre `REJECTED` no se queda cacheado: se vuelve a enviar. Un `UNKNOWN` relee el libro antes de reenviar; si el ticket ya no está, no se manda otro cierre.
 - Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy.
 

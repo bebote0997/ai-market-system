@@ -273,6 +273,7 @@ class SessionCombo:
         self._logged_bars = False
         self._sltp_attempts = {}
         self._sltp_sent = set()
+        self._asked_usdjpy = set()
         self._sleep = time_mod.sleep if sleep is None else sleep
 
     def tick(self, at, bars):
@@ -800,6 +801,7 @@ class SessionCombo:
 
     def _exits(self, at):
         asked = set()
+        self._asked_usdjpy = set()
         for key, state in list(self._phase.items()):
             if state.get("exited") or state.get("status") not in ("filled", "submitted"):
                 continue
@@ -837,7 +839,7 @@ class SessionCombo:
                 ticket = state.get("position_id")
             if not ticket:
                 continue
-            self._close_leg(key, state, ticket, row, asked)
+            self._close_leg(key, state, ticket, row, asked, at)
         self._close_london_without_flag(at, asked)
         self._close_london_by_book(at, asked)
 
@@ -847,7 +849,7 @@ class SessionCombo:
             return "london_1100"
         return "fix_30m"
 
-    def _close_leg(self, key, state, ticket, row, asked):
+    def _close_leg(self, key, state, ticket, row, asked, at):
         if self._finish_close(ticket, self._exit_reason(key, state, row), state.get("client_id"), state.get("symbol"), asked):
             state["exited"] = True
             state["status"] = "done"
@@ -855,8 +857,23 @@ class SessionCombo:
                 state["position_id"] = ticket
             self._put(key, state)
             return
-        self._high_alert("EXNESS_EXIT_FAILED", getattr(self, "_close_status", None) or "close_failed",
-                         state.get("symbol"))
+        if self._exit_failure_should_alert(state, at):
+            self._high_alert("EXNESS_EXIT_FAILED", getattr(self, "_close_status", None) or "close_failed",
+                             state.get("symbol"))
+
+    def _exit_failure_should_alert(self, state, at):
+        """No alert on the first UNKNOWN/202. Alert on REJECTED, an exception, or a later tick still open."""
+        kind = getattr(self, "_close_kind", None)
+        if kind in ("rejected", "exception"):
+            return True
+        if kind != "unknown":
+            return False
+        seen = bool(state.get("exit_unknown_seen"))
+        state["exit_unknown_seen"] = True
+        exit_at = state.get("exit_at")
+        if not seen or not isinstance(at, datetime) or not isinstance(exit_at, datetime):
+            return False
+        return at >= exit_at + timedelta(minutes=2)
 
     def _finish_close(self, ticket, reason, client, symbol, asked):
         """Close ``ticket`` once this tick. True when a later read no longer shows it.
@@ -867,19 +884,25 @@ class SessionCombo:
         """
         if not ticket or ticket in asked:
             self._close_status = "already_asked"
+            self._close_kind = "already_asked"
             return False
         asked.add(ticket)
+        if symbol == LONDON_SYMBOL:
+            self._asked_usdjpy.add(ticket)
         try:
             result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
         except Exception:  # noqa: BLE001
             self._close_status = "close_failed"
+            self._close_kind = "exception"
             _log("TIME_EXIT", symbol=symbol, reason=reason, status="UNKNOWN")
             return False
         status = getattr(result, "status", None)
         self._close_status = getattr(result, "reason", None) or status or "close_failed"
         if status == "REJECTED":
+            self._close_kind = "rejected"
             _log("TIME_EXIT", symbol=symbol, reason=reason, status="REJECTED")
             return False
+        self._close_kind = "unknown"
         try:
             gone = not any(item.ticket == ticket for item in self._positions(fresh=True))
         except Exception:  # noqa: BLE001
@@ -910,7 +933,8 @@ class SessionCombo:
         Otherwise close the one USDJPY whose side matches the flag, whose open time is inside
         02:00-05:00 ET, and which is within two minutes of the flag or linked by an ``sltp`` order.
         Zero matches or more than one: a HIGH alert, and no close. If the stored ticket, or a
-        USDJPY ticket already asked this tick, is still in the book, alert and do not close another one.
+        USDJPY ticket already asked this tick, is still open, do not close another one. If that
+        ticket is already gone, return with no alert and no close.
         """
         if not _aware(at):
             return
@@ -931,13 +955,17 @@ class SessionCombo:
         except Exception:  # noqa: BLE001
             self._high_alert("EXNESS_LONDON_BOOK", "book_unread")
             return
-        # A stored USDJPY, or a USDJPY this tick already tried to close, that is still open owns
-        # the exit. Do not close a different one. A Fix-leg ticket in ``asked`` does not block this.
+        # USDJPY tickets only. A Fix-leg ticket in ``asked`` does not block London.
+        # Still open: do not close a different position. Already gone: no alert and no close;
+        # the next tick marks the day done.
         usdjpy_open = {row.ticket for row in book.positions if row.symbol == LONDON_SYMBOL}
+        watched = set(getattr(self, "_asked_usdjpy", ()))
         stored = state.get("position_id")
-        if (stored and stored in usdjpy_open) or any(ticket in usdjpy_open for ticket in asked):
-            self._high_alert("EXNESS_EXIT_FAILED", getattr(self, "_close_status", None) or "still_open",
-                             state.get("symbol"))
+        if stored:
+            watched.add(stored)
+        if any(ticket not in usdjpy_open for ticket in watched):
+            return
+        if any(ticket in usdjpy_open for ticket in watched):
             return
         linked = set()
         for item in getattr(book, "sltp_ids", ()) or ():

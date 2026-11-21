@@ -55,7 +55,10 @@ def operation_limit(method, path):
 
 
 def _position_close(method, path):
-    return str(method).upper() == "DELETE" and isinstance(path, str) and "/positions/" in path
+    """A full position DELETE. ``?volume=`` is a partial close and must not be resent."""
+    if str(method).upper() != "DELETE" or not isinstance(path, str) or "/positions/" not in path:
+        return False
+    return "?volume=" not in path
 
 
 def _close_target(path):
