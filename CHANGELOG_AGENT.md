@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-21 — historial: deals de Exness y precio/P-L en patas nuevas
+
+- Un backfill de solo lectura (GET `/v1/history/accounts/{id}/deals`) rellena entrada, salida y resultado de las patas combo ya cerradas que no los guardaron. Cruza `position_id` con el ticket. No pisa valores que ya existen. Si Exness no responde, las banderas quedan igual y la sesión sigue. No hay `mutate`. Corre al arrancar la sesión Exness y, si aún falta algo, en el ciclo de lectura.
+- El motivo de las cuatro operaciones conocidas sale de los logs del Floor: `london_1100` para 341984, 357063 y 375978; `hq_manual` (cierre manual HQ) para 382026. Un Fix sin deal no se inventa. En el panel, `hq_manual` se muestra como «cierre manual HQ».
+- Las salidas nuevas guardan `exit_price` y `pnl` en `_FIELDS` de session_combo, además de `entry` y `exit_reason`.
+- Sin cambio de la lógica de órdenes, de los frenos, de `AI_FLOOR_GIT_COMMIT`, de flags de armado ni de Render. Sin merge y sin deploy.
+
 ## 2026-11-21 — salida de Londres por el libro del broker
 
 - A las 11:00 ET, si el día no está hecho, `_close_london_by_book` cierra el único USDJPY cuyo lado coincide con la bandera, cuya apertura está entre 02:00 y 05:00 ET, y que está a menos de dos minutos de la bandera o ligado por `sltp`. Cero coincidencias o más de una: alerta HIGH y no cierra. Un día ya hecho no cierra nada. Usa `sltp_ids` de #98, pares `(order_id, position_id)`.

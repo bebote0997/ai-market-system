@@ -217,7 +217,7 @@ def _leg_row(leg, currency):
 def _exit_label(leg):
     """The close reason stored on the leg. Nothing is inferred from the key."""
     text = leg.get("exit_reason")
-    labels = {"london_1100": "cierre 11:00 ET", "fix_30m": "30 min", "protection_missing": "sin protección"}
+    labels = {"london_1100": "cierre 11:00 ET", "fix_30m": "30 min", "protection_missing": "sin protección", "hq_manual": "cierre manual HQ"}
     if isinstance(text, str) and text.strip() in labels:
         return labels[text.strip()]
     if isinstance(text, str) and re.fullmatch(r"[A-Za-z0-9_]{1,32}", text.strip()):

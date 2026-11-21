@@ -49,7 +49,7 @@ FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
            "position_id", "volume", "opened_at", "stop", "target", "sltp_sent",
            "protection_after", "protection_retry_done", "protection_close_done",
-           "protection_miss_reads", "entry", "exit_reason", "exit_unknown_seen")
+           "protection_miss_reads", "entry", "exit_price", "pnl", "exit_reason", "exit_unknown_seen")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
 _FILL_POLLS = 5
@@ -219,7 +219,7 @@ def _blank():
     return {"status": "pending", "client_id": None, "exit_at": None, "exited": False,
             "symbol": None, "side": None, "logged_range": False, "position_id": None,
             "volume": None, "opened_at": None, "stop": None, "target": None, "entry": None,
-            "exit_reason": None, "exit_unknown_seen": False, "sltp_sent": None,
+            "exit_price": None, "pnl": None, "exit_reason": None, "exit_unknown_seen": False, "sltp_sent": None,
             "protection_after": None, "protection_retry_done": False, "protection_close_done": False,
             "protection_miss_reads": 0}
 
@@ -351,6 +351,15 @@ class SessionCombo:
                 payload[field] = payload[field].isoformat()
         self._store.set_flag(key, json.dumps(payload, sort_keys=True))
 
+    def _persist_exit(self, key, state, ticket=None):
+        """Store deal entry, exit_price and pnl when missing. A failed GET does not undo the close."""
+        try:
+            from execution.combo_history import remember_exit
+            remember_exit(state, ticket, key=key, broker=self._broker)
+        except Exception:  # noqa: BLE001
+            _log("HISTORY_BACKFILL", status="failed", reason="read_failed")
+        self._put(key, state)
+
     def _reconcile_submitted(self):
         for key, state in list(self._phase.items()):
             if state["status"] != "submitted":
@@ -367,7 +376,7 @@ class SessionCombo:
             if kind == "gone":
                 state["status"] = "done"
                 state["exited"] = True
-                self._put(key, state)
+                self._persist_exit(key, state, state.get("position_id"))
                 continue
             # Not confirmed. Stay submitted: do not SIZE_SKIP and do not mark the leg unfilled.
 
@@ -765,7 +774,7 @@ class SessionCombo:
         state["exited"] = True
         state["status"] = "done"
         state["exit_reason"] = "protection_missing"
-        self._put(key, state)
+        self._persist_exit(key, state, state.get("position_id"))
 
     def _locate(self, state, fresh=False):
         """``(held, row)``, ``(gone, None)``, ``(unknown, None)`` or ``(ambiguous, None)``.
@@ -863,7 +872,7 @@ class SessionCombo:
             state["exit_reason"] = reason
             if not state.get("position_id"):
                 state["position_id"] = ticket
-            self._put(key, state)
+            self._persist_exit(key, state, ticket)
             return
         if self._exit_failure_should_alert(state, at):
             self._high_alert("EXNESS_EXIT_FAILED", getattr(self, "_close_status", None) or "close_failed",
@@ -1007,7 +1016,7 @@ class SessionCombo:
         state["status"] = "done"
         state["exit_reason"] = "london_1100"
         state["position_id"] = row.ticket
-        self._put(key, state)
+        self._persist_exit(key, state, row.ticket)
 
     def _mark_london_done(self, comment, ticket):
         try:
@@ -1023,4 +1032,4 @@ class SessionCombo:
         state["exit_reason"] = "london_1100"
         if not state.get("position_id"):
             state["position_id"] = ticket
-        self._put(key, state)
+        self._persist_exit(key, state, ticket)

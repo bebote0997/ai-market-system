@@ -47,6 +47,8 @@ class ExnessSession:
             "component=session_combo event=%s", "SESSION_COMBO_ON" if self._combo is not None else "SESSION_COMBO_OFF")
         logging.getLogger("ai_floor.exness_m5").info(
             "component=exness_m5 event=%s", "M5_FEED_ON" if self._feed is not None else "M5_FEED_OFF")
+        self._history_backfill_done = False
+        self._backfill_history()
         self._open_live_quotes()
 
     @property
@@ -147,8 +149,22 @@ class ExnessSession:
         if desk is not None:
             self.desk = desk
 
+    def _backfill_history(self):
+        """GET-only fill of missing historial fields. A failure does not stop the session."""
+        if self._combo is None or self._history_backfill_done:
+            return
+        try:
+            from execution.combo_history import backfill_combo_history
+            result = backfill_combo_history(self.broker, now=self._clock())
+            if result.get("pending") == 0:
+                self._history_backfill_done = True
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("component=session_combo event=HISTORY_BACKFILL status=failed error_type=%s",
+                        type(exc).__name__)
+
     def _manage(self, at, bars):
         try:
+            self._backfill_history()
             if bars is None:
                 bars = self._bars(at)
             fresh = self.broker.note_link()
