@@ -1,5 +1,18 @@
 # Agent Changelog
 
+## 2026-11-21 — revisión HQ del panel Liquid Glass (solo presentación)
+
+- De 900px hacia abajo las tablas pasan a tarjetas y la estrategia de Riesgo queda en una columna.
+- El ciclo guarda en `ui_snapshots` la cuenta, las posiciones, las órdenes `sltp` y el punto de equity que ya leyó. No hay otra llamada al broker ni cambio de órdenes. El panel abre esa base con `AI_FLOOR_DB_PATH` del proceso (no solo si el entorno es un `dict`). Si esa lectura no está, sigue en «sin datos». Si copiar ese libro falla, el caché de la cuenta se apaga igual.
+- El distintivo «Ejecución real activa» usa fondo verde opaco y texto blanco. En las páginas Liquid Glass el panel ocupa el ancho y no queda dentro de la barra antigua.
+- Sin merge y sin deploy.
+
+## 2026-11-20 — panel Liquid Glass (solo presentación)
+
+- El panel Riesgo muestra los topes activos del entorno (`AI_FLOOR_EXNESS_RISK_CAP`, pérdida diaria y caída máxima). Si la variable falta, queda el mismo respaldo que usa el runtime. No se pinta el defecto del código cuando la variable está puesta.
+- Cifras solo de las lecturas que ya existían. Si una no está, dice «sin datos». El SL/TP de una posición sale de la orden `sltp` con el mismo `position_id` (bug #95); los campos de la posición no se usan.
+- No escribe flags, frenos, órdenes ni `AI_FLOOR_GIT_COMMIT`. Sin merge y sin deploy.
+
 ## 2026-11-20 — copia y purga paper, y el ciclo Exness ya no escribe paper
 
 - `python -m runtime.exness_purge` en seco no copia ni borra. `--apply` solo actúa con `AI_FLOOR_PURGE_CONFIRM=EXNESS_PURGE_AUTHORIZED`. La copia usa el backup en línea de SQLite (incluye el WAL). Si el espacio libre es menor que el doble del tamaño de la base, no borra nada. Después exporta las tablas paper, las vacía y hace `VACUUM`. Hay que parar el servicio antes, o reiniciarlo justo después. No está en el arranque, en el scheduler ni en el deploy.

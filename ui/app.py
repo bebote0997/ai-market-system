@@ -22,10 +22,8 @@ from ui.views import floor_view
 from ui import demo_refresher
 from ui import i18n_es as es
 from ui.i18n_es import tr
-from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store
-
-from ui.exness_present import LABEL, broker_is_exness
-st.set_page_config(page_title="AI Trading Floor · OANDA Demo" if not broker_is_exness() else "AI Trading Floor · " + LABEL,
+from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store  # noqa: F401 - kept for callers that read the broker label beside this module
+st.set_page_config(page_title="Jt Trading Floor",
                    layout="wide", page_icon="📊",
                    initial_sidebar_state="expanded")  # mounted, never slid off-screen; the pill collapses in CSS
 require_dashboard_access(st)
@@ -37,13 +35,17 @@ demo_refresher.ensure_started()  # idempotent: the Floor demo cache producer (al
 
 if st.query_params.get("page") == "floor" and "luxury_navigation" not in st.session_state:
     st.session_state["luxury_navigation"] = floor_view.PAGE  # alert deep link (runtime.trade_alerts.floor_url)
+if "luxury_navigation" not in st.session_state:
+    st.session_state["luxury_navigation"] = "Inicio"
 
 with st.sidebar:
     from ui.nav_menu import chrome, install, open_trades_count, stop_button
     luxury.html(st, chrome(open_trades_count()))
+    from ui.liquid.page import PAGES as LIQUID_PAGES, label as liquid_label
     page = st.radio(tr("Navigation"), luxury.PAGES + (floor_view.PAGE,) + dashboard.PAGES
-                    + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM"), key="luxury_navigation",
-                    format_func=lambda key: floor_view.LABEL if key == floor_view.PAGE else es.page_label(key))
+                    + ("FLOOR", "MARKETS", "JOURNAL", "EXPERIMENT", "SYSTEM") + LIQUID_PAGES,
+                    key="luxury_navigation",
+                    format_func=lambda key: floor_view.LABEL if key == floor_view.PAGE else liquid_label(key) or es.page_label(key))
     enabled_symbols = enabled_market_symbols()
     from ui.exness_present import combo_caption, combo_symbols, show_experiment_market
     with st.container(key="aif-ajustes"):
@@ -71,6 +73,11 @@ def open_trade_refresh():
     """"30s" while the cached OPEN trades list is non-empty (peek only, never the broker), else "60s"."""
     return demo_refresher.open_trade_refresh()
 
+
+if page in LIQUID_PAGES:
+    from ui.liquid.page import render as render_liquid
+    render_liquid(st, page)
+    st.stop()
 
 if page in luxury.PAGES:
     luxury_every = open_trade_refresh() if refresh else None

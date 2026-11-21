@@ -129,8 +129,23 @@ class ExnessSession:
         try:
             return self._manage(at, bars)
         finally:
+            try:
+                self._remember_desk(at)
+            except Exception as exc:  # noqa: BLE001 - the account cache must turn off even if the copy fails
+                LOG.warning("component=exness event=DESK_REMEMBER_FAILED error_type=%s detail=%s",
+                            type(exc).__name__, safe_detail(exc))
             if cache is not None:
                 cache(False)
+
+    def _remember_desk(self, at):
+        """Keep the book ``note_link`` already cached. Reading the cache is not a new broker call."""
+        book = getattr(self.broker, "_read_cache", None)
+        if book is None:
+            return
+        from execution.exness_desk import desk_from_book
+        desk = desk_from_book(book, at)
+        if desk is not None:
+            self.desk = desk
 
     def _manage(self, at, bars):
         try:

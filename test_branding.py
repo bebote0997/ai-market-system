@@ -17,7 +17,7 @@ class BrandingTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("Mesa de Trading", text, path.name)
             self.assertNotIn("MESA DE TRADING", text, path.name)
-        self.assertIn('page_title="AI Trading Floor', (ROOT / "ui/app.py").read_text(encoding="utf-8"))
+        self.assertIn('page_title="Jt Trading Floor"', (ROOT / "ui/app.py").read_text(encoding="utf-8"))
         self.assertIn('st.title("AI Trading Floor · panel privado', (ROOT / "ui/auth.py").read_text(encoding="utf-8"))
 
 
