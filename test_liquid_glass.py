@@ -303,6 +303,35 @@ class DeskSnapshotTests(unittest.TestCase):
         self.assertEqual(order["position_id"], "55")
         self.assertEqual(order["stop_loss_price"], "1.07000")
 
+    def test_remember_desk_failure_still_turns_the_cache_off(self):
+        from execution.exness_brakes import ExnessBrakes
+        from execution.exness_broker import ExnessBroker
+        from execution.exness_session import ExnessSession
+        from execution.exness_transport import FakeExnessTransport
+        at = datetime(2026, 6, 2, 15, 0, tzinfo=timezone.utc)
+        fake = FakeExnessTransport(clock=lambda: at)
+        broker = ExnessBroker(fake, env={"AI_FLOOR_BROKER": "exness"},
+                              brakes=ExnessBrakes.from_env(fake, {}), clock=lambda: at)
+        session = ExnessSession(broker, env={"AI_FLOOR_BROKER": "exness"}, clock=lambda: at)
+        seen = []
+        original = broker.cache_account_reads
+
+        def traced(enabled):
+            seen.append(bool(enabled))
+            return original(enabled)
+
+        broker.cache_account_reads = traced
+
+        def boom(_at):
+            raise RuntimeError("desk copy failed")
+
+        session._remember_desk = boom
+        with self.assertLogs("ai_floor.exness", level="WARNING") as caught:
+            session.manage(at)
+        self.assertEqual(seen, [True, False])
+        self.assertIsNone(broker._read_cache)
+        self.assertTrue(any("DESK_REMEMBER_FAILED" in line for line in caught.output))
+
     def test_snapshot_stores_that_desk_and_the_panel_reads_it(self):
         from runtime.service import OperationalRuntime as TradingService
         desk = {"account_state": {"balance": "1000", "equity": "1004", "currency": "USC"},

@@ -129,7 +129,11 @@ class ExnessSession:
         try:
             return self._manage(at, bars)
         finally:
-            self._remember_desk(at)
+            try:
+                self._remember_desk(at)
+            except Exception as exc:  # noqa: BLE001 - the account cache must turn off even if the copy fails
+                LOG.warning("component=exness event=DESK_REMEMBER_FAILED error_type=%s detail=%s",
+                            type(exc).__name__, safe_detail(exc))
             if cache is not None:
                 cache(False)
 
