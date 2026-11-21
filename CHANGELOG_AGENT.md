@@ -1,5 +1,19 @@
 # Agent Changelog
 
+## 2026-11-20 — seguimientos del session combo (sobre #97)
+
+- `_await_held` espera 0,2 s, 0,4 s, 0,8 s y 1,6 s entre lecturas. La primera es inmediata.
+- Un cierre que vuelve `UNKNOWN` (HTTP 202) se anota `closed` cuando la relectura ya no ve el ticket. Si la relectura falla, sigue `UNKNOWN` y la pata no se marca hecha. Así el cierre real de Londres del 18 de noviembre no queda como desconocido.
+- El aviso de `sltp` ya enviado se guarda en la pata y en `sltp_sent_<ticket>`. Un reinicio no lo repite.
+- `replace_protection` redondea al `point_digits` y rechaza un stop (o un target) del lado que no pierde.
+- Una orden `sltp` que quedó suelta no cuenta como orden pendiente en `_position_open`.
+- Si el libro no se puede leer antes de enviar, el resultado es `UNKNOWN` / `book_unread` y el día sigue armado. No es `SIZE_SKIP`.
+- El chequeo de #96 entra aquí: en un manage posterior al envío, un solo replace si falta el stop. El cierre `protection_missing` espera dos lecturas seguidas sin stop y con el campo `orders` presente. Si el snapshot no trae `orders`, no cierra. El replace manda la `sltp` nueva primero y después cancela las anteriores. Si la nueva es `REJECTED`, las anteriores se quedan y sale una alerta HIGH. La que se conserva es la id de la orden nueva, no la última del snapshot.
+- Si el cierre por falta de stop no cierra, no se marca `protection_close_done`. El tick siguiente lo reintenta y sale una alerta HIGH.
+- Un stop en el precio de entrada (breakeven) no pasa la comprobación de lado (`stop` estrictamente por debajo del fill en LONG, por encima en SHORT). Esa regla se deja así: es una limitación conocida.
+- La pata Fix (GBPUSD y luego EURUSD) usa el mismo ack que Londres: un HTTP 200/202 queda `UNKNOWN` y no se anota `SIZE_SKIP`. La pata sigue `submitted` hasta que la relectura ve la posición.
+- Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy.
+
 ## 2026-11-20 — fill Exness tras ACK, SL/TP y salida de las 11:00
 
 - Un HTTP 200/202 de Exness sigue siendo `UNKNOWN` en el transporte. El session combo lo trata como ack: relee la posición y solo entonces la marca `filled`. No anota `SIZE_SKIP` ni unfilled mientras esa lectura no confirme que no está. Si no aparece, la pata sigue `submitted` y no se reenvía.

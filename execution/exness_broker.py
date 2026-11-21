@@ -91,6 +91,22 @@ def _fraction(value):
     return value
 
 
+def _sltp_ids(book, position_ref):
+    """Order ids of sltp rows linked to this position. Unlinked working orders are left alone."""
+    ref = str(position_ref)
+    found = []
+    for order_id, linked in getattr(book, "sltp_ids", ()) or ():
+        if str(linked) == ref and str(order_id) not in found:
+            found.append(str(order_id))
+    for order in getattr(book, "orders", ()) or ():
+        if str(getattr(order, "kind", "")).lower() != "sltp":
+            continue
+        linked = getattr(order, "position_id", None)
+        if linked is not None and str(linked) == ref and str(order.ticket) not in found:
+            found.append(str(order.ticket))
+    return found
+
+
 def _round(value, digits):
     return value.quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
 
@@ -133,7 +149,11 @@ class ExnessBroker:
         return now.astimezone(timezone.utc)
 
     def _alert(self, kind, detail):
-        LOG.warning("component=exness event=%s reason=%s", kind, (detail or {}).get("reason"))
+        detail = detail or {}
+        if detail.get("severity") == "HIGH":
+            LOG.warning("component=exness event=%s severity=HIGH reason=%s", kind, detail.get("reason"))
+        else:
+            LOG.warning("component=exness event=%s reason=%s", kind, detail.get("reason"))
         if self._on_alert is None:
             return
         try:
@@ -527,15 +547,72 @@ class ExnessBroker:
         return self.replace_protection(position_ref, new_stop, None, client_id=client_id)
 
     def replace_protection(self, position_ref, stop, target, *, client_id):
+        """Place an ``sltp`` order. The stop has to sit on the losing side of the fill, rounded to ``point_digits``."""
         refused = self._readonly(client_id, ModifyResult)
         if refused is not None:
             return refused
         if not isinstance(stop, Decimal) or not stop.is_finite() or stop <= 0:
             return ModifyResult(REJECTED, client_id, reason="stop_invalid")
+        if target is not None and (not isinstance(target, Decimal) or not target.is_finite() or target <= 0):
+            return ModifyResult(REJECTED, client_id, reason="target_invalid")
+        try:
+            book = self._read()
+        except BrokerUnavailable as exc:
+            return ModifyResult(REJECTED, client_id, reason=f"read_failed:{exc}")
+        match = next((row for row in book.positions if row.ticket == str(position_ref)), None)
+        if match is None:
+            return ModifyResult(REJECTED, client_id, reason="position_not_found")
+        spec = book.specs.get(match.symbol)
+        if spec is None:
+            return ModifyResult(REJECTED, client_id, reason="spec_missing")
+        try:
+            stop_r = _round(stop, spec.point_digits)
+            target_r = None if target is None else _round(target, spec.point_digits)
+        except (ArithmeticError, ValueError):
+            return ModifyResult(REJECTED, client_id, reason="price_rounding")
+        # Known limit: a breakeven stop sits on the fill. ``stop_r < price`` (LONG) and
+        # ``stop_r > price`` (SHORT) reject that stop. This rule is unchanged on purpose.
+        if match.side == "LONG" and not stop_r < match.price:
+            return ModifyResult(REJECTED, client_id, reason="stop_side")
+        if match.side == "SHORT" and not stop_r > match.price:
+            return ModifyResult(REJECTED, client_id, reason="stop_side")
+        if target_r is not None and match.side == "LONG" and not target_r > match.price:
+            return ModifyResult(REJECTED, client_id, reason="target_side")
+        if target_r is not None and match.side == "SHORT" and not target_r < match.price:
+            return ModifyResult(REJECTED, client_id, reason="target_side")
         if not self.note_link():
             return ModifyResult(REJECTED, client_id, reason="quote_stale")
-        return self._send(Command(f"modify-{position_ref}-{client_id}", "MODIFY", "", stop=stop, target=target,
+        previous = _sltp_ids(book, position_ref)
+        sent = self._send(Command(f"modify-{position_ref}-{client_id}", "MODIFY", "", stop=stop_r, target=target_r,
                                  position_ref=str(position_ref)), client_id, ModifyResult)
+        if getattr(sent, "status", None) == "REJECTED":
+            self._alert("EXNESS_SLTP_REJECTED", {"reason": "sltp_rejected", "severity": "HIGH",
+                                                 "symbol": match.symbol})
+            return sent
+        self._drop_previous_sltp(position_ref, client_id, previous, getattr(sent, "broker_ref", None))
+        return sent
+
+    def _drop_previous_sltp(self, position_ref, client_id, previous, new_order_id):
+        """Cancel the sltp orders that existed before this replace. Keep the new order's id.
+
+        A snapshot order that is not that id is not kept: the last row in the book is not the new order.
+        """
+        keep = str(new_order_id) if new_order_id else None
+        if keep == str(position_ref):
+            keep = None
+        doomed = [order_id for order_id in previous if order_id != keep]
+        if keep:
+            try:
+                book = self._read(fresh=True)
+            except BrokerUnavailable:
+                book = None
+            if book is not None:
+                for order_id in _sltp_ids(book, position_ref):
+                    if order_id != keep and order_id not in doomed:
+                        doomed.append(order_id)
+        for order_id in doomed:
+            self._send(Command(f"cancel-sltp-{order_id}-{client_id}", "CANCEL", "", position_ref=str(order_id)),
+                       client_id, ModifyResult)
 
     def connectivity_report(self):
         book = self._read()

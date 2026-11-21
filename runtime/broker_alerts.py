@@ -69,6 +69,8 @@ MESSAGES = {
     "TRAIL": "Stop de seguimiento movido (a 1R)",
     "EXNESS_DISCONNECTED": "Exness sin precio reciente: no se abren operaciones",
     "EXNESS_BRAKE_HALT": "Freno de la cuenta Exness: entradas detenidas",
+    "EXNESS_SLTP_REJECTED": "Protección nueva rechazada: se conserva la orden anterior",
+    "EXNESS_PROTECTION_CLOSE_FAILED": "No se pudo cerrar la posición sin stop: se reintenta",
 }
 _SAFE = re.compile(r"[^A-Za-z0-9_:.\-]")
 _LONG_DIGITS = re.compile(r"\d{5,}")

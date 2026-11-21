@@ -71,7 +71,7 @@ def world(at, env=None, store=None, transport=None):
     fake.conditions = {"USDJPY": payload(spec_jpy()), "EURUSD": payload(spec_usd()), "GBPUSD": payload(spec_usd())}
     fake.push_tick(Decimal("150.200"), Decimal("150.202"), at)
     broker = ExnessBroker(fake, env=env, brakes=ExnessBrakes.from_env(store or fake, env), clock=clock)
-    return clock, fake, broker, SessionCombo(broker)
+    return clock, fake, broker, SessionCombo(broker, sleep=lambda _seconds: None)
 
 
 def cover_asian(day, bars, symbol="USDJPY"):

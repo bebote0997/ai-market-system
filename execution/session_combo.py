@@ -27,6 +27,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 import json
 import logging
+import time as time_mod
 from zoneinfo import ZoneInfo
 
 from execution.exness_sizing import RISK_FRACTION_CAP, account_risk_cap, capped_lots
@@ -45,11 +46,15 @@ PIP = {"USDJPY": Decimal("0.01"), "EURUSD": Decimal("0.0001"), "GBPUSD": Decimal
 LONDON_SYMBOL = "USDJPY"
 FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
-           "position_id", "volume", "opened_at", "stop", "target")
+           "position_id", "volume", "opened_at", "stop", "target", "sltp_sent",
+           "protection_after", "protection_retry_done", "protection_close_done",
+           "protection_miss_reads")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
 _FILL_POLLS = 5
 _SLTP_ATTEMPTS = 3
+# Real pauses between fill re-reads. The first read is immediate; later ones back off.
+_FILL_PAUSE_S = (0.2, 0.4, 0.8, 1.6)
 # The 7-hour window is 84 M5 bars. The first and the last alone are not a range.
 MIN_RANGE_BARS = 3
 
@@ -212,7 +217,18 @@ def _log(event, **detail):
 def _blank():
     return {"status": "pending", "client_id": None, "exit_at": None, "exited": False,
             "symbol": None, "side": None, "logged_range": False, "position_id": None,
-            "volume": None, "opened_at": None, "stop": None, "target": None}
+            "volume": None, "opened_at": None, "stop": None, "target": None, "sltp_sent": None,
+            "protection_after": None, "protection_retry_done": False, "protection_close_done": False,
+            "protection_miss_reads": 0}
+
+
+class _SendResult:
+    """In-process stand-in when the broker was not called."""
+
+    def __init__(self, status, reason):
+        self.status = status
+        self.reason = reason
+        self.broker_ref = None
 
 
 def _as_decimal(value):
@@ -249,13 +265,14 @@ def fix_key(day):
 
 
 class SessionCombo:
-    def __init__(self, broker, store=None):
+    def __init__(self, broker, store=None, sleep=None):
         self._broker = broker
         self._store = store if store is not None else broker.flag_store
         self._phase = {}
         self._logged_bars = False
         self._sltp_attempts = {}
         self._sltp_sent = set()
+        self._sleep = time_mod.sleep if sleep is None else sleep
 
     def tick(self, at, bars):
         if not _aware(at):
@@ -306,8 +323,15 @@ class SessionCombo:
                 state["exit_at"] = datetime.fromisoformat(state["exit_at"])
             if isinstance(state["opened_at"], str):
                 state["opened_at"] = datetime.fromisoformat(state["opened_at"])
+            if isinstance(state.get("protection_after"), str):
+                state["protection_after"] = datetime.fromisoformat(state["protection_after"])
             state["exited"] = bool(state["exited"])
             state["logged_range"] = bool(state["logged_range"])
+            state["protection_retry_done"] = bool(state.get("protection_retry_done"))
+            state["protection_close_done"] = bool(state.get("protection_close_done"))
+            sent = state.get("sltp_sent")
+            if sent:
+                self._sltp_sent.add(sent)
         self._phase[key] = state
         return state
 
@@ -319,7 +343,7 @@ class SessionCombo:
 
     def _put(self, key, state):
         payload = dict(state)
-        for field in ("exit_at", "opened_at"):
+        for field in ("exit_at", "opened_at", "protection_after"):
             if isinstance(payload.get(field), datetime):
                 payload[field] = payload[field].isoformat()
         self._store.set_flag(key, json.dumps(payload, sort_keys=True))
@@ -351,8 +375,11 @@ class SessionCombo:
             return False
 
     def _position_open(self):
+        """True when a position or a resting entry is open. A leftover ``sltp`` order is not an entry."""
         try:
-            return bool(self._broker.open_trades() or self._broker.pending_orders())
+            if self._broker.open_trades():
+                return True
+            return any(getattr(order, "kind", "") != "sltp" for order in self._broker.pending_orders())
         except Exception:  # noqa: BLE001
             return True
 
@@ -498,6 +525,12 @@ class SessionCombo:
             state["status"] = "filled"
             self._put(key, state)
             return True
+        if status == "UNKNOWN" and getattr(result, "reason", None) == "book_unread":
+            # The read failed before any order. Stay armed so the next tick can send.
+            state.update(status="armed", client_id=None, exit_at=None, symbol=None, side=None, position_id=None,
+                         volume=None, opened_at=None, stop=None, target=None)
+            self._put(key, state)
+            return False
         if status == "UNKNOWN":
             kind, row = self._await_held(state)
             if kind == "held":
@@ -525,9 +558,9 @@ class SessionCombo:
     def _send(self, day, symbol, side, entry, stop, target, client_id):
         try:
             book = self._broker._read()
-        except Exception:  # noqa: BLE001
-            _log("SIZE_SKIP", symbol=symbol, reason="book_unread")
-            return None, None
+        except Exception:  # noqa: BLE001 - the order was not sent; the leg stays retryable
+            _log("ORDER_UNREAD", symbol=symbol, status="UNKNOWN", reason="book_unread")
+            return _SendResult("UNKNOWN", "book_unread"), None
         broker_env = getattr(self._broker, "_env", None)
         if book.balance is None or account_risk_cap(book.balance.currency, broker_env) is None:
             _log("SIZE_SKIP", symbol=symbol, reason="currency_unsupported")
@@ -579,9 +612,15 @@ class SessionCombo:
         return list(self._broker.open_trades())
 
     def _await_held(self, state):
-        """Re-read until the position is visible. ``gone`` is only returned when a stored id is absent."""
+        """Re-read until the position is visible. ``gone`` is only returned when a stored id is absent.
+
+        Reads after the first one wait (0.2 s, then 0.4, 0.8, 1.6). A tight loop was reading the same
+        snapshot before the ack became a position.
+        """
         last = ("unknown", None)
-        for _ in range(_FILL_POLLS):
+        for attempt in range(_FILL_POLLS):
+            if attempt:
+                self._sleep(_FILL_PAUSE_S[attempt - 1])
             try:
                 kind, row = self._locate(state, fresh=True)
             except Exception:  # noqa: BLE001
@@ -612,7 +651,7 @@ class SessionCombo:
         seen_target = getattr(row, "target", None) if row is not None else None
         if seen_stop is not None and (target is None or seen_target is not None):
             return
-        if ticket in self._sltp_sent or self._sltp_attempts.get(ticket, 0) >= _SLTP_ATTEMPTS:
+        if self._sltp_remembered(ticket) or self._sltp_attempts.get(ticket, 0) >= _SLTP_ATTEMPTS:
             return
         attempt = self._sltp_attempts.get(ticket, 0) + 1
         self._sltp_attempts[ticket] = attempt
@@ -621,7 +660,101 @@ class SessionCombo:
         except Exception:  # noqa: BLE001
             return
         if getattr(result, "status", None) != "REJECTED":
+            self._remember_sltp(state, ticket)
+
+    def _sltp_remembered(self, ticket):
+        """True when this process, or a previous one, already accepted an ``sltp`` for ``ticket``."""
+        if not ticket or ticket in self._sltp_sent:
+            return bool(ticket and ticket in self._sltp_sent)
+        try:
+            remembered = self._store.get_flag(f"sltp_sent_{ticket}") == "1"
+        except Exception:  # noqa: BLE001
+            return False
+        if remembered:
             self._sltp_sent.add(ticket)
+        return remembered
+
+    def _remember_sltp(self, state, ticket):
+        self._sltp_sent.add(ticket)
+        state["sltp_sent"] = ticket
+        if state.get("protection_after") is None and isinstance(state.get("opened_at"), datetime):
+            state["protection_after"] = state["opened_at"]
+        try:
+            self._store.set_flag(f"sltp_sent_{ticket}", "1")
+        except Exception:  # noqa: BLE001 - the leg flag still carries sltp_sent
+            pass
+
+    def _orders_snapshot_ok(self):
+        """True only when this read's book carries a real ``orders`` list. A missing field is not 'no stop'."""
+        try:
+            book = self._broker._read(fresh=True)
+        except Exception:  # noqa: BLE001
+            return False
+        if getattr(book, "orders_present", True) is False:
+            return False
+        return isinstance(getattr(book, "orders", None), (list, tuple))
+
+    def _high_alert(self, kind, reason):
+        """Immediate operator alert. The broker sink delivers it when alerts are on."""
+        _log(kind, severity="HIGH", reason=reason)
+        alert = getattr(self._broker, "_alert", None)
+        if not callable(alert):
+            return
+        try:
+            alert(kind, {"reason": reason, "severity": "HIGH"})
+        except Exception:  # noqa: BLE001 - an alert never changes the close
+            _log("ALERT_FAILED", reason=kind)
+
+    def _protect_followup(self, key, state, row, at, asked):
+        """One replace on a later manage if the stop is still missing.
+
+        Closing for ``protection_missing`` needs two consecutive reads that both show no stop and a
+        valid ``orders`` list. A snapshot with no ``orders`` field resets that streak and never closes.
+        The check does not run on the manage that sent the first sltp (``at <= protection_after``).
+        """
+        if state.get("protection_close_done"):
+            return
+        if getattr(row, "stop", None) is not None:
+            state["protection_miss_reads"] = 0
+            return
+        sent = state.get("protection_after")
+        if not isinstance(sent, datetime) or not isinstance(at, datetime) or at <= sent:
+            return
+        if not self._orders_snapshot_ok():
+            state["protection_miss_reads"] = 0
+            _log("PROTECTION_ORDERS_ABSENT", symbol=state.get("symbol"))
+            return
+        misses = int(state.get("protection_miss_reads") or 0) + 1
+        state["protection_miss_reads"] = misses
+        ticket = getattr(row, "ticket", None)
+        if not ticket:
+            return
+        if not state.get("protection_retry_done"):
+            stop = _as_decimal(state.get("stop"))
+            if stop is None:
+                return
+            _log("PROTECTION_MISSING", symbol=state.get("symbol"))
+            try:
+                result = self._broker.replace_protection(
+                    ticket, stop, _as_decimal(state.get("target")), client_id=f"sltp-retry-{ticket}")
+            except Exception:  # noqa: BLE001
+                result = None
+            state["protection_retry_done"] = True
+            _log("PROTECTION_REPLACE", symbol=state.get("symbol"), status=getattr(result, "status", None),
+                 reason=getattr(result, "reason", None))
+            return
+        if misses < 2:
+            return
+        done = self._finish_close(ticket, "protection_missing", f"protect-{ticket}", state.get("symbol"), asked)
+        _log("PROTECTION_CLOSE", symbol=state.get("symbol"), status="closed" if done else "open",
+             reason="protection_missing")
+        if not done:
+            self._high_alert("EXNESS_PROTECTION_CLOSE_FAILED", "protection_missing")
+            return
+        state["protection_close_done"] = True
+        state["exited"] = True
+        state["status"] = "done"
+        self._put(key, state)
 
     def _locate(self, state, fresh=False):
         """``(held, row)``, ``(gone, None)``, ``(unknown, None)`` or ``(ambiguous, None)``.
@@ -679,6 +812,9 @@ class SessionCombo:
                     if not state.get("position_id"):
                         state["position_id"] = row.ticket
                 self._ensure_protection(state, row)
+                self._protect_followup(key, state, row, at, asked)
+                if state.get("exited"):
+                    continue
                 try:
                     self._put(key, state)
                 except Exception:  # noqa: BLE001
@@ -716,18 +852,34 @@ class SessionCombo:
         self._put(key, state)
 
     def _finish_close(self, ticket, reason, client, symbol, asked):
-        """Close ``ticket`` once this tick. True when a later read no longer shows it."""
+        """Close ``ticket`` once this tick. True when a later read no longer shows it.
+
+        HTTP 202 is ``UNKNOWN`` on the transport. That ack is not left as the log status: a re-read that
+        no longer shows the ticket is logged ``closed`` (the 18 Nov London exit was a real close logged
+        ``UNKNOWN`` because the 202 returned before the position disappeared).
+        """
         if not ticket or ticket in asked:
             return False
         asked.add(ticket)
-        result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
-        _log("TIME_EXIT", symbol=symbol, reason=reason, status=getattr(result, "status", None))
-        if getattr(result, "status", None) not in ("ACCEPTED", "REJECTED"):
+        try:
+            result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
+        except Exception:  # noqa: BLE001
+            _log("TIME_EXIT", symbol=symbol, reason=reason, status="UNKNOWN")
+            return False
+        status = getattr(result, "status", None)
+        if status == "REJECTED":
+            _log("TIME_EXIT", symbol=symbol, reason=reason, status="REJECTED")
             return False
         try:
-            return not any(item.ticket == ticket for item in self._positions())
+            gone = not any(item.ticket == ticket for item in self._positions(fresh=True))
         except Exception:  # noqa: BLE001
+            _log("TIME_EXIT", symbol=symbol, reason=reason, status=status or "UNKNOWN")
             return False
+        if gone:
+            _log("TIME_EXIT", symbol=symbol, reason=reason, status="closed")
+            return True
+        _log("TIME_EXIT", symbol=symbol, reason=reason, status=status or "UNKNOWN")
+        return False
 
     def _close_london_without_flag(self, at, asked):
         """11:00 ET closes the live ``combo-lon-`` ticket even when the day flag has no position id."""

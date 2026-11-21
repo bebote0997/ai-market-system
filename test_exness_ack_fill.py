@@ -6,8 +6,8 @@ import logging
 import unittest
 
 from execution.exness_transport import CommandResult, FakeExnessTransport, Position
-from execution.session_combo import SessionCombo, london_key
-from test_session_combo import Clock, _markets, bar, ny, range_pair, world
+from execution.session_combo import SessionCombo, fix_key, london_key
+from test_session_combo import Clock, _markets, bar, fix_bars, lon, ny, range_pair, world
 
 
 class AckTransport(FakeExnessTransport):
@@ -51,6 +51,37 @@ def london_bars(at):
 
 
 class AckFillTests(unittest.TestCase):
+    def test_fix_leg_unknown_ack_is_not_a_size_skip(self):
+        """GBPUSD/EURUSD use the same ack path as London: HTTP 200/202 stays submitted, not SIZE_SKIP."""
+        at = lon(2026, 1, 15, 16, 2)
+        transport = AckTransport(clock=Clock(at), appear_after=100)
+        clock, fake, _broker, combo = world(at, transport=transport)
+        fake.push_tick(Decimal("1.25140"), Decimal("1.25150"), at)
+        bars = fix_bars("GBPUSD", "1.25150")
+        with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
+            combo.tick(clock.at, bars)
+        text = "\n".join(logs.output)
+        self.assertNotIn("SIZE_SKIP", text)
+        self.assertNotIn("FIX_SKIPPED", text)
+        self.assertNotIn("unfilled", text)
+        self.assertEqual(len(_markets(fake)), 1)
+        self.assertEqual(_markets(fake)[0].symbol, "GBPUSD")
+        saved = json.loads(fake.get_flag(fix_key(at.date())))
+        self.assertEqual(saved["status"], "submitted")
+        self.assertEqual(saved["symbol"], "GBPUSD")
+        clock.at = at + timedelta(minutes=5)
+        fake.push_tick(Decimal("1.25140"), Decimal("1.25150"), clock.at)
+        combo.tick(clock.at, bars)
+        self.assertEqual(len(_markets(fake)), 1)
+        self.assertEqual(json.loads(fake.get_flag(fix_key(at.date())))["status"], "submitted")
+        transport.appear_after = 0
+        combo.tick(clock.at, bars)
+        saved = json.loads(fake.get_flag(fix_key(at.date())))
+        self.assertEqual(saved["status"], "filled")
+        self.assertEqual(saved["position_id"], fake.positions[0].ticket)
+        self.assertNotEqual(saved["position_id"], "op-not-a-ticket")
+        self.assertEqual(len(_markets(fake)), 1)
+
     def test_unknown_ack_polls_until_the_position_is_filled_without_size_skip(self):
         at = ny(2026, 1, 16, 2, 10)
         transport = AckTransport(clock=Clock(at), appear_after=3)
