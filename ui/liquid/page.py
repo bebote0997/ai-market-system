@@ -50,8 +50,20 @@ def load(env=None, now=None, book=None, account_reader=None, curve=None):
                            health=health, errors=errors, curve=curve, snapshot=latest(env))
 
 
+_CHROME = """<style>
+section[data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"],
+[data-testid="stHeader"],[data-testid="stToolbar"]{display:none !important}
+html .stApp.aif-nav-open .block-container,
+html .stApp .block-container,
+html [data-testid="stMainBlockContainer"]{
+padding:0 !important;max-width:100% !important}
+</style>"""
+
+
 def render(st, section):
+    """Full-bleed panel. The old Streamlit rail stays in the session and is not drawn around this view."""
     from ui.liquid.render import fragment
+    st.markdown(_CHROME, unsafe_allow_html=True)
     body = fragment(load(), section=section if section in PAGES else "Inicio")
     html = getattr(st, "html", None)
     if callable(html):

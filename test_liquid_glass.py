@@ -179,6 +179,13 @@ class RenderSmokeTests(unittest.TestCase):
         self.assertIn("blur(24px)", html)
         self.assertIn("prefers-color-scheme", html)
         self.assertIn("max-width:390px", html)
+        css = Path("ui/static/liquid/glass.css").read_text(encoding="utf-8")
+        wide = css.split("@media (max-width:900px)", 1)[1].split("@media", 1)[0]
+        self.assertIn(".table-wrap{display:none}", wide)
+        self.assertIn(".row-cards{display:flex", wide)
+        self.assertIn(".hline{grid-template-columns:minmax(0,1fr)}", wide)
+        self.assertIn(".lg .live{background:#0f7a45;color:#fff", css)
+        self.assertNotIn(".pill,.live,", css)
         self.assertIn("localStorage", html)
         self.assertIn("aif-liquid-theme", html)
         self.assertIn("Jt Trading Floor", html)
@@ -228,6 +235,25 @@ class LoadTests(unittest.TestCase):
             self.assertEqual(view["positions"]["state"], "sin datos")
             self.assertEqual(view["curve"]["state"], "sin datos")
 
+    def test_latest_reads_os_environ_not_only_a_dict(self):
+        import sqlite3
+        from ui.liquid.snapshot import latest
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trading_floor.db"
+            con = sqlite3.connect(path)
+            con.execute("CREATE TABLE ui_snapshots(symbol TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            con.execute("INSERT INTO ui_snapshots(symbol, payload) VALUES(?, ?)",
+                        ("EURUSD", json.dumps({"as_of": "2026-06-02T15:00:00+00:00",
+                                               "account_state": {"balance": "1000", "equity": "1004", "currency": "USC"},
+                                               "positions": [], "orders": []})))
+            con.commit()
+            con.close()
+            with patch.dict(os.environ, {"AI_FLOOR_DB_PATH": str(path)}):
+                found = latest(os.environ)
+            self.assertEqual(found["account_state"]["equity"], "1004")
+            view = build_dashboard(env=ENV, now=NOW, flags={}, snapshot=found)
+            self.assertIn("1,004.00 USC", view["kpis"]["equity"]["text"])
+
 
 class WiringTests(unittest.TestCase):
     def test_app_keeps_the_old_pages_and_opens_on_inicio(self):
@@ -238,6 +264,80 @@ class WiringTests(unittest.TestCase):
                         source.index('st.session_state["luxury_navigation"] = "Inicio"'))
         self.assertLess(source.index("if page in LIQUID_PAGES:"), source.index("if page in luxury.PAGES:"))
         self.assertLess(source.index("require_dashboard_access(st)"), source.index('= "Inicio"'))
+        page = Path("ui/liquid/page.py").read_text(encoding="utf-8")
+        self.assertIn('data-testid="stSidebar"', page)
+        self.assertLess(page.index("st.markdown(_CHROME"), page.index("fragment(load()"))
+
+
+class DeskSnapshotTests(unittest.TestCase):
+    def test_manage_keeps_the_book_it_already_read(self):
+        from execution.broker_port import BrokerBalance
+        from execution.exness_brakes import ExnessBrakes
+        from execution.exness_broker import ExnessBroker
+        from execution.exness_session import ExnessSession
+        from execution.exness_transport import FakeExnessTransport, Position
+        at = datetime(2026, 6, 2, 15, 0, tzinfo=timezone.utc)
+        fake = FakeExnessTransport(clock=lambda: at)
+        fake.balance = BrokerBalance(Decimal("1000"), Decimal("1004"), Decimal("0"), "USC")
+        fake.positions = [Position("55", "EURUSD", "LONG", Decimal("0.01"), Decimal("1.08000"),
+                                   Decimal("1.07000"), Decimal("1.11000"))]
+        fake.push_tick(Decimal("1.08000"), Decimal("1.08002"), at)
+        calls = {"n": 0}
+        original = fake.read_state
+
+        def counted():
+            calls["n"] += 1
+            return original()
+
+        fake.read_state = counted
+        broker = ExnessBroker(fake, env={"AI_FLOOR_BROKER": "exness"},
+                              brakes=ExnessBrakes.from_env(fake, {}), clock=lambda: at)
+        session = ExnessSession(broker, env={"AI_FLOOR_BROKER": "exness"}, clock=lambda: at)
+        session.manage(at)
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(session.desk["account_state"]["equity"], "1004")
+        self.assertEqual(session.desk["positions"][0]["instrument"], "EURUSD")
+        self.assertNotIn("stop_loss_price", session.desk["positions"][0])
+        order = session.desk["orders"][0]
+        self.assertEqual(order["type"], "sltp")
+        self.assertEqual(order["position_id"], "55")
+        self.assertEqual(order["stop_loss_price"], "1.07000")
+
+    def test_snapshot_stores_that_desk_and_the_panel_reads_it(self):
+        from runtime.service import OperationalRuntime as TradingService
+        desk = {"account_state": {"balance": "1000", "equity": "1004", "currency": "USC"},
+                "positions": [{"position_id": "55", "instrument": "EURUSD", "side": "LONG",
+                               "volume": "0.01", "open_price": "1.08000",
+                               "stop_loss_price": "9.99", "take_profit_price": "8.88"}],
+                "orders": [{"type": "sltp", "position_id": "55",
+                            "stop_loss_price": "1.07000", "take_profit_price": "1.11000"}],
+                "point": {"at": "2026-06-02T15:00:00+00:00", "equity": "1004"}}
+        held = {"prior": {"curve": [{"at": "2026-06-01T15:00:00+00:00", "equity": "1000"}]}}
+
+        class Store:
+            def load_snapshot(self, symbol):
+                self.asked = symbol
+                return held["prior"]
+
+        holder = type("Holder", (), {"exness_session": type("S", (), {"desk": desk})(), "store": Store()})()
+        first = TradingService._with_desk(holder, {"symbol": "EURUSD", "state": "COMPLETED"})
+        self.assertEqual(holder.store.asked, "EURUSD")
+        self.assertEqual(first["account_state"]["balance"], "1000")
+        self.assertEqual(first["curve"], [
+            {"at": "2026-06-01T15:00:00+00:00", "equity": "1000"},
+            {"at": "2026-06-02T15:00:00+00:00", "equity": "1004"}])
+        held["prior"] = first
+        second = TradingService._with_desk(holder, {"symbol": "EURUSD", "state": "COMPLETED"})
+        self.assertEqual(len(second["curve"]), 2)
+        bare = type("Holder", (), {"exness_session": None, "store": Store()})()
+        untouched = TradingService._with_desk(bare, {"symbol": "EURUSD", "state": "NO_DATA"})
+        self.assertNotIn("account_state", untouched)
+        self.assertNotIn("curve", untouched)
+        view = build_dashboard(env=ENV, now=NOW, flags={}, snapshot=first)
+        self.assertIn("1,004.00 USC", view["kpis"]["equity"]["text"])
+        self.assertEqual(view["positions"]["rows"][0]["sl"], "1.07")
+        self.assertNotIn("9.99", json.dumps(view["positions"]["rows"][0]))
+        self.assertEqual(view["curve"]["state"], "ok")
 
 
 if __name__ == "__main__":

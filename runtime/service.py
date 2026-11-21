@@ -990,7 +990,7 @@ class OperationalRuntime:
             ("entry", "stop", "target", "risk_reward", "side", "invalidation")}
         risk = None if vm.risk_decision is None else {k: getattr(vm.risk_decision, k) for k in
             ("status", "reason", "equity_at_decision", "risk_fraction", "quantity", "capital_at_risk")}
-        return {"schema_version": "1.0", "run_id": vm.run_id, "symbol": vm.symbol,
+        body = {"schema_version": "1.0", "run_id": vm.run_id, "symbol": vm.symbol,
                 "as_of": utc(vm.as_of) if vm.as_of else None, "state": vm.state,
                 "setup_status": vm.setup_status, "setup_side": vm.setup_side,
                 "setup_evidence": vm.setup_evidence, "setup_invalidation": vm.setup_invalidation,
@@ -998,13 +998,27 @@ class OperationalRuntime:
                 "warnings": vm.warnings, "facts": vm.facts,
                 "interpretation": vm.interpretation, "freshness": vm.freshness,
                 "agents": [vars(a) for a in vm.agents], "prompt_versions": vm.prompt_versions}
+        return self._with_desk(body)
 
     def _status_snapshot(self, symbol, slot, state, warning, run_id=None):
-        return {"schema_version": "1.0", "run_id": run_id, "symbol": symbol, "as_of": utc(slot),
+        return self._with_desk({"schema_version": "1.0", "run_id": run_id, "symbol": symbol, "as_of": utc(slot),
                 "state": state, "setup_status": "NO_SETUP", "setup_side": None,
                 "setup_evidence": [], "setup_invalidation": None, "risk_status": "NOT CALLED",
                 "warnings": [warning], "facts": [f"{symbol}: {state}", "Risk Engine: NOT CALLED"],
-                "interpretation": [], "freshness": state, "agents": [], "prompt_versions": []}
+                "interpretation": [], "freshness": state, "agents": [], "prompt_versions": []})
+
+    def _with_desk(self, payload):
+        session = self.exness_session
+        desk = getattr(session, "desk", None) if session is not None else None
+        if not isinstance(desk, dict):
+            return payload
+        prior = None
+        try:
+            prior = self.store.load_snapshot(payload.get("symbol"))
+        except Exception:  # noqa: BLE001 - a missing store leaves the curve at this cycle's point
+            prior = None
+        from execution.exness_desk import attach_desk
+        return attach_desk(payload, desk, prior)
 
     # -- V2 P3 REX (flag v2_rex, OFF by default): evidence only; every helper is a no-op when ``rex`` is None ------
     def _new_rex(self, run_id, key, symbol, slot):

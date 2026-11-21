@@ -6,7 +6,8 @@ import sqlite3
 
 
 def _db_path(env):
-    raw = env.get("AI_FLOOR_DB_PATH") if isinstance(env, dict) else None
+    getter = getattr(env, "get", None)
+    raw = getter("AI_FLOOR_DB_PATH") if callable(getter) else None
     text = raw.strip() if isinstance(raw, str) else ""
     return Path(text or "data/runtime/trading_floor.db")
 

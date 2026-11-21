@@ -38,11 +38,15 @@ def example_view(now=None):
     curve = [{"at": "2026-11-18T16:00:00+00:00", "equity": "10000"},
              {"at": "2026-11-19T16:00:00+00:00", "equity": "10030"},
              {"at": "2026-11-20T16:00:00+00:00", "equity": "9980"}]
+    snapshot = {"as_of": "2026-11-20T16:00:00+00:00",
+                "account_state": {"balance": "10020", "equity": "9980", "currency": "USC"},
+                "positions": book["positions"], "orders": book["orders"], "curve": curve}
     view = build_dashboard(
-        env={"AI_FLOOR_BROKER": "exness", "AI_FLOOR_EXNESS_STATE_DB_PATH": "/nonexistent/exness.db"},
-        now=now, flags=flags,
-        account_reader=lambda _env: {"balance": "10020", "equity": "9980", "currency": "USC"},
-        book=book, curve=curve,
+        env={"AI_FLOOR_BROKER": "exness", "AI_FLOOR_EXNESS_STATE_DB_PATH": "/nonexistent/exness.db",
+             "AI_FLOOR_EXNESS_RISK_CAP": "300", "AI_FLOOR_EXNESS_DAILY_LOSS_USD": "600",
+             "AI_FLOOR_EXNESS_MAX_DRAWDOWN_USD": "3000",
+             "AI_FLOOR_EXNESS_REAL_EXECUTION": "1", "AI_FLOOR_EXNESS_REAL_CONFIRM": "EXNESS_REAL_AUTHORIZED"},
+        now=now, flags=flags, snapshot=snapshot,
         health={"runtime_heartbeat": "2026-11-20T15:59:00+00:00", "scheduler": "RUNNING", "status": "ONLINE",
                 "last_cycle_status": "COMPLETED", "last_run": "2026-11-20T15:55:00+00:00"},
         errors=[])

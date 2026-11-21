@@ -129,8 +129,19 @@ class ExnessSession:
         try:
             return self._manage(at, bars)
         finally:
+            self._remember_desk(at)
             if cache is not None:
                 cache(False)
+
+    def _remember_desk(self, at):
+        """Keep the book ``note_link`` already cached. Reading the cache is not a new broker call."""
+        book = getattr(self.broker, "_read_cache", None)
+        if book is None:
+            return
+        from execution.exness_desk import desk_from_book
+        desk = desk_from_book(book, at)
+        if desk is not None:
+            self.desk = desk
 
     def _manage(self, at, bars):
         try:

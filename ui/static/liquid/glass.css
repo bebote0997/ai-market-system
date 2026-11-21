@@ -23,7 +23,7 @@
 .mob-bar h1{font-size:16px}
 .mob-bar p{color:rgba(255,255,255,.75);font-size:12px}
 .desk-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
-.desk-head h1{font-size:22px}
+.desk-head h1{font-size:22px;color:var(--lg-ink) !important}
 .desk-head p{color:var(--lg-muted);font-size:13px;margin-top:4px}
 .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .live{background:#16a34a;color:#fff;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:750}
@@ -34,9 +34,11 @@
 .kpis.five{grid-template-columns:repeat(5,minmax(0,1fr))}
 .kpis.three{grid-template-columns:repeat(3,minmax(0,1fr))}
 .card{background:var(--lg-card);border:1px solid var(--lg-line);border-radius:20px;box-shadow:0 16px 40px rgba(19,41,75,.1),inset 0 1px 0 rgba(255,255,255,.7);backdrop-filter:blur(24px) saturate(1.45);-webkit-backdrop-filter:blur(24px) saturate(1.45);padding:0 16px 14px;min-width:0}
-.pill,.live,.theme,.filters button,.pager button,.back{background:rgba(255,255,255,.22);border:1px solid rgba(255,255,255,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.65);backdrop-filter:blur(22px) saturate(1.35);-webkit-backdrop-filter:blur(22px) saturate(1.35)}
+.pill,.theme,.filters button,.pager button,.back{background:rgba(255,255,255,.22);border:1px solid rgba(255,255,255,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.65);backdrop-filter:blur(22px) saturate(1.35);-webkit-backdrop-filter:blur(22px) saturate(1.35)}
+.lg .live{background:#0f7a45;color:#fff;border:1px solid #0b5c34}
+.lg .live.off{background:#334155;color:#fff;border:1px solid #1e293b}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
-.card,.pill,.live,.theme,.filters button,.tabs{background:rgba(255,255,255,.92);backdrop-filter:none}
+.card,.pill,.theme,.filters button,.tabs{background:rgba(255,255,255,.92);backdrop-filter:none}
 .lg[data-theme="dark"] .card,.lg[data-theme="dark"] .pill,.lg[data-theme="dark"] .tabs{background:rgba(12,22,40,.92)}
 }
 .card h2,.card h3{background:var(--lg-navy);color:#fff;margin:0 -16px 12px;padding:10px 16px;border-radius:18px 18px 0 0;font-size:14px}
@@ -85,7 +87,7 @@ h2.with-link .linkish{color:#fff;padding:0}
 .hline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .hline .step{background:rgba(19,41,75,.04);border-radius:12px;padding:8px}
 .pairs{display:flex;flex-direction:column;gap:8px}
-.pair{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.pair{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;min-width:0}
 .shield{border:1px solid var(--lg-stroke);border-radius:14px;padding:10px;margin-top:8px}
 .kv{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:4px 8px;padding-bottom:8px}
 .kv span{color:var(--lg-muted)}
@@ -109,7 +111,10 @@ svg{width:100%;height:auto;display:block}
 .desk-head{display:none}
 .main{padding:12px 12px 84px}
 .kpis.five,.kpis.three,.stats{grid-template-columns:1fr}
-.row1,.row2{grid-template-columns:minmax(0,1fr)}
+.row1,.row2,.split,.hline{grid-template-columns:minmax(0,1fr)}
+.table-wrap{display:none}
+.row-cards{display:flex;flex-direction:column;gap:8px}
+.hline .step,.pair{overflow-wrap:anywhere}
 .tabs{display:flex;position:fixed;z-index:3;left:10px;right:10px;bottom:10px;border-radius:22px;background:rgba(255,255,255,.22);border:1px solid rgba(255,255,255,.5);box-shadow:0 12px 32px rgba(19,41,75,.16),inset 0 1px 0 rgba(255,255,255,.7);backdrop-filter:blur(24px) saturate(1.4);-webkit-backdrop-filter:blur(24px) saturate(1.4)}
 .tabs button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:transparent;padding:8px 2px 10px;font-size:10px;font-weight:750;cursor:pointer}
 .tabs button i{font-style:normal;font-size:14px}

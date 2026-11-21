@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-21 — revisión HQ del panel Liquid Glass (solo presentación)
+
+- De 900px hacia abajo las tablas pasan a tarjetas y la estrategia de Riesgo queda en una columna.
+- El ciclo guarda en `ui_snapshots` la cuenta, las posiciones, las órdenes `sltp` y el punto de equity que ya leyó. No hay otra llamada al broker ni cambio de órdenes. El panel abre esa base con `AI_FLOOR_DB_PATH` del proceso (no solo si el entorno es un `dict`). Si esa lectura no está, sigue en «sin datos».
+- El distintivo «Ejecución real activa» usa fondo verde opaco y texto blanco. En las páginas Liquid Glass el panel ocupa el ancho y no queda dentro de la barra antigua.
+- Sin merge y sin deploy.
+
 ## 2026-11-20 — panel Liquid Glass (solo presentación)
 
 - El panel Riesgo muestra los topes activos del entorno (`AI_FLOOR_EXNESS_RISK_CAP`, pérdida diaria y caída máxima). Si la variable falta, queda el mismo respaldo que usa el runtime. No se pinta el defecto del código cuando la variable está puesta.
