@@ -2,6 +2,8 @@
 
 **Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
 
+2026-11-21, salida de Londres por el libro (sobre #101, sin merge ni deploy): lado de la bandera, apertura 02:00-05:00 ET, y (menos de dos minutos o `sltp`). Cero o más de una: alerta HIGH y no cierra. Un día hecho no cierra.
+
 2026-11-21, purga paper (sobre #100, sin merge ni deploy): el catch-up y la escritura paper siguen. La purga es un comando en seco por defecto; `--apply` no se ejecuta sin orden del CEO. No corre al desplegar.
 
 2026-11-20, endurecimiento de operación (sobre #98, sin merge ni deploy): alertas suaves de xAI/fxmacro, disco lleno sin tumbar el proceso, etiqueta `EXNESS` en el resumen, un reintento ante 401 de clave, adopt de `combo_lon` por comando confirmado, y el watchdog ya no marca obsoleto un latido de edad 0.

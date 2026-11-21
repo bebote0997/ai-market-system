@@ -22,6 +22,7 @@ position is read again until it is visible, and only then is the leg ``filled``.
 it, the leg stays ``submitted`` and nothing is logged as ``SIZE_SKIP`` or unfilled. A position that is open
 still gets an ``sltp`` order when its stop (and take-profit, when the leg has one) is missing, even if the
 position id was not stored. The 11:00 ET exit closes the live ticket, including when ``combo_lon`` has no id.
+If that path did not close, ``_close_london_by_book`` reads the broker book and closes the matching USDJPY.
 """
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -272,6 +273,7 @@ class SessionCombo:
         self._logged_bars = False
         self._sltp_attempts = {}
         self._sltp_sent = set()
+        self._asked_usdjpy = set()
         self._sleep = time_mod.sleep if sleep is None else sleep
 
     def tick(self, at, bars):
@@ -694,14 +696,17 @@ class SessionCombo:
             return False
         return isinstance(getattr(book, "orders", None), (list, tuple))
 
-    def _high_alert(self, kind, reason):
+    def _high_alert(self, kind, reason, symbol=None):
         """Immediate operator alert. The broker sink delivers it when alerts are on."""
-        _log(kind, severity="HIGH", reason=reason)
+        _log(kind, severity="HIGH", reason=reason, symbol=symbol)
         alert = getattr(self._broker, "_alert", None)
         if not callable(alert):
             return
+        detail = {"reason": reason, "severity": "HIGH"}
+        if symbol:
+            detail["symbol"] = symbol
         try:
-            alert(kind, {"reason": reason, "severity": "HIGH"})
+            alert(kind, detail)
         except Exception:  # noqa: BLE001 - an alert never changes the close
             _log("ALERT_FAILED", reason=kind)
 
@@ -796,6 +801,7 @@ class SessionCombo:
 
     def _exits(self, at):
         asked = set()
+        self._asked_usdjpy = set()
         for key, state in list(self._phase.items()):
             if state.get("exited") or state.get("status") not in ("filled", "submitted"):
                 continue
@@ -833,8 +839,9 @@ class SessionCombo:
                 ticket = state.get("position_id")
             if not ticket:
                 continue
-            self._close_leg(key, state, ticket, row, asked)
+            self._close_leg(key, state, ticket, row, asked, at)
         self._close_london_without_flag(at, asked)
+        self._close_london_by_book(at, asked)
 
     def _exit_reason(self, key, state, row):
         client = state.get("client_id") or getattr(row, "comment", None) or ""
@@ -842,14 +849,31 @@ class SessionCombo:
             return "london_1100"
         return "fix_30m"
 
-    def _close_leg(self, key, state, ticket, row, asked):
-        if not self._finish_close(ticket, self._exit_reason(key, state, row), state.get("client_id"), state.get("symbol"), asked):
+    def _close_leg(self, key, state, ticket, row, asked, at):
+        if self._finish_close(ticket, self._exit_reason(key, state, row), state.get("client_id"), state.get("symbol"), asked):
+            state["exited"] = True
+            state["status"] = "done"
+            if not state.get("position_id"):
+                state["position_id"] = ticket
+            self._put(key, state)
             return
-        state["exited"] = True
-        state["status"] = "done"
-        if not state.get("position_id"):
-            state["position_id"] = ticket
-        self._put(key, state)
+        if self._exit_failure_should_alert(state, at):
+            self._high_alert("EXNESS_EXIT_FAILED", getattr(self, "_close_status", None) or "close_failed",
+                             state.get("symbol"))
+
+    def _exit_failure_should_alert(self, state, at):
+        """No alert on the first UNKNOWN/202. Alert on REJECTED, an exception, or a later tick still open."""
+        kind = getattr(self, "_close_kind", None)
+        if kind in ("rejected", "exception"):
+            return True
+        if kind != "unknown":
+            return False
+        seen = bool(state.get("exit_unknown_seen"))
+        state["exit_unknown_seen"] = True
+        exit_at = state.get("exit_at")
+        if not seen or not isinstance(at, datetime) or not isinstance(exit_at, datetime):
+            return False
+        return at >= exit_at + timedelta(minutes=2)
 
     def _finish_close(self, ticket, reason, client, symbol, asked):
         """Close ``ticket`` once this tick. True when a later read no longer shows it.
@@ -859,17 +883,26 @@ class SessionCombo:
         ``UNKNOWN`` because the 202 returned before the position disappeared).
         """
         if not ticket or ticket in asked:
+            self._close_status = "already_asked"
+            self._close_kind = "already_asked"
             return False
         asked.add(ticket)
+        if symbol == LONDON_SYMBOL:
+            self._asked_usdjpy.add(ticket)
         try:
             result = self._broker.close_market(ticket, reason=reason, client_id=f"{client}-exit")
         except Exception:  # noqa: BLE001
+            self._close_status = "close_failed"
+            self._close_kind = "exception"
             _log("TIME_EXIT", symbol=symbol, reason=reason, status="UNKNOWN")
             return False
         status = getattr(result, "status", None)
+        self._close_status = getattr(result, "reason", None) or status or "close_failed"
         if status == "REJECTED":
+            self._close_kind = "rejected"
             _log("TIME_EXIT", symbol=symbol, reason=reason, status="REJECTED")
             return False
+        self._close_kind = "unknown"
         try:
             gone = not any(item.ticket == ticket for item in self._positions(fresh=True))
         except Exception:  # noqa: BLE001
@@ -893,6 +926,79 @@ class SessionCombo:
             if not self._finish_close(row.ticket, "london_1100", row.comment, row.symbol, asked):
                 continue
             self._mark_london_done(row.comment, row.ticket)
+
+    def _close_london_by_book(self, at, asked):
+        """11:00 ET fallback. Close nothing when the day is already done.
+
+        Otherwise close the one USDJPY whose side matches the flag, whose open time is inside
+        02:00-05:00 ET, and which is within two minutes of the flag or linked by an ``sltp`` order.
+        Zero matches or more than one: a HIGH alert, and no close. If the stored ticket, or a
+        USDJPY ticket already asked this tick, is still open, do not close another one. If that
+        ticket is already gone, return with no alert and no close.
+        """
+        if not _aware(at):
+            return
+        local = _ny(at)
+        if local.weekday() >= 5 or local.time() < time(11, 0):
+            return
+        key = london_key(local.date())
+        state = self._leg(key)
+        if state.get("exited") or state.get("status") == "done":
+            return
+        if state.get("status") not in ("filled", "submitted"):
+            return
+        if state.get("side") not in ("LONG", "SHORT"):
+            self._high_alert("EXNESS_LONDON_BOOK", "london_book_count")
+            return
+        try:
+            book = self._broker._read()
+        except Exception:  # noqa: BLE001
+            self._high_alert("EXNESS_LONDON_BOOK", "book_unread")
+            return
+        # USDJPY tickets only. A Fix-leg ticket in ``asked`` does not block London.
+        # Still open: do not close a different position. Already gone: no alert and no close;
+        # the next tick marks the day done.
+        usdjpy_open = {row.ticket for row in book.positions if row.symbol == LONDON_SYMBOL}
+        watched = set(getattr(self, "_asked_usdjpy", ()))
+        stored = state.get("position_id")
+        if stored:
+            watched.add(stored)
+        if any(ticket not in usdjpy_open for ticket in watched):
+            return
+        if any(ticket in usdjpy_open for ticket in watched):
+            return
+        linked = set()
+        for item in getattr(book, "sltp_ids", ()) or ():
+            if isinstance(item, (tuple, list)) and len(item) >= 2:
+                linked.add(str(item[1]))
+        window_start = datetime.combine(local.date(), time(2, 0), tzinfo=NY)
+        window_end = datetime.combine(local.date(), time(5, 0), tzinfo=NY)
+        opened_flag = state.get("opened_at")
+        matches = []
+        for row in book.positions:
+            if row.symbol != LONDON_SYMBOL or row.side != state.get("side") or row.ticket in asked:
+                continue
+            if _london_exit_due(getattr(row, "comment", None), at):
+                continue
+            opened = getattr(row, "opened_at", None)
+            in_window = (isinstance(opened, datetime) and opened.tzinfo is not None
+                         and window_start <= opened.astimezone(NY) < window_end)
+            near_flag = (isinstance(opened, datetime) and isinstance(opened_flag, datetime)
+                         and abs((opened - opened_flag).total_seconds()) <= _MATCH_SECONDS)
+            by_link = str(row.ticket) in linked
+            if in_window and (near_flag or by_link):
+                matches.append(row)
+        if len(matches) != 1:
+            self._high_alert("EXNESS_LONDON_BOOK", "london_book_count")
+            return
+        row = matches[0]
+        client = state.get("client_id") or f"combo-lon-{local.date().isoformat()}"
+        if not self._finish_close(row.ticket, "london_1100", client, row.symbol, asked):
+            return
+        state["exited"] = True
+        state["status"] = "done"
+        state["position_id"] = row.ticket
+        self._put(key, state)
 
     def _mark_london_done(self, comment, ticket):
         try:
