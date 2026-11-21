@@ -1,14 +1,14 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-21 (rama `cursor/liquid-glass-dashboard-8910`). Revisión HQ del panel Liquid Glass, sin merge. El ciclo deja en la instantánea la cuenta, posiciones y órdenes que ya leyó. De 900px hacia abajo hay tarjetas y una sola columna en Riesgo. Sin otra llamada al broker, sin cambio de órdenes, frenos, flags, `AI_FLOOR_GIT_COMMIT` ni Render. Sin deploy._
+_Última actualización: 2026-11-21 (rama `cursor/london-book-exit-5ce5`, base `main`). A las 11:00 ET, si el día no está hecho, se cierra el único USDJPY con el lado de la bandera, abierto entre 02:00 y 05:00 ET, y a menos de dos minutos de la bandera o ligado por `sltp`. Cero o más de una coincidencia: alerta HIGH y no cierra. Un día hecho no cierra. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
+
+_Anterior: 2026-11-21 (rama `cursor/liquid-glass-dashboard-8910`). Revisión HQ del panel Liquid Glass, sin merge. El ciclo deja en la instantánea la cuenta, posiciones y órdenes que ya leyó. De 900px hacia abajo hay tarjetas y una sola columna en Riesgo. Sin otra llamada al broker, sin cambio de órdenes, frenos, flags, `AI_FLOOR_GIT_COMMIT` ni Render. Sin deploy._
 
 _Anterior en esta rama: 2026-11-21. Panel Liquid Glass, solo lectura. Los topes de Riesgo salen de `account_risk_cap` y `ExnessBrakes._limits`. Nombre visible «Jt Trading Floor»._
 
 _Anterior: 2026-11-20 (rama `cursor/liquid-glass-dashboard-8910`). Panel Liquid Glass, solo lectura, sobre las lecturas Exness y de sistema que ya existían. Claro/oscuro, cinco secciones en español, sin animación. El SL/TP visible sale de la orden `sltp` ligada por `position_id`. No cambia ejecución, frenos, flags, `AI_FLOOR_GIT_COMMIT` ni Render. Sin merge, sin deploy._
 
 _Anterior: 2026-11-20 (rama `cursor/exness-purge-paper-oanda-5ce5`, sobre #100). La purga es un comando aparte, en seco si no se confirma. La copia usa el backup en línea de SQLite e incluye el WAL; si no hay el doble de espacio libre, no borra. Después vacía las tablas paper y hace VACUUM. Hay que parar el servicio antes, o reiniciarlo justo después. No corre al desplegar y no se ejecuta sin orden del CEO. Los módulos OANDA y paper siguen en el árbol. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
-
-_Anterior: 2026-11-21 (rama `cursor/ops-hardening-weekend-5ce5`, sobre #98). Un TIMEOUT de xAI y un fallo de fxmacro que no paran el ciclo no salen como alerta HIGH. Un disco lleno en `recover` se anota y manda una alerta HIGH, sin tumbar el proceso. El resumen diario sigue por el correo de siempre. `--adopt` sin libro de posiciones queda para más adelante. Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy._
 
 _Anterior: 2026-11-15 (rama `cursor/exness-dashboard-labels-083e`). Las insignias de ejecución del panel leen el mismo armado que el adaptador Exness, sin cambiarlo. Con las dos claves exactas dicen «Ejecución real activa · Exness». El lateral deja el experimento y muestra los pares del session combo. Sigue sin cambio de ejecución, frenos, flags ni reinicio. Sin merge, sin deploy._
 

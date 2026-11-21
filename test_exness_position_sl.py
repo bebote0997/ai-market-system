@@ -52,6 +52,7 @@ class PositionStopFromSltpTests(unittest.TestCase):
         book = RestExnessTransport(Map([position()], [sltp(stop_loss_price="1.09844")])).read_state()
         self.assertEqual(book.positions[0].stop, Decimal("1.09844"))
         self.assertIsNone(book.positions[0].target)
+        self.assertEqual(book.sltp_ids, (("5001", "332845"),))
 
     def test_stop_and_target_from_sltp_and_no_leak_to_other_positions(self):
         orders = [sltp(stop_loss_price="1.09844", take_profit_price="1.10800"),

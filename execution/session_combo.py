@@ -22,6 +22,7 @@ position is read again until it is visible, and only then is the leg ``filled``.
 it, the leg stays ``submitted`` and nothing is logged as ``SIZE_SKIP`` or unfilled. A position that is open
 still gets an ``sltp`` order when its stop (and take-profit, when the leg has one) is missing, even if the
 position id was not stored. The 11:00 ET exit closes the live ticket, including when ``combo_lon`` has no id.
+If that path did not close, ``_close_london_by_book`` reads the broker book and closes the matching USDJPY.
 """
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -835,6 +836,7 @@ class SessionCombo:
                 continue
             self._close_leg(key, state, ticket, row, asked)
         self._close_london_without_flag(at, asked)
+        self._close_london_by_book(at, asked)
 
     def _exit_reason(self, key, state, row):
         client = state.get("client_id") or getattr(row, "comment", None) or ""
@@ -893,6 +895,65 @@ class SessionCombo:
             if not self._finish_close(row.ticket, "london_1100", row.comment, row.symbol, asked):
                 continue
             self._mark_london_done(row.comment, row.ticket)
+
+    def _close_london_by_book(self, at, asked):
+        """11:00 ET fallback. Close nothing when the day is already done.
+
+        Otherwise close the one USDJPY whose side matches the flag, whose open time is inside
+        02:00-05:00 ET, and which is within two minutes of the flag or linked by an ``sltp`` order.
+        Zero matches or more than one: a HIGH alert, and no close.
+        """
+        if not _aware(at):
+            return
+        local = _ny(at)
+        if local.weekday() >= 5 or local.time() < time(11, 0):
+            return
+        key = london_key(local.date())
+        state = self._leg(key)
+        if state.get("exited") or state.get("status") == "done":
+            return
+        if state.get("status") not in ("filled", "submitted"):
+            return
+        if state.get("side") not in ("LONG", "SHORT"):
+            self._high_alert("EXNESS_LONDON_BOOK", "london_book_count")
+            return
+        try:
+            book = self._broker._read()
+        except Exception:  # noqa: BLE001
+            self._high_alert("EXNESS_LONDON_BOOK", "book_unread")
+            return
+        linked = set()
+        for item in getattr(book, "sltp_ids", ()) or ():
+            if isinstance(item, (tuple, list)) and len(item) >= 2:
+                linked.add(str(item[1]))
+        window_start = datetime.combine(local.date(), time(2, 0), tzinfo=NY)
+        window_end = datetime.combine(local.date(), time(5, 0), tzinfo=NY)
+        opened_flag = state.get("opened_at")
+        matches = []
+        for row in book.positions:
+            if row.symbol != LONDON_SYMBOL or row.side != state.get("side") or row.ticket in asked:
+                continue
+            if _london_exit_due(getattr(row, "comment", None), at):
+                continue
+            opened = getattr(row, "opened_at", None)
+            in_window = (isinstance(opened, datetime) and opened.tzinfo is not None
+                         and window_start <= opened.astimezone(NY) < window_end)
+            near_flag = (isinstance(opened, datetime) and isinstance(opened_flag, datetime)
+                         and abs((opened - opened_flag).total_seconds()) <= _MATCH_SECONDS)
+            by_link = str(row.ticket) in linked
+            if in_window and (near_flag or by_link):
+                matches.append(row)
+        if len(matches) != 1:
+            self._high_alert("EXNESS_LONDON_BOOK", "london_book_count")
+            return
+        row = matches[0]
+        client = state.get("client_id") or f"combo-lon-{local.date().isoformat()}"
+        if not self._finish_close(row.ticket, "london_1100", client, row.symbol, asked):
+            return
+        state["exited"] = True
+        state["status"] = "done"
+        state["position_id"] = row.ticket
+        self._put(key, state)
 
     def _mark_london_done(self, comment, ticket):
         try:
