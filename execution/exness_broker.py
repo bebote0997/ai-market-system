@@ -149,7 +149,11 @@ class ExnessBroker:
         return now.astimezone(timezone.utc)
 
     def _alert(self, kind, detail):
-        LOG.warning("component=exness event=%s reason=%s", kind, (detail or {}).get("reason"))
+        detail = detail or {}
+        if detail.get("severity") == "HIGH":
+            LOG.warning("component=exness event=%s severity=HIGH reason=%s", kind, detail.get("reason"))
+        else:
+            LOG.warning("component=exness event=%s reason=%s", kind, detail.get("reason"))
         if self._on_alert is None:
             return
         try:
@@ -578,26 +582,36 @@ class ExnessBroker:
             return ModifyResult(REJECTED, client_id, reason="target_side")
         if not self.note_link():
             return ModifyResult(REJECTED, client_id, reason="quote_stale")
-        for order_id in _sltp_ids(book, position_ref):
-            cancelled = self._send(Command(f"cancel-sltp-{order_id}-{client_id}", "CANCEL", "",
-                                           position_ref=str(order_id)), client_id, ModifyResult)
-            if getattr(cancelled, "status", None) == "REJECTED":
-                return ModifyResult(REJECTED, client_id, reason="sltp_cancel_failed")
+        previous = _sltp_ids(book, position_ref)
         sent = self._send(Command(f"modify-{position_ref}-{client_id}", "MODIFY", "", stop=stop_r, target=target_r,
                                  position_ref=str(position_ref)), client_id, ModifyResult)
-        if getattr(sent, "status", None) != "REJECTED":
-            self._leave_one_sltp(position_ref, client_id)
+        if getattr(sent, "status", None) == "REJECTED":
+            self._alert("EXNESS_SLTP_REJECTED", {"reason": "sltp_rejected", "severity": "HIGH",
+                                                 "symbol": match.symbol})
+            return sent
+        self._drop_previous_sltp(position_ref, client_id, previous, getattr(sent, "broker_ref", None))
         return sent
 
-    def _leave_one_sltp(self, position_ref, client_id):
-        """A replace is a new sltp order. Drop every older one so the position never keeps two."""
-        try:
-            book = self._read(fresh=True)
-        except BrokerUnavailable:
-            return
-        linked = _sltp_ids(book, position_ref)
-        for order_id in linked[:-1]:
-            self._send(Command(f"cancel-extra-{order_id}-{client_id}", "CANCEL", "", position_ref=str(order_id)),
+    def _drop_previous_sltp(self, position_ref, client_id, previous, new_order_id):
+        """Cancel the sltp orders that existed before this replace. Keep the new order's id.
+
+        A snapshot order that is not that id is not kept: the last row in the book is not the new order.
+        """
+        keep = str(new_order_id) if new_order_id else None
+        if keep == str(position_ref):
+            keep = None
+        doomed = [order_id for order_id in previous if order_id != keep]
+        if keep:
+            try:
+                book = self._read(fresh=True)
+            except BrokerUnavailable:
+                book = None
+            if book is not None:
+                for order_id in _sltp_ids(book, position_ref):
+                    if order_id != keep and order_id not in doomed:
+                        doomed.append(order_id)
+        for order_id in doomed:
+            self._send(Command(f"cancel-sltp-{order_id}-{client_id}", "CANCEL", "", position_ref=str(order_id)),
                        client_id, ModifyResult)
 
     def connectivity_report(self):

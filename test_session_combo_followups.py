@@ -5,7 +5,7 @@ import json
 import logging
 import unittest
 
-from execution.exness_transport import CommandResult, Position, WorkingOrder
+from execution.exness_transport import CommandResult, FakeExnessTransport, Position, WorkingOrder
 from execution.session_combo import SessionCombo, _FILL_PAUSE_S, london_key
 from test_session_combo import ny, world
 
@@ -146,7 +146,41 @@ class ProtectionTests(unittest.TestCase):
         combo.tick(sent + timedelta(minutes=120), [])
         self.assertEqual([c.position_ref for c in fake.commands if c.kind == "CLOSE"], ["4"])
 
-    def test_replace_cancels_existing_sltp_orders_before_sending_another(self):
+    def test_a_failed_protection_close_is_retried_and_alerts(self):
+        sent = ny(2026, 1, 16, 2, 10)
+        _clock, fake, broker, combo = world(sent)
+        alerts = []
+        broker._on_alert = lambda kind, detail: alerts.append((kind, detail.get("severity")))
+        fake.positions.append(Position("4", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.20"),
+                                       comment="combo-lon-2026-01-16-LONG", opened_at=sent))
+        fake.set_flag(london_key(sent.date()), json.dumps({
+            "status": "filled", "position_id": "4", "stop": "149.80", "target": "151.00",
+            "symbol": "USDJPY", "side": "LONG", "exited": False, "sltp_sent": "4",
+            "protection_after": sent.isoformat(), "protection_retry_done": True,
+            "exit_at": ny(2026, 1, 16, 11, 0).isoformat(),
+            "opened_at": sent.isoformat()}))
+        fake.set_flag("sltp_sent_4", "1")
+
+        def submit(command):
+            if command.kind == "CLOSE":
+                result = CommandResult("REJECTED", command.idempotency_key, None, "rejected")
+                fake.commands.append(command)
+                return result
+            return FakeExnessTransport.submit(fake, command)
+
+        fake.submit = submit
+        combo.tick(sent + timedelta(minutes=30), [])
+        combo.tick(sent + timedelta(minutes=60), [])
+        self.assertEqual([c.kind for c in fake.commands if c.kind == "CLOSE"], ["CLOSE"])
+        self.assertEqual(alerts, [("EXNESS_PROTECTION_CLOSE_FAILED", "HIGH")])
+        saved = json.loads(fake.get_flag(london_key(sent.date())))
+        self.assertNotEqual(saved["status"], "done")
+        self.assertFalse(saved.get("protection_close_done"))
+        combo.tick(sent + timedelta(minutes=90), [])
+        self.assertEqual([c.kind for c in fake.commands if c.kind == "CLOSE"], ["CLOSE", "CLOSE"])
+        self.assertEqual(len(alerts), 2)
+
+    def test_replace_sends_the_new_sltp_before_cancelling_the_old_ones(self):
         at = ny(2026, 1, 16, 2, 10)
         _clock, fake, broker, _combo = world(at)
         fake.positions.append(Position("4", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.200"),
@@ -157,10 +191,59 @@ class ProtectionTests(unittest.TestCase):
                                         kind="sltp", position_id="4"))
         result = broker.replace_protection("4", Decimal("149.80"), Decimal("151.00"), client_id="sltp-4-2")
         self.assertNotEqual(result.status, "REJECTED")
-        kinds = [c.kind for c in fake.commands]
-        self.assertEqual(kinds[:2], ["CANCEL", "CANCEL"])
-        self.assertIn("MODIFY", kinds)
+        self.assertEqual([c.kind for c in fake.commands], ["MODIFY", "CANCEL", "CANCEL"])
         self.assertEqual([o.ticket for o in fake.orders if o.kind == "sltp"], [])
+
+    def test_a_rejected_sltp_keeps_the_old_order_and_alerts(self):
+        at = ny(2026, 1, 16, 2, 10)
+        _clock, fake, broker, _combo = world(at)
+        alerts = []
+        broker._on_alert = lambda kind, detail: alerts.append((kind, detail))
+        fake.positions.append(Position("4", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.200"),
+                                       comment="combo-lon-2026-01-16-LONG"))
+        fake.orders.append(WorkingOrder("old", "USDJPY", "LONG", Decimal("0.01"), Decimal("149.8"),
+                                        kind="sltp", position_id="4"))
+
+        def submit(command):
+            if command.kind == "MODIFY":
+                result = CommandResult("REJECTED", command.idempotency_key, None, "rejected")
+                fake.commands.append(command)
+                return result
+            return FakeExnessTransport.submit(fake, command)
+
+        fake.submit = submit
+        result = broker.replace_protection("4", Decimal("149.80"), Decimal("151.00"), client_id="sltp-4-2")
+        self.assertEqual(result.status, "REJECTED")
+        self.assertEqual([c.kind for c in fake.commands], ["MODIFY"])
+        self.assertEqual([o.ticket for o in fake.orders], ["old"])
+        self.assertEqual(alerts[0][0], "EXNESS_SLTP_REJECTED")
+        self.assertEqual(alerts[0][1]["severity"], "HIGH")
+
+    def test_the_new_sltp_id_is_kept_not_the_last_snapshot_order(self):
+        at = ny(2026, 1, 16, 2, 10)
+        _clock, fake, broker, _combo = world(at)
+        fake.positions.append(Position("4", "USDJPY", "LONG", Decimal("0.01"), Decimal("150.200"),
+                                       comment="combo-lon-2026-01-16-LONG"))
+        fake.orders.append(WorkingOrder("old", "USDJPY", "LONG", Decimal("0.01"), Decimal("149.8"),
+                                        kind="sltp", position_id="4"))
+
+        def submit(command):
+            if command.kind == "MODIFY":
+                fake.orders.append(WorkingOrder("new", "USDJPY", "LONG", Decimal("0.01"), Decimal("149.8"),
+                                                kind="sltp", position_id="4"))
+                fake.orders.append(WorkingOrder("zzz", "USDJPY", "LONG", Decimal("0.01"), Decimal("149.8"),
+                                                kind="sltp", position_id="4"))
+                result = CommandResult("ACCEPTED", command.idempotency_key, "new", "modified")
+                fake.commands.append(command)
+                fake._done[command.idempotency_key] = result
+                return result
+            return FakeExnessTransport.submit(fake, command)
+
+        fake.submit = submit
+        result = broker.replace_protection("4", Decimal("149.80"), Decimal("151.00"), client_id="sltp-4-2")
+        self.assertEqual(result.broker_ref, "new")
+        self.assertEqual([o.ticket for o in fake.orders if getattr(o, "kind", "") == "sltp"], ["new"])
+        self.assertEqual([c.position_ref for c in fake.commands if c.kind == "CANCEL"], ["old", "zzz"])
 
 
 class CloseAckTests(unittest.TestCase):

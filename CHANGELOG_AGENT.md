@@ -8,7 +8,8 @@
 - `replace_protection` redondea al `point_digits` y rechaza un stop (o un target) del lado que no pierde.
 - Una orden `sltp` que quedó suelta no cuenta como orden pendiente en `_position_open`.
 - Si el libro no se puede leer antes de enviar, el resultado es `UNKNOWN` / `book_unread` y el día sigue armado. No es `SIZE_SKIP`.
-- El chequeo de #96 entra aquí: en un manage posterior al envío, un solo replace si falta el stop. El cierre `protection_missing` espera dos lecturas seguidas sin stop y con el campo `orders` presente. Si el snapshot no trae `orders`, no cierra. El replace cancela las `sltp` viejas de esa posición antes de mandar otra, y si aun así quedan dos, deja una.
+- El chequeo de #96 entra aquí: en un manage posterior al envío, un solo replace si falta el stop. El cierre `protection_missing` espera dos lecturas seguidas sin stop y con el campo `orders` presente. Si el snapshot no trae `orders`, no cierra. El replace manda la `sltp` nueva primero y después cancela las anteriores. Si la nueva es `REJECTED`, las anteriores se quedan y sale una alerta HIGH. La que se conserva es la id de la orden nueva, no la última del snapshot.
+- Si el cierre por falta de stop no cierra, no se marca `protection_close_done`. El tick siguiente lo reintenta y sale una alerta HIGH.
 - Un stop en el precio de entrada (breakeven) no pasa la comprobación de lado (`stop` estrictamente por debajo del fill en LONG, por encima en SHORT). Esa regla se deja así: es una limitación conocida.
 - La pata Fix (GBPUSD y luego EURUSD) usa el mismo ack que Londres: un HTTP 200/202 queda `UNKNOWN` y no se anota `SIZE_SKIP`. La pata sigue `submitted` hasta que la relectura ve la posición.
 - Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy.

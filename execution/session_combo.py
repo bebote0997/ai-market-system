@@ -694,6 +694,17 @@ class SessionCombo:
             return False
         return isinstance(getattr(book, "orders", None), (list, tuple))
 
+    def _high_alert(self, kind, reason):
+        """Immediate operator alert. The broker sink delivers it when alerts are on."""
+        _log(kind, severity="HIGH", reason=reason)
+        alert = getattr(self._broker, "_alert", None)
+        if not callable(alert):
+            return
+        try:
+            alert(kind, {"reason": reason, "severity": "HIGH"})
+        except Exception:  # noqa: BLE001 - an alert never changes the close
+            _log("ALERT_FAILED", reason=kind)
+
     def _protect_followup(self, key, state, row, at, asked):
         """One replace on a later manage if the stop is still missing.
 
@@ -734,14 +745,16 @@ class SessionCombo:
             return
         if misses < 2:
             return
-        state["protection_close_done"] = True
         done = self._finish_close(ticket, "protection_missing", f"protect-{ticket}", state.get("symbol"), asked)
         _log("PROTECTION_CLOSE", symbol=state.get("symbol"), status="closed" if done else "open",
              reason="protection_missing")
-        if done:
-            state["exited"] = True
-            state["status"] = "done"
-            self._put(key, state)
+        if not done:
+            self._high_alert("EXNESS_PROTECTION_CLOSE_FAILED", "protection_missing")
+            return
+        state["protection_close_done"] = True
+        state["exited"] = True
+        state["status"] = "done"
+        self._put(key, state)
 
     def _locate(self, state, fresh=False):
         """``(held, row)``, ``(gone, None)``, ``(unknown, None)`` or ``(ambiguous, None)``.
