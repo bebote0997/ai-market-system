@@ -424,7 +424,13 @@ class BrakeStateLogTests(unittest.TestCase):
         self.assertNotIn("gateway.example", line)
         self.assertNotIn("exnsk", line)
         self.assertEqual(fake.commands, [])
-        self.assertEqual(self.rows(), before)
+        after = self.rows()
+        for key in (HALT_FLAG, REASON_FLAG, START_FLAG, DAY_EQUITY_FLAG, DAY_FLAG):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(after["exness_last_equity"], "24800.25")
+        self.assertEqual(after["exness_last_balance"], "25000")
+        self.assertEqual(after["exness_last_currency"], "USC")
+        self.assertEqual(after["exness_last_read_at"], NOW.isoformat())
 
     def test_a_failed_equity_read_logs_none_and_startup_continues(self):
         before = self.rows()
@@ -460,6 +466,27 @@ class BrakeStateLogTests(unittest.TestCase):
         self.assertNotIn("secret.example", line)
         self.assertNotIn("999001", line)
         self.assertEqual(self.rows(), before)
+
+    def test_a_failed_account_flag_write_does_not_stop_startup(self):
+        from execution.exness_brakes import SqliteFlags
+        original = SqliteFlags.set_flag
+
+        def boom(store, key, value):
+            if key == "exness_last_equity":
+                raise OSError("disk")
+            return original(store, key, value)
+
+        SqliteFlags.set_flag = boom
+        try:
+            fake = FakeExnessTransport(clock=lambda: NOW)
+            fake.balance = BrokerBalance(Decimal("25000"), Decimal("24800.25"), Decimal("0"), "USC")
+            with self.assertLogs("ai_floor.exness", level="WARNING") as logs:
+                session = session_from_env(self.env(), transport=fake, clock=lambda: NOW)
+            self.assertIsNotNone(session)
+            self.assertTrue(any("DESK_REMEMBER_FAILED" in line for line in logs.output))
+            self.assertEqual(fake.commands, [])
+        finally:
+            SqliteFlags.set_flag = original
 
 
 if __name__ == "__main__":

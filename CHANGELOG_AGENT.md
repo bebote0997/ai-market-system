@@ -7,6 +7,13 @@
 - Un cierre `REJECTED` no se queda cacheado: se vuelve a enviar. Un `UNKNOWN` relee el libro antes de reenviar; si el ticket ya no está, no se manda otro cierre.
 - Sin cambio de `AI_FLOOR_GIT_COMMIT`, flags, frenos ni Render. Sin merge y sin deploy.
 
+## 2026-11-21 — panel con el mercado cerrado (solo lectura)
+
+- Balance y equity salen de la última lectura que el arranque ya hizo (`exness_last_*`) o, si no está, de la base del día. No hay otra llamada a Exness. Si guardar esa lectura falla, el arranque sigue. El P/L y el consumo salen de esa equity y de las bases ya guardadas. Si no hay lectura y el mercado está cerrado, dice «mercado cerrado».
+- El historial muestra la entrada y el motivo solo si la pata los guardó. Sin motivo, «sin datos». El precio de salida y el resultado siguen en «sin datos» si nunca se guardaron.
+- «Último despliegue» es `RENDER_GIT_COMMIT`. Con el mercado cerrado, un libro viejo no deja la salud en «Degradado». Un latido viejo o un proveedor sin configurar sí.
+- Sin merge y sin deploy.
+
 ## 2026-11-21 — revisión HQ del panel Liquid Glass (solo presentación)
 
 - De 900px hacia abajo las tablas pasan a tarjetas y la estrategia de Riesgo queda en una columna.

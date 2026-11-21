@@ -632,8 +632,8 @@ class ExnessBroker:
                 "halted": self._brakes.halted()}
 
 
-def _startup_equity(transport):
-    """``(equity, currency)`` for the startup brake log. A live client uses two GETs, not the full book."""
+def _startup_account(transport):
+    """``(balance, equity, currency)`` from the startup read. A live client uses the same two GETs, not a third."""
     client = getattr(transport, "_client", None)
     if client is not None:
         account_id = client.account_id
@@ -642,12 +642,30 @@ def _startup_equity(transport):
         from execution.exness_transport import _account_currency, _dec
         raw = snapshot.get("account_state") if isinstance(snapshot, dict) else None
         state = raw if isinstance(raw, dict) else {}
-        return _dec(state.get("equity")), _account_currency(account if isinstance(account, dict) else {}, state)
+        code = _account_currency(account if isinstance(account, dict) else {}, state)
+        return _dec(state.get("balance")), _dec(state.get("equity")), code
     book = transport.read_state()
-    balance = getattr(book, "balance", None)
-    if balance is None:
+    money = getattr(book, "balance", None)
+    if money is None:
         return None
-    return balance.equity, balance.currency
+    code = money.currency.strip().upper() if isinstance(money.currency, str) else ""
+    return money.balance, money.equity, code
+
+
+def _remember_startup_account(store, reading, at):
+    """Keep the account the startup log already read. No broker call."""
+    from execution.exness_brakes import LAST_BALANCE_FLAG, LAST_CURRENCY_FLAG, LAST_EQUITY_FLAG, LAST_READ_FLAG
+    if store is None or not isinstance(reading, tuple) or len(reading) != 3:
+        return
+    balance, equity, currency = reading
+    code = currency.strip().upper() if isinstance(currency, str) else ""
+    if equity is None or code not in ("USC", "USD") or not hasattr(at, "isoformat"):
+        return
+    store.set_flag(LAST_EQUITY_FLAG, format(equity, "f"))
+    store.set_flag(LAST_CURRENCY_FLAG, code)
+    store.set_flag(LAST_READ_FLAG, at.isoformat())
+    if balance is not None:
+        store.set_flag(LAST_BALANCE_FLAG, format(balance, "f"))
 
 
 def broker_from_env(env, *, transport=None, clock=None, on_alert=None):
@@ -662,5 +680,16 @@ def broker_from_env(env, *, transport=None, clock=None, on_alert=None):
     if brakes is None:
         raise BrokerGuardError("exness brake configuration is invalid")
     broker = ExnessBroker(transport, env=env, brakes=brakes, clock=clock, on_alert=on_alert)
-    log_brake_state(brakes._store, lambda: _startup_equity(transport))
+    try:
+        reading = _startup_account(transport)
+    except Exception:  # noqa: BLE001 - the brake log still runs and records that the read failed
+        reading = None
+    equity = None if reading is None else reading[1]
+    currency = None if reading is None else reading[2]
+    log_brake_state(brakes._store, lambda: (equity, currency))
+    when = clock() if clock is not None else broker._now()
+    try:
+        _remember_startup_account(brakes._store, reading, when)
+    except Exception as exc:  # noqa: BLE001 - a flag write must not stop the session from starting
+        LOG.warning("component=exness event=DESK_REMEMBER_FAILED error_type=%s", type(exc).__name__)
     return broker
