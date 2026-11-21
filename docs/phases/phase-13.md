@@ -2,6 +2,8 @@
 
 **Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
 
+2026-11-21, la pata Fix del session combo (apilada sobre #97, sin merge ni deploy) usa el mismo ack que Londres: HTTP 200/202 no es `SIZE_SKIP`.
+
 2026-11-20, seguimientos del session combo (apilados sobre #97, sin merge ni deploy): pausa real entre lecturas del fill, cierre 202 confirmado por relectura, `sltp` recordado entre reinicios, redondeo y lado del stop, y el chequeo de protección de #96 (un replace y luego un cierre).
 
 2026-11-15, presentación del panel con el broker Exness: rótulos, saldo USC, frenos en solo lectura y día 1 en la primera orden real. La práctica OANDA queda como histórico. Sin cambio de ejecución ni de flags. Sin merge ni deploy.
