@@ -11,6 +11,7 @@ import logging
 import os
 import smtplib
 import ssl
+from types import MethodType
 
 from runtime.alert_chart import chart_png
 from runtime.alert_render import render_html, render_text, subject
@@ -106,28 +107,60 @@ class GmailEmailChannel:
         try:
             smtp = factory(GMAIL_HOST, GMAIL_PORT, timeout=self.timeout, context=ssl.create_default_context())
         except (smtplib.SMTPException, OSError) as exc:
-            raise AlertChannelError(classify_smtp_error(exc)) from None
+            raise _failed("connect", exc, None) from None
+        replies = _track_replies(smtp)
+        stage = "login"
         try:
             smtp.login(self.sender, self.password.replace(" ", ""))
+            stage = "send"
             smtp.send_message(msg)
         except (smtplib.SMTPException, OSError) as exc:
-            raise AlertChannelError(classify_smtp_error(exc)) from None
+            raise _failed(stage, exc, replies.get("code")) from None
         finally:
             # Cleanup is separate from delivery: once send_message returned the message is accepted (SENT), so a
             # failing QUIT/close is only logged and never turns the send into a retry (duplicate email).
             _close_quietly(smtp)
 
 
-def classify_smtp_error(exc):
-    """Typed code for an SMTP failure: 4xx is temporary (retryable), 5xx permanent (REJECTED / AUTH_ERROR)."""
+def _track_replies(smtp):
+    """Remember the last SMTP reply code (codes only, never the text). smtplib's login() falls back from AUTH PLAIN
+    to AUTH LOGIN; when the server answers 535/454 and then hangs up, the fallback raises SMTPServerDisconnected and
+    the real reply code would otherwise be lost."""
+    seen = {"code": None}
+    original = getattr(smtp, "getreply", None)
+    if not isinstance(original, MethodType) or not isinstance(smtp, smtplib.SMTP):
+        return seen  # test doubles: nothing to track
+
+    def getreply():
+        code, text = original()
+        seen["code"] = code
+        return code, text
+    smtp.getreply = getreply
+    return seen
+
+
+def _failed(stage, exc, last_code):
+    code = classify_smtp_error(exc, last_code=last_code, stage=stage)
+    LOG.warning("component=alerts event=SMTP_FAILED stage=%s error_type=%s smtp_code=%s last_reply_code=%s code=%s",
+                stage, type(exc).__name__, getattr(exc, "smtp_code", None), last_code, code)
+    return AlertChannelError(code)
+
+
+def classify_smtp_error(exc, *, last_code=None, stage=None):
+    """Typed code for an SMTP failure: 4xx is temporary (retryable), 5xx permanent (REJECTED / AUTH_ERROR).
+    A disconnect without a code uses the server's last 4xx/5xx reply (``last_code``) when there was one."""
     if isinstance(exc, smtplib.SMTPRecipientsRefused):
         codes = [code for code, _ in exc.recipients.values()]
         return "TEMPORARY_FAILURE" if codes and all(400 <= code < 500 for code in codes) else "REJECTED"
     code = getattr(exc, "smtp_code", None) if isinstance(exc, smtplib.SMTPResponseException) else None
+    auth = isinstance(exc, smtplib.SMTPAuthenticationError)
+    if code is None and isinstance(exc, smtplib.SMTPServerDisconnected) and isinstance(last_code, int) \
+            and 400 <= last_code < 600:
+        code, auth = last_code, stage == "login"
     if isinstance(code, int) and 400 <= code < 500:
         return "TEMPORARY_FAILURE"
     if isinstance(code, int) and 500 <= code < 600:
-        return "AUTH_ERROR" if isinstance(exc, smtplib.SMTPAuthenticationError) else "REJECTED"
+        return "AUTH_ERROR" if auth else "REJECTED"
     return "CONNECTION_ERROR"  # disconnects, timeouts, DNS and responses without a 4xx/5xx code
 
 
