@@ -177,7 +177,15 @@ def fill_state_from_deals(state, deals, key=None):
         changed |= fill_if_empty(state, "entry", _plain(opens[0].get("price")))
     if closes:
         changed |= fill_if_empty(state, "exit_price", _plain(closes[-1].get("price")))
-        changed |= fill_if_empty(state, "pnl", _plain(profit_amount(closes[-1].get("profit"))))
+        amounts = []
+        for deal in closes:
+            amount = profit_amount(deal.get("profit"))
+            if amount is None:
+                amounts = None
+                break
+            amounts.append(amount)
+        if amounts:
+            changed |= fill_if_empty(state, "pnl", _plain(sum(amounts, Decimal(0))))
     return changed
 
 

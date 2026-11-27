@@ -1,5 +1,5 @@
 """Liquid Glass view model, SL/TP join (bug #95), and a static render smoke. No network and no flag writes."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 import json
@@ -474,6 +474,115 @@ class DeskSnapshotTests(unittest.TestCase):
         self.assertEqual(view["positions"]["rows"][0]["sl"], "1.07")
         self.assertNotIn("9.99", json.dumps(view["positions"]["rows"][0]))
         self.assertEqual(view["curve"]["state"], "ok")
+
+
+class HistorySquareTests(unittest.TestCase):
+    """The 25 Nov USDJPY is filled, not exited, and its P/L is a deal amount. Table and summary both keep it."""
+
+    def _flags(self):
+        def done(day, symbol, side, pnl, ticket):
+            return json.dumps({
+                "status": "done", "exited": True, "symbol": symbol, "side": side,
+                "position_id": ticket, "volume": "0.40", "pnl": pnl,
+                "opened_at": f"2026-11-{day}T12:00:00+00:00",
+                "exit_at": f"2026-11-{day}T16:00:00+00:00",
+            })
+
+        return {
+            "combo_lon_2026-11-27": done("27", "USDJPY", "LONG", "181.46", "t27"),
+            "combo_lon_2026-11-25": json.dumps({
+                "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
+                "position_id": None, "volume": "0.40", "client_id": "combo-lon-2026-11-25",
+                "opened_at": "2026-11-25T07:10:00+00:00", "exit_at": "2026-11-25T16:00:00+00:00",
+                "entry": "156.10", "exit_price": "156.02",
+                "pnl": {"amount": "-20.19", "currency": "USC"},
+            }),
+            "combo_lon_2026-11-24": done("24", "USDJPY", "LONG", "-139.89", "t24"),
+            "combo_fix_2026-11-23": done("23", "GBPUSD", "LONG", "-13.00", "f23"),
+            "combo_lon_2026-11-23": done("23", "USDJPY", "LONG", "380.76", "t23"),
+            "combo_fix_2026-11-20": done("20", "GBPUSD", "LONG", "-9", "f20"),
+            "combo_lon_2026-11-20": done("20", "USDJPY", "SHORT", "116.42", "t20"),
+            "combo_lon_2026-11-19": done("19", "USDJPY", "LONG", "146.19", "t19"),
+            "combo_lon_2026-11-18": done("18", "USDJPY", "SHORT", "-84.08", "t18"),
+            "combo_fix_2026-11-26": json.dumps({"status": "skipped"}),
+            "combo_fix_2026-11-22": json.dumps({"status": "done", "exited": False}),
+            "combo_lon_2026-11-21": json.dumps({
+                "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
+                "position_id": "still-open", "opened_at": "2026-11-21T12:00:00+00:00",
+            }),
+        }
+
+    def test_table_and_summary_include_the_nov_25_deal_and_hide_ghosts(self):
+        now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
+        view = _view(now=now, flags=self._flags())
+        rows = view["history"]["rows"]
+        symbols = [(row["day"], row["symbol"], row["pnl"]) for row in rows]
+        self.assertEqual(len(rows), 9)
+        self.assertTrue(any(row["day"].startswith("25 ") and row["symbol"] == "USDJPY" and "20.19" in row["pnl"] for row in rows))
+        self.assertFalse(any(row["symbol"] == MISSING and row["pnl"] == MISSING for row in rows))
+        self.assertNotIn("still-open", [row["ticket"] for row in rows])
+        stats = view["history"]["stats"]
+        self.assertEqual(stats["count"], "9")
+        self.assertEqual(len(rows), int(stats["count"]))
+        self.assertIn("558.67", stats["net"])
+        self.assertEqual(stats["net_tone"], "pos")
+        html = fragment(view, section="Historial")
+        self.assertIn("25 nov 2026", html)
+        self.assertIn("20.19", html)
+        self.assertNotIn("Sin operación", html)
+        self.assertEqual(len(symbols), 9)
+
+    def test_parts_sum_to_one_row(self):
+        now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
+        flags = {"combo_lon_2026-11-25": json.dumps({
+            "status": "filled", "exited": False, "position_id": None,
+            "opened_at": "2026-11-25T07:10:00+00:00", "exit_at": "2026-11-25T16:00:00+00:00",
+            "parts": [
+                {"symbol": "USDJPY", "side": "LONG", "profit": {"amount": "-12.00", "currency": "USC"}},
+                {"symbol": "USDJPY", "side": "LONG", "profit": {"amount": "-8.19", "currency": "USC"}},
+            ],
+        })}
+        view = _view(now=now, flags=flags)
+        self.assertEqual(len(view["history"]["rows"]), 1)
+        row = view["history"]["rows"][0]
+        self.assertEqual(row["symbol"], "USDJPY")
+        self.assertEqual(row["side"], "Compra")
+        self.assertIn("20.19", row["pnl"])
+        self.assertEqual(view["history"]["stats"]["count"], "1")
+        self.assertIn("20.19", view["history"]["stats"]["net"])
+
+
+class EmptyBookTests(unittest.TestCase):
+    def test_a_fresh_empty_mark_is_zero_and_a_missing_read_is_sin_datos(self):
+        now = datetime(2026, 11, 27, 16, 0, tzinfo=timezone.utc)
+        fresh = json.dumps({"at": now.isoformat(), "positions": []})
+        flags = {"exness_link": "1", "exness_link_at": now.isoformat(), "exness_live_marks": fresh}
+        snapshot = {"as_of": now.isoformat(), "account_state": {"balance": "10000", "equity": "10000", "currency": "USC"}}
+        view = _view(now=now, flags=flags, snapshot=snapshot)
+        self.assertEqual(view["positions"]["state"], "empty")
+        self.assertIn("0.00", view["positions"]["floating"])
+        self.assertNotEqual(view["positions"]["floating"], MISSING)
+        self.assertEqual(view["active"], "0")
+        html = fragment(view, section="Posiciones")
+        self.assertIn("Sin posiciones abiertas.", html)
+        self.assertNotIn("El libro de posiciones no está en el panel", html)
+
+        stale_at = (now - timedelta(minutes=46)).isoformat()
+        stale = _view(now=now, flags={"exness_live_marks": json.dumps({"at": stale_at, "positions": []})}, snapshot={})
+        self.assertEqual(stale["positions"]["state"], "sin datos")
+        self.assertEqual(stale["positions"]["note"], "El libro de posiciones no está en el panel.")
+        self.assertEqual(stale["positions"]["floating"], MISSING)
+
+        down = _view(now=now, flags={"exness_link": "0", "exness_live_marks": fresh}, snapshot={})
+        self.assertEqual(down["positions"]["state"], "sin datos")
+        self.assertEqual(down["positions"]["floating"], MISSING)
+
+        absent = _view(now=now, flags={}, snapshot={"as_of": now.isoformat()})
+        self.assertEqual(absent["positions"]["state"], "sin datos")
+
+        listed = _view(now=now, snapshot={"positions": [], "orders": []})
+        self.assertEqual(listed["positions"]["state"], "empty")
+        self.assertIn("0.00", listed["positions"]["floating"])
 
 
 if __name__ == "__main__":

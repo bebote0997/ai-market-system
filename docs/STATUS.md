@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-27 (rama `cursor/liquid-header-layout-42b1`, borrador). Encabezado del panel: sin el texto «Exness Standard Cent (USC)»; el distintivo queda a la derecha del logo, en la misma fila; el logo de la cabecera es más grande. El fondo del menú arranca oculto y no tapa la página. La barra inferior no cubre el final de la pestaña. Riesgo separa las dos tarjetas. Al cambiar de pestaña la vista vuelve arriba. Sin merge, sin deploy, sin Render._
+_Última actualización: 2026-11-27 (rama `cursor/historial-book-square-385b`, sobre `ea25569`). El Historial pinta la pata del 25 nov que sigue `filled` sin ticket: la tabla y el resumen usan las mismas operaciones. Lotes, entrada, salida y motivo salen del flag (`cierre 11:00 ET`, `cierre manual HQ`). Un libro vacío ya publicado muestra 0.00; sin lectura sigue «sin datos». El encabezado del #111 sigue. Sin merge, sin deploy, sin Render._
+
+_Anterior: 2026-11-27 (rama `cursor/liquid-header-layout-42b1`, en main `ea25569`). Encabezado del panel: sin el texto «Exness Standard Cent (USC)»; el distintivo queda a la derecha del logo, en la misma fila; el logo de la cabecera es más grande. El fondo del menú arranca oculto y no tapa la página. La barra inferior no cubre el final de la pestaña. Riesgo separa las dos tarjetas. Al cambiar de pestaña la vista vuelve arriba. Sin merge, sin deploy, sin Render._
 
 _Anterior: 2026-11-27 (rama `cursor/fase3-panel-77ab`). Fase 3 del panel: el diseño aprobado (misma pieza de cristal, mejor jerarquía), el logo 1 y el tema en el lateral o en Configuración. Un Fix omitido queda `skipped` y no pinta una fila vacía. El enlace Exness se renueva en cada tick de 30 s. El despliegue lee `RENDER_INSTANCE_ID` si no hay commit de Render. Se quitan servidor, ping y tiempo activo. El libro vacío muestra 0.00 y el tope por operación también. Sin merge, sin deploy, sin Render._
 

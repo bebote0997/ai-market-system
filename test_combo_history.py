@@ -280,6 +280,29 @@ class FlatFlagBackfillTests(unittest.TestCase):
         self.assertIn("20.19", row["pnl"])
         self.assertIn("20.19", view["history"]["stats"]["net"])
 
+    def test_two_close_deals_sum_to_one_pnl(self):
+        day = datetime(2026, 11, 25, tzinfo=timezone.utc)
+        store = MemoryFlags()
+        opened = "2026-11-25T07:10:00+00:00"
+        put(store, london_key(day.date()), {
+            "status": "done", "exited": True, "symbol": "USDJPY", "side": "LONG",
+            "position_id": "425111", "opened_at": opened,
+        })
+        client = FakeHistoryClient([
+            deal("425111", "open", "156.10", "0", opened, direction="buy", volume="0.40"),
+            deal("425111", "close", "156.05", ("-12.00", "USC"), "2026-11-25T15:00:00+00:00",
+                 direction="sell", volume="0.20"),
+            deal("425111", "close", "156.02", ("-8.19", "USC"), "2026-11-25T16:00:00+00:00",
+                 direction="sell", volume="0.20"),
+        ])
+        broker = FakeBroker(store, client)
+        result = backfill_combo_history(broker, now=datetime(2026, 11, 25, 21, 0, tzinfo=timezone.utc))
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(client.mutated, 0)
+        state = load(store, london_key(day.date()))
+        self.assertEqual(state["pnl"], "-20.19")
+        self.assertEqual(state["exit_price"], "156.02")
+
     def test_an_open_position_is_not_marked_exited(self):
         day = datetime(2026, 11, 25, tzinfo=timezone.utc)
         store = MemoryFlags()
