@@ -1,5 +1,15 @@
 # Agent Changelog
 
+## 2026-11-27 — panel fase 3: diseño, logo y seis lecturas reales
+
+- Mismo Liquid Glass, con la jerarquía aprobada el 25 nov. El logo 1 va en el lateral y en la cabecera móvil (blanco sobre azul, transparente sobre claro). El tema está en el lateral en escritorio y en Configuración > Sistema en el móvil. La barra inferior no tapa el contenido.
+- Un Fix omitido se guarda como `skipped` con motivo (`window_closed` o `below_threshold`). El historial no pinta patas sin par y sin P/L. En Estado por par dice Omitida.
+- Cada tick del planificador (30 s) renueva el enlace con las cotizaciones ya en memoria. El umbral sigue en 90 s.
+- «Último despliegue» usa `RENDER_GIT_COMMIT` si viene, y si no `RENDER_INSTANCE_ID`. No se toca la variable del freeze.
+- Se quitan Servidor, Conexión, Ping y Tiempo activo: no había de dónde leerlos.
+- Libro leído y vacío: P/L flotante 0.00. El consumo del tope por operación es 0.00; si hay posiciones y no se puede medir el riesgo, no se muestra «sin datos».
+- Sin merge, sin deploy, sin cambio de Render ni de órdenes (salvo cómo se anota el Fix omitido).
+
 ## 2026-11-27 — panel: refresco, P/L vivo, resumen Exness, TP del Fix, conexión y freno
 
 - El panel Liquid se vuelve a pintar cada 20 s. La pestaña y el scroll se guardan en el navegador.

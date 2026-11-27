@@ -42,6 +42,18 @@ def _disarm_stall_dump(started):
         pass
 
 
+def _refresh_exness_link(runner):
+    """Cada tick (TICK_SECONDS) renueva el enlace. Usa el estado que ya está en memoria."""
+    runtime = getattr(runner, "runtime", None)
+    refresh = getattr(runtime, "refresh_exness_link", None)
+    if refresh is None:
+        return
+    try:
+        refresh(datetime.now(timezone.utc))
+    except Exception as exc:  # noqa: BLE001 - el panel no puede cortar el ciclo
+        LOGGER.warning("component=runner event=EXNESS_LINK_REFRESH_FAILED error_type=%s", type(exc).__name__)
+
+
 def _poll_operator_requests(runner):
     """Floor «Cerrar operación» / emergency flatten between ticks; never raises into the loop."""
     started = time.monotonic()
@@ -148,6 +160,7 @@ def main():
                 try:
                     try:
                         runner.tick()
+                        _refresh_exness_link(runner)
                         runner.daily_summary(datetime.now(timezone.utc))
                     except sqlite3.OperationalError as exc:
                         from storage.disk_guard import is_disk_full, log_disk_full

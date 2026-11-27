@@ -109,7 +109,7 @@ svg{width:100%;height:auto;display:block}
 .only-desk{display:none}
 .mob-bar{display:flex}
 .desk-head{display:none}
-.main{padding:12px 12px 84px}
+.main{padding:12px 12px calc(98px + env(safe-area-inset-bottom))}
 .kpis.five,.kpis.three,.stats{grid-template-columns:1fr}
 .row1,.row2,.split,.hline{grid-template-columns:minmax(0,1fr)}
 .table-wrap{display:none}
@@ -120,5 +120,45 @@ svg{width:100%;height:auto;display:block}
 .tabs button i{font-style:normal;font-size:14px}
 }
 @media (min-width:901px){.table-wrap{overflow:visible}.table-wrap table{table-layout:fixed;width:100%}}
-@media (max-width:390px){.table-wrap{display:none}.row-cards{display:flex;flex-direction:column;gap:8px}.main{padding:10px 10px 84px}.kpi .value{font-size:20px}.mob-bar h1{font-size:15px}}
+@media (max-width:390px){.table-wrap{display:none}.row-cards{display:flex;flex-direction:column;gap:8px}.main{padding:10px 10px calc(98px + env(safe-area-inset-bottom))}.kpi .value{font-size:20px}.mob-bar h1{font-size:15px}}
 @media (min-width:901px){.only-mob{display:none}.mob-bar{display:none}}
+
+/* Propuesta 25 nov: mismo estilo, mejor jerarquía */
+.kpi .value{font-size:clamp(22px,2.1vw,30px)}
+.kpi .value .unit{font-size:.48em;font-weight:650;margin-left:5px;color:var(--lg-muted);letter-spacing:0}
+.kpi .label{text-transform:uppercase;letter-spacing:.06em;font-size:11px}
+.row1{grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr)}
+.strategy .split{grid-template-columns:minmax(0,1fr)}
+.strategy .pairs,.pairs{flex-direction:row;flex-wrap:wrap}
+.pair{border:1px solid var(--lg-stroke);border-radius:999px;padding:4px 6px 4px 12px;background:rgba(255,255,255,.35)}
+.lg[data-theme="dark"] .pair{background:rgba(255,255,255,.05)}
+th.num,td.num{text-align:right;padding-right:12px}
+th{position:sticky;top:0;text-transform:uppercase;letter-spacing:.05em}
+tbody tr:hover{background:rgba(37,99,235,.06)}
+tr.skip td{color:var(--lg-muted);font-size:11px;padding:3px 0;border-top:1px dashed var(--lg-stroke)}
+.mini.skip{display:flex;justify-content:space-between;gap:8px;color:var(--lg-muted);font-size:11px;padding:5px 10px;border-style:dashed}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:36px 8px;text-align:center}
+.empty i{font-style:normal;font-size:28px;opacity:.55}
+.fresh{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;border:1px solid var(--lg-stroke);font-size:11px;background:var(--lg-wait-bg)}
+.card h2{letter-spacing:.02em}
+.mark{height:40px;width:auto;display:block}
+.on-dark{display:none}
+.lg[data-theme="dark"] .on-light{display:none}
+.lg[data-theme="dark"] .on-dark{display:block}
+.side .mark{height:52px}
+.mob-bar .mark{height:32px}
+.brand-row{display:flex;align-items:center;gap:12px}
+.side .theme{color:#fff;border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.08);margin-bottom:12px}
+@media (max-width:900px){.side .theme{display:none !important}}
+@media (prefers-color-scheme:dark){.lg:not([data-theme]) .on-light{display:none}.lg:not([data-theme]) .on-dark{display:block}}
+@media (max-width:900px){
+.kpi .value{font-size:clamp(20px,6.4vw,28px);white-space:nowrap}
+.kpis.mob{gap:10px}
+.kpis.mob article:nth-child(n+3) .value{font-size:clamp(17px,4.8vw,22px)}
+.main{padding-bottom:calc(98px + env(safe-area-inset-bottom))}
+.tabs{bottom:calc(10px + env(safe-area-inset-bottom))}
+.tabs button{min-height:48px;font-size:11px}
+.tabs button i{font-size:17px}
+.mini{padding:10px 12px}
+.kv-row b{text-align:right}
+}

@@ -24,7 +24,8 @@ from ui import i18n_es as es
 from ui.i18n_es import tr
 from ui.state import current_market, default_market_index, enabled_market_symbols, operational_store  # noqa: F401 - kept for callers that read the broker label beside this module
 st.set_page_config(page_title="Jt Trading Floor",
-                   layout="wide", page_icon="📊",
+                   layout="wide",
+                   page_icon=str(Path(__file__).resolve().parent / "static" / "liquid" / "logo_1_48.png"),
                    initial_sidebar_state="expanded")  # mounted, never slid off-screen; the pill collapses in CSS
 require_dashboard_access(st)
 if "ui_theme" not in st.session_state:

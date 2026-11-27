@@ -256,6 +256,18 @@ def log_brake_state(store, equity_reader, daily_limit=None):
         return
 
 
+def touch_link(store, *, fresh, at):
+    """Solo el enlace y su hora. No lee el broker ni reescribe el freno."""
+    try:
+        stamp = at.isoformat() if hasattr(at, "isoformat") else None
+        if not stamp:
+            return
+        store.set_flag(LINK_FLAG, "1" if fresh else "0")
+        store.set_flag(LINK_AT_FLAG, stamp)
+    except Exception:  # noqa: BLE001 - un fallo al guardar no corta el ciclo
+        return
+
+
 def publish_runtime_state(store, *, equity, currency, fresh, at, marks, daily_limit, log=True):
     """Deja BRAKE_STATE en el log y en la bandera, más el enlace y las marcas. No cambia el freno ni manda órdenes."""
     if log:

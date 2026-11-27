@@ -573,7 +573,8 @@ class SessionCombo:
             return
         if _lon(at) >= datetime.combine(day, time(16, 0), tzinfo=LONDON) + FIX_TOLERANCE:
             _log("FIX_SKIPPED", reason="window_closed")
-            state["status"] = "done"
+            state["status"] = "skipped"
+            state["exit_reason"] = "window_closed"
             self._put(key, state)
             return
         waiting = False
@@ -605,7 +606,8 @@ class SessionCombo:
         if waiting or signaled:
             return
         _log("FIX_SKIPPED", reason="below_threshold")
-        state["status"] = "done"
+        state["status"] = "skipped"
+        state["exit_reason"] = "below_threshold"
         self._put(key, state)
 
     def _fill_price(self, symbol, side):

@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-27 (rama `cursor/liquid-panel-phase2-ef5c`). El panel se refresca cada 20 s sin perder la pestaña ni el scroll. El precio y el P/L flotante salen de un GET cacheado (como mucho uno cada 30 s) o de las marcas que el ciclo ya guardó. El resumen de las 17:00 y el de las 21:15 dicen Exness. El TP del Fix es 2R del SL real y se mueve si el SL cambia. «Conexión Exness» lee el enlace y el latido. BRAKE_STATE se registra, se guarda y se muestra. Sin merge, sin deploy, sin Render._
+_Última actualización: 2026-11-27 (rama `cursor/fase3-panel-77ab`). Fase 3 del panel: el diseño aprobado (misma pieza de cristal, mejor jerarquía), el logo 1 y el tema en el lateral o en Configuración. Un Fix omitido queda `skipped` y no pinta una fila vacía. El enlace Exness se renueva en cada tick de 30 s. El despliegue lee `RENDER_INSTANCE_ID` si no hay commit de Render. Se quitan servidor, ping y tiempo activo. El libro vacío muestra 0.00 y el tope por operación también. Sin merge, sin deploy, sin Render._
+
+_Anterior: 2026-11-27 (rama `cursor/liquid-panel-phase2-ef5c`). El panel se refresca cada 20 s sin perder la pestaña ni el scroll. El precio y el P/L flotante salen de un GET cacheado (como mucho uno cada 30 s) o de las marcas que el ciclo ya guardó. El resumen de las 17:00 y el de las 21:15 dicen Exness. El TP del Fix es 2R del SL real y se mueve si el SL cambia. «Conexión Exness» lee el enlace y el latido. BRAKE_STATE se registra, se guarda y se muestra. Sin merge, sin deploy, sin Render._
 
 _Anterior: 2026-11-27 (rama `cursor/london-flag-flat-backfill-6099`). Una pata Londres `filled` cuyo ticket ya no está en el broker queda `exited` en el backfill del ciclo, con `position_id` y P/L si el deal se cruza. `london_book_count` ignora un `open_time` vacío y no repite la alerta. Sin merge, sin deploy, sin Render._
 

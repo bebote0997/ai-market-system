@@ -1,5 +1,7 @@
-"""Static Liquid Glass screens. No motion. Navigation, theme, filters and CSV stay in the browser."""
+"""Pantallas Liquid Glass estáticas. Sin movimiento. Navegación, tema, filtros y CSV quedan en el navegador."""
+import base64
 from decimal import Decimal
+from functools import lru_cache
 from html import escape
 from pathlib import Path
 
@@ -12,6 +14,27 @@ RANGES = (("30", "30 Días"), ("90", "90 Días"), ("365", "1 Año"), ("all", "To
 
 def _css():
     return (_ROOT / "glass.css").read_text(encoding="utf-8")
+
+
+@lru_cache(maxsize=4)
+def _png(name):
+    try:
+        raw = (_ROOT / name).read_bytes()
+    except OSError:
+        return ""
+    return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+
+
+def _mark(kind):
+    """Logo 1: blanco sobre azul marino u oscuro; transparente sobre fondo claro."""
+    blanco, claro = _png("logo_1_blanco.png"), _png("logo_1_transparente.png")
+    if not blanco:
+        return "<b>Jt Trading Floor</b>"
+    if kind == "navy":
+        return f'<img class="mark" src="{blanco}" alt="Jt Trading Floor">'
+    src = claro or blanco
+    return (f'<img class="mark on-light" src="{src}" alt="Jt Trading Floor">'
+            f'<img class="mark on-dark" src="{blanco}" alt="Jt Trading Floor">')
 
 
 def _script():
@@ -54,7 +77,7 @@ def _chart(points):
     y_hi, y_lo = _e(points[hi].get("y") or values[hi]), _e(points[lo].get("y") or values[lo])
     x0, x1 = _e(points[0].get("axis") or ""), _e(points[-1].get("axis") or "")
     label = _e(points[-1].get("text") or points[-1].get("y") or "")
-    label_y = last_y - 8 if last_y - 8 > 12 else Decimal(12)
+    label_y = Decimal(14)
     return (
         f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
         f'<defs><linearGradient id="lg-area" x1="0" y1="0" x2="0" y2="1">'
@@ -81,11 +104,20 @@ def _side(row):
     return _pill(row["side"], row.get("side_tone"))
 
 
+def _value(text):
+    """El número grande y la divisa pequeña. El texto es el mismo."""
+    raw = MISSING if text is None else str(text)
+    for unit in (" USC", " USD"):
+        if raw.endswith(unit):
+            return f'{_e(raw[:-len(unit)])}<span class="unit">{unit.strip()}</span>'
+    return _e(raw)
+
+
 def _kpi(label, item):
     tone = item.get("tone") if item.get("tone") in ("pos", "neg") else ""
     minor = f'<div class="minor">{_e(item.get("minor"))}</div>' if item.get("minor") else ""
     return (f'<article class="card kpi"><div class="label">{_e(label)}</div>'
-            f'<div class="value {tone}">{_e(item.get("main") or item["text"])}</div>{minor}'
+            f'<div class="value {tone}">{_value(item.get("main") or item["text"])}</div>{minor}'
             f'<div class="hint">{_e(item["sub"])}</div></article>')
 
 
@@ -121,6 +153,10 @@ def _position_cards(rows):
 def _trade_cards(rows):
     cards = []
     for row in rows:
+        if row["symbol"] == MISSING:
+            cards.append(f'<article class="mini skip"><span>{_e(row["day"])}</span>'
+                         f'<span>Sin operación · {_e(row.get("kind", ""))} · {_e(row.get("state", MISSING))}</span></article>')
+            continue
         title = f'{_e(row["day"])} {_e(row["symbol"])} {_side(row)}'
         cards.append(_mini(title, (
             ("Lotes", _e(row["lots"])), ("Entrada", _e(row.get("entry", MISSING))), ("Salida", _e(row["exit_price"])),
@@ -155,11 +191,16 @@ def _trade_table(rows, tagged=False):
             pairs = (("epoch", "epoch"), ("fecha", "day"), ("par", "symbol"), ("lado", "side"), ("lotes", "lots"),
                      ("entrada", "entry"), ("salida", "exit_price"), ("motivo", "reason"), ("resultado", "pnl"))
             attrs = " data-trade=\"1\" " + " ".join(f'data-{name}="{_e(row.get(key, MISSING))}"' for name, key in pairs)
+        if row["symbol"] == MISSING:
+            built.append((attrs + ' class="skip"', f'<td>{_e(row["day"])}</td><td colspan="7">Sin operación · '
+                          f'{_e(row.get("kind", ""))} · {_e(row.get("state", MISSING))}</td>'))
+            continue
         cells = (_e(row["day"]), _e(row["symbol"]), _side(row), _e(row["lots"]), _e(row.get("entry", MISSING)),
                  _e(row["exit_price"]), _e(row["reason"]),
                  f'<span class="{_e(row["pnl_tone"])}">{_e(row["pnl"])}</span>')
-        built.append((attrs, "".join(f"<td>{cell}</td>" for cell in cells)))
-    head = "".join(f"<th>{_e(name)}</th>" for name in headers)
+        numeric = (False, False, False, True, True, True, False, True)
+        built.append((attrs, "".join(f'<td{" class=\"num\"" if num else ""}>{cell}</td>' for cell, num in zip(cells, numeric))))
+    head = "".join(f'<th{" class=\"num\"" if name in ("LOTES", "ENTRADA", "SALIDA", "RESULTADO USC") else ""}>{_e(name)}</th>' for name in headers)
     body = "".join(f"<tr{attrs}>{cells}</tr>" for attrs, cells in built)
     return (f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
             + _trade_cards(rows))
@@ -168,9 +209,10 @@ def _trade_table(rows, tagged=False):
 def _positions_card(view, link=False):
     block = view["positions"]
     if block["state"] == "empty":
-        body = "<p class=\"hint\">Sin posiciones abiertas.</p>"
+        body = (f'<div class="empty"><i aria-hidden="true">▤</i><b>Sin posiciones abiertas</b>'
+                f'<span class="hint">Libro: {_e(view["kpis"]["equity"]["sub"])}</span></div>')
     elif block["state"] == "closed":
-        body = f'<p class="hint">{_e(block["note"])}</p>'
+        body = f'<div class="empty"><i aria-hidden="true">☾</i><b>{_e(block["note"])}</b></div>'
     elif block["state"] != "rows":
         body = f'<p class="na">{_e(MISSING)}</p><p class="hint">{_e(block["note"])}</p>'
     else:
@@ -201,7 +243,7 @@ def _strategy_card(view, horizontal=False):
             f'<div><div class="pair-title">Estado por par</div>{_pairs(strategy["pairs"])}</div>')
     if horizontal:
         return (f'<article class="card"><h2>Estrategia de hoy</h2><p class="hint">{_e(strategy["now"])}</p>{body}</article>')
-    return (f'<article class="card"><h2>Estrategia de hoy</h2><p class="hint">{_e(strategy["now"])}</p>'
+    return (f'<article class="card strategy"><h2>Estrategia de hoy</h2><p class="hint">{_e(strategy["now"])}</p>'
             f'<div class="split">{body}</div></article>')
 
 
@@ -214,13 +256,17 @@ def _short(text):
 def _brake_row(title, item):
     cap = _short(item["cap"] if isinstance(item, dict) else item)
     used = item.get("text") if isinstance(item, dict) else ""
+    consumo = ""
+    if used and used != MISSING:
+        consumo = f'<div class="hint">Consumo: {_e(used)}</div>'
     return (f'<div class="brake"><div class="brake-top"><span>{_e(title)}</span><b>{_e(cap)}</b></div>'
-            f'<div class="hint">Consumo: {_e(used or MISSING)}</div>{_bar(item) if isinstance(item, dict) else ""}</div>')
+            f'{consumo}{_bar(item) if isinstance(item, dict) else ""}</div>')
 
 
 def _brakes_card(view):
     brakes = view["brakes"]
-    rows = (f'{_brake_row("Tope por operación", {"cap": brakes["trade_cap"], "text": MISSING, "bar": None})}'
+    trade = brakes.get("trade") or {"cap": brakes["trade_cap"], "text": "", "bar": None}
+    rows = (f'{_brake_row("Tope por operación", trade)}'
             f'{_brake_row("Pérdida diaria", brakes["daily"])}'
             f'{_brake_row("Caída máxima", brakes["total"])}')
     shield = (f'<div class="shield"><b>Freno activado: {_e(brakes["halt_badge"])}</b>'
@@ -265,24 +311,21 @@ def _system_card(view, compact=False):
             checks += "".join(f'<div class="check"><span>{_e(row["event"])}</span><b>{_e(row["at"])}</b></div>' for row in system["errors"])
         elif system["errors_state"] == "empty":
             checks += '<p class="hint">Sin errores recientes.</p>'
-    server = "" if compact else (
-        f'<h2>Información del servidor</h2>'
-        f'<div class="check"><span>Servidor</span><b>{_e(MISSING)}</b></div>'
-        f'<div class="check"><span>Conexión</span><b>{_e(MISSING)}</b></div>'
-        f'<div class="check"><span>Ping</span><b>{_e(MISSING)}</b></div>'
-        f'<div class="check"><span>Tiempo activo</span><b>{_e(MISSING)}</b></div>')
-    return f'<article class="card"><h2>Salud del sistema</h2><p class="headline">{_e(headline)}</p>{checks}{server}</article>'
+    return f'<article class="card"><h2>Salud del sistema</h2><p class="headline">{_e(headline)}</p>{checks}</article>'
 
 
 def _config(view):
     brakes = view["brakes"]
-    riesgo = (f'{_brake_row("Tope por operación", {"cap": brakes["trade_cap"], "text": MISSING, "bar": None})}'
+    trade = brakes.get("trade") or {"cap": brakes["trade_cap"], "text": "", "bar": None}
+    riesgo = (f'{_brake_row("Tope por operación", trade)}'
               f'{_brake_row("Pérdida diaria", brakes["daily"])}{_brake_row("Caída máxima", brakes["total"])}'
               f'<div class="shield"><b>Freno activado: {_e(brakes["halt_badge"])}</b></div>')
     notes = f'<p class="na">{_e(MISSING)}</p><p class="hint">No hay un estado de notificaciones en las lecturas del panel.</p>'
     sistema = (f'<div class="check"><span>Ejecución</span><b>{_e(view["safety_short"])}</b></div>'
                f'<div class="check"><span>Planificador</span><b>{_e(view["system"]["scheduler"])}</b></div>'
-               f'<div class="check"><span>Último ciclo</span><b>{_e(view["system"]["last_cycle"])}</b></div>')
+               f'<div class="check"><span>Último ciclo</span><b>{_e(view["system"]["last_cycle"])}</b></div>'
+               f'<button type="button" class="theme only-mob" data-theme-toggle="1" '
+               f'aria-label="Cambiar tema claro u oscuro">Tema</button>')
     tabs = (("riesgo", "Riesgo", riesgo, False), ("avisos", "Notificaciones", notes, True), ("sistema", "Sistema", sistema, True))
     buttons = "".join(f'<button type="button" data-config="{name}"{" aria-current=\"page\"" if not hidden else ""}>{_e(label)}</button>'
                       for name, label, _body, hidden in tabs)
@@ -393,15 +436,17 @@ def fragment(view, *, section="Inicio", theme=None):
     return (
         f'<div class="lg"{theme_attr} data-now="{_e(view.get("now_epoch"))}" data-page="0">'
         f'<style>{_css()}</style>{banner}<div class="shell"><aside class="side"><div class="logo">'
-        f'<b>Jt Trading Floor</b><span>{_e(view["title"])}</span></div><nav aria-label="Secciones">{nav}</nav>'
-        f'<div class="foot"><b>JT GROUP HOLDINGS</b><span>v2.0.0</span></div></aside><div class="main">'
+        f'{_mark("navy")}<span>{_e(view["title"])}</span></div><nav aria-label="Secciones">{nav}</nav>'
+        f'<div class="foot"><button type="button" class="theme" data-theme-toggle="1" '
+        f'aria-label="Cambiar tema claro u oscuro">Tema</button>'
+        f'<b>JT GROUP HOLDINGS</b><span>v2.0.0</span></div></aside><div class="main">'
         f'<header class="mob-bar"><button type="button" class="burger" data-menu="1" aria-label="Abrir menú">☰</button>'
-        f'<div class="titles"><h1>Jt Trading Floor</h1><p>{_e(view["title"])}</p></div>'
+        f'{_mark("navy")}<div class="titles"><p>{_e(view["title"])}</p></div>'
+        f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span></div></header>'
+        f'<header class="desk-head"><div class="brand-row">{_mark("page")}'
+        f'<div><h1>{_e(view["title"])}</h1><p>{_e(view["clock"])} '
+        f'<span class="fresh">Datos: {_e(view["kpis"]["equity"]["sub"])}</span></p></div></div>'
         f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
-        f'<button type="button" class="theme" data-theme-toggle="1" aria-label="Cambiar tema claro u oscuro">Tema</button></div></header>'
-        f'<header class="desk-head"><div><h1>Jt Trading Floor · {_e(view["title"])}</h1><p>{_e(view["clock"])}</p></div>'
-        f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
-        f'<button type="button" class="theme" data-theme-toggle="1" aria-label="Cambiar tema claro u oscuro">Tema</button>'
         f'</div></header>{body}'
         f'<p class="hint">Solo lectura. Este panel no cierra operaciones ni cambia frenos.</p>'
         f'</div></div><nav class="tabs" aria-label="Secciones">{nav}</nav><script>{_script()}</script></div>'
@@ -410,7 +455,12 @@ def fragment(view, *, section="Inicio", theme=None):
 
 def document(view, *, section="Inicio", theme=None):
     """Full page for a screenshot. The Streamlit panel uses ``fragment``."""
+    icon = _png("logo_1_48.png")
+    favicon = f'<link rel="icon" href="{icon}">' if icon else ""
+    locked = fragment(view, section=section, theme=theme)
+    if theme in ("light", "dark"):
+        locked = locked.replace(' data-now=', f' data-theme-lock="{theme}" data-now=', 1)
     return ("<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            "<title>Jt Trading Floor</title></head><body style=\"margin:0\">"
-            + fragment(view, section=section, theme=theme) + "</body></html>")
+            f"{favicon}<title>Jt Trading Floor</title></head><body style=\"margin:0\">"
+            + locked + "</body></html>")

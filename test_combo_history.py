@@ -332,11 +332,7 @@ class HistorialViewTests(unittest.TestCase):
         self.assertIn("116.42", by_ticket["375978"]["pnl"])
         self.assertEqual(by_ticket["382026"]["reason"], "cierre manual HQ")
         self.assertIn("9.00", by_ticket["382026"]["pnl"] or "")
-        skipped = next(row for row in view["history"]["rows"] if row["ticket"] == MISSING)
-        self.assertEqual(skipped["entry"], MISSING)
-        self.assertEqual(skipped["exit_price"], MISSING)
-        self.assertEqual(skipped["reason"], MISSING)
-        self.assertEqual(skipped["pnl"], MISSING)
+        self.assertFalse(any(row["symbol"] == MISSING and row["pnl"] == MISSING for row in view["history"]["rows"]))
         self.assertEqual(_exit_label({"exit_reason": "hq_manual"}), "cierre manual HQ")
 
 
@@ -379,7 +375,7 @@ class HistorialViewTests(unittest.TestCase):
         self.assertEqual(stats["net_tone"], "pos")
         self.assertNotEqual(stats["profit_factor"], MISSING)
         tickets = [row["ticket"] for row in view["history"]["rows"]]
-        self.assertEqual(tickets.count(MISSING), 3)
+        self.assertEqual(tickets.count(MISSING), 0)
         self.assertIn("341984", tickets)
         self.assertIn("382026", tickets)
 
@@ -392,7 +388,7 @@ class HistorialViewTests(unittest.TestCase):
         }
         view = _view(now=datetime(2026, 11, 21, 16, 0, tzinfo=timezone.utc), flags=flags)
         stats = view["history"]["stats"]
-        self.assertEqual(len(view["history"]["rows"]), 2)
+        self.assertEqual(len(view["history"]["rows"]), 1)
         self.assertEqual(stats["count"], "0")
         self.assertEqual(stats["winners"], MISSING)
         self.assertEqual(stats["net"], MISSING)

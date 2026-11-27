@@ -283,7 +283,9 @@ def _positions(book, legs, currency, now):
     orders = book.get("orders") if isinstance(book.get("orders"), (list, tuple)) else ()
     rows = [_position_row(item, orders, closes, currency) for item in book["positions"] if isinstance(item, dict)]
     if not rows:
-        text, tone = _signed(_money(book.get("floating_pnl")), currency)
+        # Libro leído y sin posiciones: el flotante es cero, no «sin datos».
+        amount = _money(book.get("floating_pnl"))
+        text, tone = _signed(Decimal(0) if amount is None else amount, currency)
         return {"state": "empty", "rows": [], "note": "", "floating": text, "floating_tone": tone}
     known = [row["_profit"] for row in rows]
     if all(item is not None for item in known):
@@ -295,8 +297,14 @@ def _positions(book, legs, currency, now):
     return {"state": "rows", "rows": rows, "note": "", "floating": text, "floating_tone": tone}
 
 
+def _shown_in_history(leg):
+    """Una pata sin par y sin P/L no es una operación. No se pinta."""
+    return bool(leg["symbol"]) or leg["pnl"] is not None
+
+
 def _history(legs, currency):
     chosen = [leg for leg in legs if leg["status"] in ("done", "skipped", "cancelled") or (leg["status"] == "filled" and leg["exited"])]
+    chosen = [leg for leg in chosen if _shown_in_history(leg)]
     chosen.sort(key=lambda leg: (leg["opened_at"] or datetime.min.replace(tzinfo=timezone.utc), leg["key"]), reverse=True)
     rows = [_leg_row(leg, currency) for leg in chosen]
     return {"state": "rows" if chosen else "empty", "rows": rows, "recent": rows[:3], "stats": _stats(chosen, currency)}
@@ -424,6 +432,14 @@ def _brake_line(cap, used, currency):
     return {"cap": cap_text, "used": money_line(used, currency), "text": f"{money_line(used, currency)} · {shown}", "bar": bar}
 
 
+def _trade_use(cap, positions):
+    """Consumo del tope por operación. Con el libro vacío es 0. Sin riesgo medible, no se inventa."""
+    if isinstance(positions, dict) and positions.get("state") == "empty":
+        return _brake_line(cap, Decimal(0), "USC")
+    line = _brake_line(cap, None, "USC")
+    return {**line, "text": ""}
+
+
 def _system(health, errors):
     if not isinstance(health, dict) and errors is None:
         return {"state": "sin datos", "heartbeat": MISSING, "scheduler": MISSING, "status": MISSING,
@@ -510,10 +526,16 @@ def _close_pill(leg, now):
 def _pair(fix, symbol):
     if not isinstance(fix, dict):
         return {"symbol": symbol, "state": MISSING, "tone": "na"}
-    if fix.get("status") == "pending" or not fix.get("symbol"):
-        state, tone = _pill(fix)
-        return {"symbol": symbol, "state": state, "tone": tone}
-    if fix.get("symbol") != symbol:
+    own = fix.get("symbol")
+    status = fix.get("status")
+    if status == "skipped" and not own:
+        return {"symbol": symbol, "state": "Omitida", "tone": "wait"}
+    if not own:
+        if status == "pending":
+            state, tone = _pill(fix)
+            return {"symbol": symbol, "state": state, "tone": tone}
+        return {"symbol": symbol, "state": "Sin operación", "tone": "na"}
+    if own != symbol:
         return {"symbol": symbol, "state": "Sin operación", "tone": "na"}
     state, tone = _pill(fix)
     return {"symbol": symbol, "state": state, "tone": tone}
@@ -539,9 +561,16 @@ def _when(stamp):
 
 
 def _deploy_label(env):
-    raw = env.get("RENDER_GIT_COMMIT") if hasattr(env, "get") else None
-    if isinstance(raw, str) and re.fullmatch(r"[0-9a-fA-F]{7,40}", raw.strip()):
-        return raw.strip()[:7]
+    """Identificador que Render ya inyecta. No pide variables nuevas."""
+    if not hasattr(env, "get"):
+        return MISSING
+    commit = env.get("RENDER_GIT_COMMIT")
+    if isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{7,40}", commit.strip()):
+        return commit.strip()[:7]
+    instance = env.get("RENDER_INSTANCE_ID")
+    if isinstance(instance, str) and re.fullmatch(r"[A-Za-z0-9_-]{4,64}", instance.strip()):
+        token = instance.strip()
+        return token if len(token) <= 12 else token[-12:]
     return MISSING
 
 
@@ -802,8 +831,6 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         unavailable.append("Conexión Exness")
     if system.get("deploy") == MISSING:
         unavailable.append("Último despliegue")
-    for name in ("Ping", "Tiempo activo"):
-        unavailable.append(name)
     title = LABEL if broker_is_exness(env) else "Jt Trading Floor"
     armed = real_execution_armed(env) is True
     trades = "0" if clock.get("waiting") is not False else str(clock.get("trades") or 0)
@@ -822,6 +849,7 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         "cycle_pct": cycle_pct, "active": "0" if positions["state"] == "closed" else (MISSING if positions["state"] == "sin datos" else str(len(positions["rows"]))),
         "positions": positions, "curve": curve_view, "strategy": _strategy(legs, now),
         "brakes": {"daily": daily, "total": total_brake, "trade_cap": money_line(brakes.get("cap"), "USC"),
+                   "trade": _trade_use(brakes.get("cap"), positions),
                    "halt": "Activo" if brakes.get("halt") else "No",
                    "halt_badge": "Sí" if brakes.get("halt") else "No", "reason": reason_text,
                    "state_line": _brake_state_line(flags, brakes, known, currency)},
