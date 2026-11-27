@@ -3,7 +3,7 @@ from decimal import Decimal
 from html import escape
 from pathlib import Path
 
-from ui.liquid.model import CLOSED, MISSING
+from ui.liquid.model import MISSING
 
 _ROOT = Path(__file__).resolve().parents[1] / "static" / "liquid"
 SECTIONS = ("Inicio", "Posiciones", "Historial", "Riesgo", "Sistema")
