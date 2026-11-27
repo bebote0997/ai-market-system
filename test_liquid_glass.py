@@ -529,6 +529,8 @@ class HistorySquareTests(unittest.TestCase):
         html = fragment(view, section="Historial")
         self.assertIn("25 nov 2026", html)
         self.assertIn("20.19", html)
+        self.assertIn("Ganancia bruta", html)
+        self.assertNotIn("Ganancia total", html)
         self.assertNotIn("Sin operación", html)
         self.assertEqual(len(symbols), 9)
 
