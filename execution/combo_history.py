@@ -7,6 +7,7 @@ they were.
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 import json
 import logging
 
@@ -15,6 +16,8 @@ from execution.exness_client import safe_detail
 
 LOG = logging.getLogger("ai_floor.session_combo")
 HISTORY_START = date(2026, 11, 18)
+NY = ZoneInfo("America/New_York")
+_MATCH_SECONDS = 120
 # Tickets closed before #104 stored no exit_reason. Motivo comes from Floor logs, not from Exness
 # (deal.reason was empty). Do not invent fix_30m: 382026 was a manual HQ close.
 KNOWN_EXIT_REASONS = {
@@ -215,6 +218,153 @@ def _incomplete(state):
     return not all(_present(state.get(name)) for name in ("entry", "exit_price", "pnl", "exit_reason"))
 
 
+def _filled_open(state):
+    """Pata ``filled`` que el flag aún no dio por salida."""
+    return (state or {}).get("status") == "filled" and (state or {}).get("exited") is not True
+
+
+def _row_ticket(row):
+    if isinstance(row, dict):
+        return str(row.get("ticket") or row.get("position_id") or "").strip()
+    return str(getattr(row, "ticket", None) or getattr(row, "position_id", None) or "").strip()
+
+
+def _row_symbol(row):
+    if isinstance(row, dict):
+        raw = row.get("symbol") or row.get("instrument")
+    else:
+        raw = getattr(row, "symbol", None) or getattr(row, "instrument", None)
+    return str(raw or "").strip().upper()
+
+
+def _row_side(row):
+    if isinstance(row, dict):
+        raw = row.get("side") or row.get("direction")
+    else:
+        raw = getattr(row, "side", None) or getattr(row, "direction", None)
+    text = str(raw or "").strip().upper()
+    if text in ("BUY", "LONG"):
+        return "LONG"
+    if text in ("SELL", "SHORT"):
+        return "SHORT"
+    return ""
+
+
+def open_rows(broker):
+    """Posiciones abiertas, o None si el libro no se pudo leer."""
+    reader = getattr(broker, "open_trades", None)
+    if not callable(reader):
+        return None
+    try:
+        return list(reader() or ())
+    except Exception:  # noqa: BLE001
+        _log("skip", reason="book_unread")
+        return None
+
+
+def _still_held(state, rows):
+    """True si el broker todavía tiene esta pata. Sin id, basta el mismo símbolo y lado."""
+    ticket = str((state or {}).get("position_id") or "").strip()
+    if ticket:
+        return any(_row_ticket(row) == ticket for row in rows)
+    symbol = str((state or {}).get("symbol") or "").strip().upper()
+    side = (state or {}).get("side")
+    if not symbol or side not in ("LONG", "SHORT"):
+        return False
+    return any(_row_symbol(row) == symbol and _row_side(row) == side for row in rows)
+
+
+def _deal_time(deal):
+    if not isinstance(deal, dict):
+        return None
+    # open_time vacío no tumba el cruce: se prueba create_time y event_time.
+    for name in ("open_time", "create_time", "event_time"):
+        stamp = _aware(deal.get(name))
+        if stamp is not None:
+            return stamp
+    return None
+
+
+def resolve_closed_ticket(state, key, deals, rows):
+    """Id de la pata ya cerrada. None si sigue abierta, si no hay un solo candidato, o si el libro no se leyó."""
+    if not isinstance(state, dict) or rows is None:
+        return None
+    held = str(state.get("position_id") or "").strip()
+    if held:
+        return None if _still_held(state, rows) else held
+    symbol = str(state.get("symbol") or "").strip().upper()
+    side = state.get("side")
+    want = {"LONG": "buy", "SHORT": "sell"}.get(side)
+    day = _leg_day(key)
+    opened_flag = _aware(state.get("opened_at"))
+    grouped = {}
+    for deal in deals or ():
+        if not isinstance(deal, dict):
+            continue
+        ticket = str(deal.get("position_id") or "").strip()
+        if ticket:
+            grouped.setdefault(ticket, []).append(deal)
+    open_ids = {_row_ticket(row) for row in rows}
+    near, rest = [], []
+    for ticket, items in grouped.items():
+        if not ticket or ticket in open_ids:
+            continue
+        opens = [item for item in items if item.get("type") == "open"]
+        closes = [item for item in items if item.get("type") == "close"]
+        if not closes:
+            continue
+        sample = opens[0] if opens else closes[-1]
+        inst = str(sample.get("instrument") or "").strip().upper()
+        if symbol and inst and inst != symbol:
+            continue
+        direction = str((opens[0].get("direction") if opens else "") or "").strip().lower()
+        if want and direction and direction not in (want, str(side or "").lower()):
+            continue
+        stamp = _deal_time(opens[0]) if opens else _deal_time(closes[-1])
+        if day is not None and stamp is not None and stamp.astimezone(NY).date() != day:
+            continue
+        if opened_flag is not None and stamp is not None and abs((stamp - opened_flag).total_seconds()) <= _MATCH_SECONDS:
+            near.append(ticket)
+        else:
+            rest.append(ticket)
+    if len(near) == 1:
+        return near[0]
+    if not near and len(rest) == 1:
+        return rest[0]
+    return None
+
+
+def settle_flat_leg(state, key, broker, deals=None, rows=None):
+    """Si el broker ya no tiene la pata, la marca salida y guarda id y P/L cuando se pueden cruzar.
+
+    No envía órdenes. Un libro ilegible no toca el flag.
+    """
+    if not _filled_open(state):
+        return False
+    if rows is None:
+        rows = open_rows(broker)
+    if rows is None or _still_held(state, rows):
+        return False
+    if deals is None and broker is not None:
+        client = history_client(broker)
+        if client is None:
+            return False
+        try:
+            opened = _aware(state.get("opened_at")) or datetime.now(timezone.utc) - timedelta(days=3)
+            ended = datetime.now(timezone.utc) + timedelta(hours=1)
+            deals = fetch_deals(client, opened, ended)
+        except Exception as exc:  # noqa: BLE001
+            _log("failed", reason="read_failed", error_type=type(exc).__name__)
+            return False
+    ticket = resolve_closed_ticket(state, key, deals, rows)
+    if ticket and not str(state.get("position_id") or "").strip():
+        state["position_id"] = ticket
+    state["exited"] = True
+    state["status"] = "done"
+    fill_state_from_deals(state, deals or (), key=key)
+    return True
+
+
 def _dump(state):
     payload = dict(state)
     for field in ("exit_at", "opened_at", "protection_after"):
@@ -298,18 +448,26 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
         if not isinstance(now, datetime) or now.tzinfo is None:
             now = datetime.now(timezone.utc)
         today = now.astimezone(timezone.utc).date()
-        loaded = []
+        loaded, flat = [], []
         for key, raw in _iter_combo_keys(store, today):
             state = _load_state(raw)
-            if state is not None and _incomplete(state):
+            if state is None:
+                continue
+            if _incomplete(state):
                 loaded.append((key, state))
+            elif _filled_open(state):
+                flat.append((key, state))
+        rows = open_rows(broker) if flat else None
+        # Una pata filled que ya no está en el libro se cierra aquí. El backfill viejo solo miraba patas ya cerradas.
+        waiting = [(key, state) for key, state in flat if rows is not None and not _still_held(state, rows)]
         need_deals = [(key, state) for key, state in loaded if str(state.get("position_id") or "").strip()]
-        result["pending"] = len(loaded)
+        need_deals.extend(waiting)
+        result["pending"] = len(loaded) + len(waiting)
         deals = []
         if need_deals:
             client = history_client(broker)
             if client is None:
-                _log("skip", reason="no_client", pending=len(loaded))
+                _log("skip", reason="no_client", pending=result["pending"])
                 return result
             start, end = _window(need_deals)
             deals = fetch_deals(client, start, end, get_json=get_json)
@@ -319,10 +477,23 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
                 continue
             store.set_flag(key, _dump(state))
             result["updated"] += 1
+        for key, state in waiting:
+            if not settle_flat_leg(state, key, broker, deals=deals, rows=rows):
+                continue
+            store.set_flag(key, _dump(state))
+            result["updated"] += 1
         still = 0
         for key, state in loaded:
             if _incomplete(state) and str(state.get("position_id") or "").strip():
                 still += 1
+        if rows is None:
+            still += len(flat)
+        else:
+            for key, state in flat:
+                if _filled_open(state):
+                    still += 1
+                elif _incomplete(state) and str(state.get("position_id") or "").strip():
+                    still += 1
         result["pending"] = still
         _log("ok", updated=result["updated"], pending=still)
         return result

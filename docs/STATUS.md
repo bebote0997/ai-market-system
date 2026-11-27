@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-21 (rama `fix/historial-exness-backfill`, sobre `c0f37d1`). Backfill GET-only del historial con deals de Exness (entrada, salida, P/L; motivo de los logs del Floor). Las salidas nuevas guardan `exit_price` y `pnl`. Sin cambio de órdenes, frenos, `AI_FLOOR_GIT_COMMIT` ni Render. Sin merge y sin deploy._
+_Última actualización: 2026-11-27 (rama `cursor/london-flag-flat-backfill-6099`). Una pata Londres `filled` cuyo ticket ya no está en el broker queda `exited` en el backfill del ciclo, con `position_id` y P/L si el deal se cruza. `london_book_count` ignora un `open_time` vacío y no repite la alerta. Sin merge, sin deploy, sin Render._
+
+_Anterior: 2026-11-21 (rama `fix/historial-exness-backfill`, sobre `c0f37d1`). Backfill GET-only del historial con deals de Exness (entrada, salida, P/L; motivo de los logs del Floor). Las salidas nuevas guardan `exit_price` y `pnl`. Sin cambio de órdenes, frenos, `AI_FLOOR_GIT_COMMIT` ni Render. Sin merge y sin deploy._
 
 _Anterior: 2026-11-21 (rama `cursor/liquid-closed-market-8910`, sobre `b8a843a`). Con el mercado cerrado el panel usa la última lectura ya guardada y `RENDER_GIT_COMMIT`. No llama a Exness. Solo un libro viejo pasa a «Mercado cerrado»; un latido viejo o un proveedor sin configurar siguen en Degradado. Sin merge y sin deploy._
 

@@ -73,6 +73,15 @@ class PositionStopFromSltpTests(unittest.TestCase):
         book = RestExnessTransport(Map([position()], [sltp(state="cancelled", stop_loss_price="1.09844")])).read_state()
         self.assertIsNone(book.positions[0].stop)
 
+    def test_empty_open_time_falls_back_and_a_blank_pair_is_none(self):
+        book = RestExnessTransport(Map([position(open_time="", create_time="2026-11-25T07:10:00+00:00")], [])).read_state()
+        self.assertEqual(book.positions[0].opened_at.isoformat(), "2026-11-25T07:10:00+00:00")
+        blank = position(open_time="", create_time="")
+        book = RestExnessTransport(Map([blank], [])).read_state()
+        self.assertIsNone(book.positions[0].opened_at)
+        book = RestExnessTransport(Map([position(open_time=None)], [])).read_state()
+        self.assertIsNotNone(book.positions[0].opened_at)
+
     def test_no_sltp_still_reads_none(self):
         book = RestExnessTransport(Map([position()], [])).read_state()
         self.assertIsNone(book.positions[0].stop)
