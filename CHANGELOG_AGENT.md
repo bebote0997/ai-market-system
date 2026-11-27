@@ -5,7 +5,7 @@
 - El panel Liquid se vuelve a pintar cada 20 s. La pestaña y el scroll se guardan en el navegador.
 - Precio y P/L flotante de las abiertas: marcas que el ciclo ya leyó, o un solo GET del snapshot como mucho cada 30 s. Con el mercado cerrado no hay GET. Sin botones que operen.
 - El resumen de las 17:00 y el de las 21:15 registran `source=EXNESS` y el texto dice Exness.
-- El Fix pone el TP al doble del stop de 30 pips (60 pips), con la misma regla 2x de la estrategia.
+- El TP del Fix es 2R de la distancia real del SL de esa operación. Si el SL cambia, el TP se mueve con él. No es un número fijo de 60 pips.
 - «Conexión Exness» usa el enlace guardado y el latido. BRAKE_STATE se escribe en el log y en una bandera, y el panel muestra equity, límite diario y si el freno está activo.
 - Sin cambio de `AI_FLOOR_GIT_COMMIT`, de Render ni de otras órdenes. Sin merge y sin deploy.
 

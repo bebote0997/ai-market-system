@@ -9,7 +9,7 @@ from unittest.mock import patch
 from execution.exness_brakes import (
     DAY_EQUITY_FLAG, DAY_FLAG, HALT_FLAG, LINK_AT_FLAG, LINK_FLAG, LIVE_FLAG, REASON_FLAG,
     START_FLAG, STATE_FLAG, MemoryFlags, publish_runtime_state)
-from execution.session_combo import fix_prices
+from execution.session_combo import fix_prices, target_at_two_r
 from ui.liquid.live import cached_call, panel_marks, reset_cache
 from ui.liquid.model import MISSING, build_dashboard
 from ui.liquid.render import fragment
@@ -108,11 +108,15 @@ class SummarySourceTests(unittest.TestCase):
 
 
 class FixTpTests(unittest.TestCase):
-    def test_fix_target_is_twice_the_thirty_pip_stop(self):
+    def test_fix_target_is_two_r_of_the_real_stop(self):
         stop, target = fix_prices(Decimal("1.25150"), "SHORT", "GBPUSD")
-        self.assertEqual((stop, target), (Decimal("1.25450"), Decimal("1.24550")))
+        self.assertEqual(stop, Decimal("1.25450"))
+        self.assertEqual(target, target_at_two_r(Decimal("1.25150"), stop, "SHORT"))
+        moved = Decimal("1.25300")
+        self.assertEqual(target_at_two_r(Decimal("1.25150"), moved, "SHORT"), Decimal("1.24850"))
+        self.assertNotEqual(target_at_two_r(Decimal("1.25150"), moved, "SHORT"), Decimal("1.24550"))
         stop, target = fix_prices(Decimal("1.25000"), "LONG", "GBPUSD")
-        self.assertEqual((stop, target), (Decimal("1.24700"), Decimal("1.25600")))
+        self.assertEqual(target, target_at_two_r(Decimal("1.25000"), stop, "LONG"))
 
 
 class ConnectionTests(unittest.TestCase):

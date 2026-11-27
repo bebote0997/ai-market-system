@@ -14,9 +14,9 @@ only in the first five minutes of the 16:00 Europe/London bar. Each leg is store
 day's trade again.
 
 The fill is the live ask (LONG) or bid (SHORT). Stop stays at the other side of the range (London) or 30 pips
-from that fill (fix). Take-profit is twice that fill-to-stop distance, including the fix (30 pips of stop,
-60 pips of target). If the minimum lot would risk more than the lesser of 1% and $5 at that distance, the
-trade is not sent.
+from that fill (fix). Take-profit is twice the real fill-to-stop distance. On the fix that is 2R of the stop
+the position actually has, so the target moves if that stop moves. If the minimum lot would risk more than
+the lesser of 1% and $5 at that distance, the trade is not sent.
 
 An HTTP 200/202 from Exness is ``UNKNOWN`` (the body is an ack, not a fill). That ack is not a skip: the
 position is read again until it is visible, and only then is the leg ``filled``. Until that read confirms
@@ -48,7 +48,7 @@ PIP = {"USDJPY": Decimal("0.01"), "EURUSD": Decimal("0.0001"), "GBPUSD": Decimal
 LONDON_SYMBOL = "USDJPY"
 FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
-           "position_id", "volume", "opened_at", "stop", "target", "sltp_sent",
+           "position_id", "volume", "opened_at", "stop", "target", "sltp_sent", "sltp_target",
            "protection_after", "protection_retry_done", "protection_close_done",
            "protection_miss_reads", "entry", "exit_price", "pnl", "exit_reason", "exit_unknown_seen",
            "book_alert")
@@ -194,15 +194,26 @@ def fix_move(bars, symbol, at):
     return ("SHORT" if move > 0 else "LONG"), move
 
 
+def target_at_two_r(entry, stop, side):
+    """TP a 2R: el doble de la distancia real entre la entrada y el SL. None si el SL no está del lado correcto."""
+    if side not in ("LONG", "SHORT") or not isinstance(entry, Decimal) or not isinstance(stop, Decimal):
+        return None
+    if not entry.is_finite() or not stop.is_finite() or entry <= 0 or stop <= 0:
+        return None
+    distance = entry - stop if side == "LONG" else stop - entry
+    if distance <= 0:
+        return None
+    return entry + distance * 2 if side == "LONG" else entry - distance * 2
+
+
 def fix_prices(fill, side, symbol):
-    """SL de 30 pips y TP al doble de esa distancia. El mismo 2x que Londres, con el stop fijo del Fix."""
+    """SL de 30 pips y TP a 2R de esa distancia, no un número fijo de pips."""
     pip = pip_size(symbol)
     if pip is None or side not in ("LONG", "SHORT") or not isinstance(fill, Decimal):
         return None, None
     distance = FIX_SL_PIPS * pip
-    if side == "LONG":
-        return fill - distance, fill + distance * 2
-    return fill + distance, fill - distance * 2
+    stop = fill - distance if side == "LONG" else fill + distance
+    return stop, target_at_two_r(fill, stop, side)
 
 
 def fix_signal(bars, symbol, at):
@@ -244,6 +255,13 @@ class _SendResult:
         self.status = status
         self.reason = reason
         self.broker_ref = None
+
+
+def _same_price(left, right):
+    """Igual a un punto de GBP (0.00001). Sirve para no reenviar un TP que el broker ya redondeó."""
+    if left is None or right is None:
+        return False
+    return abs(left - right) <= Decimal("0.000005")
 
 
 def _as_decimal(value):
@@ -735,8 +753,27 @@ class SessionCombo:
             state["entry"] = format(price, "f")
         self._ensure_protection(state, bound)
 
+    def _retarget_fix(self, state, row):
+        """El TP del Fix queda a 2R del SL que la posición tiene ahora. No envía la orden."""
+        if not str(state.get("client_id") or "").startswith("combo-fix-"):
+            return
+        entry = getattr(row, "price", None) if row is not None else None
+        if not isinstance(entry, Decimal) or not entry.is_finite() or entry <= 0:
+            entry = _as_decimal(state.get("entry"))
+        stop = getattr(row, "stop", None) if row is not None else None
+        if not isinstance(stop, Decimal) or not stop.is_finite() or stop <= 0:
+            stop = _as_decimal(state.get("stop"))
+        side = state.get("side") or (getattr(row, "side", None) if row is not None else None)
+        target = target_at_two_r(entry, stop, side)
+        if target is None:
+            return
+        state["entry"] = format(entry, "f")
+        state["stop"] = format(stop, "f")
+        state["target"] = format(target, "f")
+
     def _ensure_protection(self, state, row):
-        """Place the ``sltp`` order when the open position has no stop, or no target the leg required."""
+        """Coloca el sltp si falta el stop o el TP. En el Fix el TP se reenvía si el SL cambió."""
+        self._retarget_fix(state, row)
         stop = _as_decimal(state.get("stop"))
         target = _as_decimal(state.get("target"))
         ticket = getattr(row, "ticket", None) if row is not None else state.get("position_id")
@@ -744,9 +781,16 @@ class SessionCombo:
             return
         seen_stop = getattr(row, "stop", None) if row is not None else None
         seen_target = getattr(row, "target", None) if row is not None else None
-        if seen_stop is not None and (target is None or seen_target is not None):
+        fix = str(state.get("client_id") or "").startswith("combo-fix-")
+        if seen_stop is not None and target is None:
             return
-        if self._sltp_remembered(ticket) or self._sltp_attempts.get(ticket, 0) >= _SLTP_ATTEMPTS:
+        if seen_stop is not None and seen_target is not None and (not fix or _same_price(seen_target, target)):
+            return
+        if fix and _same_price(_as_decimal(state.get("sltp_target")), target):
+            return
+        if self._sltp_attempts.get(ticket, 0) >= _SLTP_ATTEMPTS:
+            return
+        if not fix and self._sltp_remembered(ticket):
             return
         attempt = self._sltp_attempts.get(ticket, 0) + 1
         self._sltp_attempts[ticket] = attempt
@@ -755,6 +799,8 @@ class SessionCombo:
         except Exception:  # noqa: BLE001
             return
         if getattr(result, "status", None) != "REJECTED":
+            if fix and target is not None:
+                state["sltp_target"] = format(target, "f")
             self._remember_sltp(state, ticket)
 
     def _sltp_remembered(self, ticket):
