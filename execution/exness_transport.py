@@ -282,6 +282,30 @@ def _side(value):
     return None
 
 
+def _opened_at(item):
+    """Hora de apertura. ``open_time`` vacío cae a ``create_time``. Si falta o no se lee, None."""
+    if not isinstance(item, dict):
+        return None
+    raw = item.get("open_time")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        raw = item.get("create_time")
+    if isinstance(raw, datetime):
+        parsed = raw
+    elif isinstance(raw, str) and raw.strip():
+        text = raw.strip()
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
 class RestExnessTransport:
     """Live transport. ``client`` is an ``ExnessClient``. Ticks are pushed by the WebSocket loop via ``quotes``."""
 
@@ -343,7 +367,8 @@ class RestExnessTransport:
             positions.append(Position(ticket, str(item.get("instrument") or ""), side, volume, price,
                                       stop if stop is not None else linked_stop,
                                       target if target is not None else linked_target,
-                                      comment if isinstance(comment, str) else ""))
+                                      comment if isinstance(comment, str) else "",
+                                      _opened_at(item)))
         for item in snapshot.get("orders") or []:
             if not isinstance(item, dict):
                 continue

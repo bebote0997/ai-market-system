@@ -6,7 +6,8 @@ import unittest
 
 from execution.exness_client import ExnessClient
 from execution.exness_transport import CommandResult, FakeExnessTransport, Position
-from execution.session_combo import SessionCombo, fix_key, london_key
+from execution.session_combo import SessionCombo, fix_key, london_book_count, london_key
+from test_combo_history import FakeHistoryClient, deal
 from test_session_combo import ny, world
 
 
@@ -342,6 +343,78 @@ class CloseRetryTests(unittest.TestCase):
         client.mutate("DELETE", partial, None, "close-stored-partial")
         self.assertEqual(len(deletes), 1)
         self.assertIn("?volume=", deletes[0])
+
+
+class _Row:
+    def __init__(self, ticket, opened_at=None, open_time=None, symbol="USDJPY", side="LONG"):
+        self.ticket = ticket
+        self.symbol = symbol
+        self.side = side
+        self.comment = ""
+        self.opened_at = opened_at
+        self.open_time = open_time
+
+
+class OpenTimeCountTests(unittest.TestCase):
+    def test_empty_or_missing_open_time_is_not_a_window_match(self):
+        at = ny(2026, 11, 25, 11, 0)
+        state = {"side": "LONG", "opened_at": ny(2026, 11, 25, 2, 10)}
+        rows = [
+            _Row("timed", opened_at=ny(2026, 11, 25, 2, 10)),
+            _Row("blank", open_time=""),
+            _Row("missing", open_time=None),
+        ]
+        found = london_book_count(state, rows, set(), at)
+        self.assertEqual([row.ticket for row in found], ["timed"])
+
+    def test_missing_open_time_falls_back_to_the_sltp_link(self):
+        at = ny(2026, 11, 25, 11, 0)
+        state = {"side": "LONG", "opened_at": ny(2026, 11, 25, 2, 10)}
+        found = london_book_count(state, [_Row("linked", open_time="")], {"linked"}, at)
+        self.assertEqual([row.ticket for row in found], ["linked"])
+        self.assertEqual(london_book_count(state, [_Row("loose", open_time="")], set(), at), [])
+
+
+class FlatLondonFlagTests(unittest.TestCase):
+    def test_manual_close_marks_the_flag_and_does_not_repeat_the_alert(self):
+        at = ny(2026, 11, 25, 11, 0)
+        clock, fake, broker, combo = world(at)
+        opened = "2026-11-25T07:10:00+00:00"
+        fake.positions = []
+        fake.set_flag(london_key(at.date()), _flag(
+            at.date(), position_id=None, opened_at=opened, volume="0.40",
+            client_id="combo-lon-2026-11-25"))
+        fake._client = FakeHistoryClient([
+            deal("425111", "open", "156.10", "0", opened, direction="buy", volume="0.40"),
+            deal("425111", "close", "156.02", ("-20.19", "USC"), "2026-11-25T16:00:00+00:00",
+                 direction="sell", volume="0.40"),
+        ])
+        alerts = []
+        broker._on_alert = lambda kind, detail: alerts.append((kind, detail.get("reason")))
+        combo.tick(at, [])
+        clock.at = ny(2026, 11, 25, 11, 1)
+        combo.tick(clock.at, [])
+        saved = json.loads(fake.get_flag(london_key(at.date())))
+        self.assertTrue(saved["exited"])
+        self.assertEqual(saved["status"], "done")
+        self.assertEqual(saved["position_id"], "425111")
+        self.assertEqual(saved["pnl"], "-20.19")
+        self.assertEqual([command for command in fake.commands if command.kind == "CLOSE"], [])
+        self.assertNotIn(("EXNESS_LONDON_BOOK", "london_book_count"), alerts)
+        self.assertEqual(fake._client.mutated, 0)
+
+    def test_two_matches_alert_once(self):
+        at = ny(2026, 1, 16, 11, 0)
+        clock, fake, broker, combo = world(at)
+        alerts = []
+        broker._on_alert = lambda kind, detail: alerts.append((kind, detail.get("reason")))
+        fake.positions = [_pos("a", ny(2026, 1, 16, 2, 10)), _pos("b", ny(2026, 1, 16, 2, 11))]
+        fake.set_flag(london_key(at.date()), _flag(at.date()))
+        combo.tick(at, [])
+        clock.at = ny(2026, 1, 16, 11, 1)
+        combo.tick(clock.at, [])
+        self.assertEqual(alerts, [("EXNESS_LONDON_BOOK", "london_book_count")])
+        self.assertEqual(json.loads(fake.get_flag(london_key(at.date())))["status"], "filled")
 
 
 if __name__ == "__main__":

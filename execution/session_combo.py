@@ -49,7 +49,8 @@ FIX_SYMBOLS = ("GBPUSD", "EURUSD")
 _FIELDS = ("status", "client_id", "exit_at", "exited", "symbol", "side", "logged_range",
            "position_id", "volume", "opened_at", "stop", "target", "sltp_sent",
            "protection_after", "protection_retry_done", "protection_close_done",
-           "protection_miss_reads", "entry", "exit_price", "pnl", "exit_reason", "exit_unknown_seen")
+           "protection_miss_reads", "entry", "exit_price", "pnl", "exit_reason", "exit_unknown_seen",
+           "book_alert")
 _MATCH_SECONDS = 120
 _TERMINAL = ("filled", "skipped", "cancelled", "done", "submitted")
 _FILL_POLLS = 5
@@ -245,6 +246,73 @@ def _as_decimal(value):
     return out if out.is_finite() else None
 
 
+def _parse_stamp(value):
+    """Datetime con zona, o None si viene vacío, naive o ilegible."""
+    if isinstance(value, datetime):
+        return value if _aware(value) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if _aware(parsed) else None
+
+
+def _row_open_time(row):
+    """Hora de apertura de una posición. ``open_time`` vacío no cuenta como hora."""
+    for name in ("opened_at", "open_time"):
+        raw = row.get(name) if isinstance(row, dict) else getattr(row, name, None)
+        if raw is None or raw is False or (isinstance(raw, str) and not raw.strip()):
+            continue
+        return _parse_stamp(raw)
+    return None
+
+
+def london_book_count(state, positions, linked, at, asked=()):
+    """USDJPY que coinciden con la pata de Londres.
+
+    Un ``open_time`` vacío o ausente no entra en la ventana: no se cuenta ni tumba el ciclo.
+    Respaldo: sin hora, el ticket solo cuenta si una orden ``sltp`` lo liga.
+    """
+    if not _aware(at) or not isinstance(state, dict):
+        return []
+    local = _ny(at)
+    side = state.get("side")
+    if side not in ("LONG", "SHORT"):
+        return []
+    window_start = datetime.combine(local.date(), time(2, 0), tzinfo=NY)
+    window_end = datetime.combine(local.date(), time(5, 0), tzinfo=NY)
+    opened_flag = _parse_stamp(state.get("opened_at"))
+    linked = {str(item) for item in linked or ()}
+    asked = {str(item) for item in asked or ()}
+    matches = []
+    for row in positions or ():
+        symbol = row.get("symbol") if isinstance(row, dict) else getattr(row, "symbol", None)
+        row_side = row.get("side") if isinstance(row, dict) else getattr(row, "side", None)
+        ticket = row.get("ticket") if isinstance(row, dict) else getattr(row, "ticket", None)
+        if symbol != LONDON_SYMBOL or row_side != side or str(ticket) in asked:
+            continue
+        comment = row.get("comment") if isinstance(row, dict) else getattr(row, "comment", None)
+        if _london_exit_due(comment, at):
+            continue
+        opened = _row_open_time(row)
+        in_window = opened is not None and window_start <= opened.astimezone(NY) < window_end
+        near_flag = False
+        if opened is not None and opened_flag is not None:
+            try:
+                near_flag = abs((opened - opened_flag).total_seconds()) <= _MATCH_SECONDS
+            except (TypeError, OverflowError, ValueError):
+                near_flag = False
+        by_link = str(ticket) in linked
+        if (in_window and (near_flag or by_link)) or (opened is None and by_link):
+            matches.append(row)
+    return matches
+
+
 def _london_exit_due(comment, at):
     """True when ``comment`` is ``combo-lon-YYYY-MM-DD-...`` and ``at`` is at or after 11:00 ET that day."""
     text = str(comment or "")
@@ -322,12 +390,9 @@ class SessionCombo:
             for field in _FIELDS:
                 if field in parsed:
                     state[field] = parsed[field]
-            if isinstance(state["exit_at"], str):
-                state["exit_at"] = datetime.fromisoformat(state["exit_at"])
-            if isinstance(state["opened_at"], str):
-                state["opened_at"] = datetime.fromisoformat(state["opened_at"])
-            if isinstance(state.get("protection_after"), str):
-                state["protection_after"] = datetime.fromisoformat(state["protection_after"])
+            state["exit_at"] = _parse_stamp(state.get("exit_at"))
+            state["opened_at"] = _parse_stamp(state.get("opened_at"))
+            state["protection_after"] = _parse_stamp(state.get("protection_after"))
             state["exited"] = bool(state["exited"])
             state["logged_range"] = bool(state["logged_range"])
             state["protection_retry_done"] = bool(state.get("protection_retry_done"))
@@ -710,6 +775,28 @@ class SessionCombo:
             return False
         return isinstance(getattr(book, "orders", None), (list, tuple))
 
+    def _alert_once(self, key, state, kind, reason, symbol=None):
+        """La misma alerta de libro no se repite en cada ciclo para una pata vieja."""
+        token = f"{kind}:{reason}"
+        if state.get("book_alert") == token:
+            return
+        self._high_alert(kind, reason, symbol)
+        state["book_alert"] = token
+        try:
+            self._put(key, state)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _retire_flat_london(self, key, state, rows):
+        """El broker ya no tiene el USDJPY: marca la pata salida y guarda el P/L si el deal se cruza."""
+        from execution.combo_history import settle_flat_leg
+        if not settle_flat_leg(state, key, self._broker, rows=rows):
+            return
+        try:
+            self._put(key, state)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _high_alert(self, kind, reason, symbol=None):
         """Immediate operator alert. The broker sink delivers it when alerts are on."""
         _log(kind, severity="HIGH", reason=reason, symbol=symbol)
@@ -965,7 +1052,7 @@ class SessionCombo:
         if state.get("status") not in ("filled", "submitted"):
             return
         if state.get("side") not in ("LONG", "SHORT"):
-            self._high_alert("EXNESS_LONDON_BOOK", "london_book_count")
+            self._alert_once(key, state, "EXNESS_LONDON_BOOK", "london_book_count")
             return
         try:
             book = self._broker._read()
@@ -984,29 +1071,18 @@ class SessionCombo:
             return
         if any(ticket in usdjpy_open for ticket in watched):
             return
+        same_side = [row for row in book.positions
+                     if row.symbol == LONDON_SYMBOL and row.side == state.get("side")]
+        if state.get("status") == "filled" and not same_side:
+            self._retire_flat_london(key, state, book.positions)
+            return
         linked = set()
         for item in getattr(book, "sltp_ids", ()) or ():
             if isinstance(item, (tuple, list)) and len(item) >= 2:
                 linked.add(str(item[1]))
-        window_start = datetime.combine(local.date(), time(2, 0), tzinfo=NY)
-        window_end = datetime.combine(local.date(), time(5, 0), tzinfo=NY)
-        opened_flag = state.get("opened_at")
-        matches = []
-        for row in book.positions:
-            if row.symbol != LONDON_SYMBOL or row.side != state.get("side") or row.ticket in asked:
-                continue
-            if _london_exit_due(getattr(row, "comment", None), at):
-                continue
-            opened = getattr(row, "opened_at", None)
-            in_window = (isinstance(opened, datetime) and opened.tzinfo is not None
-                         and window_start <= opened.astimezone(NY) < window_end)
-            near_flag = (isinstance(opened, datetime) and isinstance(opened_flag, datetime)
-                         and abs((opened - opened_flag).total_seconds()) <= _MATCH_SECONDS)
-            by_link = str(row.ticket) in linked
-            if in_window and (near_flag or by_link):
-                matches.append(row)
+        matches = london_book_count(state, book.positions, linked, at, asked)
         if len(matches) != 1:
-            self._high_alert("EXNESS_LONDON_BOOK", "london_book_count")
+            self._alert_once(key, state, "EXNESS_LONDON_BOOK", "london_book_count")
             return
         row = matches[0]
         client = state.get("client_id") or f"combo-lon-{local.date().isoformat()}"

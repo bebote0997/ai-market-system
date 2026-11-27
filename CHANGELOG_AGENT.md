@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-27 — pata Londres cerrada a mano ya no se queda en filled
+
+- El backfill del ciclo también mira las patas `filled` que siguen sin salida. Si el libro ya no tiene esa posición (cierre manual o por SL/TP), la marca `exited`, guarda `position_id` cuando hay un solo deal que cruza, y anota el P/L. Así entra en el Historial y desaparece «En curso». No hay SQL suelto ni script de un solo uso.
+- `london_book_count` trata un `open_time` vacío o ausente como sin hora (no cuenta de más ni revienta). Sin hora, el respaldo es el enlace `sltp`. La alerta `EXNESS_LONDON_BOOK` / `london_book_count` no se repite en cada ciclo para la misma pata.
+- Sin cambio de órdenes, frenos, `AI_FLOOR_GIT_COMMIT` ni Render. Sin merge y sin deploy.
+
 ## 2026-11-21 — historial: estadísticas solo con P/L real
 
 - El resumen y las estadísticas del Historial (ganadoras, neto, profit factor y demás) se calculan solo con las filas que tienen P/L. Las filas sin deal siguen visibles y no cuentan. Si ninguna fila tiene P/L, se muestra «sin datos».

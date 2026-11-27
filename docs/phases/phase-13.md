@@ -2,6 +2,8 @@
 
 **Estado:** STARTED 2026-10-14 08:29 ET (DEC-13.1, opción B).
 
+2026-11-27, pata Londres atascada en `filled` (sin merge ni deploy): si el broker ya no tiene la posición, el backfill del ciclo la marca `exited`, guarda el id y el P/L cuando el deal se cruza, y `london_book_count` no repite la alerta ni cuenta un `open_time` vacío.
+
 2026-11-21, salida de Londres por el libro (sobre #101, sin merge ni deploy): lado de la bandera, apertura 02:00-05:00 ET, y (menos de dos minutos o `sltp`). Cero o más de una: alerta HIGH y no cierra. Un día hecho no cierra.
 
 2026-11-21, purga paper (sobre #100, sin merge ni deploy): el catch-up y la escritura paper siguen. La purga es un comando en seco por defecto; `--apply` no se ejecuta sin orden del CEO. No corre al desplegar.
