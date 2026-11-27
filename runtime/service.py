@@ -776,6 +776,22 @@ class OperationalRuntime:
         touch_link(store, fresh=fresh, at=at)
         return fresh
 
+    def refresh_chart_cache(self, at):
+        """Publish the read-only M5 cache. The poll already runs every few seconds; the cache itself waits 30 s.
+
+        A missing session, or ``AI_FLOOR_CHART_CACHE=0``, does nothing. Orders, size and windows stay as they are.
+        """
+        session = getattr(self, "exness_session", None)
+        refresh = getattr(session, "refresh_chart", None)
+        if refresh is None:
+            return None
+        try:
+            return refresh(at)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("component=exness event=CHART_CACHE_FAILED error_type=%s detail=%s",
+                        type(exc).__name__, _exness_detail(exc))
+            return None
+
     def pace_exness(self, at):
         """One session-combo ``manage`` during the live entry window, at most every 30 seconds.
 
@@ -813,6 +829,7 @@ class OperationalRuntime:
         if self.halt_gate is not None and self.halt_gate.halted:
             return {}
         self.pace_exness(at)
+        self.refresh_chart_cache(at)
         if self.broker_router is None:
             return {}
         try:
