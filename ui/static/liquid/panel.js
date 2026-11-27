@@ -25,6 +25,18 @@
       else item.removeAttribute("aria-current");
     });
     root.removeAttribute("data-open");
+    var bd = root.querySelector(".aif-backdrop");
+    if (bd) bd.setAttribute("hidden", "");
+  }
+  function menu(open) {
+    var bd = root.querySelector(".aif-backdrop");
+    if (open) {
+      root.setAttribute("data-open", "1");
+      if (bd) bd.removeAttribute("hidden");
+    } else {
+      root.removeAttribute("data-open");
+      if (bd) bd.setAttribute("hidden", "");
+    }
   }
   function rangeBounds(name) {
     var now = Number(root.getAttribute("data-now")) * 1000;
@@ -104,6 +116,9 @@
   root.querySelectorAll("[data-nav]").forEach(function (button) {
     button.addEventListener("click", function () {
       show(button.getAttribute("data-nav"));
+      var main = root.querySelector(".main");
+      if (main) main.scrollTop = 0;
+      window.scrollTo(0, 0);
       remember();
     });
   });
@@ -112,9 +127,21 @@
   if (scroller) scroller.addEventListener("scroll", remember, {passive: true});
   var burger = root.querySelector("[data-menu]");
   if (burger) burger.addEventListener("click", function () {
-    if (root.getAttribute("data-open") === "1") root.removeAttribute("data-open");
-    else root.setAttribute("data-open", "1");
+    menu(root.getAttribute("data-open") !== "1");
   });
+  var backdrop = root.querySelector(".aif-backdrop");
+  if (backdrop) backdrop.addEventListener("click", function () { menu(false); });
+  if (!window.__aifLiquidKeys) {
+    window.__aifLiquidKeys = 1;
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Escape" && ev.key !== "Esc") return;
+      var live = document.querySelector(".lg");
+      if (!live) return;
+      live.removeAttribute("data-open");
+      var shade = live.querySelector(".aif-backdrop");
+      if (shade) shade.setAttribute("hidden", "");
+    });
+  }
   root.querySelectorAll("[data-range]").forEach(function (button) {
     button.addEventListener("click", function () {
       root.setAttribute("data-page", "0");

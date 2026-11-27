@@ -15,14 +15,14 @@
 .side .foot{margin-top:auto;font-size:11px;letter-spacing:.04em;color:rgba(255,255,255,.7)}
 .side .foot b,.side .foot span{display:block}
 .main{padding:18px 18px 28px;min-width:0}
-.mob-bar{display:none;background:var(--lg-navy);color:#fff;border-radius:16px;padding:12px;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-.mob-bar .titles{flex:1;min-width:0}
-.mob-bar .tools{flex:1 1 100%;width:100%}
-.mob-bar .live{white-space:normal}
-.mob-bar .burger{background:transparent;border:0;color:#fff;font-size:20px;cursor:pointer}
+.mob-bar{display:none;background:var(--lg-navy);color:#fff;border-radius:16px;padding:8px 10px;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:nowrap}
+.mob-bar .tools{margin-left:auto;flex:0 1 auto;width:auto;min-width:0;justify-content:flex-end}
+.mob-bar .live{white-space:nowrap}
+.mob-bar .burger{flex:none;background:transparent;border:0;color:#fff;font-size:22px;line-height:1;padding:0;cursor:pointer}
 .mob-bar h1{font-size:16px}
 .mob-bar p{color:rgba(255,255,255,.75);font-size:12px}
-.desk-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
+.desk-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.desk-head .tools{margin-left:auto;flex:none}
 .desk-head h1{font-size:22px;color:var(--lg-ink) !important}
 .desk-head p{color:var(--lg-muted);font-size:13px;margin-top:4px}
 .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -105,11 +105,11 @@ svg{width:100%;height:auto;display:block}
 .shell{grid-template-columns:minmax(0,1fr)}
 .side{display:none}
 .desk-col{display:none}
-.lg[data-open="1"] .side{display:flex;position:fixed;z-index:4;inset:0 auto 0 0;width:min(280px,86vw)}
+.lg[data-open="1"] .side{display:flex;position:fixed;z-index:5;inset:0 auto 0 0;width:min(280px,86vw)}
 .only-desk{display:none}
 .mob-bar{display:flex}
 .desk-head{display:none}
-.main{padding:12px 12px calc(98px + env(safe-area-inset-bottom))}
+.main{padding:12px 12px 98px;padding:12px 12px calc(98px + env(safe-area-inset-bottom))}
 .kpis.five,.kpis.three,.stats{grid-template-columns:1fr}
 .row1,.row2,.split,.hline{grid-template-columns:minmax(0,1fr)}
 .table-wrap{display:none}
@@ -120,7 +120,7 @@ svg{width:100%;height:auto;display:block}
 .tabs button i{font-style:normal;font-size:14px}
 }
 @media (min-width:901px){.table-wrap{overflow:visible}.table-wrap table{table-layout:fixed;width:100%}}
-@media (max-width:390px){.table-wrap{display:none}.row-cards{display:flex;flex-direction:column;gap:8px}.main{padding:10px 10px calc(98px + env(safe-area-inset-bottom))}.kpi .value{font-size:20px}.mob-bar h1{font-size:15px}}
+@media (max-width:390px){.table-wrap{display:none}.row-cards{display:flex;flex-direction:column;gap:8px}.main{padding:10px 10px 98px;padding:10px 10px calc(98px + env(safe-area-inset-bottom))}.kpi .value{font-size:20px}.mob-bar h1{font-size:15px}}
 @media (min-width:901px){.only-mob{display:none}.mob-bar{display:none}}
 
 /* Propuesta 25 nov: mismo estilo, mejor jerarquía */
@@ -141,12 +141,13 @@ tr.skip td{color:var(--lg-muted);font-size:11px;padding:3px 0;border-top:1px das
 .empty i{font-style:normal;font-size:28px;opacity:.55}
 .fresh{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;border:1px solid var(--lg-stroke);font-size:11px;background:var(--lg-wait-bg)}
 .card h2{letter-spacing:.02em}
-.mark{height:40px;width:auto;display:block}
+.mark{height:52px;width:auto;display:block}
 .on-dark{display:none}
 .lg[data-theme="dark"] .on-light{display:none}
 .lg[data-theme="dark"] .on-dark{display:block}
 .side .mark{height:52px}
-.mob-bar .mark{height:32px}
+.mob-bar .mark{height:41px;flex:none}
+.desk-head .mark{height:52px}
 .brand-row{display:flex;align-items:center;gap:12px}
 .side .theme{color:#fff;border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.08);margin-bottom:12px}
 @media (max-width:900px){.side .theme{display:none !important}}
@@ -155,10 +156,14 @@ tr.skip td{color:var(--lg-muted);font-size:11px;padding:3px 0;border-top:1px das
 .kpi .value{font-size:clamp(20px,6.4vw,28px);white-space:nowrap}
 .kpis.mob{gap:10px}
 .kpis.mob article:nth-child(n+3) .value{font-size:clamp(17px,4.8vw,22px)}
-.main{padding-bottom:calc(98px + env(safe-area-inset-bottom))}
+.main{padding-bottom:98px;padding-bottom:calc(98px + env(safe-area-inset-bottom))}
 .tabs{bottom:calc(10px + env(safe-area-inset-bottom))}
 .tabs button{min-height:48px;font-size:11px}
 .tabs button i{font-size:17px}
 .mini{padding:10px 12px}
 .kv-row b{text-align:right}
 }
+.lg .aif-backdrop{display:none;pointer-events:none}
+.lg:not([data-open="1"]) .aif-backdrop{display:none !important;pointer-events:none !important}
+.lg[data-open="1"] .aif-backdrop{display:block !important;pointer-events:auto !important;position:fixed;inset:0;z-index:4;background:rgba(8,16,32,.46)}
+[data-panel="Riesgo"] > .card + .card{margin-top:14px}

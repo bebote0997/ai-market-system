@@ -2,6 +2,29 @@
 from pathlib import Path
 import unittest
 
+
+class LiquidPanelChromeTests(unittest.TestCase):
+    def test_backdrop_starts_inert_and_content_clears_the_tab_bar(self):
+        theme = Path("ui/static/theme.css").read_text(encoding="utf-8")
+        glass = Path("ui/static/liquid/glass.css").read_text(encoding="utf-8")
+        page = Path("ui/liquid/page.py").read_text(encoding="utf-8")
+        nav = Path("ui/nav_menu.py").read_text(encoding="utf-8")
+        panel = Path("ui/static/liquid/panel.js").read_text(encoding="utf-8")
+        self.assertIn(".aif-backdrop{display:none;pointer-events:none}", theme)
+        self.assertIn("pointer-events:auto", theme)
+        self.assertIn("body:has(.stApp.aif-nav-open) .stApp > .aif-backdrop", theme)
+        self.assertIn(".stApp > .aif-backdrop{display:none !important;pointer-events:none !important}", page)
+        self.assertIn("Escape", nav)
+        self.assertIn("!(window.innerWidth>=900)", nav)
+        self.assertIn("querySelector('.lg')", nav)
+        self.assertIn(".lg:not([data-open=\"1\"]) .aif-backdrop{display:none !important;pointer-events:none !important}", glass)
+        self.assertIn("pointer-events:auto !important", glass)
+        self.assertIn("env(safe-area-inset-bottom)", glass)
+        self.assertIn('[data-panel="Riesgo"] > .card + .card{margin-top:14px}', glass)
+        self.assertIn('ev.key !== "Escape"', panel)
+        self.assertIn("scrollTo(0, 0)", panel)
+        self.assertNotIn("<", panel)
+
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:

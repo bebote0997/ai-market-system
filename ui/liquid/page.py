@@ -59,6 +59,7 @@ def load(env=None, now=None, book=None, account_reader=None, curve=None, live_re
 _CHROME = """<style>
 section[data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"],
 [data-testid="stHeader"],[data-testid="stToolbar"]{display:none !important}
+.stApp > .aif-backdrop{display:none !important;pointer-events:none !important}
 html .stApp.aif-nav-open .block-container,
 html .stApp .block-container,
 html [data-testid="stMainBlockContainer"]{

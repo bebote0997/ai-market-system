@@ -30,19 +30,24 @@ _CHEVRON_LEFT = (
 _SCRIPT = r"""
 (function(){
   function root(){return document.querySelector('.stApp')}
-  function setOpen(open){
+  function setOpen(open, persist){
     var app=root(); if(!app) return;
+    if(document.querySelector('.lg')) open=false;
     app.classList.toggle('aif-nav-open', !!open);
-    try{sessionStorage.setItem('aif-nav', open?'open':'closed')}catch(e){}
-    var bd=document.querySelector('.aif-backdrop');
-    if(!bd){bd=document.createElement('div'); bd.className='aif-backdrop';}
-    if(bd.parentNode!==app) app.appendChild(bd);
+    if(persist!==false){
+      try{sessionStorage.setItem('aif-nav', open?'open':'closed')}catch(e){}
+    }
+    var bd=app.querySelector(':scope > .aif-backdrop');
+    if(!bd){bd=document.createElement('div'); bd.className='aif-backdrop'; app.appendChild(bd);}
+    if(open) bd.removeAttribute('hidden');
+    else bd.setAttribute('hidden','');
   }
   function applyStored(){
+    if(document.querySelector('.lg')){setOpen(false, false); return}
     var stored=null;
     try{stored=sessionStorage.getItem('aif-nav')}catch(e){}
-    var open=stored==='open'||(stored!=='closed'&&window.innerWidth>=900);
-    setOpen(open);
+    if(!(window.innerWidth>=900)){setOpen(false, false); return}
+    setOpen(stored==='open'||stored!=='closed');
   }
   function iconOf(text){
     var t=(text||'').replace(/^\s+/, '');
@@ -83,10 +88,19 @@ _SCRIPT = r"""
   }
   if(!window.__aifNav){
     window.__aifNav=1;
+    document.addEventListener('keydown', function(ev){
+      if(ev.key!=='Escape' && ev.key!=='Esc') return;
+      setOpen(false);
+      var live=document.querySelector('.lg');
+      if(live) live.removeAttribute('data-open');
+    });
     document.addEventListener('click', function(ev){
       var t=ev.target; if(!t||!t.closest) return;
       if(t.closest('.aif-expand')){setOpen(true); ev.preventDefault(); return}
-      if(t.closest('.aif-collapse, .aif-backdrop')){setOpen(false); ev.preventDefault(); return}
+      var shade=t.closest('.aif-backdrop');
+      var app=root();
+      if(t.closest('.aif-collapse') || (shade && app && shade.parentNode===app)){setOpen(false); ev.preventDefault(); return}
+      if(t.closest('[data-testid="stSidebar"] [role="radiogroup"]')) setOpen(false);
       var stop=t.closest('.aif-stop');
       if(!stop) return;
       var buttons=document.querySelectorAll('button');

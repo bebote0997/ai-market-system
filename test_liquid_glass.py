@@ -263,6 +263,53 @@ class RenderSmokeTests(unittest.TestCase):
             self.assertNotIn(banned, lowered, banned)
         self.assertNotIn("<", Path("ui/static/liquid/panel.js").read_text(encoding="utf-8"))
 
+    def test_header_hides_the_cent_label_and_pins_the_badge_to_the_logo(self):
+        from ui.exness_present import LABEL
+        view = example_view()
+        html = fragment(view)
+        self.assertEqual(view["title"], LABEL)
+        self.assertEqual(view["safety_short"], "Ejecución real activa")
+        self.assertTrue(view["live"])
+        self.assertNotIn(LABEL, html)
+        self.assertIn("RESULTADO USC", html)
+        self.assertIn("USC", html)
+        mob = html.split('class="mob-bar"', 1)[1].split("</header>", 1)[0]
+        desk = html.split('class="desk-head"', 1)[1].split("</header>", 1)[0]
+        side = html.split('class="logo"', 1)[1].split("</div>", 1)[0]
+        for chunk in (mob, desk, side):
+            self.assertNotIn("Exness Standard Cent", chunk)
+        self.assertIn("Ejecución real activa", mob)
+        self.assertIn("Ejecución real activa", desk)
+        self.assertLess(mob.index('class="mark"'), mob.index('class="live"'))
+        self.assertNotIn("live off", mob)
+        off = fragment(_view())
+        self.assertIn("Ejecución real desactivada", off)
+        self.assertIn('class="live off"', off)
+        css = Path("ui/static/liquid/glass.css").read_text(encoding="utf-8")
+        self.assertIn(".mob-bar{display:none;", css)
+        self.assertIn("flex-wrap:nowrap", css)
+        self.assertNotIn("flex:1 1 100%", css)
+        self.assertIn(".mob-bar .mark{height:41px", css)
+        self.assertIn(".desk-head .mark{height:52px}", css)
+        self.assertIn(".mob-bar .tools{margin-left:auto", css)
+
+    def test_menu_backdrop_starts_hidden_and_tabs_clear_the_bar(self):
+        html = fragment(example_view())
+        body = html.split("</style>", 1)[1].split("<script>", 1)[0]
+        self.assertIn('<div class="aif-backdrop" hidden></div>', body)
+        self.assertNotIn("data-open", body)
+        css = Path("ui/static/liquid/glass.css").read_text(encoding="utf-8")
+        js = Path("ui/static/liquid/panel.js").read_text(encoding="utf-8")
+        self.assertIn(".lg:not([data-open=\"1\"]) .aif-backdrop{display:none !important;pointer-events:none !important}", css)
+        self.assertIn("pointer-events:auto !important", css)
+        self.assertIn("padding-bottom:98px", css)
+        self.assertIn("padding-bottom:calc(98px + env(safe-area-inset-bottom))", css)
+        self.assertIn('[data-panel="Riesgo"] > .card + .card{margin-top:14px}', css)
+        self.assertIn('ev.key !== "Escape"', js)
+        self.assertIn("menu(false)", js)
+        self.assertIn("window.scrollTo(0, 0);\n      remember();", js)
+        self.assertIn("sessionStorage.getItem(scrollKey)", js)
+
     def test_example_banner_is_only_on_the_screenshot_view(self):
         view = example_view()
         html = document(view, theme="dark")
