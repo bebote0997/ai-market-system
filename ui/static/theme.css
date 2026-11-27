@@ -451,8 +451,8 @@ header[data-testid="stHeader"]{display:none!important}
 .aif-history-narrow{display:flex;flex-direction:column;gap:8px}
 .aif-history-narrow article{border:1px solid rgba(34,211,238,.35);border-radius:12px;padding:10px 12px;min-width:0}
 .aif-history-narrow b,.aif-history-narrow span{display:block;overflow-wrap:anywhere}
-.aif-backdrop{display:none}
-@media(max-width:899px){body:has(.stApp.aif-nav-open) .aif-backdrop{display:block;position:fixed;inset:0;z-index:1000001;background:rgba(0,0,0,.34)}}
+.aif-backdrop{display:none;pointer-events:none}
+@media(max-width:899px){body:has(.stApp.aif-nav-open) .stApp > .aif-backdrop{display:block;pointer-events:auto;position:fixed;inset:0;z-index:1000001;background:rgba(0,0,0,.34)}}
 .aif-chrome{position:relative;width:100%}
 .aif-brand{display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:36px;padding:0}
 .stApp:not(.aif-nav-open) .aif-brand{justify-content:center;width:100%}

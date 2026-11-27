@@ -65,7 +65,9 @@ class NavStyleTests(unittest.TestCase):
         self.assertIn("color:#1a1a1a", css)
         self.assertIn("--aif-section:#555555", css)
         self.assertIn(".aif-backdrop", css)
-        self.assertIn("body:has(.stApp.aif-nav-open) .aif-backdrop", css)
+        self.assertIn("body:has(.stApp.aif-nav-open) .stApp > .aif-backdrop", css)
+        self.assertIn("pointer-events:none", css)
+        self.assertIn("pointer-events:auto", css)
         self.assertNotIn("#ff5c00", css.lower())
         self.assertIn(".stApp:has(#tf-theme-light) [data-testid=\"stSidebar\"]", css)
 

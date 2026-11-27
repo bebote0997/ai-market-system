@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-11-27 — encabezado del panel y menú a 414 px
+
+- El encabezado, en móvil y en escritorio, ya no muestra «Exness Standard Cent (USC)». Las cifras en USC (saldos, frenos, historial) siguen. El distintivo «Ejecución real activa» (y el de desactivada) queda a la derecha, en la misma fila que el logo. En móvil la fila es ☰, logo y distintivo. El logo de esa fila es un 28 % más alto en móvil (41 px) y un 30 % en escritorio (52 px).
+- El fondo `.aif-backdrop` arranca oculto. Con el menú cerrado no recibe toques. Se cierra con Escape, al tocar el fondo y al cambiar de pestaña. En el panel Liquid el fondo del menú de Streamlit no tapa la página.
+- El contenido deja debajo el alto de la barra (98 px) más `env(safe-area-inset-bottom)`, con un respaldo si el navegador no entiende `env()`.
+- En Riesgo hay 14 px entre «Estrategia de hoy» y «Frenos de riesgo».
+- Cambiar de pestaña vuelve arriba. El refresco de 20 s sigue restaurando la pestaña y el scroll.
+- Sin merge, sin deploy, sin cambio de variables ni de Render.
+
 ## 2026-11-27 — panel fase 3: diseño, logo y seis lecturas reales
 
 - Mismo Liquid Glass, con la jerarquía aprobada el 25 nov. El logo 1 va en el lateral y en la cabecera móvil (blanco sobre azul, transparente sobre claro). El tema está en el lateral en escritorio y en Configuración > Sistema en el móvil. La barra inferior no tapa el contenido.
