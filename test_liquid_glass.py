@@ -491,10 +491,10 @@ class HistorySquareTests(unittest.TestCase):
         return {
             "combo_lon_2026-11-27": done("27", "USDJPY", "LONG", "181.46", "t27"),
             "combo_lon_2026-11-25": json.dumps({
-                "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
-                "position_id": None, "volume": "0.40", "client_id": "combo-lon-2026-11-25",
-                "opened_at": "2026-11-25T07:10:00+00:00", "exit_at": "2026-11-25T16:00:00+00:00",
-                "entry": "156.10", "exit_price": "156.02",
+                "status": "filled", "exited": False, "symbol": "USDJPY", "side": "SHORT",
+                "position_id": "440549", "volume": "1.19", "client_id": "combo-lon-2026-11-25",
+                "opened_at": "2026-11-25T07:30:39+00:00", "exit_at": "2026-11-25T16:07:49+00:00",
+                "entry": "159.092", "exit_price": "159.119", "exit_reason": "hq_manual",
                 "pnl": {"amount": "-20.19", "currency": "USC"},
             }),
             "combo_lon_2026-11-24": done("24", "USDJPY", "LONG", "-139.89", "t24"),
@@ -542,11 +542,11 @@ class HistorySquareTests(unittest.TestCase):
                 "opened_at": "2026-11-27T12:00:00+00:00", "exit_at": "2026-11-27T16:00:00+00:00",
             }),
             "combo_lon_2026-11-25": json.dumps({
-                "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
-                "position_id": None, "volume": "0.40", "client_id": "combo-lon-2026-11-25",
-                "entry": "156.10", "exit_price": "156.02", "exit_reason": "hq_manual",
-                "opened_at": "2026-11-25T07:10:00+00:00", "exit_at": "2026-11-25T16:00:00+00:00",
-                "pnl": {"amount": "-20.19", "currency": "USC"},
+                "status": "done", "exited": True, "symbol": "USDJPY", "side": "SHORT",
+                "position_id": "440549", "volume": "1.19",
+                "entry": "159.092", "exit_price": "159.119", "exit_reason": "london_1100",
+                "opened_at": "2026-11-25T07:30:39+00:00", "exit_at": "2026-11-25T16:07:49+00:00",
+                "pnl": "-20.19",
             }),
         }
         view = _view(now=now, flags=flags)
@@ -558,9 +558,10 @@ class HistorySquareTests(unittest.TestCase):
         self.assertEqual(nov27["reason"], "cierre 11:00 ET")
         self.assertIn("181.46", nov27["pnl"])
         nov25 = by_day["25"]
-        self.assertEqual(nov25["lots"], "0.4")
-        self.assertEqual(nov25["entry"], "156.1")
-        self.assertEqual(nov25["exit_price"], "156.02")
+        self.assertEqual(nov25["side"], "Venta")
+        self.assertEqual(nov25["lots"], "1.19")
+        self.assertEqual(nov25["entry"], "159.092")
+        self.assertEqual(nov25["exit_price"], "159.119")
         self.assertEqual(nov25["reason"], "cierre manual HQ")
         html = fragment(view, section="Historial")
         self.assertIn("1.88", html)

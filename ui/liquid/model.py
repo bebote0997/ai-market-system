@@ -282,8 +282,11 @@ def _leg_row(leg, currency):
 
 
 def _exit_label(leg):
-    """The close reason stored on the leg. Nothing is inferred from the key."""
-    text = leg.get("exit_reason")
+    """Close reason. A ticket in the known map wins over a stored ``london_1100``."""
+    from execution.combo_history import KNOWN_EXIT_REASONS
+    ticket = str(leg.get("position_id") or "").strip()
+    known = KNOWN_EXIT_REASONS.get(ticket)
+    text = known if known else leg.get("exit_reason")
     labels = {"london_1100": "cierre 11:00 ET", "fix_30m": "30 min", "protection_missing": "sin protección", "hq_manual": "cierre manual HQ"}
     if isinstance(text, str) and text.strip() in labels:
         return labels[text.strip()]

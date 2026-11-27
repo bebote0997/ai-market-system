@@ -114,9 +114,24 @@ class FillRulesTests(unittest.TestCase):
         self.assertEqual(derive_exit_reason({"position_id": "341984"}, "combo_lon_2026-11-18"), "london_1100")
         self.assertIsNone(derive_exit_reason({"position_id": "99"}, "combo_fix_2026-11-19"))
         self.assertEqual(derive_exit_reason({"position_id": "1"}, "combo_lon_2026-11-21"), "london_1100")
-        self.assertEqual(derive_exit_reason({"position_id": "425111"}, "combo_lon_2026-11-25"), "hq_manual")
+        self.assertEqual(derive_exit_reason({"position_id": "440549"}, "combo_lon_2026-11-25"), "hq_manual")
+        self.assertNotIn("425111", KNOWN_EXIT_REASONS)
+        self.assertNotEqual(derive_exit_reason({"position_id": "425111"}, "combo_lon_2026-11-25"), "hq_manual")
         self.assertEqual(KNOWN_EXIT_REASONS["357063"], "london_1100")
         self.assertEqual(KNOWN_EXIT_REASONS["375978"], "london_1100")
+
+    def test_a_known_reason_replaces_only_that_tickets_stored_label(self):
+        from execution.combo_history import fill_state_from_deals
+        manual = {"position_id": "440549", "exit_reason": "london_1100"}
+        self.assertTrue(fill_state_from_deals(manual, [], key="combo_lon_2026-11-25"))
+        self.assertEqual(manual["exit_reason"], "hq_manual")
+        london = {"position_id": "341984", "exit_reason": "london_1100", "entry": "159.15"}
+        self.assertFalse(fill_state_from_deals(london, [], key="combo_lon_2026-11-18"))
+        self.assertEqual(london["exit_reason"], "london_1100")
+        self.assertEqual(london["entry"], "159.15")
+        other = {"position_id": "synth-1", "exit_reason": "london_1100"}
+        self.assertFalse(fill_state_from_deals(other, [], key="combo_lon_2026-11-21"))
+        self.assertEqual(other["exit_reason"], "london_1100")
 
 
 class BackfillTests(unittest.TestCase):
@@ -238,16 +253,19 @@ class FlatFlagBackfillTests(unittest.TestCase):
         from ui.liquid.render import fragment
         day = datetime(2026, 11, 25, tzinfo=timezone.utc)
         store = MemoryFlags()
-        opened = "2026-11-25T07:10:00+00:00"
+        # 2:30:39 AM ET open, 11:07:49 AM ET close. Position 440549, USDJPY sell, 1.19 lots.
+        opened = "2026-11-25T07:30:39+00:00"
+        closed = "2026-11-25T16:07:49+00:00"
         put(store, london_key(day.date()), {
-            "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
-            "position_id": None, "volume": "0.40", "opened_at": opened,
-            "exit_at": "2026-11-25T16:00:00+00:00", "client_id": "combo-lon-2026-11-25",
+            "status": "filled", "exited": False, "symbol": "USDJPY",
+            "position_id": None, "opened_at": opened,
+            "exit_at": closed, "client_id": "combo-lon-2026-11-25",
+            "exit_reason": "london_1100",
         })
         client = FakeHistoryClient([
-            deal("425111", "open", "156.10", "0", opened, direction="buy", volume="0.40"),
-            deal("425111", "close", "156.02", ("-20.19", "USC"), "2026-11-25T16:00:00+00:00",
-                 direction="sell", volume="0.40"),
+            deal("440549", "open", "159.092", "0", opened, direction="sell", volume="1.19"),
+            deal("440549", "close", "159.119", ("-20.19", "USC"), closed,
+                 direction="buy", volume="1.19"),
         ])
         broker = FakeBroker(store, client)
         broker.open_trades = lambda: []
@@ -257,10 +275,13 @@ class FlatFlagBackfillTests(unittest.TestCase):
         state = load(store, london_key(day.date()))
         self.assertTrue(state["exited"])
         self.assertEqual(state["status"], "done")
-        self.assertEqual(state["position_id"], "425111")
-        self.assertEqual(state["entry"], "156.1")
-        self.assertEqual(state["exit_price"], "156.02")
+        self.assertEqual(state["position_id"], "440549")
+        self.assertEqual(state["side"], "SHORT")
+        self.assertEqual(state["volume"], "1.19")
+        self.assertEqual(state["entry"], "159.092")
+        self.assertEqual(state["exit_price"], "159.119")
         self.assertEqual(state["pnl"], "-20.19")
+        self.assertEqual(state["exit_reason"], "hq_manual")
         again = backfill_combo_history(broker, now=datetime(2026, 11, 25, 21, 30, tzinfo=timezone.utc))
         self.assertEqual(again["updated"], 0)
         self.assertEqual(load(store, london_key(day.date()))["pnl"], "-20.19")
@@ -277,14 +298,14 @@ class FlatFlagBackfillTests(unittest.TestCase):
         self.assertEqual(view["strategy"]["pairs"][0]["state"], "Hecha")
         self.assertNotIn("En curso", fragment(view, section="Inicio"))
         self.assertNotIn("En curso", fragment(view, section="Riesgo"))
-        row = next(item for item in view["history"]["rows"] if item["ticket"] == "425111")
+        row = next(item for item in view["history"]["rows"] if item["ticket"] == "440549")
         self.assertIn("20.19", row["pnl"])
         self.assertIn("20.19", view["history"]["stats"]["net"])
-        self.assertEqual(row["lots"], "0.4")
-        self.assertEqual(row["entry"], "156.1")
-        self.assertEqual(row["exit_price"], "156.02")
+        self.assertEqual(row["side"], "Venta")
+        self.assertEqual(row["lots"], "1.19")
+        self.assertEqual(row["entry"], "159.092")
+        self.assertEqual(row["exit_price"], "159.119")
         self.assertEqual(row["reason"], "cierre manual HQ")
-        self.assertEqual(load(store, london_key(day.date()))["exit_reason"], "hq_manual")
 
     def test_two_close_deals_sum_to_one_pnl(self):
         day = datetime(2026, 11, 25, tzinfo=timezone.utc)
@@ -292,13 +313,14 @@ class FlatFlagBackfillTests(unittest.TestCase):
         opened = "2026-11-25T07:10:00+00:00"
         put(store, london_key(day.date()), {
             "status": "done", "exited": True, "symbol": "USDJPY", "side": "LONG",
-            "position_id": "425111", "opened_at": opened,
+            "position_id": "synth-parts-1", "opened_at": opened,
         })
+        # Fixture only. Not position 440549.
         client = FakeHistoryClient([
-            deal("425111", "open", "156.10", "0", opened, direction="buy", volume="0.40"),
-            deal("425111", "close", "156.05", ("-12.00", "USC"), "2026-11-25T15:00:00+00:00",
+            deal("synth-parts-1", "open", "156.10", "0", opened, direction="buy", volume="0.40"),
+            deal("synth-parts-1", "close", "156.05", ("-12.00", "USC"), "2026-11-25T15:00:00+00:00",
                  direction="sell", volume="0.20"),
-            deal("425111", "close", "156.02", ("-8.19", "USC"), "2026-11-25T16:00:00+00:00",
+            deal("synth-parts-1", "close", "156.02", ("-8.19", "USC"), "2026-11-25T16:00:00+00:00",
                  direction="sell", volume="0.20"),
         ])
         broker = FakeBroker(store, client)
@@ -314,10 +336,10 @@ class FlatFlagBackfillTests(unittest.TestCase):
         store = MemoryFlags()
         put(store, london_key(day.date()), {
             "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
-            "position_id": "425111", "opened_at": "2026-11-25T07:10:00+00:00",
+            "position_id": "synth-open-1", "opened_at": "2026-11-25T07:10:00+00:00",
         })
         broker = FakeBroker(store, FakeHistoryClient())
-        broker.open_trades = lambda: [type("P", (), {"ticket": "425111", "symbol": "USDJPY", "side": "LONG"})()]
+        broker.open_trades = lambda: [type("P", (), {"ticket": "synth-open-1", "symbol": "USDJPY", "side": "LONG"})()]
         result = backfill_combo_history(broker, now=datetime(2026, 11, 25, 21, 0, tzinfo=timezone.utc))
         self.assertEqual(result["updated"], 0)
         state = load(store, london_key(day.date()))

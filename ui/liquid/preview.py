@@ -21,9 +21,9 @@ def example_view(now=None):
     from ui.liquid.model import build_dashboard
     now = _NOW if now is None else now
     stamp = now.isoformat()
-    # 18–20 Nov and the 25 Nov deal match the stored tickets. 27 Nov is the row shape
-    # 1.88 / 159.39 / 159.544 / cierre 11:00 ET. 23 and 24 Nov prices are example fills
-    # so the table is not a column of «sin datos». The 25 Nov reason is the manual close.
+    # 25 Nov is position 440549: USDJPY sell 1.19, 159.092 → 159.119, −20.19, manual close.
+    # 18–20 Nov match the stored tickets. 27 Nov is 1.88 / 159.39 / 159.544 / cierre 11:00 ET.
+    # 23 and 24 Nov prices are example fills so the table is not a column of «sin datos».
     # The snapshot has no positions key. The cycle already published an empty book on the marks flag.
     flags = {
         "exness_launch_start": "2026-11-16T21:00:00+00:00",
@@ -35,11 +35,11 @@ def example_view(now=None):
         "exness_live_marks": json.dumps({"at": stamp, "positions": []}),
         "combo_lon_2026-11-27": _done("27", "USDJPY", "LONG", "181.46", "t27", "1.88", "159.39", "159.544", "london_1100"),
         "combo_lon_2026-11-25": json.dumps({
-            "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
-            "position_id": None, "volume": "0.40", "client_id": "combo-lon-2026-11-25",
-            "opened_at": "2026-11-25T07:10:00+00:00", "exit_at": "2026-11-25T16:00:00+00:00",
-            "entry": "156.10", "exit_price": "156.02", "exit_reason": "hq_manual",
-            "pnl": {"amount": "-20.19", "currency": "USC"},
+            "status": "done", "exited": True, "symbol": "USDJPY", "side": "SHORT",
+            "position_id": "440549", "volume": "1.19", "client_id": "combo-lon-2026-11-25",
+            "opened_at": "2026-11-25T07:30:39+00:00", "exit_at": "2026-11-25T16:07:49+00:00",
+            "entry": "159.092", "exit_price": "159.119", "exit_reason": "hq_manual",
+            "pnl": "-20.19",
         }),
         "combo_lon_2026-11-24": _done("24", "USDJPY", "LONG", "-139.89", "t24", "1.10", "157.402", "157.891", "london_1100"),
         "combo_fix_2026-11-23": _done("23", "GBPUSD", "LONG", "-13.00", "f23", "0.80", "1.27150", "1.27120", "fix_30m"),

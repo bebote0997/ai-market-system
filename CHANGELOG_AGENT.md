@@ -5,7 +5,7 @@
 - La tabla y el resumen del Historial salen de las mismas patas cerradas. La del 25 nov (sigue `filled`, sin ticket, P/L como importe del deal) entra y suma. Un Fix sin par ni P/L no se pinta. Una pata abierta tampoco.
 - Si el cierre tuvo varias partes, el backfill guarda la suma de los P/L, no solo el último.
 - Posiciones: un libro vacío que el ciclo ya publicó (`exness_live_marks`) muestra 0.00 USC y «Sin posiciones abiertas». Sin esa lectura, con el enlace caído o con la marca vieja, sigue «sin datos». No se inventa un flotante.
-- Lotes, entrada, salida y motivo se copian del flag. `london_1100` se lee «cierre 11:00 ET» y `hq_manual` «cierre manual HQ». El ticket 425111 (25 nov, cierre manual) queda en ese segundo motivo; antes el backfill lo anotaba como cierre de las 11:00.
+- Lotes, entrada, salida y motivo se copian del flag. `london_1100` se lee «cierre 11:00 ET» y `hq_manual` «cierre manual HQ». La posición real del 25 nov es 440549 (USDJPY venta, 1.19 lotes, 159.092 → 159.119, −20.19 USC), cierre manual. Si el flag guardó `london_1100` para ese ticket, el motivo conocido lo sustituye. El 425111 no existe.
 - Sin cambio de órdenes, frenos, variables de entorno ni Render. Sin merge y sin deploy.
 
 ## 2026-11-27 — encabezado del panel y menú a 414 px
