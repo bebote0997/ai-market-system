@@ -114,6 +114,7 @@ class FillRulesTests(unittest.TestCase):
         self.assertEqual(derive_exit_reason({"position_id": "341984"}, "combo_lon_2026-11-18"), "london_1100")
         self.assertIsNone(derive_exit_reason({"position_id": "99"}, "combo_fix_2026-11-19"))
         self.assertEqual(derive_exit_reason({"position_id": "1"}, "combo_lon_2026-11-21"), "london_1100")
+        self.assertEqual(derive_exit_reason({"position_id": "425111"}, "combo_lon_2026-11-25"), "hq_manual")
         self.assertEqual(KNOWN_EXIT_REASONS["357063"], "london_1100")
         self.assertEqual(KNOWN_EXIT_REASONS["375978"], "london_1100")
 
@@ -279,6 +280,11 @@ class FlatFlagBackfillTests(unittest.TestCase):
         row = next(item for item in view["history"]["rows"] if item["ticket"] == "425111")
         self.assertIn("20.19", row["pnl"])
         self.assertIn("20.19", view["history"]["stats"]["net"])
+        self.assertEqual(row["lots"], "0.4")
+        self.assertEqual(row["entry"], "156.1")
+        self.assertEqual(row["exit_price"], "156.02")
+        self.assertEqual(row["reason"], "cierre manual HQ")
+        self.assertEqual(load(store, london_key(day.date()))["exit_reason"], "hq_manual")
 
     def test_two_close_deals_sum_to_one_pnl(self):
         day = datetime(2026, 11, 25, tzinfo=timezone.utc)

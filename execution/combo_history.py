@@ -25,6 +25,8 @@ KNOWN_EXIT_REASONS = {
     "357063": "london_1100",
     "375978": "london_1100",
     "382026": "hq_manual",
+    # 25 Nov USDJPY, closed by hand. A london key alone would say 11:00 ET.
+    "425111": "hq_manual",
 }
 _TERMINAL = ("done", "skipped", "cancelled")
 _DEAL_KEYS = ("type", "position_id", "price", "profit", "instrument", "direction",

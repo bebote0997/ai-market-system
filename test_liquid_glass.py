@@ -532,6 +532,42 @@ class HistorySquareTests(unittest.TestCase):
         self.assertNotIn("Sin operación", html)
         self.assertEqual(len(symbols), 9)
 
+    def test_closed_leg_keeps_lots_entry_exit_and_reason(self):
+        now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
+        flags = {
+            "combo_lon_2026-11-27": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "side": "LONG",
+                "position_id": "t27", "volume": "1.88", "entry": "159.39", "exit_price": "159.544",
+                "pnl": "181.46", "exit_reason": "london_1100",
+                "opened_at": "2026-11-27T12:00:00+00:00", "exit_at": "2026-11-27T16:00:00+00:00",
+            }),
+            "combo_lon_2026-11-25": json.dumps({
+                "status": "filled", "exited": False, "symbol": "USDJPY", "side": "LONG",
+                "position_id": None, "volume": "0.40", "client_id": "combo-lon-2026-11-25",
+                "entry": "156.10", "exit_price": "156.02", "exit_reason": "hq_manual",
+                "opened_at": "2026-11-25T07:10:00+00:00", "exit_at": "2026-11-25T16:00:00+00:00",
+                "pnl": {"amount": "-20.19", "currency": "USC"},
+            }),
+        }
+        view = _view(now=now, flags=flags)
+        by_day = {row["day"][:2]: row for row in view["history"]["rows"]}
+        nov27 = by_day["27"]
+        self.assertEqual(nov27["lots"], "1.88")
+        self.assertEqual(nov27["entry"], "159.39")
+        self.assertEqual(nov27["exit_price"], "159.544")
+        self.assertEqual(nov27["reason"], "cierre 11:00 ET")
+        self.assertIn("181.46", nov27["pnl"])
+        nov25 = by_day["25"]
+        self.assertEqual(nov25["lots"], "0.4")
+        self.assertEqual(nov25["entry"], "156.1")
+        self.assertEqual(nov25["exit_price"], "156.02")
+        self.assertEqual(nov25["reason"], "cierre manual HQ")
+        html = fragment(view, section="Historial")
+        self.assertIn("1.88", html)
+        self.assertIn("159.544", html)
+        self.assertIn("cierre 11:00 ET", html)
+        self.assertIn("cierre manual HQ", html)
+
     def test_parts_sum_to_one_row(self):
         now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
         flags = {"combo_lon_2026-11-25": json.dumps({
