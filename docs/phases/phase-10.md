@@ -1,5 +1,7 @@
 # Fase 10 — Command Center / Display V2
 
+**Adenda 2026-11-27 (presentación, fase G1, no recertifica):** caché de solo lectura para la gráfica de Posiciones. Un GET de velas M5 cada 30 s (USDJPY y EURUSD, solo velas cerradas; la vela en curso sale de los ticks). `GET /chart/<SYMBOL>.json` detrás de la contraseña del panel. No cambia el estado CERTIFIED, ni órdenes, ni Render.
+
 **Adenda 2026-11-27 (presentación, fase 3, no recertifica):** mismo Liquid Glass, logo 1, tema en el lateral (escritorio) o en Configuración > Sistema (móvil). Un Fix omitido se guarda como `skipped` y no sale como fila vacía. El enlace se renueva cada 30 s sin otra llamada al broker. El despliegue usa el id de instancia que Render ya inyecta. Sin bloque de servidor, ping ni tiempo activo. Libro vacío: P/L 0.00 y consumo del tope 0. No cambia el estado CERTIFIED ni Render.
 
 **Adenda 2026-11-27 (presentación, no recertifica):** el panel se refresca cada 20 s. El precio y el P/L flotante pueden salir de un GET del snapshot, como mucho uno cada 30 s, solo con la clave del panel y nunca con el mercado cerrado. El resumen diario usa Exness. El TP del Fix es 2R del SL real. La conexión y BRAKE_STATE salen del estado real. No cambia el estado CERTIFIED ni Render.

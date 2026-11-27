@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-27 — gráfica en vivo, fase G1 (solo lectura, sin UI)
+
+- Caché en el servicio (`execution/chart_cache.py`, enganchada desde `ExnessSession.refresh_chart` y `OperationalRuntime.refresh_chart_cache`). Hasta 150 velas M5 cerradas por USDJPY y EURUSD. Un GET `/v1/market-data/accounts/{id}/candles` cada 30 s (`timeframe=M5`, `price_type=bid`), por el mismo cliente que el ciclo: si la ventana de 2/s ya está llena, no envía. La vela en curso se arma con el bid del libro de cotizaciones. La posición copia entrada, lado y P/L flotante de la foto del ciclo; SL y TP salen solo de la orden `sltp`.
+- `GET /chart/USDJPY.json` y `GET /chart/EURUSD.json` (`ui/liquid/chart_feed.py`), con la cookie `aif_remember` del panel. POST, PUT, PATCH y DELETE responden 405. El cuerpo no lleva llave, id de cuenta ni host. El navegador no llama a Exness.
+- `AI_FLOOR_CHART_CACHE=0` apaga esos GET. Si la variable no está, la caché queda encendida y `manage` no cambia.
+- Sin merge, sin deploy, sin cambio de Render ni de órdenes.
+
 ## 2026-11-27 — panel fase 3: diseño, logo y seis lecturas reales
 
 - Mismo Liquid Glass, con la jerarquía aprobada el 25 nov. El logo 1 va en el lateral y en la cabecera móvil (blanco sobre azul, transparente sobre claro). El tema está en el lateral en escritorio y en Configuración > Sistema en el móvil. La barra inferior no tapa el contenido.

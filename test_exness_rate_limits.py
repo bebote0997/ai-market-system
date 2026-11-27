@@ -362,3 +362,73 @@ class TwoPerSecondMarginTests(unittest.TestCase):
         gap = calls[4][0] - calls[0][1]
         self.assertGreaterEqual(gap, OPERATION_WINDOW_MS)
         self.assertLess(gap, TWO_PER_SECOND_WINDOW_MS)
+
+
+class ChartCacheQuotaTests(unittest.TestCase):
+    """The chart cache shares the candle window. It does not take a third GET inside it, and the cycle still reads."""
+
+    def _book(self):
+        from execution.exness_stream import QuoteBook
+        book = QuoteBook()
+        book.note_tick(Decimal("150.000"), Decimal("150.020"), NOW, symbol="USDJPY")
+        book.note_tick(Decimal("1.10000"), Decimal("1.10020"), NOW, symbol="EURUSD")
+        return book
+
+    def test_the_cache_stops_at_two_candle_gets_and_the_cycle_still_reads_three(self):
+        from execution.chart_cache import ChartCache
+        server = FakeServer()
+        client = server.client()
+        arrivals = []
+        inner = server.caller
+
+        def stamp(method, url, headers, body):
+            result = inner(method, url, headers, body)
+            if "/candles" in url:
+                arrivals.append(server.now[0])
+            return result
+
+        client._caller = stamp
+        cache = ChartCache(interval=0)
+        book = self._book()
+        for _ in range(5):
+            cache.refresh(NOW, client=client, quotes=book, desk=None)
+        cached = [path for method, path in server.calls if "/candles" in path]
+        self.assertLessEqual(len(cached), 2)
+        self.assertTrue(cached)
+        self.assertIn("timeframe=M5", cached[0])
+        self.assertIn("price_type=bid", cached[0])
+        for symbol in ("USDJPY", "GBPUSD", "EURUSD"):
+            payload = client.get_json(f"/v1/market-data/accounts/123456/candles?instrument={symbol}")
+            self.assertIn("candles", payload)
+        client.get_json("/v1/configuration/accounts/123456/account")
+        for stamp_at in arrivals:
+            inside = [item for item in arrivals if 0 <= stamp_at - item < 1000]
+            self.assertLessEqual(len(inside), 2)
+        self.assertGreaterEqual(len(arrivals), 5)  # cache plus the cycle's three
+
+    def test_the_cache_itself_waits_thirty_seconds_between_candle_gets(self):
+        from execution.chart_cache import GAP_SECONDS, ChartCache
+        self.assertTrue(30 <= GAP_SECONDS <= 60)
+
+        class Pace:
+            def __init__(self):
+                self.account_id = "123456"
+                self.paths = []
+
+            def get_json(self, path):
+                self.paths.append(path)
+                return {"candles": []}
+
+        pace = Pace()
+        cache = ChartCache()
+        book = self._book()
+        for second in range(10):
+            cache.refresh(NOW + timedelta(seconds=second), client=pace, quotes=book, desk=None)
+        self.assertEqual(len(pace.paths), 1)
+        cache.refresh(NOW + timedelta(seconds=GAP_SECONDS), client=pace, quotes=book, desk=None)
+        self.assertEqual(len(pace.paths), 2)
+        self.assertIn("instrument=USDJPY", pace.paths[0])
+        self.assertIn("instrument=EURUSD", pace.paths[1])
+        for path in pace.paths:
+            self.assertIn("timeframe=M5", path)
+            self.assertIn("price_type=bid", path)
