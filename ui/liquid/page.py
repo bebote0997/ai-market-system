@@ -88,7 +88,6 @@ def render(st, section):
     def _paint():
         body = fragment(load(live_reader=panel_marks), section=chosen)
         _draw(st, body)
-        st.caption("Solo lectura. Este panel no cierra operaciones ni cambia frenos.")
 
     # El fragmento vuelve a leer la foto. El script del panel restaura pestaña y scroll.
     paint = getattr(st, "fragment", None)

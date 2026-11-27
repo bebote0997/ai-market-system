@@ -384,9 +384,10 @@ class FlatLondonFlagTests(unittest.TestCase):
         fake.set_flag(london_key(at.date()), _flag(
             at.date(), position_id=None, opened_at=opened, volume="0.40",
             client_id="combo-lon-2026-11-25"))
+        # Synthetic deal. Not Exness position 440549.
         fake._client = FakeHistoryClient([
-            deal("425111", "open", "156.10", "0", opened, direction="buy", volume="0.40"),
-            deal("425111", "close", "156.02", ("-20.19", "USC"), "2026-11-25T16:00:00+00:00",
+            deal("synth-flat-1", "open", "156.10", "0", opened, direction="buy", volume="0.40"),
+            deal("synth-flat-1", "close", "156.02", ("-20.19", "USC"), "2026-11-25T16:00:00+00:00",
                  direction="sell", volume="0.40"),
         ])
         alerts = []
@@ -397,7 +398,7 @@ class FlatLondonFlagTests(unittest.TestCase):
         saved = json.loads(fake.get_flag(london_key(at.date())))
         self.assertTrue(saved["exited"])
         self.assertEqual(saved["status"], "done")
-        self.assertEqual(saved["position_id"], "425111")
+        self.assertEqual(saved["position_id"], "synth-flat-1")
         self.assertEqual(saved["pnl"], "-20.19")
         self.assertEqual([command for command in fake.commands if command.kind == "CLOSE"], [])
         self.assertNotIn(("EXNESS_LONDON_BOOK", "london_book_count"), alerts)

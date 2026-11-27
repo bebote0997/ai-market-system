@@ -126,7 +126,12 @@ class RenderedScreensTests(unittest.TestCase):
         app = self.case.app()
         self.assertEqual(app.radio[0].value, "Inicio")
         self.assertEqual(app.radio[0].options[0], es.page_label("Overview"))
-        self.assertIn("Solo lectura", self.texts(app))
+        html = "\n".join(str(node.value) for node in app.get("html"))
+        self.assertIn("Solo lectura. Este panel no cierra operaciones ni cambia frenos.", html)
+        self.assertNotIn(
+            "Solo lectura. Este panel no cierra operaciones ni cambia frenos.",
+            "\n".join(str(c.value) for c in app.caption),
+        )
         app.radio[0].set_value("Overview").run()
         button = app.button(key="open-floor")
         self.assertEqual(button.label, luxury.FLOOR_BUTTON)

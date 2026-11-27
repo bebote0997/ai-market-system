@@ -12,7 +12,7 @@ from decimal import Decimal
 import json
 import re
 
-from execution.exness_brakes import USC_DAILY, USC_DRAWDOWN, _money
+from execution.exness_brakes import LIVE_FLAG, USC_DAILY, USC_DRAWDOWN, _money
 from execution.session_combo import FIX_SYMBOLS, LONDON, LONDON_SYMBOL, NY, fix_key, london_key
 from ui.exness_present import LABEL, OFF_SAFETY, broker_is_exness, brake_view, clock_line, live_badge, money_line, read_account, session_clock
 from ui.i18n_es import datetime_et, long_date_et
@@ -20,6 +20,8 @@ from ui.i18n_es import datetime_et, long_date_et
 MISSING = "sin datos"
 CLOSED = "mercado cerrado"
 VERSION = "V2.1"
+# The session reads the book at most every 15 minutes. Older than this, the flag is not a live book.
+_BOOK_FRESH_SECONDS = 45 * 60
 _STATUSES = ("pending", "armed", "submitted", "filled", "skipped", "cancelled", "done")
 _LEG_TEXT = {
     "pending": "Esperando", "armed": "Armada", "submitted": "Enviada", "filled": "Abierta",
@@ -187,15 +189,80 @@ def _legs(flags, now):
             day = None
         rows.append({
             "key": key, "kind": "london" if key.startswith("combo_lon_") else "fix", "day": day,
-            "status": parsed.get("status"), "symbol": _symbol(parsed.get("symbol")), "side": _side(parsed.get("side")),
+            "status": parsed.get("status"), "symbol": _leg_symbol(parsed), "side": _leg_side(parsed),
             "position_id": _ident(parsed.get("position_id")), "volume": _money(parsed.get("volume")),
             "opened_at": opened, "exit_at": exit_at, "exited": parsed.get("exited") is True,
             "entry": _money(_get(parsed, "entry", "fill", "open_price")),
             "exit_price": _money(_get(parsed, "exit_price", "close_price")),
             "exit_reason": parsed.get("exit_reason") if isinstance(parsed.get("exit_reason"), str) else None,
-            "pnl": _money(parsed.get("pnl") if parsed.get("pnl") is not None else parsed.get("profit")),
+            "pnl": _leg_pnl(parsed),
         })
     return rows
+
+
+def _pnl_value(value):
+    """A number, ``{amount}``, or the sum of every part. A missing part is not a partial sum."""
+    if isinstance(value, dict):
+        if "amount" in value:
+            return _money(value.get("amount"))
+        return None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        parts = []
+        for item in value:
+            piece = item
+            if isinstance(item, dict) and "amount" not in item:
+                piece = item.get("pnl") if item.get("pnl") is not None else item.get("profit")
+            amount = _pnl_value(piece)
+            if amount is None:
+                return None
+            parts.append(amount)
+        return sum(parts, Decimal(0))
+    return _money(value)
+
+
+def _leg_parts(parsed):
+    parts = parsed.get("parts") if isinstance(parsed, dict) else None
+    return parts if isinstance(parts, list) else []
+
+
+def _leg_pnl(parsed):
+    raw = None
+    if isinstance(parsed, dict) and parsed.get("pnl") is not None:
+        raw = parsed.get("pnl")
+    elif isinstance(parsed, dict) and parsed.get("profit") is not None:
+        raw = parsed.get("profit")
+    amount = _pnl_value(raw) if raw is not None else None
+    if amount is not None:
+        return amount
+    parts = _leg_parts(parsed)
+    return _pnl_value(parts) if parts else None
+
+
+def _one_part(parsed, reader):
+    found = []
+    for part in _leg_parts(parsed):
+        if not isinstance(part, dict):
+            continue
+        got = reader(part)
+        if got and got not in found:
+            found.append(got)
+    return found[0] if len(found) == 1 else None
+
+
+def _leg_symbol(parsed):
+    symbol = _symbol(parsed.get("symbol")) if isinstance(parsed, dict) else None
+    if symbol:
+        return symbol
+    return _one_part(parsed, lambda part: _symbol(part.get("symbol") or part.get("instrument")))
+
+
+def _leg_side(parsed):
+    side = _side(parsed.get("side")) if isinstance(parsed, dict) else None
+    if side:
+        return side
+    return _one_part(parsed, lambda part: _side(part.get("side") or part.get("direction")))
 
 
 def _leg_row(leg, currency):
@@ -215,8 +282,11 @@ def _leg_row(leg, currency):
 
 
 def _exit_label(leg):
-    """The close reason stored on the leg. Nothing is inferred from the key."""
-    text = leg.get("exit_reason")
+    """Close reason. A ticket in the known map wins over a stored ``london_1100``."""
+    from execution.combo_history import KNOWN_EXIT_REASONS
+    ticket = str(leg.get("position_id") or "").strip()
+    known = KNOWN_EXIT_REASONS.get(ticket)
+    text = known if known else leg.get("exit_reason")
     labels = {"london_1100": "cierre 11:00 ET", "fix_30m": "30 min", "protection_missing": "sin protección", "hq_manual": "cierre manual HQ"}
     if isinstance(text, str) and text.strip() in labels:
         return labels[text.strip()]
@@ -302,9 +372,25 @@ def _shown_in_history(leg):
     return bool(leg["symbol"]) or leg["pnl"] is not None
 
 
-def _history(legs, currency):
-    chosen = [leg for leg in legs if leg["status"] in ("done", "skipped", "cancelled") or (leg["status"] == "filled" and leg["exited"])]
-    chosen = [leg for leg in chosen if _shown_in_history(leg)]
+def _closed_leg(leg, now):
+    """Cerrada de verdad. Una pata ``filled`` que sigue abierta no entra en el historial.
+
+    El 25 nov quedó ``filled`` con ``exited`` en falso y sin ticket: el cierre ya pasó
+    (o el P/L ya está guardado) y el libro no la tiene. Esa sí es una operación.
+    """
+    status = leg["status"]
+    if status in ("done", "skipped", "cancelled"):
+        return True
+    if status != "filled":
+        return False
+    if leg["exited"] or leg["pnl"] is not None:
+        return True
+    exit_at = leg["exit_at"]
+    return exit_at is not None and exit_at <= now and not leg["position_id"]
+
+
+def _history(legs, currency, now):
+    chosen = [leg for leg in legs if _closed_leg(leg, now) and _shown_in_history(leg)]
     chosen.sort(key=lambda leg: (leg["opened_at"] or datetime.min.replace(tzinfo=timezone.utc), leg["key"]), reverse=True)
     rows = [_leg_row(leg, currency) for leg in chosen]
     return {"state": "rows" if chosen else "empty", "rows": rows, "recent": rows[:3], "stats": _stats(chosen, currency)}
@@ -719,6 +805,35 @@ def _book_from_snapshot(snapshot, book):
     return book
 
 
+def _book_from_marks(flags, now):
+    """Libro vacío que el ciclo ya publicó en ``exness_live_marks``.
+
+    La foto del panel a veces no trae la clave ``positions`` (se guardó antes de copiar
+    el libro). Una lista vacía y reciente es una lectura real: P/L 0. Una lista con
+    posiciones no sustituye al libro (no trae par ni lado). Sin marca, con el enlace
+    caído o con la marca vieja, no hay libro.
+    """
+    if not isinstance(flags, dict) or flags.get("exness_link") == "0":
+        return None
+    raw = flags.get(LIVE_FLAG)
+    if not isinstance(raw, str) or not raw.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict) or parsed.get("positions") != []:
+        return None
+    stamp = _aware(parsed.get("at"))
+    if stamp is None:
+        return None
+    age = (now - stamp).total_seconds()
+    if not 0 <= age <= _BOOK_FRESH_SECONDS:
+        return None
+    orders = parsed.get("orders") if isinstance(parsed.get("orders"), list) else []
+    return {"positions": [], "orders": orders, "floating_pnl": None}
+
+
 def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book=None, health=None,
                     errors=None, curve=None, snapshot=None, marks=None):
     """One read-only view. Positions' SL/TP come from the linked ``sltp`` order, not the position fields."""
@@ -750,6 +865,8 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         total_text, total_tone = _gap(now), ""
     legs = _legs(flags, now)
     book = _book_from_snapshot(snap, book)
+    if book is None:
+        book = _book_from_marks(flags, now)
     if curve is None and isinstance(snap.get("curve"), (list, tuple)):
         curve = snap.get("curve")
     positions = _positions(book, legs, currency, now)
@@ -853,5 +970,5 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
                    "halt": "Activo" if brakes.get("halt") else "No",
                    "halt_badge": "Sí" if brakes.get("halt") else "No", "reason": reason_text,
                    "state_line": _brake_state_line(flags, brakes, known, currency)},
-        "history": _history(legs, currency), "system": system, "unavailable": unavailable, "banner": None,
+        "history": _history(legs, currency, now), "system": system, "unavailable": unavailable, "banner": None,
     }

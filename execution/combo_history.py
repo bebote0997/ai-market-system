@@ -25,6 +25,8 @@ KNOWN_EXIT_REASONS = {
     "357063": "london_1100",
     "375978": "london_1100",
     "382026": "hq_manual",
+    # 25 Nov USDJPY 440549, closed by hand about 7 min after 11:00 ET. The deal reason was empty.
+    "440549": "hq_manual",
 }
 _TERMINAL = ("done", "skipped", "cancelled")
 _DEAL_KEYS = ("type", "position_id", "price", "profit", "instrument", "direction",
@@ -156,11 +158,35 @@ def fetch_deals(client, start, end, *, get_json=None):
     return rows
 
 
+def _deal_side(direction):
+    text = str(direction or "").strip().lower()
+    if text in ("sell", "short"):
+        return "SHORT"
+    if text in ("buy", "long"):
+        return "LONG"
+    return None
+
+
+def _write_exit_reason(state, key=None):
+    """A ticket in ``KNOWN_EXIT_REASONS`` wins over a reason already stored.
+
+    Other rows stay as they are: a blank reason is filled, a stored one is not.
+    """
+    ticket = str((state or {}).get("position_id") or "").strip()
+    known = KNOWN_EXIT_REASONS.get(ticket)
+    if known:
+        if state.get("exit_reason") != known:
+            state["exit_reason"] = known
+            return True
+        return False
+    return fill_if_empty(state, "exit_reason", derive_exit_reason(state, key))
+
+
 def fill_state_from_deals(state, deals, key=None):
-    """Fill missing entry, exit_price, pnl and exit_reason. Does not overwrite."""
+    """Fill missing entry, exit_price, pnl, volume and side. A known exit reason wins."""
     if not isinstance(state, dict):
         return False
-    changed = fill_if_empty(state, "exit_reason", derive_exit_reason(state, key))
+    changed = _write_exit_reason(state, key)
     ticket = str(state.get("position_id") or "").strip()
     if not ticket:
         return changed
@@ -175,9 +201,19 @@ def fill_state_from_deals(state, deals, key=None):
             closes.append(deal)
     if opens:
         changed |= fill_if_empty(state, "entry", _plain(opens[0].get("price")))
+        changed |= fill_if_empty(state, "volume", _plain(opens[0].get("volume")))
+        changed |= fill_if_empty(state, "side", _deal_side(opens[0].get("direction")))
     if closes:
         changed |= fill_if_empty(state, "exit_price", _plain(closes[-1].get("price")))
-        changed |= fill_if_empty(state, "pnl", _plain(profit_amount(closes[-1].get("profit"))))
+        amounts = []
+        for deal in closes:
+            amount = profit_amount(deal.get("profit"))
+            if amount is None:
+                amounts = None
+                break
+            amounts.append(amount)
+        if amounts:
+            changed |= fill_if_empty(state, "pnl", _plain(sum(amounts, Decimal(0))))
     return changed
 
 

@@ -393,7 +393,7 @@ def _history_page(view):
     table = _trade_table(view["history"]["rows"], tagged=True) if view["history"]["rows"] else '<p class="hint">Sin operaciones cerradas en el registro.</p>'
     resumen = f'<div class="stats">{_stat("Operaciones", stats["count"])}{_stat("Ganadoras", stats["winners"])}{_stat("Perdedoras", stats["losers"])}{_stat("Beneficio neto", stats["net"], stats["net_tone"])}</div>'
     periodo = (f'<div class="stats">{_stat("Operaciones totales", stats["count"])}{_stat("Ganadoras %", stats["win_pct"])}'
-               f'{_stat("Perdedoras %", stats["loss_pct"])}{_stat("Ganancia total", stats["gross_win"])}'
+               f'{_stat("Perdedoras %", stats["loss_pct"])}{_stat("Ganancia bruta", stats["gross_win"])}'
                f'{_stat("Pérdida total", stats["gross_loss"])}{_stat("Beneficio neto", stats["net"], stats["net_tone"])}</div>')
     clave = (f'<div class="stats">{_stat("Profit factor", stats["profit_factor"])}{_stat("Drawdown máximo", stats["drawdown"])}'
              f'{_stat("Promedio ganancia", stats["avg_win"])}{_stat("Promedio pérdida", stats["avg_loss"])}</div>')

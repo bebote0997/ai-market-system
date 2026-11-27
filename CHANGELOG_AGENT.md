@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-27 — historial y libro vacío cuadran
+
+- La tabla y el resumen del Historial salen de las mismas patas cerradas. La del 25 nov (sigue `filled`, sin ticket, P/L como importe del deal) entra y suma. Un Fix sin par ni P/L no se pinta. Una pata abierta tampoco.
+- Si el cierre tuvo varias partes, el backfill guarda la suma de los P/L, no solo el último.
+- Posiciones: un libro vacío que el ciclo ya publicó (`exness_live_marks`) muestra 0.00 USC y «Sin posiciones abiertas». Sin esa lectura, con el enlace caído o con la marca vieja, sigue «sin datos». No se inventa un flotante.
+- Lotes, entrada, salida y motivo se copian del flag. `london_1100` se lee «cierre 11:00 ET» y `hq_manual` «cierre manual HQ». La posición real del 25 nov es 440549 (USDJPY venta, 1.19 lotes, 159.092 → 159.119, −20.19 USC), cierre manual. Si el flag guardó `london_1100` para ese ticket, el motivo conocido lo sustituye. El 425111 no existe.
+- Sin cambio de órdenes, frenos, variables de entorno ni Render. Sin merge y sin deploy.
+
 ## 2026-11-27 — encabezado del panel y menú a 414 px
 
 - El encabezado, en móvil y en escritorio, ya no muestra «Exness Standard Cent (USC)». Las cifras en USC (saldos, frenos, historial) siguen. El distintivo «Ejecución real activa» (y el de desactivada) queda a la derecha, en la misma fila que el logo. En móvil la fila es ☰, logo y distintivo. El logo de esa fila es un 28 % más alto en móvil (41 px) y un 30 % en escritorio (52 px).
