@@ -755,6 +755,27 @@ class OperationalRuntime:
             return now
         return at
 
+    def refresh_exness_link(self, at):
+        """Reescribe el enlace con las cotizaciones ya en memoria. No llama al broker."""
+        session = getattr(self, "exness_session", None)
+        broker = getattr(session, "broker", None)
+        transport = getattr(broker, "_transport", None)
+        quotes = getattr(transport, "quotes", None)
+        if quotes is None or not hasattr(quotes, "fresh"):
+            return None
+        from execution.exness_brakes import touch_link
+        from execution.exness_broker import _stale_seconds
+        limit = _stale_seconds(getattr(broker, "_env", {}) or {})
+        try:
+            fresh = bool(limit) and quotes.fresh(at, limit) is True
+        except Exception:  # noqa: BLE001
+            return None
+        store = getattr(getattr(broker, "_brakes", None), "_store", None)
+        if store is None:
+            return None
+        touch_link(store, fresh=fresh, at=at)
+        return fresh
+
     def pace_exness(self, at):
         """One session-combo ``manage`` during the live entry window, at most every 30 seconds.
 

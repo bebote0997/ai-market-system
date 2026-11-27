@@ -393,7 +393,8 @@ class ProgressionTests(unittest.TestCase):
         with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
             combo.tick(lon(2026, 1, 15, 16, 5), [])
         self.assertIn("reason=window_closed", "\n".join(logs.output))
-        self.assertIn('"status": "done"', fake.get_flag(fix_key(at.date())))
+        self.assertIn('"status": "skipped"', fake.get_flag(fix_key(at.date())))
+        self.assertIn('"exit_reason": "window_closed"', fake.get_flag(fix_key(at.date())))
 
     def test_a_gap_through_the_level_is_sized_from_the_fill(self):
         at = ny(2026, 1, 15, 2, 0)

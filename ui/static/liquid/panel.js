@@ -9,10 +9,12 @@
   function applyTheme() {
     var saved = null;
     try { saved = localStorage.getItem(key); } catch (err) { saved = null; }
-    var mode = saved === "light" || saved === "dark" ? saved : systemMode();
+    var locked = root.getAttribute("data-theme-lock");
+    var mode = locked === "light" || locked === "dark" ? locked : (saved === "light" || saved === "dark" ? saved : systemMode());
     root.setAttribute("data-theme", mode);
-    var toggle = root.querySelector("[data-theme-toggle]");
-    if (toggle) toggle.textContent = mode === "dark" ? "Modo claro" : "Modo oscuro";
+    root.querySelectorAll("[data-theme-toggle]").forEach(function (toggle) {
+      toggle.textContent = mode === "dark" ? "Modo claro" : "Modo oscuro";
+    });
   }
   function show(name) {
     root.querySelectorAll("[data-panel]").forEach(function (panel) {
@@ -91,11 +93,13 @@
     if (y) window.scrollTo(0, y);
   }
   applyTheme();
-  var toggle = root.querySelector("[data-theme-toggle]");
-  if (toggle) toggle.addEventListener("click", function () {
-    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
-    try { localStorage.setItem(key, next); } catch (err) {}
-    applyTheme();
+  root.querySelectorAll("[data-theme-toggle]").forEach(function (toggle) {
+    toggle.addEventListener("click", function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.removeAttribute("data-theme-lock");
+      try { localStorage.setItem(key, next); } catch (err) {}
+      applyTheme();
+    });
   });
   root.querySelectorAll("[data-nav]").forEach(function (button) {
     button.addEventListener("click", function () {
