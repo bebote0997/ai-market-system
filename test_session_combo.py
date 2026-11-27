@@ -15,7 +15,7 @@ from execution.exness_session import ExnessSession
 from execution.exness_sizing import InstrumentSpec
 from execution.exness_transport import FakeExnessTransport, Position
 from execution.session_combo import (FIX_SYMBOLS, M5Bar, SessionCombo, asian_range, combo_enabled, fix_signal,
-                                    london_fill, london_key, fix_key, range_window, size_for_cap)
+                                    london_fill, london_key, fix_key, range_window, size_for_cap, target_at_two_r)
 
 
 NY = ZoneInfo("America/New_York")
@@ -182,13 +182,34 @@ class FixTests(unittest.TestCase):
         self.assertIn("event=FIX_ENTRY", "\n".join(logs.output))
         self.assertEqual(fake.commands[0].symbol, "GBPUSD")
         self.assertEqual(fake.commands[0].side, "SHORT")
-        self.assertIsNone(fake.commands[0].target)
+        self.assertEqual(fake.commands[0].stop, Decimal("1.25450"))
+        self.assertEqual(fake.commands[0].target, Decimal("1.24550"))
         clock.at = at + timedelta(minutes=30)
         fake.push_tick(Decimal("1.25100"), Decimal("1.25110"), clock.at)
         with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
             combo.tick(clock.at, bars)
         self.assertIn("reason=fix_30m", "\n".join(logs.output))
         self.assertEqual(fake.commands[-1].kind, "CLOSE")
+
+    def test_fix_target_follows_a_changed_stop(self):
+        at = lon(2026, 1, 15, 16, 0)
+        bars = self.gbp("1.25150")
+        clock, fake, _broker, combo = world(at)
+        fake.push_tick(Decimal("1.25150"), Decimal("1.25160"), at)
+        combo.tick(at, bars)
+        held = fake.positions[0]
+        self.assertEqual(held.target, Decimal("1.24550"))
+        fake.positions[0] = Position(held.ticket, held.symbol, held.side, held.volume, held.price,
+                                     Decimal("1.25350"), held.target, held.comment, held.opened_at)
+        clock.at = at + timedelta(minutes=1)
+        fake.push_tick(Decimal("1.25140"), Decimal("1.25155"), clock.at)
+        combo.tick(clock.at, bars)
+        revised = [command for command in fake.commands if command.kind == "MODIFY"]
+        self.assertEqual(revised[-1].stop, Decimal("1.25350"))
+        self.assertEqual(revised[-1].target, target_at_two_r(held.price, Decimal("1.25350"), "SHORT"))
+        self.assertEqual(revised[-1].target, Decimal("1.24750"))
+        combo.tick(clock.at, bars)
+        self.assertEqual(len([command for command in fake.commands if command.kind == "MODIFY"]), 1)
 
     def test_london_clock_not_a_fixed_new_york_hour(self):
         stamp = lon(2026, 10, 28, 15, 45)
@@ -410,7 +431,7 @@ class ProgressionTests(unittest.TestCase):
         self.assertEqual(_markets(fake)[0].side, "SHORT")
         self.assertEqual(_markets(fake)[0].price, Decimal("1.08190"))
         self.assertEqual(_markets(fake)[0].stop, Decimal("1.08490"))
-        self.assertIsNone(_markets(fake)[0].target)
+        self.assertEqual(_markets(fake)[0].target, Decimal("1.07590"))
         SessionCombo(broker).tick(lon(2026, 1, 15, 16, 2), weak_gbp + eur)
         self.assertEqual(len(_markets(fake)), 1)
         both = fix_bars("GBPUSD", "1.25150") + eur

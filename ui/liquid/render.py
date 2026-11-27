@@ -3,7 +3,7 @@ from decimal import Decimal
 from html import escape
 from pathlib import Path
 
-from ui.liquid.model import CLOSED, MISSING
+from ui.liquid.model import MISSING
 
 _ROOT = Path(__file__).resolve().parents[1] / "static" / "liquid"
 SECTIONS = ("Inicio", "Posiciones", "Historial", "Riesgo", "Sistema")
@@ -227,6 +227,7 @@ def _brakes_card(view):
               f'<div class="hint">Motivo: {_e(brakes["reason"])}</div></div>')
     return (f'<article class="card"><h2>Frenos de riesgo</h2>'
             f'<p class="hint">Solo lectura. Estos topes no se cambian desde el panel.</p>'
+            f'<p class="hint">BRAKE_STATE: {_e(brakes.get("state_line"))}</p>'
             f'<div class="split brake-split"><div>{rows}</div>{shield}</div></article>')
 
 
@@ -253,7 +254,7 @@ def _system_card(view, compact=False):
         headline = "Sistema operativo y estable" if stable else system["status"]
         scheduler = "Sí" if system["scheduler"] == "En marcha" else (MISSING if system["scheduler"] == MISSING else "No")
         rows = [("Programador en marcha", scheduler, scheduler == "Sí"), ("Último ciclo", system["last_cycle"], system["last_cycle"] != MISSING),
-                ("Conexión Exness", system.get("connection", MISSING), system.get("connection") not in (MISSING, CLOSED)),
+                ("Conexión Exness", system.get("connection", MISSING), system.get("connection") == "Conectada"),
                 ("Último despliegue", system.get("deploy", MISSING), system.get("deploy", MISSING) != MISSING)]
         if not compact:
             rows.append(("Latido", system["heartbeat"], system["heartbeat"] != MISSING))

@@ -7,6 +7,7 @@ Both halt until ``clear_halt`` is called with ``RESUME_EXNESS``. Any other curre
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+import json
 import logging
 import os
 from pathlib import Path
@@ -31,6 +32,10 @@ LAST_EQUITY_FLAG = "exness_last_equity"
 LAST_CURRENCY_FLAG = "exness_last_currency"
 LAST_READ_FLAG = "exness_last_read_at"
 START_FLAG = "exness_brake_start"
+STATE_FLAG = "exness_brake_state"
+LINK_FLAG = "exness_link"
+LINK_AT_FLAG = "exness_link_at"
+LIVE_FLAG = "exness_live_marks"
 
 
 class FlagStore(Protocol):
@@ -224,15 +229,52 @@ def _equity_fields(reader):
     return equity, currency
 
 
-def log_brake_state(store, equity_reader):
-    """One INFO line of the stored brakes plus one equity read. No writes. Never raises."""
+def _daily_text(currency, daily_limit):
+    amount = _money(daily_limit)
+    if amount is not None:
+        return format(amount, "f")
+    if currency in ACCOUNT_CURRENCIES:
+        brakes = ExnessBrakes.from_env(MemoryFlags(), os.environ)
+        if brakes is not None:
+            limits = brakes._limits(currency)
+            if limits is not None:
+                return format(limits[0], "f")
+    return "none"
+
+
+def log_brake_state(store, equity_reader, daily_limit=None):
+    """Una línea INFO del equity, el límite diario y el freno guardado. No escribe. Nunca lanza."""
     try:
         equity, currency = _equity_fields(equity_reader)
         BRAKE_LOG.info(
             "component=exness_brakes event=BRAKE_STATE equity=%s currency=%s brake_start=%s "
-            "day_base=%s day=%s halt=%s halt_reason=%s",
+            "day_base=%s day=%s halt=%s halt_reason=%s daily_limit=%s",
             equity, currency, _stored(store, START_FLAG), _stored(store, DAY_EQUITY_FLAG),
             _stored(store, DAY_FLAG), "true" if _stored(store, HALT_FLAG) == "1" else "false",
-            _stored(store, REASON_FLAG))
-    except Exception:  # noqa: BLE001 - startup continues when the log itself fails
+            _stored(store, REASON_FLAG), _daily_text(currency, daily_limit))
+    except Exception:  # noqa: BLE001 - el arranque sigue si el log falla
+        return
+
+
+def publish_runtime_state(store, *, equity, currency, fresh, at, marks, daily_limit, log=True):
+    """Deja BRAKE_STATE en el log y en la bandera, más el enlace y las marcas. No cambia el freno ni manda órdenes."""
+    if log:
+        log_brake_state(store, lambda: (equity, currency), daily_limit=daily_limit)
+    try:
+        code = currency.strip().upper() if isinstance(currency, str) else ""
+        if code not in ACCOUNT_CURRENCIES:
+            code = "none"
+        stamp = at.isoformat() if hasattr(at, "isoformat") else None
+        amount = _money(equity)
+        limit = _money(daily_limit)
+        store.set_flag(STATE_FLAG, json.dumps({
+            "equity": None if amount is None else format(amount, "f"),
+            "currency": code, "daily": None if limit is None else format(limit, "f"),
+            "halt": _stored(store, HALT_FLAG) == "1", "at": stamp,
+        }, separators=(",", ":")))
+        store.set_flag(LINK_FLAG, "1" if fresh else "0")
+        if stamp:
+            store.set_flag(LINK_AT_FLAG, stamp)
+        store.set_flag(LIVE_FLAG, json.dumps({"at": stamp, "positions": marks}, separators=(",", ":")))
+    except Exception:  # noqa: BLE001 - un fallo al guardar no corta el ciclo
         return

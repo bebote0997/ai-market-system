@@ -64,6 +64,32 @@
       else button.removeAttribute("aria-current");
     });
   }
+  var tabKey = "aif-liquid-section";
+  var scrollKey = "aif-liquid-scroll";
+  var mainKey = "aif-liquid-main-scroll";
+  function remember() {
+    var current = root.querySelector("[data-nav][aria-current='page']");
+    var main = root.querySelector(".main");
+    try {
+      if (current) sessionStorage.setItem(tabKey, current.getAttribute("data-nav"));
+      sessionStorage.setItem(scrollKey, String(window.scrollY || 0));
+      if (main) sessionStorage.setItem(mainKey, String(main.scrollTop || 0));
+    } catch (err) {}
+  }
+  function restore() {
+    var name = null;
+    var y = 0;
+    var inner = 0;
+    try {
+      name = sessionStorage.getItem(tabKey);
+      y = Number(sessionStorage.getItem(scrollKey) || "0");
+      inner = Number(sessionStorage.getItem(mainKey) || "0");
+    } catch (err) {}
+    if (name === "Inicio" || name === "Posiciones" || name === "Historial" || name === "Riesgo" || name === "Sistema") show(name);
+    var main = root.querySelector(".main");
+    if (main && inner) main.scrollTop = inner;
+    if (y) window.scrollTo(0, y);
+  }
   applyTheme();
   var toggle = root.querySelector("[data-theme-toggle]");
   if (toggle) toggle.addEventListener("click", function () {
@@ -72,8 +98,14 @@
     applyTheme();
   });
   root.querySelectorAll("[data-nav]").forEach(function (button) {
-    button.addEventListener("click", function () { show(button.getAttribute("data-nav")); });
+    button.addEventListener("click", function () {
+      show(button.getAttribute("data-nav"));
+      remember();
+    });
   });
+  window.addEventListener("scroll", remember, {passive: true});
+  var scroller = root.querySelector(".main");
+  if (scroller) scroller.addEventListener("scroll", remember, {passive: true});
   var burger = root.querySelector("[data-menu]");
   if (burger) burger.addEventListener("click", function () {
     if (root.getAttribute("data-open") === "1") root.removeAttribute("data-open");
@@ -137,4 +169,5 @@
     });
   });
   paint("30");
+  restore();
 })();

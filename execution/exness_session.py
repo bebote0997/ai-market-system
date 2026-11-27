@@ -48,6 +48,7 @@ class ExnessSession:
         logging.getLogger("ai_floor.exness_m5").info(
             "component=exness_m5 event=%s", "M5_FEED_ON" if self._feed is not None else "M5_FEED_OFF")
         self._history_backfill_done = False
+        self._brake_logged = None
         self._backfill_history()
         self._open_live_quotes()
 
@@ -136,6 +137,10 @@ class ExnessSession:
             except Exception as exc:  # noqa: BLE001 - the account cache must turn off even if the copy fails
                 LOG.warning("component=exness event=DESK_REMEMBER_FAILED error_type=%s detail=%s",
                             type(exc).__name__, safe_detail(exc))
+            try:
+                self._publish_state(at)
+            except Exception as exc:  # noqa: BLE001 - el estado del panel no puede cortar el ciclo
+                LOG.warning("component=exness event=BRAKE_STATE_FAILED error_type=%s", type(exc).__name__)
             if cache is not None:
                 cache(False)
 
@@ -147,7 +152,59 @@ class ExnessSession:
         from execution.exness_desk import desk_from_book
         desk = desk_from_book(book, at)
         if desk is not None:
+            self._stamp_marks(desk, book)
             self.desk = desk
+
+    def _publish_state(self, at):
+        """BRAKE_STATE, enlace y marcas, a partir del libro que este ciclo ya leyó. Sin otra llamada al broker."""
+        book = getattr(self.broker, "_read_cache", None)
+        brakes = getattr(self.broker, "_brakes", None)
+        store = getattr(brakes, "_store", None)
+        if book is None or store is None:
+            return
+        from execution.exness_brakes import publish_runtime_state
+        from execution.exness_broker import _stale_seconds
+        money = getattr(book, "balance", None)
+        equity = None if money is None else money.equity
+        currency = None if money is None else money.currency
+        limit = _stale_seconds(self._env)
+        fresh = bool(limit) and book.quotes.fresh(at, limit)
+        limits = brakes._limits(currency)
+        daily = None if limits is None else limits[0]
+        logged = self._brake_logged
+        do_log = logged is None or (at - logged).total_seconds() >= 30
+        publish_runtime_state(store, equity=equity, currency=currency, fresh=fresh, at=at,
+                              marks=self._mark_rows(book), daily_limit=daily, log=do_log)
+        if do_log:
+            self._brake_logged = at
+
+    def _stamp_marks(self, desk, book):
+        by_id = {row["position_id"]: row for row in self._mark_rows(book)}
+        for item in desk.get("positions") or []:
+            found = by_id.get(item.get("position_id"))
+            if not found:
+                continue
+            if found.get("current") is not None:
+                item["current_price"] = found["current"]
+            if found.get("profit") is not None:
+                item["profit"] = found["profit"]
+
+    def _mark_rows(self, book):
+        from execution.exness_sizing import floating_pnl
+        rows = []
+        for item in getattr(book, "positions", ()) or ():
+            slot = book.quotes.quote(getattr(item, "symbol", None))
+            bid = None if slot is None else slot.bid
+            ask = None if slot is None else slot.ask
+            mark = bid if getattr(item, "side", None) == "LONG" else ask
+            if mark is None:
+                mark = bid if bid is not None else ask
+            profit = floating_pnl(getattr(item, "side", None), getattr(item, "price", None), mark,
+                                  getattr(item, "volume", None), book.specs.get(getattr(item, "symbol", None)))
+            rows.append({"position_id": item.ticket,
+                         "current": None if mark is None else format(mark, "f"),
+                         "profit": None if profit is None else format(profit, "f")})
+        return rows
 
     def _backfill_history(self):
         """GET-only fill of missing historial fields. A failure does not stop the session."""

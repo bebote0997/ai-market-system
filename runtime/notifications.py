@@ -141,12 +141,12 @@ class SlackNotificationSink:
         Slack and the OANDA demo email are attempted independently (each once): the email goes out with a Gmail-only
         setup and after a Slack failure; the delivery record (raised error) reflects the Slack outcome, the email
         outcome is logged on its own."""
-        source = "OANDA_DEMO" if _routing_on() else "PAPER"
+        source = _summary_source()
         if not self.webhook_url and (source == "PAPER" or not _daily_email_configured()):
             raise SlackNotificationError("NOT_CONFIGURED")  # no channel: no OANDA read
         summary = event.daily_summary or {}
         alert = None
-        if source == "OANDA_DEMO":
+        if source in ("OANDA_DEMO", "EXNESS"):
             alert = oanda_demo_daily_alert(summary.get("close_at_utc") or event.timestamp_utc,
                                            summary.get("window_start_utc"), self.clock() if self.clock else None)
             from runtime.trade_alerts import daily_slack_payload
@@ -224,7 +224,7 @@ def oanda_demo_daily_alert(timestamp_utc=None, window_start_utc=None, sent_at=No
         now = sent_at if isinstance(sent_at, datetime) else None
         clock = session_clock(now=now)
         day = None if clock["waiting"] else clock["day"]
-        return daily_alert(summary_lines(now=sent_at), os.environ, demo_day=day)
+        return daily_alert(summary_lines(now=sent_at), os.environ, demo_day=day, venue="Exness")
     meta = {}
     try:
         lines = _demo_lines(timestamp_utc, window_start_utc, sent_at, meta, sleep)
@@ -250,6 +250,17 @@ def _email_daily_summary(alert, event_id, date="-"):
             LOG.info("component=notifications event=DAILY_SUMMARY_EMAIL_SENT date=%s", date)
     except Exception as exc:  # noqa: BLE001
         LOG.warning("component=notifications event=DAILY_SUMMARY_EMAIL_FAILED error_type=%s", type(exc).__name__)
+
+
+def _summary_source():
+    """EXNESS si el broker es Exness (17:00 y el envío de las 21:15 usan esta misma función). Si no, OANDA o PAPER."""
+    try:
+        from ui.exness_present import broker_is_exness
+        if broker_is_exness():
+            return "EXNESS"
+    except Exception:  # noqa: BLE001 - sin poder leer el broker, sigue la regla anterior
+        pass
+    return "OANDA_DEMO" if _routing_on() else "PAPER"
 
 
 def _routing_on():

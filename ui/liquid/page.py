@@ -37,8 +37,8 @@ def _system(now):
     return snapshot, errors
 
 
-def load(env=None, now=None, book=None, account_reader=None, curve=None):
-    """Live view. Reads the stored cycle snapshot only. No network client and no sample book."""
+def load(env=None, now=None, book=None, account_reader=None, curve=None, live_reader=None):
+    """Vista en vivo. La foto del ciclo y, si se pide, el precio cacheado. Sin libro de ejemplo."""
     import os
     from ui.exness_present import _flags
     from ui.liquid.model import build_dashboard
@@ -46,8 +46,14 @@ def load(env=None, now=None, book=None, account_reader=None, curve=None):
     env = os.environ if env is None else env
     now = now or datetime.now(timezone.utc)
     health, errors = _system(now)
+    marks = None
+    if live_reader is not None:
+        try:
+            marks = live_reader(env, now)
+        except Exception:  # noqa: BLE001 - el panel sigue con la foto si la lectura viva falla
+            marks = None
     return build_dashboard(env=env, now=now, flags=_flags(env), account_reader=account_reader, book=book,
-                           health=health, errors=errors, curve=curve, snapshot=latest(env))
+                           health=health, errors=errors, curve=curve, snapshot=latest(env), marks=marks)
 
 
 _CHROME = """<style>
@@ -60,11 +66,7 @@ padding:0 !important;max-width:100% !important}
 </style>"""
 
 
-def render(st, section):
-    """Full-bleed panel. The old Streamlit rail stays in the session and is not drawn around this view."""
-    from ui.liquid.render import fragment
-    st.markdown(_CHROME, unsafe_allow_html=True)
-    body = fragment(load(), section=section if section in PAGES else "Inicio")
+def _draw(st, body):
     html = getattr(st, "html", None)
     if callable(html):
         try:
@@ -73,4 +75,23 @@ def render(st, section):
             html(body)
     else:
         st.markdown(body, unsafe_allow_html=True)
-    st.caption("Solo lectura. Este panel no cierra operaciones ni cambia frenos.")
+
+
+def render(st, section):
+    """Panel a sangre. Se refresca cada 20 s sin tocar la pestaña ni el scroll del navegador."""
+    from ui.liquid.live import panel_marks
+    from ui.liquid.render import fragment
+    st.markdown(_CHROME, unsafe_allow_html=True)
+    chosen = section if section in PAGES else "Inicio"
+
+    def _paint():
+        body = fragment(load(live_reader=panel_marks), section=chosen)
+        _draw(st, body)
+        st.caption("Solo lectura. Este panel no cierra operaciones ni cambia frenos.")
+
+    # El fragmento vuelve a leer la foto. El script del panel restaura pestaña y scroll.
+    paint = getattr(st, "fragment", None)
+    if callable(paint):
+        paint(run_every="20s")(_paint)()
+    else:
+        _paint()
