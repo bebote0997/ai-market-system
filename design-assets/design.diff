@@ -1,0 +1,145 @@
+--- /workspace/rev1121/pr106/ui/liquid/render.py	2026-11-21 11:17:10.940059813 -0500
++++ ui/liquid/render.py	2026-11-25 12:13:06.579085284 -0500
+@@ -54,7 +54,7 @@
+     y_hi, y_lo = _e(points[hi].get("y") or values[hi]), _e(points[lo].get("y") or values[lo])
+     x0, x1 = _e(points[0].get("axis") or ""), _e(points[-1].get("axis") or "")
+     label = _e(points[-1].get("text") or points[-1].get("y") or "")
+-    label_y = last_y - 8 if last_y - 8 > 12 else Decimal(12)
++    label_y = Decimal(14)
+     return (
+         f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
+         f'<defs><linearGradient id="lg-area" x1="0" y1="0" x2="0" y2="1">'
+@@ -81,11 +81,20 @@
+     return _pill(row["side"], row.get("side_tone"))
+ 
+ 
++def _value(text):
++    """Number big, currency small. Same text, only the unit gets its own span."""
++    raw = MISSING if text is None else str(text)
++    for unit in (" USC", " USD"):
++        if raw.endswith(unit):
++            return f'{_e(raw[:-len(unit)])}<span class="unit">{unit.strip()}</span>'
++    return _e(raw)
++
++
+ def _kpi(label, item):
+     tone = item.get("tone") if item.get("tone") in ("pos", "neg") else ""
+     minor = f'<div class="minor">{_e(item.get("minor"))}</div>' if item.get("minor") else ""
+     return (f'<article class="card kpi"><div class="label">{_e(label)}</div>'
+-            f'<div class="value {tone}">{_e(item.get("main") or item["text"])}</div>{minor}'
++            f'<div class="value {tone}">{_value(item.get("main") or item["text"])}</div>{minor}'
+             f'<div class="hint">{_e(item["sub"])}</div></article>')
+ 
+ 
+@@ -121,6 +130,10 @@
+ def _trade_cards(rows):
+     cards = []
+     for row in rows:
++        if row["symbol"] == MISSING:
++            cards.append(f'<article class="mini skip"><span>{_e(row["day"])}</span>'
++                         f'<span>Sin operación · {_e(row.get("kind", ""))} · {_e(row.get("state", MISSING))}</span></article>')
++            continue
+         title = f'{_e(row["day"])} {_e(row["symbol"])} {_side(row)}'
+         cards.append(_mini(title, (
+             ("Lotes", _e(row["lots"])), ("Entrada", _e(row.get("entry", MISSING))), ("Salida", _e(row["exit_price"])),
+@@ -155,11 +168,16 @@
+             pairs = (("epoch", "epoch"), ("fecha", "day"), ("par", "symbol"), ("lado", "side"), ("lotes", "lots"),
+                      ("entrada", "entry"), ("salida", "exit_price"), ("motivo", "reason"), ("resultado", "pnl"))
+             attrs = " data-trade=\"1\" " + " ".join(f'data-{name}="{_e(row.get(key, MISSING))}"' for name, key in pairs)
++        if row["symbol"] == MISSING:
++            built.append((attrs + ' class="skip"', f'<td>{_e(row["day"])}</td><td colspan="7">Sin operación · '
++                          f'{_e(row.get("kind", ""))} · {_e(row.get("state", MISSING))}</td>'))
++            continue
+         cells = (_e(row["day"]), _e(row["symbol"]), _side(row), _e(row["lots"]), _e(row.get("entry", MISSING)),
+                  _e(row["exit_price"]), _e(row["reason"]),
+                  f'<span class="{_e(row["pnl_tone"])}">{_e(row["pnl"])}</span>')
+-        built.append((attrs, "".join(f"<td>{cell}</td>" for cell in cells)))
+-    head = "".join(f"<th>{_e(name)}</th>" for name in headers)
++        numeric = (False, False, False, True, True, True, False, True)
++        built.append((attrs, "".join(f'<td{" class=\"num\"" if num else ""}>{cell}</td>' for cell, num in zip(cells, numeric))))
++    head = "".join(f'<th{" class=\"num\"" if name in ("LOTES", "ENTRADA", "SALIDA", "RESULTADO USC") else ""}>{_e(name)}</th>' for name in headers)
+     body = "".join(f"<tr{attrs}>{cells}</tr>" for attrs, cells in built)
+     return (f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+             + _trade_cards(rows))
+@@ -168,9 +186,10 @@
+ def _positions_card(view, link=False):
+     block = view["positions"]
+     if block["state"] == "empty":
+-        body = "<p class=\"hint\">Sin posiciones abiertas.</p>"
++        body = (f'<div class="empty"><i aria-hidden="true">▤</i><b>Sin posiciones abiertas</b>'
++                f'<span class="hint">Libro: {_e(view["kpis"]["equity"]["sub"])}</span></div>')
+     elif block["state"] == "closed":
+-        body = f'<p class="hint">{_e(block["note"])}</p>'
++        body = f'<div class="empty"><i aria-hidden="true">☾</i><b>{_e(block["note"])}</b></div>'
+     elif block["state"] != "rows":
+         body = f'<p class="na">{_e(MISSING)}</p><p class="hint">{_e(block["note"])}</p>'
+     else:
+@@ -201,7 +220,7 @@
+             f'<div><div class="pair-title">Estado por par</div>{_pairs(strategy["pairs"])}</div>')
+     if horizontal:
+         return (f'<article class="card"><h2>Estrategia de hoy</h2><p class="hint">{_e(strategy["now"])}</p>{body}</article>')
+-    return (f'<article class="card"><h2>Estrategia de hoy</h2><p class="hint">{_e(strategy["now"])}</p>'
++    return (f'<article class="card strategy"><h2>Estrategia de hoy</h2><p class="hint">{_e(strategy["now"])}</p>'
+             f'<div class="split">{body}</div></article>')
+ 
+ 
+@@ -265,11 +284,7 @@
+         elif system["errors_state"] == "empty":
+             checks += '<p class="hint">Sin errores recientes.</p>'
+     server = "" if compact else (
+-        f'<h2>Información del servidor</h2>'
+-        f'<div class="check"><span>Servidor</span><b>{_e(MISSING)}</b></div>'
+-        f'<div class="check"><span>Conexión</span><b>{_e(MISSING)}</b></div>'
+-        f'<div class="check"><span>Ping</span><b>{_e(MISSING)}</b></div>'
+-        f'<div class="check"><span>Tiempo activo</span><b>{_e(MISSING)}</b></div>')
++        f'<p class="hint pending">Servidor, ping y tiempo activo: el panel aún no los mide (pendiente).</p>')
+     return f'<article class="card"><h2>Salud del sistema</h2><p class="headline">{_e(headline)}</p>{checks}{server}</article>'
+ 
+ 
+@@ -398,7 +413,8 @@
+         f'<div class="titles"><h1>Jt Trading Floor</h1><p>{_e(view["title"])}</p></div>'
+         f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
+         f'<button type="button" class="theme" data-theme-toggle="1" aria-label="Cambiar tema claro u oscuro">Tema</button></div></header>'
+-        f'<header class="desk-head"><div><h1>Jt Trading Floor · {_e(view["title"])}</h1><p>{_e(view["clock"])}</p></div>'
++        f'<header class="desk-head"><div><h1>Jt Trading Floor · {_e(view["title"])}</h1><p>{_e(view["clock"])} '
++        f'<span class="fresh">Datos: {_e(view["kpis"]["equity"]["sub"])}</span></p></div>'
+         f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
+         f'<button type="button" class="theme" data-theme-toggle="1" aria-label="Cambiar tema claro u oscuro">Tema</button>'
+         f'</div></header>{body}'
+--- /workspace/rev1121/pr106/ui/static/liquid/glass.css	2026-11-21 11:17:10.944059990 -0500
++++ ui/static/liquid/glass.css	2026-11-25 12:13:06.579085284 -0500
+@@ -122,3 +122,34 @@
+ @media (min-width:901px){.table-wrap{overflow:visible}.table-wrap table{table-layout:fixed;width:100%}}
+ @media (max-width:390px){.table-wrap{display:none}.row-cards{display:flex;flex-direction:column;gap:8px}.main{padding:10px 10px 84px}.kpi .value{font-size:20px}.mob-bar h1{font-size:15px}}
+ @media (min-width:901px){.only-mob{display:none}.mob-bar{display:none}}
++
++/* Propuesta 25 nov: mismo estilo, mejor jerarquía */
++.kpi .value{font-size:clamp(22px,2.1vw,30px)}
++.kpi .value .unit{font-size:.48em;font-weight:650;margin-left:5px;color:var(--lg-muted);letter-spacing:0}
++.kpi .label{text-transform:uppercase;letter-spacing:.06em;font-size:11px}
++.row1{grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr)}
++.strategy .split{grid-template-columns:minmax(0,1fr)}
++.strategy .pairs,.pairs{flex-direction:row;flex-wrap:wrap}
++.pair{border:1px solid var(--lg-stroke);border-radius:999px;padding:4px 6px 4px 12px;background:rgba(255,255,255,.35)}
++.lg[data-theme="dark"] .pair{background:rgba(255,255,255,.05)}
++th.num,td.num{text-align:right;padding-right:12px}
++th{position:sticky;top:0;text-transform:uppercase;letter-spacing:.05em}
++tbody tr:hover{background:rgba(37,99,235,.06)}
++tr.skip td{color:var(--lg-muted);font-size:11px;padding:3px 0;border-top:1px dashed var(--lg-stroke)}
++.mini.skip{display:flex;justify-content:space-between;gap:8px;color:var(--lg-muted);font-size:11px;padding:5px 10px;border-style:dashed}
++.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:36px 8px;text-align:center}
++.empty i{font-style:normal;font-size:28px;opacity:.55}
++.fresh{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;border:1px solid var(--lg-stroke);font-size:11px;background:var(--lg-wait-bg)}
++.pending{margin-top:6px}
++.card h2{letter-spacing:.02em}
++@media (max-width:900px){
++.kpi .value{font-size:clamp(20px,6.4vw,28px);white-space:nowrap}
++.kpis.mob{gap:10px}
++.kpis.mob article:nth-child(n+3) .value{font-size:clamp(17px,4.8vw,22px)}
++.main{padding-bottom:calc(98px + env(safe-area-inset-bottom))}
++.tabs{bottom:calc(10px + env(safe-area-inset-bottom))}
++.tabs button{min-height:48px;font-size:11px}
++.tabs button i{font-size:17px}
++.mini{padding:10px 12px}
++.kv-row b{text-align:right}
++}
