@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-11-27 — panel: refresco, P/L vivo, resumen Exness, TP del Fix, conexión y freno
+
+- El panel Liquid se vuelve a pintar cada 20 s. La pestaña y el scroll se guardan en el navegador.
+- Precio y P/L flotante de las abiertas: marcas que el ciclo ya leyó, o un solo GET del snapshot como mucho cada 30 s. Con el mercado cerrado no hay GET. Sin botones que operen.
+- El resumen de las 17:00 y el de las 21:15 registran `source=EXNESS` y el texto dice Exness.
+- El Fix pone el TP al doble del stop de 30 pips (60 pips), con la misma regla 2x de la estrategia.
+- «Conexión Exness» usa el enlace guardado y el latido. BRAKE_STATE se escribe en el log y en una bandera, y el panel muestra equity, límite diario y si el freno está activo.
+- Sin cambio de `AI_FLOOR_GIT_COMMIT`, de Render ni de otras órdenes. Sin merge y sin deploy.
+
 ## 2026-11-27 — pata Londres cerrada a mano ya no se queda en filled
 
 - El backfill del ciclo también mira las patas `filled` que siguen sin salida. Si el libro ya no tiene esa posición (cierre manual o por SL/TP), la marca `exited`, guarda `position_id` cuando hay un solo deal que cruza, y anota el P/L. Así entra en el Historial y desaparece «En curso». No hay SQL suelto ni script de un solo uso.

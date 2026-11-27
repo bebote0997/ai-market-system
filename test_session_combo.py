@@ -182,7 +182,8 @@ class FixTests(unittest.TestCase):
         self.assertIn("event=FIX_ENTRY", "\n".join(logs.output))
         self.assertEqual(fake.commands[0].symbol, "GBPUSD")
         self.assertEqual(fake.commands[0].side, "SHORT")
-        self.assertIsNone(fake.commands[0].target)
+        self.assertEqual(fake.commands[0].stop, Decimal("1.25450"))
+        self.assertEqual(fake.commands[0].target, Decimal("1.24550"))
         clock.at = at + timedelta(minutes=30)
         fake.push_tick(Decimal("1.25100"), Decimal("1.25110"), clock.at)
         with self.assertLogs("ai_floor.session_combo", level=logging.INFO) as logs:
@@ -410,7 +411,7 @@ class ProgressionTests(unittest.TestCase):
         self.assertEqual(_markets(fake)[0].side, "SHORT")
         self.assertEqual(_markets(fake)[0].price, Decimal("1.08190"))
         self.assertEqual(_markets(fake)[0].stop, Decimal("1.08490"))
-        self.assertIsNone(_markets(fake)[0].target)
+        self.assertEqual(_markets(fake)[0].target, Decimal("1.07590"))
         SessionCombo(broker).tick(lon(2026, 1, 15, 16, 2), weak_gbp + eur)
         self.assertEqual(len(_markets(fake)), 1)
         both = fix_bars("GBPUSD", "1.25150") + eur

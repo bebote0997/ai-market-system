@@ -278,6 +278,7 @@ class DailyAlert:
     demo_length: int = 30
     url: str | None = None
     image_url: str | None = None
+    venue: str = VENUE
 
     @property
     def color(self):
@@ -285,17 +286,18 @@ class DailyAlert:
         return GOLD if pnl is None or pnl == 0 else GREEN if pnl > 0 else RED
 
     def header(self):
-        return f"📊 Resumen diario · {VENUE}" + (f" · {self.date_label}" if self.date_label else "")
+        return f"📊 Resumen diario · {self.venue}" + (f" · {self.date_label}" if self.date_label else "")
 
     def title(self):
-        return "Resumen diario · " + VENUE + (f" · {self.date_label}" if self.date_label else "")
+        return "Resumen diario · " + self.venue + (f" · {self.date_label}" if self.date_label else "")
 
     def footer(self):
-        return footer(self.demo_day, self.demo_length)
+        return footer(self.demo_day, self.demo_length, self.venue)
 
 
-def footer(day, length=30):
-    return f"{VENUE} · Día {day} de {length}" if isinstance(day, int) and day > 0 else f"{VENUE} · Día {NO_DATA}"
+def footer(day, length=30, venue=None):
+    name = venue or VENUE
+    return f"{name} · Día {day} de {length}" if isinstance(day, int) and day > 0 else f"{name} · Día {NO_DATA}"
 
 
 # -- Slack ---------------------------------------------------------------------------------------------------------

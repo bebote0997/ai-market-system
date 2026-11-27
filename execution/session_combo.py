@@ -14,8 +14,9 @@ only in the first five minutes of the 16:00 Europe/London bar. Each leg is store
 day's trade again.
 
 The fill is the live ask (LONG) or bid (SHORT). Stop stays at the other side of the range (London) or 30 pips
-from that fill (fix). Take-profit, when there is one, is twice the actual fill-to-stop distance. If the minimum
-lot would risk more than the lesser of 1% and $5 at that distance, the trade is not sent.
+from that fill (fix). Take-profit is twice that fill-to-stop distance, including the fix (30 pips of stop,
+60 pips of target). If the minimum lot would risk more than the lesser of 1% and $5 at that distance, the
+trade is not sent.
 
 An HTTP 200/202 from Exness is ``UNKNOWN`` (the body is an ack, not a fill). That ack is not a skip: the
 position is read again until it is visible, and only then is the leg ``filled``. Until that read confirms
@@ -191,6 +192,17 @@ def fix_move(bars, symbol, at):
     if abs(move) < FIX_PIPS:
         return "below"
     return ("SHORT" if move > 0 else "LONG"), move
+
+
+def fix_prices(fill, side, symbol):
+    """SL de 30 pips y TP al doble de esa distancia. El mismo 2x que Londres, con el stop fijo del Fix."""
+    pip = pip_size(symbol)
+    if pip is None or side not in ("LONG", "SHORT") or not isinstance(fill, Decimal):
+        return None, None
+    distance = FIX_SL_PIPS * pip
+    if side == "LONG":
+        return fill - distance, fill + distance * 2
+    return fill + distance, fill - distance * 2
 
 
 def fix_signal(bars, symbol, at):
@@ -564,10 +576,12 @@ class SessionCombo:
             if fill is None:
                 _log("SIZE_SKIP", symbol=symbol, reason="quote_missing")
                 return
-            pip = pip_size(symbol)
-            stop = fill - FIX_SL_PIPS * pip if side == "LONG" else fill + FIX_SL_PIPS * pip
+            stop, target = fix_prices(fill, side, symbol)
+            if stop is None or target is None:
+                _log("SIZE_SKIP", symbol=symbol, reason="price_invalid")
+                return
             client = f"combo-fix-{day.isoformat()}-{symbol}"
-            if self._commit(key, state, day, symbol, side, fill, stop, None, client, at + FIX_HOLD, at):
+            if self._commit(key, state, day, symbol, side, fill, stop, target, client, at + FIX_HOLD, at):
                 _log("FIX_ENTRY", symbol=symbol, side=side)
                 return
         if waiting or signaled:

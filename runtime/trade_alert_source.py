@@ -187,7 +187,7 @@ def trade_alert(kind, detail, env, *, now=None, trades_fetch=None, account_fetch
         return None
 
 
-def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None, window=None):
+def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None, window=None, venue=None):
     """DailyAlert from the OANDA demo summary lines ("Etiqueta: valor"); the macro view of the reported trading day
     (``window`` = (start, end) aware, else derived from ``date_label``) folded in as one line. The first line (demo
     day text) and the trading-day line become the header/footer, not grid cells."""
@@ -203,7 +203,8 @@ def daily_alert(lines, env, *, date_label=None, demo_day=None, pnl=None, window=
     bounds = _safe(_window, date_label, window)
     macro = None if bounds is None else _safe(latest_macro, env, *bounds)
     return ta.DailyAlert(lines=tuple(pairs), date_label=date_label, macro=macro, pnl=pnl,
-                         demo_day=demo_day, demo_length=DEMO_LENGTH_DAYS, url=ta.floor_url(env), image_url=ta.image_url(env))
+                         demo_day=demo_day, demo_length=DEMO_LENGTH_DAYS, url=ta.floor_url(env),
+                         image_url=ta.image_url(env), venue=venue or ta.VENUE)
 
 
 __all__ = ["CLOSE_KINDS", "FOLDED_KINDS", "OPEN_KINDS", "RICH_KINDS", "daily_alert", "setup_facts",

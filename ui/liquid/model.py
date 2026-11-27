@@ -562,12 +562,83 @@ def _saved_account(flags):
     return {"balance": None, "equity": day, "currency": "USC", "stored": True, "kind": "day", "at": None}
 
 
-def _heartbeat_fresh(health, now):
-    stamp = _aware(health.get("runtime_heartbeat"))
+def _heartbeat_fresh(health, now, limit=60):
+    stamp = _aware(health.get("runtime_heartbeat")) if isinstance(health, dict) else None
     if stamp is None:
         return False
     age = (now - stamp).total_seconds()
-    return 0 <= age <= 60
+    return 0 <= age <= limit
+
+
+def _connection(flags, health, now):
+    """Conexión Exness y latido. Con el mercado cerrado sigue «mercado cerrado»."""
+    if _market_closed(now):
+        return CLOSED
+    if not isinstance(flags, dict):
+        return MISSING
+    link = flags.get("exness_link")
+    at = _aware(flags.get("exness_link_at"))
+    if link not in ("0", "1") or at is None:
+        return MISSING
+    age = (now - at).total_seconds()
+    if not (link == "1" and 0 <= age <= 90):
+        return "Sin conexión"
+    if not _heartbeat_fresh(health, now, 90):
+        return "Sin latido"
+    return "Conectada"
+
+
+def _brake_state_line(flags, brakes, equity, currency):
+    """Equity, límite de pérdida diaria y si el freno está activo. La bandera guardada manda."""
+    raw = flags.get("exness_brake_state") if isinstance(flags, dict) else None
+    parsed = None
+    if isinstance(raw, str) and raw.startswith("{"):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = None
+    if isinstance(parsed, dict):
+        code = parsed.get("currency") if parsed.get("currency") in ("USC", "USD") else currency
+        halt = "activo" if parsed.get("halt") is True else "no"
+        return (f"equity {money_line(_money(parsed.get('equity')), code)} · "
+                f"límite diario {money_line(_money(parsed.get('daily')), code)} · freno {halt}")
+    halt = "activo" if brakes.get("halt") else "no"
+    shown = money_line(equity, currency) if equity is not None else MISSING
+    return f"equity {shown} · límite diario {money_line(brakes.get('daily'), 'USC')} · freno {halt}"
+
+
+def _apply_marks(positions, marks, currency):
+    """Precio y P/L flotante de una lectura ya hecha. No inventa un precio que no vino."""
+    if not isinstance(marks, dict) or not isinstance(positions, dict):
+        return
+    rows_in = marks.get("positions")
+    if not isinstance(rows_in, (list, tuple)):
+        return
+    by_id = {}
+    for item in rows_in:
+        if isinstance(item, dict):
+            ident = _ident(item.get("position_id"))
+            if ident:
+                by_id[ident] = item
+    profits = []
+    rows = positions.get("rows") or []
+    for row in rows:
+        found = by_id.get(row.get("ticket"))
+        if not isinstance(found, dict):
+            continue
+        current = _money(found.get("current"))
+        profit = _money(found.get("profit"))
+        if current is not None:
+            row["current"] = _plain(current)
+        if profit is not None:
+            text, tone = _signed(profit, currency)
+            row["floating"] = text
+            row["floating_tone"] = tone
+            profits.append(profit)
+    if rows and len(profits) == len(rows):
+        text, tone = _signed(sum(profits, Decimal(0)), currency)
+        positions["floating"] = text
+        positions["floating_tone"] = tone
 
 
 def _panel_health(health, now):
@@ -620,7 +691,7 @@ def _book_from_snapshot(snapshot, book):
 
 
 def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book=None, health=None,
-                    errors=None, curve=None, snapshot=None):
+                    errors=None, curve=None, snapshot=None, marks=None):
     """One read-only view. Positions' SL/TP come from the linked ``sltp`` order, not the position fields."""
     import os
     from execution.exness_broker import real_execution_armed
@@ -655,6 +726,7 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     positions = _positions(book, legs, currency, now)
     for row in positions["rows"]:
         row.pop("_profit", None)
+    _apply_marks(positions, marks, currency)
     day = clock.get("day") if clock.get("waiting") is False else 0
     if not isinstance(day, int) or isinstance(day, bool) or day < 1:
         day = 0
@@ -678,7 +750,7 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     else:
         reason_text = "ninguno"
     system = _system(_panel_health(health, now), errors)
-    system["connection"] = _gap(now)
+    system["connection"] = _connection(flags, health, now)
     system["deploy"] = _deploy_label(env)
     curve_view = _curve(curve, now, currency)
     equity_text = money_line(account.get("equity"), currency)
@@ -751,6 +823,7 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         "positions": positions, "curve": curve_view, "strategy": _strategy(legs, now),
         "brakes": {"daily": daily, "total": total_brake, "trade_cap": money_line(brakes.get("cap"), "USC"),
                    "halt": "Activo" if brakes.get("halt") else "No",
-                   "halt_badge": "Sí" if brakes.get("halt") else "No", "reason": reason_text},
+                   "halt_badge": "Sí" if brakes.get("halt") else "No", "reason": reason_text,
+                   "state_line": _brake_state_line(flags, brakes, known, currency)},
         "history": _history(legs, currency), "system": system, "unavailable": unavailable, "banner": None,
     }

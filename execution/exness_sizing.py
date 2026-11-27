@@ -108,6 +108,17 @@ def on_step(volume, spec):
     return count == count.to_integral_value()
 
 
+def floating_pnl(side, entry, mark, volume, spec):
+    """P/L flotante en la divisa de la cuenta. LONG se marca al bid, SHORT al ask. Sin precio o sin contrato, None."""
+    entry, mark, volume = _pos(entry), _pos(mark), _pos(volume)
+    if side not in ("LONG", "SHORT") or not isinstance(spec, InstrumentSpec):
+        return None
+    if entry is None or mark is None or volume is None:
+        return None
+    diff = (mark - entry) if side == "LONG" else (entry - mark)
+    return diff * spec.contract_size * spec.profit_rate * volume
+
+
 def spread_cost(bid, ask, lots, spec):
     """Account-currency cost of the spread on ``lots``, using the documented PnL identity. None if unusable."""
     bid, ask, lots = _pos(bid), _pos(ask), _pos(lots)

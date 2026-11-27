@@ -325,7 +325,7 @@ class WiringTests(unittest.TestCase):
         self.assertLess(source.index("require_dashboard_access(st)"), source.index('= "Inicio"'))
         page = Path("ui/liquid/page.py").read_text(encoding="utf-8")
         self.assertIn('data-testid="stSidebar"', page)
-        self.assertLess(page.index("st.markdown(_CHROME"), page.index("fragment(load()"))
+        self.assertLess(page.index("st.markdown(_CHROME"), page.index("fragment(load("))
 
 
 class DeskSnapshotTests(unittest.TestCase):

@@ -409,7 +409,7 @@ class ExnessBroker:
 
     def open_market(self, *, symbol, side, quantity, entry, stop, client_id, source_run_id, risk_fraction=RISK_FRACTION_CAP,
                     target=None):
-        """Market order from the session-combo strategy. ``target`` None means no take-profit (the fix fade).
+        """Market order from the session-combo strategy. ``target`` None means that order has no take-profit.
 
         The pending-order JSON type is still undocumented, so stop entries are not sent as broker stops.
         """
