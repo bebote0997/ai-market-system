@@ -1,6 +1,10 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-28 (rama `cursor/historial-blank-chart-usd-385b`, sobre `77a4fc8`). Una pata ya `done` (o `filled` con salida) sin ticket ni P/L se cruza por el día, igual que una `waiting`. En `combo_lon_` sin par se asume USDJPY. Si no hay ticket, no se reescribe el flag y sigue pendiente. El Historial abre con un solo «Rendimiento» y solo la gráfica de 30 días. El USD de una pérdida lleva el mismo menos que el USC. Sin merge, sin deploy, sin Render._
+_Última actualización: 2026-11-28 (rama `cursor/historial-live-curve-385b`, sobre `62188b0`). El Historial se ordena por la hora de cierre, la más reciente primero, y desempata por ticket. Si falta entrada, salida, lado o lotes y hay ticket, el backfill los rellena del deal y no borra un precio ya guardado. La curva arranca en el balance de inicio del ciclo (30086 en la vista previa). Sin merge, sin deploy, sin Render._
+
+_Anterior: 2026-11-28 (rama `cursor/historial-live-curve-385b`, sobre `62188b0`). Un `combo_lon_` ya cerrado con el lado o el par mal guardados se cruza si ese día ET hay un solo cierre USDJPY. Un Fix que no llegó a abrirse no queda pendiente. Cada pendiente deja una línea sin importes. Sin serie guardada, Rendimiento suma el P/L realizado desde el balance de inicio del ciclo. Sin merge, sin deploy, sin Render._
+
+_Anterior: 2026-11-28 (rama `cursor/historial-blank-chart-usd-385b`, sobre `77a4fc8`). Una pata ya `done` (o `filled` con salida) sin ticket ni P/L se cruza por el día, igual que una `waiting`. En `combo_lon_` sin par se asume USDJPY. Si no hay ticket, no se reescribe el flag y sigue pendiente. El Historial abre con un solo «Rendimiento» y solo la gráfica de 30 días. El USD de una pérdida lleva el mismo menos que el USC. Sin merge, sin deploy, sin Render._
 
 _Anterior: 2026-11-27 (rama `cursor/historial-book-square-385b`, sobre `ea25569`). El Historial pinta la pata del 25 nov que sigue `filled` sin ticket: la tabla y el resumen usan las mismas operaciones. Lotes, entrada, salida y motivo salen del flag (`cierre 11:00 ET`, `cierre manual HQ`). Un libro vacío ya publicado muestra 0.00; sin lectura sigue «sin datos». El encabezado del #111 sigue. Sin merge, sin deploy, sin Render._
 

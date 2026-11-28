@@ -1,5 +1,20 @@
 # Agent Changelog
 
+## 2026-11-28 — Historial por hora de cierre, y precios que no se borran
+
+- Las filas se ordenan por la hora de cierre, la más reciente primero, en todas las páginas. Si dos cierran a la vez, queda arriba el ticket mayor.
+- Si hay ticket y falta entrada, salida, lado, lotes o la hora de cierre, el backfill los toma del deal. Un valor ya guardado no se sustituye por un blanco ni por otro número.
+- La vista previa usa los nueve deals con sus precios reales. La curva arranca en 30086. La tarjeta de arriba sigue en equity 30644.6 y P/L total +558.60.
+- Sin merge y sin deploy.
+
+## 2026-11-28 — cruce del 25 nov con lado distinto, y curva desde el historial
+
+- Un `combo_lon_` terminal sin ticket acepta el único cierre USDJPY de ese día ET aunque el lado o el par guardados no coincidan. El lado se corrige con el deal y queda un aviso con el valor viejo y el nuevo. Cero o dos cierres: no se escribe nada.
+- Un Fix `skipped`, o una pata que no llegó a abrirse, ya no cuenta como `pending`. Cada clave que sigue pendiente deja una línea: clave, status guardado (`flag`), salida, lado, par, si hay ticket, si hay P/L y `opened_at`. Sin importes.
+- Si no hay serie de equity, o tiene menos de dos puntos, Rendimiento suma el P/L realizado por hora de cierre, anclado al balance de inicio del ciclo. Siguen los botones; al abrir se ve 30 días. La vista previa ya no inyecta una curva.
+- La tarjeta de arriba («Operaciones», «P/L total») sigue siendo la del ciclo, no la suma de la tabla.
+- Sin cambio de órdenes, frenos, variables ni Render. Sin merge y sin deploy.
+
 ## 2026-11-28 — backfill sin ticket, un Rendimiento, menos en el USD
 
 - Una pata terminal sin `position_id` (el `combo_lon_2026-11-25` en vivo) entra al mismo cruce que una `waiting`: deals del día, y en `combo_lon_` sin par se asume USDJPY. El deal 440549 rellena lado, lotes, entrada, salida, P/L y `hq_manual`. Sin ticket resuelto el flag no se vuelve a marcar `done` y `pending` sigue por encima de cero.

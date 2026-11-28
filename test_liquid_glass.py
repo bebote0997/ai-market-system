@@ -545,6 +545,73 @@ class HistorySquareTests(unittest.TestCase):
         self.assertIn('data-chart="all" hidden', html)
         self.assertIn('data-chart="90" hidden', html)
         self.assertIn('data-chart="365" hidden', html)
+        view = example_view()
+        points = view["curve"]["points"]
+        self.assertEqual(view["curve"]["state"], "ok")
+        self.assertEqual(view["curve"]["ranges"]["30"]["state"], "ok")
+        self.assertEqual(len(points), 10)
+        self.assertEqual(points[0]["equity"], "30086")
+        self.assertEqual(points[-1]["equity"], "30644.67")
+        self.assertIn("558.67", view["history"]["stats"]["net"])
+        self.assertIn("558.60", view["kpis"]["total"]["text"])
+        self.assertIn("30,644.60", view["kpis"]["balance"]["text"])
+        order = ["473902", "440549", "424576", "415945", "409759", "382026", "375978", "357063", "341984"]
+        self.assertEqual([row["ticket"] for row in view["history"]["rows"]], order)
+        for row in view["history"]["rows"]:
+            self.assertNotEqual(row["entry"], MISSING)
+            self.assertNotEqual(row["exit_price"], MISSING)
+            self.assertNotEqual(row["lots"], MISSING)
+            self.assertNotIn(row["side"], (MISSING, ""))
+        table = html.split("<h2>Detalle de operaciones</h2>", 1)[1].split("<h2>Estadísticas del periodo</h2>", 1)[0]
+        self.assertNotIn("sin datos", table.lower())
+        self.assertIn('data-range="30"', html)
+        self.assertNotIn("No hay una serie de equity guardada", html)
+        self.assertIn("<svg", html)
+
+    def test_a_short_stored_curve_uses_the_closed_history(self):
+        flags = {
+            "exness_brake_start": "10000",
+            "exness_launch_start": "2026-11-16T21:00:00+00:00",
+            "combo_lon_2026-11-18": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "pnl": "-84.08",
+                "exit_at": "2026-11-18T16:00:13+00:00",
+            }),
+            "combo_lon_2026-11-19": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "pnl": "146.19",
+                "exit_at": "2026-11-19T16:00:07+00:00",
+            }),
+        }
+        now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
+        one = _view(now=now, flags=flags, curve=[{"at": "2026-11-20T12:00:00+00:00", "equity": "1"}])
+        self.assertEqual(one["curve"]["state"], "ok")
+        self.assertEqual(one["curve"]["points"][0]["equity"], "10000")
+        self.assertEqual(one["curve"]["points"][-1]["equity"], "10062.11")
+        kept = _view(now=now, flags=flags, curve=[
+            {"at": "2026-11-18T16:00:00+00:00", "equity": "10000"},
+            {"at": "2026-11-19T16:00:00+00:00", "equity": "10010"},
+        ])
+        self.assertEqual(kept["curve"]["points"][-1]["equity"], "10010")
+
+    def test_history_sorts_by_close_time_and_breaks_ties_by_ticket(self):
+        now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
+        same = "2026-11-23T16:00:00+00:00"
+        flags = {
+            "combo_lon_2026-11-23": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "pnl": "1",
+                "position_id": "100", "exit_at": same, "opened_at": "2026-11-23T12:00:00+00:00",
+            }),
+            "combo_fix_2026-11-23": json.dumps({
+                "status": "done", "exited": True, "symbol": "GBPUSD", "pnl": "2",
+                "position_id": "200", "exit_at": same, "opened_at": "2026-11-23T08:00:00+00:00",
+            }),
+            "combo_lon_2026-11-24": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "pnl": "3",
+                "position_id": "50", "exit_at": "2026-11-24T16:00:00+00:00",
+                "opened_at": "2026-11-24T07:00:00+00:00",
+            }),
+        }
+        view = _view(now=now, flags=flags)
+        self.assertEqual([row["ticket"] for row in view["history"]["rows"]], ["50", "200", "100"])
 
     def test_a_loss_signs_both_the_usc_and_the_usd(self):
         from decimal import Decimal

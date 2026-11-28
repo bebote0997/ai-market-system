@@ -1,5 +1,9 @@
 # Fase 10 — Command Center / Display V2
 
+**Adenda 2026-11-28 (presentación, no recertifica):** el Historial se ordena por la hora de cierre, la más reciente primero, y desempata por ticket. Un ticket al que le faltan entrada, salida, lado o lotes se completa con el deal, sin pisar un precio ya guardado. No cambia el estado CERTIFIED ni Render.
+
+**Adenda 2026-11-28 (presentación, no recertifica):** un Londres ya cerrado con el lado o el par distintos se cruza si ese día hay un solo cierre USDJPY. Lo que no llegó a abrirse no queda pendiente. Sin serie guardada, la gráfica de Rendimiento sale del P/L realizado y del balance de inicio del ciclo. No cambia el estado CERTIFIED ni Render.
+
 **Adenda 2026-11-28 (presentación, no recertifica):** una pata ya terminal sin ticket ni P/L se cruza con los deals del día (en `combo_lon_` sin par, USDJPY) y no se reescribe si el ticket no sale. El Historial abre con un solo título Rendimiento y solo la gráfica de 30 días. El USD de una pérdida lleva signo menos. No cambia el estado CERTIFIED ni Render.
 
 **Adenda 2026-11-27 (presentación, no recertifica):** el Historial incluye la pata cerrada que el flag aún marca `filled` sin ticket, y lee el P/L aunque venga como importe del deal o como suma de partes. El resumen sale de esas mismas filas. Lotes, entrada, salida y motivo se copian del flag. Un Fix sin par ni P/L no se pinta. Si la foto no trae `positions` pero el ciclo ya publicó un libro vacío en `exness_live_marks`, el flotante es 0.00. Sin esa lectura, o si es vieja o el enlace está caído, sigue «sin datos». No cambia el estado CERTIFIED ni Render.

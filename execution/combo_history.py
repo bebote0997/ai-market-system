@@ -12,6 +12,7 @@ import json
 import logging
 
 from execution.exness_client import safe_detail
+from execution.session_combo import LONDON_SYMBOL
 
 
 LOG = logging.getLogger("ai_floor.session_combo")
@@ -221,7 +222,7 @@ def _fill_times_from_deals(state, deals):
     """Horario de entrada y salida del propio deal, solo si el flag no lo tiene."""
     ticket = str((state or {}).get("position_id") or "").strip()
     if not ticket:
-        return
+        return False
     opens, closes = [], []
     for deal in deals or ():
         if not isinstance(deal, dict) or str(deal.get("position_id") or "").strip() != ticket:
@@ -230,14 +231,18 @@ def _fill_times_from_deals(state, deals):
             opens.append(deal)
         elif deal.get("type") == "close":
             closes.append(deal)
+    changed = False
     if not state.get("opened_at") and opens:
         stamp = _deal_time(opens[0])
         if stamp is not None:
             state["opened_at"] = stamp.astimezone(timezone.utc).isoformat()
+            changed = True
     if not state.get("exit_at") and closes:
         stamp = _deal_time(closes[-1])
         if stamp is not None:
             state["exit_at"] = stamp.astimezone(timezone.utc).isoformat()
+            changed = True
+    return changed
 
 
 def _aware(value):
@@ -277,6 +282,22 @@ def _incomplete(state):
     return not all(_present(state.get(name)) for name in ("entry", "exit_price", "pnl", "exit_reason"))
 
 
+def _price_gap(state):
+    """Ticket ya guardado, pero falta la entrada, la salida, el lado o los lotes."""
+    if _no_ticket(state):
+        return False
+    return any(not _present(state.get(name)) for name in ("entry", "exit_price", "side", "volume"))
+
+
+def _deal_gap(state):
+    """Ese hueco, o la hora de apertura o de cierre todavía vacía."""
+    if _price_gap(state):
+        return True
+    if _no_ticket(state):
+        return False
+    return _aware(state.get("exit_at")) is None or _aware(state.get("opened_at")) is None
+
+
 def _filled_open(state):
     """Pata ``filled`` que el flag aún no dio por salida."""
     return (state or {}).get("status") == "filled" and (state or {}).get("exited") is not True
@@ -298,8 +319,94 @@ def _with_london_symbol(state, key):
     if not str(key or "").startswith("combo_lon_"):
         return state
     guessed = dict(state)
-    guessed["symbol"] = "USDJPY"
+    guessed["symbol"] = LONDON_SYMBOL
     return guessed
+
+
+def _never_filled(state, key):
+    """Un Fix omitido, o una pata sin hora de entrada que no es el Londres ya cerrado.
+
+    El ``combo_lon_`` ``done`` con ``exited`` sigue siendo candidato aunque no tenga
+    ``opened_at``: en vivo el lado o el par guardados pueden estar mal.
+    """
+    status = (state or {}).get("status")
+    if status in ("skipped", "cancelled"):
+        return True
+    if _aware((state or {}).get("opened_at")):
+        return False
+    return not (str(key or "").startswith("combo_lon_") and _terminal(state) and (state or {}).get("exited") is True)
+
+
+def _london_day_ticket(key, deals, rows):
+    """El único cierre USDJPY de ese día ET. Ignora el lado y el par guardados.
+
+    Cero o dos o más candidatos: None. No se escribe el flag.
+    """
+    if rows is None or not str(key or "").startswith("combo_lon_"):
+        return None
+    day = _leg_day(key)
+    if day is None:
+        return None
+    open_ids = {_row_ticket(row) for row in rows}
+    grouped = {}
+    for deal in deals or ():
+        if not isinstance(deal, dict):
+            continue
+        ticket = str(deal.get("position_id") or "").strip()
+        if ticket:
+            grouped.setdefault(ticket, []).append(deal)
+    found = []
+    for ticket, items in grouped.items():
+        if not ticket or ticket in open_ids:
+            continue
+        opens = [item for item in items if item.get("type") == "open"]
+        closes = [item for item in items if item.get("type") == "close"]
+        if not closes:
+            continue
+        sample = opens[0] if opens else closes[-1]
+        inst = str(sample.get("instrument") or "").strip().upper()
+        if inst != LONDON_SYMBOL:
+            continue
+        stamp = _deal_time(opens[0]) if opens else _deal_time(closes[-1])
+        if stamp is None or stamp.astimezone(NY).date() != day:
+            continue
+        found.append(ticket)
+    if len(found) == 1:
+        return found[0]
+    return None
+
+
+def _open_side(deals, ticket):
+    for deal in deals or ():
+        if not isinstance(deal, dict) or str(deal.get("position_id") or "").strip() != ticket:
+            continue
+        if deal.get("type") == "open":
+            return _deal_side(deal.get("direction"))
+    return None
+
+
+def _correct(key, field, old, new):
+    if not _present(new) or old == new:
+        return
+    if not _present(old):
+        return
+    LOG.warning("component=session_combo event=HISTORY_BACKFILL status=correct key=%s field=%s old=%s new=%s",
+                key, field, old, new)
+
+
+def _pending_line(key, state):
+    """Una línea, sin importes ni secretos, para ver el flag que sigue pendiente.
+
+    ``flag`` es el status guardado. ``status`` de la línea ya es el evento (pending).
+    """
+    LOG.info(
+        "component=session_combo event=HISTORY_BACKFILL status=pending key=%s flag=%s exited=%s "
+        "side=%s symbol=%s has_ticket=%s has_pnl=%s opened_at=%s",
+        key, (state or {}).get("status"), (state or {}).get("exited"),
+        (state or {}).get("side") or "none", (state or {}).get("symbol") or "none",
+        "no" if _no_ticket(state) else "yes",
+        "yes" if _present((state or {}).get("pnl")) else "no",
+        (state or {}).get("opened_at") or "none")
 
 
 def _row_ticket(row):
@@ -532,12 +639,12 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
             state = _load_state(raw)
             if state is None:
                 continue
-            if _blank_terminal(state):
+            if _blank_terminal(state) and not _never_filled(state, key):
                 blank.append((key, state))
-            elif _incomplete(state):
-                loaded.append((key, state))
             elif _filled_open(state):
                 flat.append((key, state))
+            elif _incomplete(state) or _deal_gap(state):
+                loaded.append((key, state))
         rows = open_rows(broker) if (flat or blank) else None
         # Una pata filled que ya no está en el libro se cierra aquí. El backfill viejo solo miraba patas ya cerradas.
         waiting = [(key, state) for key, state in flat if rows is not None and not _still_held(state, rows)]
@@ -557,7 +664,10 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
             deals = fetch_deals(client, start, end, get_json=get_json)
             result["fetched"] = True
         for key, state in loaded:
-            if not fill_state_from_deals(state, deals, key=key):
+            # fill_if_empty no pisa un precio ya guardado, ni con blanco ni con otro número.
+            changed = fill_state_from_deals(state, deals, key=key)
+            changed = _fill_times_from_deals(state, deals) or changed
+            if not changed:
                 continue
             store.set_flag(key, _dump(state))
             result["updated"] += 1
@@ -567,18 +677,29 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
             store.set_flag(key, _dump(state))
             result["updated"] += 1
         for key, state in blank:
-            # Sin libro no se cruza. Sin un único ticket no se reescribe el done vacío.
+            # Sin libro no se cruza. Cero o varios cierres: no se reescribe el done vacío.
             if rows is None:
                 continue
-            guessed = _with_london_symbol(state, key)
-            if not str(guessed.get("symbol") or "").strip():
-                continue
-            ticket = resolve_closed_ticket(guessed, key, deals, rows)
+            if str(key).startswith("combo_lon_"):
+                ticket = _london_day_ticket(key, deals, rows)
+            else:
+                guessed = _with_london_symbol(state, key)
+                if not str(guessed.get("symbol") or "").strip():
+                    continue
+                ticket = resolve_closed_ticket(guessed, key, deals, rows)
             if not ticket:
                 continue
-            filled = dict(guessed)
+            filled = dict(state)
+            old_symbol = str(filled.get("symbol") or "").strip()
+            if str(key).startswith("combo_lon_"):
+                _correct(key, "symbol", old_symbol.upper(), LONDON_SYMBOL)
+                filled["symbol"] = LONDON_SYMBOL
             filled["position_id"] = ticket
             fill_state_from_deals(filled, deals, key=key)
+            deal_side = _open_side(deals, ticket)
+            if deal_side:
+                _correct(key, "side", filled.get("side"), deal_side)
+                filled["side"] = deal_side
             _fill_times_from_deals(filled, deals)
             if _no_ticket(filled) or not _present(filled.get("pnl")):
                 continue
@@ -586,23 +707,25 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
             state.update(filled)
             store.set_flag(key, _dump(state))
             result["updated"] += 1
-        still = 0
+        pending = []
         for key, state in loaded:
-            if _incomplete(state) and str(state.get("position_id") or "").strip():
-                still += 1
+            if str(state.get("position_id") or "").strip() and (_incomplete(state) or _price_gap(state)):
+                pending.append((key, state))
         for key, state in blank:
             if _no_ticket(state) or not _present(state.get("pnl")):
-                still += 1
+                pending.append((key, state))
         if rows is None:
-            still += len(flat)
+            pending.extend(flat)
         else:
             for key, state in flat:
                 if _filled_open(state):
-                    still += 1
+                    pending.append((key, state))
                 elif _incomplete(state) and str(state.get("position_id") or "").strip():
-                    still += 1
-        result["pending"] = still
-        _log("ok", updated=result["updated"], pending=still)
+                    pending.append((key, state))
+        for key, state in pending:
+            _pending_line(key, state)
+        result["pending"] = len(pending)
+        _log("ok", updated=result["updated"], pending=result["pending"])
         return result
     except Exception as exc:  # noqa: BLE001 - a history miss must not break the session
         _log("failed", reason="read_failed", error_type=type(exc).__name__,
