@@ -510,6 +510,52 @@ class FlatFlagBackfillTests(unittest.TestCase):
         self.assertEqual(result["pending"], 0)
         self.assertFalse(result["fetched"])
 
+    def test_missing_prices_are_filled_and_stored_prices_are_not_blanked(self):
+        store = MemoryFlags()
+        key = "combo_lon_2026-11-23"
+        put(store, key, {
+            "status": "done", "exited": True, "symbol": "USDJPY",
+            "position_id": "409759", "pnl": "380.76", "exit_reason": "london_1100",
+        })
+        opened = "2026-11-23T08:02:04+00:00"
+        closed = "2026-11-23T16:00:03+00:00"
+        client = FakeHistoryClient([
+            deal("409759", "open", "159.067", "0", opened, direction="buy", volume="1.71"),
+            deal("409759", "close", "159.422", ("380.76", "USC"), closed, direction="sell", volume="1.71"),
+        ])
+        broker = FakeBroker(store, client)
+        result = backfill_combo_history(broker, now=datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc))
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(result["pending"], 0)
+        state = load(store, key)
+        self.assertEqual(state["entry"], "159.067")
+        self.assertEqual(state["exit_price"], "159.422")
+        self.assertEqual(state["side"], "LONG")
+        self.assertEqual(state["volume"], "1.71")
+        self.assertEqual(state["opened_at"], opened)
+        self.assertEqual(state["exit_at"], closed)
+        client.deals = [
+            deal("409759", "open", "", "0", opened, direction="buy", volume=""),
+            deal("409759", "close", "", ("380.76", "USC"), closed, direction="sell", volume=""),
+        ]
+        again = backfill_combo_history(broker, now=datetime(2026, 11, 27, 21, 30, tzinfo=timezone.utc))
+        self.assertEqual(again["updated"], 0)
+        kept = load(store, key)
+        self.assertEqual(kept["entry"], "159.067")
+        self.assertEqual(kept["exit_price"], "159.422")
+        self.assertEqual(kept["side"], "LONG")
+        self.assertEqual(kept["volume"], "1.71")
+        client.deals = [
+            deal("409759", "open", "111", "0", opened, direction="sell", volume="9"),
+            deal("409759", "close", "1", ("1", "USC"), closed, direction="buy", volume="9"),
+        ]
+        backfill_combo_history(broker, now=datetime(2026, 11, 27, 22, 0, tzinfo=timezone.utc))
+        still = load(store, key)
+        self.assertEqual(still["entry"], "159.067")
+        self.assertEqual(still["exit_price"], "159.422")
+        self.assertEqual(still["side"], "LONG")
+        self.assertEqual(still["volume"], "1.71")
+
     def test_two_close_deals_sum_to_one_pnl(self):
         day = datetime(2026, 11, 25, tzinfo=timezone.utc)
         store = MemoryFlags()

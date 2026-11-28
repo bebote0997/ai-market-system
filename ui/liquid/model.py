@@ -393,9 +393,18 @@ def _closed_leg(leg, now):
     return exit_at is not None and exit_at <= now and not leg["position_id"]
 
 
+def _ticket_rank(ticket):
+    text = str(ticket or "")
+    if text.isdigit():
+        return (0, int(text))
+    return (1, text)
+
+
 def _history(legs, currency, now):
     chosen = [leg for leg in legs if _closed_leg(leg, now) and _shown_in_history(leg)]
-    chosen.sort(key=lambda leg: (leg["opened_at"] or datetime.min.replace(tzinfo=timezone.utc), leg["key"]), reverse=True)
+    # Cierre más reciente primero. Mismo cierre: el ticket mayor queda arriba. Vale para todas las páginas.
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    chosen.sort(key=lambda leg: (leg["exit_at"] or floor, _ticket_rank(leg["position_id"])), reverse=True)
     rows = [_leg_row(leg, currency) for leg in chosen]
     return {"state": "rows" if chosen else "empty", "rows": rows, "recent": rows[:3], "stats": _stats(chosen, currency)}
 

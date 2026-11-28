@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-28 — Historial por hora de cierre, y precios que no se borran
+
+- Las filas se ordenan por la hora de cierre, la más reciente primero, en todas las páginas. Si dos cierran a la vez, queda arriba el ticket mayor.
+- Si hay ticket y falta entrada, salida, lado, lotes o la hora de cierre, el backfill los toma del deal. Un valor ya guardado no se sustituye por un blanco ni por otro número.
+- La vista previa usa los nueve deals con sus precios reales. La curva arranca en 30086. La tarjeta de arriba sigue en equity 30644.6 y P/L total +558.60.
+- Sin merge y sin deploy.
+
 ## 2026-11-28 — cruce del 25 nov con lado distinto, y curva desde el historial
 
 - Un `combo_lon_` terminal sin ticket acepta el único cierre USDJPY de ese día ET aunque el lado o el par guardados no coincidan. El lado se corrige con el deal y queda un aviso con el valor viejo y el nuevo. Cero o dos cierres: no se escribe nada.

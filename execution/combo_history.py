@@ -222,7 +222,7 @@ def _fill_times_from_deals(state, deals):
     """Horario de entrada y salida del propio deal, solo si el flag no lo tiene."""
     ticket = str((state or {}).get("position_id") or "").strip()
     if not ticket:
-        return
+        return False
     opens, closes = [], []
     for deal in deals or ():
         if not isinstance(deal, dict) or str(deal.get("position_id") or "").strip() != ticket:
@@ -231,14 +231,18 @@ def _fill_times_from_deals(state, deals):
             opens.append(deal)
         elif deal.get("type") == "close":
             closes.append(deal)
+    changed = False
     if not state.get("opened_at") and opens:
         stamp = _deal_time(opens[0])
         if stamp is not None:
             state["opened_at"] = stamp.astimezone(timezone.utc).isoformat()
+            changed = True
     if not state.get("exit_at") and closes:
         stamp = _deal_time(closes[-1])
         if stamp is not None:
             state["exit_at"] = stamp.astimezone(timezone.utc).isoformat()
+            changed = True
+    return changed
 
 
 def _aware(value):
@@ -276,6 +280,22 @@ def _incomplete(state):
     if not _terminal(state):
         return False
     return not all(_present(state.get(name)) for name in ("entry", "exit_price", "pnl", "exit_reason"))
+
+
+def _price_gap(state):
+    """Ticket ya guardado, pero falta la entrada, la salida, el lado o los lotes."""
+    if _no_ticket(state):
+        return False
+    return any(not _present(state.get(name)) for name in ("entry", "exit_price", "side", "volume"))
+
+
+def _deal_gap(state):
+    """Ese hueco, o la hora de apertura o de cierre todavía vacía."""
+    if _price_gap(state):
+        return True
+    if _no_ticket(state):
+        return False
+    return _aware(state.get("exit_at")) is None or _aware(state.get("opened_at")) is None
 
 
 def _filled_open(state):
@@ -621,10 +641,10 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
                 continue
             if _blank_terminal(state) and not _never_filled(state, key):
                 blank.append((key, state))
-            elif _incomplete(state):
-                loaded.append((key, state))
             elif _filled_open(state):
                 flat.append((key, state))
+            elif _incomplete(state) or _deal_gap(state):
+                loaded.append((key, state))
         rows = open_rows(broker) if (flat or blank) else None
         # Una pata filled que ya no está en el libro se cierra aquí. El backfill viejo solo miraba patas ya cerradas.
         waiting = [(key, state) for key, state in flat if rows is not None and not _still_held(state, rows)]
@@ -644,7 +664,10 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
             deals = fetch_deals(client, start, end, get_json=get_json)
             result["fetched"] = True
         for key, state in loaded:
-            if not fill_state_from_deals(state, deals, key=key):
+            # fill_if_empty no pisa un precio ya guardado, ni con blanco ni con otro número.
+            changed = fill_state_from_deals(state, deals, key=key)
+            changed = _fill_times_from_deals(state, deals) or changed
+            if not changed:
                 continue
             store.set_flag(key, _dump(state))
             result["updated"] += 1
@@ -686,7 +709,7 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
             result["updated"] += 1
         pending = []
         for key, state in loaded:
-            if _incomplete(state) and str(state.get("position_id") or "").strip():
+            if str(state.get("position_id") or "").strip() and (_incomplete(state) or _price_gap(state)):
                 pending.append((key, state))
         for key, state in blank:
             if _no_ticket(state) or not _present(state.get("pnl")):
