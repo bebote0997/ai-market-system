@@ -550,8 +550,10 @@ class HistorySquareTests(unittest.TestCase):
         self.assertEqual(view["curve"]["state"], "ok")
         self.assertEqual(view["curve"]["ranges"]["30"]["state"], "ok")
         self.assertEqual(len(points), 10)
-        self.assertEqual(points[0]["equity"], "30086")
-        self.assertEqual(points[-1]["equity"], "30644.67")
+        self.assertEqual(points[0]["equity"], "30085.93")
+        self.assertEqual(points[-1]["equity"], "30644.60")
+        self.assertEqual(points[0]["axis"], "18/11")
+        self.assertEqual(points[-1]["axis"], "27/11")
         self.assertIn("558.67", view["history"]["stats"]["net"])
         self.assertIn("558.60", view["kpis"]["total"]["text"])
         self.assertIn("30,644.60", view["kpis"]["balance"]["text"])
@@ -591,7 +593,9 @@ class HistorySquareTests(unittest.TestCase):
             {"at": "2026-11-18T16:00:00+00:00", "equity": "10000"},
             {"at": "2026-11-19T16:00:00+00:00", "equity": "10010"},
         ])
-        self.assertEqual(kept["curve"]["points"][-1]["equity"], "10010")
+        # A stored cycle-equity series no longer wins over the realized closes.
+        self.assertEqual(kept["curve"]["points"][0]["equity"], "10000")
+        self.assertEqual(kept["curve"]["points"][-1]["equity"], "10062.11")
 
     def test_history_sorts_by_close_time_and_breaks_ties_by_ticket(self):
         now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)

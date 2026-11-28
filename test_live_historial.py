@@ -155,6 +155,76 @@ class LiveEightRowsTests(unittest.TestCase):
         self.assertNotIn("332845", [row["ticket"] for row in view["history"]["rows"]])
 
 
+    def test_rendimiento_uses_close_times_not_a_flat_snapshot_curve(self):
+        """Live on 23f1030: ui_snapshots.curve is current equity at the cycle read time.
+
+        desk_from_book stores {at: cycle time, equity: current equity}; attach_desk
+        appends those points. build_dashboard preferred that series when it had
+        two or more points, so Rendimiento was nine points at 30,644.60, 27/11→27/11.
+        The series must be brake_start 30086 plus the −0.07 of 17 nov, then the
+        nine closes, ending at 30,644.60, with real close dates on the axis.
+        """
+        import sqlite3
+        from ui.liquid.page import load
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        state = Path(folder.name) / "exness_state.db"
+        ui_db = Path(folder.name) / "trading_floor.db"
+        flags, cached = [], []
+        for item in DEALS:
+            if item[0] != "440549":
+                flags.append(_flag(*item))
+            cached.extend(_deal(*item))
+        cached.extend(_deal(*PRIOR))
+        flags.append(("combo_lon_2026-11-25", json.dumps({"status": "submitted", "exited": False, "side": "SHORT", "symbol": "USDJPY", "opened_at": "2026-11-25T07:30:32.198228+00:00"})))
+        flags.append(("exness_brake_start", "30086"))
+        flags.append(("exness_launch_start", "2026-11-16T21:00:00+00:00"))
+        flags.append(("exness_closed_deals", json.dumps(cached)))
+        _store(state, flags)
+        # Nine cycle samples, all at today's equity and today's read time — the live shape.
+        now_at = NOW.isoformat()
+        flat = [{"at": "2026-11-27T16:%02d:00+00:00" % (i * 5), "equity": "30644.6"} for i in range(9)]
+        con = sqlite3.connect(ui_db)
+        con.execute("CREATE TABLE ui_snapshots(symbol TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+        con.execute("INSERT INTO ui_snapshots(symbol, payload) VALUES(?, ?)",
+                    ("USDJPY", json.dumps({
+                        "as_of": now_at,
+                        "account_state": {"balance": "30644.6", "equity": "30644.6", "currency": "USC"},
+                        "positions": [], "orders": [],
+                        "curve": flat,
+                    })))
+        con.commit()
+        con.close()
+        env = {
+            "AI_FLOOR_BROKER": "exness",
+            "AI_FLOOR_EXNESS_STATE_DB_PATH": str(state),
+            "AI_FLOOR_DB_PATH": str(ui_db),
+        }
+        view = load(env=env, now=NOW)
+        points = view["curve"]["points"]
+        tickets = [row["ticket"] for row in view["history"]["rows"]]
+        self.assertEqual(view["curve"]["state"], "ok")
+        self.assertEqual(len(tickets), 9)
+        self.assertIn("440549", tickets)
+        self.assertNotIn("332845", tickets)
+        self.assertEqual(len(points), 10)
+        self.assertEqual(points[0]["equity"], "30085.93")
+        self.assertEqual(points[-1]["equity"], "30644.60")
+        self.assertEqual(points[0]["axis"], "18/11")
+        self.assertEqual(points[-1]["axis"], "27/11")
+        axes = [point["axis"] for point in points]
+        self.assertEqual(set(axes), {"18/11", "19/11", "20/11", "23/11", "24/11", "25/11", "27/11"})
+        # Running balances at each close (start 30085.93, then the nine P/L figures).
+        expected = ["30085.93", "30001.85", "30148.04", "30264.46", "30255.46",
+                    "30636.22", "30623.22", "30483.33", "30463.14", "30644.60"]
+        self.assertEqual([point["equity"] for point in points], expected)
+        for key in ("30", "90", "365", "all"):
+            series = view["curve"]["ranges"][key]["points"]
+            self.assertEqual(series[-1]["equity"], "30644.60")
+            self.assertEqual(series[0]["axis"], "18/11")
+            self.assertEqual(series[-1]["axis"], "27/11")
+
+
 class PriorNoteAndLogTests(unittest.TestCase):
     def tearDown(self):
         from ui.liquid import model as liquid_model

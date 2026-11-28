@@ -477,10 +477,10 @@ def _strategy(legs, now):
 
 
 def _history_curve(legs, now, start_balance, start_at):
-    """P/L realizado acumulado por hora de cierre, anclado al balance de inicio del ciclo.
+    """P/L realizado acumulado por hora de cierre, anclado al balance de inicio del Historial.
 
-    Sin serie guardada (o con menos de dos puntos) esta es la curva. No inventa precios.
-    Si el flag no trae reloj, el punto cae a las 11:00 ET de la fecha que ya está en la clave.
+    ``start_balance`` already includes closes before HISTORY_START (brake_start plus
+    that earlier P/L). If the flag has no clock, the point uses 11:00 ET of the key date.
     """
     if start_balance is None:
         return None
@@ -914,7 +914,7 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     if total_amount is None:
         total_text, total_tone = _gap(now), ""
     legs = _legs(flags, now)
-    from execution.combo_history import extra_rows_from_deals, prior_history_note
+    from execution.combo_history import HISTORY_START, extra_rows_from_deals, prior_history_note, prior_history_pnl
     shown = {leg["position_id"] for leg in legs
              if leg.get("position_id") and _closed_leg(leg, now) and _shown_in_history(leg)}
     added = extra_rows_from_deals(flags, shown, now)
@@ -924,12 +924,21 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     book = _book_from_snapshot(snap, book)
     if book is None:
         book = _book_from_marks(flags, now)
-    if curve is None and isinstance(snap.get("curve"), (list, tuple)):
+    # desk_from_book (execution/exness_desk.py) stores current equity at the cycle
+    # read time; attach_desk appends those points to ui_snapshots.curve. Prefer the
+    # realized series at each close so Rendimiento is not that flat sample.
+    start_balance = _money(brakes.get("brake_start"))
+    if start_balance is not None:
+        start_balance = start_balance + prior_history_pnl(flags)
+    start_at = _aware(flags.get("exness_launch_start") if isinstance(flags, dict) else None)
+    history_open = datetime(HISTORY_START.year, HISTORY_START.month, HISTORY_START.day, tzinfo=NY)
+    if start_at is None or start_at < history_open:
+        start_at = history_open
+    derived = _history_curve(legs, now, start_balance, start_at)
+    if derived:
+        curve = derived
+    elif curve is None and isinstance(snap.get("curve"), (list, tuple)):
         curve = snap.get("curve")
-    if _curve(curve, now, currency).get("state") != "ok":
-        derived = _history_curve(legs, now, _money(brakes.get("brake_start")), _aware(flags.get("exness_launch_start") if isinstance(flags, dict) else None))
-        if derived:
-            curve = derived
     positions = _positions(book, legs, currency, now)
     for row in positions["rows"]:
         row.pop("_profit", None)

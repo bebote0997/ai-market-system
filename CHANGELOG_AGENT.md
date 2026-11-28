@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-28 — la curva de Rendimiento usa el P/L realizado en cada cierre
+
+- Causa: `desk_from_book` (`execution/exness_desk.py`) guarda el equity actual a la hora del ciclo; `attach_desk` lo añade a `ui_snapshots.curve`. `build_dashboard` prefería esa serie si tenía dos o más puntos, y no usaba `_history_curve`. En vivo eran 9 puntos en 30,644.60, eje 27/11→27/11.
+- La curva pasa a ser el balance de inicio (30086) más el P/L anterior al Historial (−0.07 del 17 nov) y, en cada hora de cierre, el P/L acumulado. El último punto es 30,644.60, igual que el saldo y la tarjeta de P/L total. El eje muestra las fechas reales de cierre (18/11→27/11). El 17 nov no entra en la tabla.
+- Borrador, luego merge y deploy autorizados.
+
 ## 2026-11-28 — nota del P/L total, logs del panel y la curva como imagen
 
 - Bajo la tarjeta P/L total, una nota calcula el P/L de los cierres anteriores al inicio del Historial (18 nov). Con los datos actuales: «Incluye −0.07 USC del 17 nov (EURUSD), anterior al historial». Si esa suma es 0, la nota no sale. Esa operación no entra en la tabla.

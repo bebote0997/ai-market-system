@@ -1,6 +1,6 @@
 """Capturas con los nueve deals reales. El panel en vivo no importa este módulo.
 
-La curva no se inyecta: sale del P/L realizado, anclada al balance de inicio del ciclo.
+La curva no se inyecta: sale del P/L realizado, anclada al inicio del Historial (brake_start más el P/L anterior al 18 nov).
 """
 from datetime import datetime, timezone
 import json
@@ -24,10 +24,19 @@ def example_view(now=None):
     now = _NOW if now is None else now
     stamp = now.isoformat()
     # Nine real Exness deals. Times below are ET converted to UTC (EST, UTC−5).
-    # Cycle card: equity 30644.6 − brake_start 30086 = +558.60. The curve starts at 30086.
+    # Cycle card: equity 30644.6 − brake_start 30086 = +558.60. The curve starts at
+    # 30085.93 (30086 plus the −0.07 close of 17 nov) so the last point is 30644.60.
     flags = {
         "exness_launch_start": "2026-11-16T21:00:00+00:00",
         "exness_brake_start": "30086",
+        "exness_closed_deals": json.dumps([
+            {"type": "open", "position_id": "332845", "instrument": "EURUSD", "direction": "buy",
+             "volume": "0.01", "price": "1.10152", "profit": {"amount": "0", "currency": "USC"},
+             "create_time": "2026-11-17T16:50:47+00:00"},
+            {"type": "close", "position_id": "332845", "instrument": "EURUSD", "direction": "buy",
+             "volume": "0.01", "price": "1.10145", "profit": {"amount": "-0.07", "currency": "USC"},
+             "create_time": "2026-11-17T16:50:50+00:00"},
+        ]),
         "exness_brake_day_equity": "30644.6",
         "exness_brake_halt": "0",
         "exness_link": "1",
