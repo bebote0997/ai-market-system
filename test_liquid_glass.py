@@ -566,7 +566,8 @@ class HistorySquareTests(unittest.TestCase):
         self.assertNotIn("sin datos", table.lower())
         self.assertIn('data-range="30"', html)
         self.assertNotIn("No hay una serie de equity guardada", html)
-        self.assertIn("<svg", html)
+        self.assertIn("data:image/svg+xml;base64,", html)
+        self.assertIsNone(__import__("re").search(r"<svg\b", html))
 
     def test_a_short_stored_curve_uses_the_closed_history(self):
         flags = {

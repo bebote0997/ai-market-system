@@ -1,5 +1,13 @@
 # Agent Changelog
 
+## 2026-11-28 — nota del P/L total, logs del panel y la curva como imagen
+
+- Bajo la tarjeta P/L total, una nota calcula el P/L de los cierres anteriores al inicio del Historial (18 nov). Con los datos actuales: «Incluye −0.07 USC del 17 nov (EURUSD), anterior al historial». Si esa suma es 0, la nota no sale. Esa operación no entra en la tabla.
+- El cache de deals arranca 14 días antes del 18 nov, para que la nota tenga esos cierres. El backfill no los pinta como fila.
+- El proceso Streamlit entra un handler de stdout en el logger `ai_floor.session_combo` si no lo tiene, una sola vez. `HISTORY_VIEW` añade el número de puntos de cada rango (30, 90, 365, todo).
+- Streamlit 1.65 `st.html` limpia el HTML con DOMPurify `USE_PROFILES: { html: true }`, también con `unsafe_allow_javascript=True`. Ese perfil quita `svg`, `polyline`, `polygon`, `defs` y el resto de SVG. La curva de Rendimiento pasa a un `img` con data-URI (claro y oscuro).
+- Borrador. Sin merge y sin deploy.
+
 ## 2026-11-28 — la 440549 entra desde los deals, y la curva tiene alto
 
 - El Historial sigue saliendo de las flags. Un cierre del cache `exness_closed_deals` cuyo ticket no está en una fila visible se añade. No se duplica. La 440549, confirmada por HQ, queda `hq_manual` («cierre manual HQ»). Si no hay motivo de ese día, el texto es «cierre manual».

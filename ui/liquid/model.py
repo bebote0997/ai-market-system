@@ -606,9 +606,12 @@ def _split(text):
     return main, minor
 
 
-def _kpi(text, sub, tone=""):
+def _kpi(text, sub, tone="", note=None):
     main, minor = _split(text)
-    return {"text": text, "sub": sub, "tone": tone, "main": main, "minor": minor}
+    item = {"text": text, "sub": sub, "tone": tone, "main": main, "minor": minor}
+    if note:
+        item["note"] = note
+    return item
 
 
 def _pill(leg):
@@ -911,7 +914,7 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     if total_amount is None:
         total_text, total_tone = _gap(now), ""
     legs = _legs(flags, now)
-    from execution.combo_history import extra_rows_from_deals
+    from execution.combo_history import extra_rows_from_deals, prior_history_note
     shown = {leg["position_id"] for leg in legs
              if leg.get("position_id") and _closed_leg(leg, now) and _shown_in_history(leg)}
     added = extra_rows_from_deals(flags, shown, now)
@@ -1017,7 +1020,8 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
             "balance": _kpi(balance_text, "Saldo de la cuenta" if account.get("balance") is not None else (read_at or _gap(now))),
             "equity": _kpi(equity_text, equity_sub),
             "today": _kpi(today_text, "Respecto a la base del día" if today_amount is not None else MISSING, today_tone),
-            "total": _kpi(total_text, "Desde el inicio del ciclo" if total_amount is not None else MISSING, total_tone),
+            "total": _kpi(total_text, "Desde el inicio del ciclo" if total_amount is not None else MISSING, total_tone,
+                          note=prior_history_note(flags, currency)),
             "cycle": _kpi(f"Día {shown_day} de 30", clock_line(clock), ""),
             "trades": _kpi(trades, "Operaciones del ciclo"),
         },
@@ -1036,6 +1040,10 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
 _view_logged = False
 
 
+def _range_points(ranges, key):
+    return len((ranges.get(key) or {}).get("points") or [])
+
+
 def _log_history_view(view, added):
     """Once per process. No amounts. The next deploy compares this line with the nine real tickets."""
     global _view_logged
@@ -1043,13 +1051,17 @@ def _log_history_view(view, added):
         return view
     _view_logged = True
     import logging
+    from execution.combo_history import ensure_session_combo_log
+    ensure_session_combo_log()
     rows = (view.get("history") or {}).get("rows") or []
     tickets = [row.get("ticket") for row in rows if row.get("ticket") and row.get("ticket") != MISSING]
     ranges = (view.get("curve") or {}).get("ranges") or {}
-    points = (ranges.get("30") or {}).get("points") or []
+    points = _range_points(ranges, "30")
     logging.getLogger("ai_floor.session_combo").info(
-        "component=session_combo event=HISTORY_VIEW rows=%s tickets=%s curve_points=%s source=exness_flags",
-        len(rows), ",".join(tickets), len(points))
+        "component=session_combo event=HISTORY_VIEW rows=%s tickets=%s curve_points=%s "
+        "range_30=%s range_90=%s range_365=%s range_all=%s source=exness_flags",
+        len(rows), ",".join(tickets), points,
+        points, _range_points(ranges, "90"), _range_points(ranges, "365"), _range_points(ranges, "all"))
     logging.getLogger("ai_floor.session_combo").info(
         "component=session_combo event=HISTORY_DEALS_MERGE added=%s", len(added))
     return view
