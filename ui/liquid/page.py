@@ -68,6 +68,9 @@ padding:0 !important;max-width:100% !important}
 
 
 def _draw(st, body):
+    # Streamlit 1.65 ``st.html`` always runs DOMPurify with USE_PROFILES html:true,
+    # even when unsafe_allow_javascript=True. That profile drops svg/MathML, so
+    # the Rendimiento curve is an <img data:image/svg+xml> rather than inline svg.
     html = getattr(st, "html", None)
     if callable(html):
         try:

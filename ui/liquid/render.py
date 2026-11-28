@@ -52,7 +52,8 @@ def _bar(item):
     return f'<div class="bar" aria-hidden="true"><i style="width:{width:.1f}%"></i></div>'
 
 
-def _chart(points):
+def _chart_svg(points, *, ink, muted, chart, grad_id):
+    """Standalone SVG with baked-in colors. CSS variables do not apply inside an img."""
     values = []
     for point in points:
         try:
@@ -79,20 +80,46 @@ def _chart(points):
     label = _e(points[-1].get("text") or points[-1].get("y") or "")
     label_y = Decimal(14)
     return (
-        f'<svg class="equity" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
-        f'<defs><linearGradient id="lg-area" x1="0" y1="0" x2="0" y2="1">'
-        f'<stop offset="0" stop-color="#2563eb" stop-opacity="0.35"/>'
-        f'<stop offset="1" stop-color="#2563eb" stop-opacity="0.02"/></linearGradient></defs>'
-        f'<polygon points="{area}" fill="url(#lg-area)"/>'
-        f'<polyline points="{" ".join(coords)}" fill="none" stroke="var(--lg-chart)" stroke-width="2.5" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
+        f'<defs><linearGradient id="{grad_id}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0" stop-color="{chart}" stop-opacity="0.35"/>'
+        f'<stop offset="1" stop-color="{chart}" stop-opacity="0.02"/></linearGradient></defs>'
+        f'<polygon points="{area}" fill="url(#{grad_id})"/>'
+        f'<polyline points="{" ".join(coords)}" fill="none" stroke="{chart}" stroke-width="2.5" '
         f'stroke-linecap="round" stroke-linejoin="round"/>'
-        + "".join(f'<circle cx="{xy.split(",")[0]}" cy="{xy.split(",")[1]}" r="3.5" fill="var(--lg-chart)"/>' for xy in coords) +
-        f'<text class="axis" x="4" y="{top + 4:.0f}">{y_hi}</text>'
-        f'<text class="axis" x="4" y="{floor:.0f}">{y_lo}</text>'
-        f'<text class="axis" x="{left:.0f}" y="{height - 8}">{x0}</text>'
-        f'<text class="axis" x="{last_x:.0f}" y="{height - 8}" text-anchor="end">{x1}</text>'
-        f'<text class="chart-label" x="{last_x:.1f}" y="{label_y:.1f}" text-anchor="end">{label}</text>'
+        + "".join(
+            f'<circle cx="{xy.split(",")[0]}" cy="{xy.split(",")[1]}" r="3.5" fill="{chart}"/>'
+            for xy in coords) +
+        f'<text font-size="11" fill="{muted}" x="4" y="{top + 4:.0f}">{y_hi}</text>'
+        f'<text font-size="11" fill="{muted}" x="4" y="{floor:.0f}">{y_lo}</text>'
+        f'<text font-size="11" fill="{muted}" x="{left:.0f}" y="{height - 8}">{x0}</text>'
+        f'<text font-size="11" fill="{muted}" x="{last_x:.0f}" y="{height - 8}" text-anchor="end">{x1}</text>'
+        f'<text font-size="12" font-weight="700" fill="{ink}" x="{last_x:.1f}" y="{label_y:.1f}" '
+        f'text-anchor="end">{label}</text>'
         f'</svg>')
+
+
+def _chart_img(svg, klass):
+    if not svg:
+        return ""
+    payload = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return (
+        f'<img class="equity {klass}" src="data:image/svg+xml;base64,{payload}" '
+        f'width="640" height="220" alt="Curva de equity">'
+    )
+
+
+def _chart(points):
+    """Emit the curve as an HTML img. Streamlit 1.65 ``st.html`` sanitizes with
+    DOMPurify ``USE_PROFILES: { html: true }``, which drops ``svg`` and
+    descendants (polyline, polygon, defs, text, …). An ``img`` data-URI survives.
+    Two copies follow the logo's light/dark swap because the image cannot see
+    page CSS variables.
+    """
+    light = _chart_svg(points, ink="#14324a", muted="#4d6478", chart="#2563eb", grad_id="lg-area-light")
+    dark = _chart_svg(points, ink="#e8eef8", muted="#b7c5d8", chart="#7dd3fc", grad_id="lg-area-dark")
+    return _chart_img(light, "on-light") + _chart_img(dark, "on-dark")
 
 
 def _pill(text, tone):
@@ -116,9 +143,10 @@ def _value(text):
 def _kpi(label, item):
     tone = item.get("tone") if item.get("tone") in ("pos", "neg") else ""
     minor = f'<div class="minor">{_e(item.get("minor"))}</div>' if item.get("minor") else ""
+    note = f'<div class="hint">{_e(item["note"])}</div>' if item.get("note") else ""
     return (f'<article class="card kpi"><div class="label">{_e(label)}</div>'
             f'<div class="value {tone}">{_value(item.get("main") or item["text"])}</div>{minor}'
-            f'<div class="hint">{_e(item["sub"])}</div></article>')
+            f'<div class="hint">{_e(item["sub"])}</div>{note}</article>')
 
 
 def _table(headers, rows):

@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 import json
 import logging
+import sys
 
 from execution.exness_client import safe_detail
 from execution.session_combo import LONDON_SYMBOL
@@ -17,7 +18,11 @@ from execution.session_combo import LONDON_SYMBOL
 
 LOG = logging.getLogger("ai_floor.session_combo")
 HISTORY_START = date(2026, 11, 18)
+# The table starts on HISTORY_START. The cache also keeps earlier closes so the
+# P/L-total note can show them without putting those rows in the Historial.
+CACHE_LOOKBACK_DAYS = 14
 NY = ZoneInfo("America/New_York")
+_MONTHS_ES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 _MATCH_SECONDS = 120
 # Tickets closed before #104 stored no exit_reason. Motivo comes from Floor logs, not from Exness
 # (deal.reason was empty). Do not invent fix_30m: 382026 was a manual HQ close.
@@ -654,6 +659,107 @@ def store_closed_deals(store, deals):
     store.set_flag(CLOSED_DEALS_FLAG, json.dumps(_json_deals(deals), sort_keys=True))
 
 
+
+def cache_deals_from():
+    """UTC instant for the deals cache: two weeks before the Historial start."""
+    start = datetime(HISTORY_START.year, HISTORY_START.month, HISTORY_START.day, tzinfo=timezone.utc)
+    return start - timedelta(days=CACHE_LOOKBACK_DAYS)
+
+
+def ensure_session_combo_log():
+    """Idempotent: give the Streamlit process a stdout handler if it has none.
+
+    The runtime already logs ``ai_floor.session_combo`` to Render. The panel
+    process often has no stdout handler, so HISTORY_VIEW never appeared.
+    """
+    log = logging.getLogger("ai_floor.session_combo")
+    for handler in log.handlers:
+        stream = getattr(handler, "stream", None)
+        if isinstance(handler, logging.StreamHandler) and stream in (sys.stdout, sys.stderr):
+            if log.level == logging.NOTSET or log.level > logging.INFO:
+                log.setLevel(logging.INFO)
+            return log
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    log.addHandler(handler)
+    if log.level == logging.NOTSET or log.level > logging.INFO:
+        log.setLevel(logging.INFO)
+    return log
+
+
+def _signed_usc(amount):
+    text = _plain(abs(amount))
+    if amount > 0:
+        return "+" + text
+    if amount < 0:
+        return "\N{MINUS SIGN}" + text
+    return text or "0"
+
+
+def _date_es(day):
+    return "%s %s" % (day.day, _MONTHS_ES[day.month - 1])
+
+
+def prior_history_note(flags, currency="USC"):
+    """One line for closes before HISTORY_START, or None when their P/L sums to 0."""
+    raw = flags.get(CLOSED_DEALS_FLAG) if isinstance(flags, dict) else None
+    try:
+        deals = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except (TypeError, ValueError):
+        deals = []
+    if not isinstance(deals, list):
+        return None
+    grouped = {}
+    for deal in deals:
+        if not isinstance(deal, dict):
+            continue
+        ticket = str(deal.get("position_id") or "").strip()
+        if ticket:
+            grouped.setdefault(ticket, []).append(deal)
+    total = Decimal(0)
+    parts = []
+    for ticket, items in grouped.items():
+        opens = [item for item in items if item.get("type") == "open"]
+        closes = [item for item in items if item.get("type") == "close"]
+        if not closes:
+            continue
+        closes.sort(key=lambda item: _deal_time(item) or datetime.min.replace(tzinfo=timezone.utc))
+        closed = _deal_time(closes[-1])
+        if closed is None:
+            continue
+        day = closed.astimezone(NY).date()
+        if day >= HISTORY_START:
+            continue
+        amounts = []
+        for deal in closes:
+            amount = profit_amount(deal.get("profit"))
+            if amount is None:
+                amounts = None
+                break
+            amounts.append(amount)
+        if not amounts:
+            continue
+        pnl = sum(amounts, Decimal(0))
+        sample = opens[0] if opens else closes[-1]
+        symbol = str(sample.get("instrument") or "").strip().upper()
+        if len(symbol) != 6 or not symbol.isalpha():
+            continue
+        total += pnl
+        parts.append((day, symbol))
+    if total == 0 or not parts:
+        return None
+    parts = sorted(set(parts))
+    bits = ["%s (%s)" % (_date_es(day), symbol) for day, symbol in parts]
+    if len(bits) == 1:
+        when = "del " + bits[0]
+    elif len(bits) == 2:
+        when = "del " + bits[0] + " y " + bits[1]
+    else:
+        when = "del " + ", ".join(bits[:-1]) + " y " + bits[-1]
+    return "Incluye %s %s %s, anterior al historial" % (_signed_usc(total), currency or "USC", when)
+
+
 def log_london_flag(store):
     """One non-secret line for the 25 Nov flag, even when it is not pending."""
     raw = None
@@ -856,9 +962,7 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
         try:
             client = history_client(broker)
             if client is not None:
-                start = datetime(HISTORY_START.year, HISTORY_START.month, HISTORY_START.day, tzinfo=timezone.utc)
-                end = now + timedelta(hours=1)
-                cached = fetch_deals(client, start, end, get_json=get_json)
+                cached = fetch_deals(client, cache_deals_from(), now + timedelta(hours=1), get_json=get_json)
                 store_closed_deals(store, cached)
         except Exception as exc:  # noqa: BLE001 - the panel keeps the previous cache
             _log("skip", reason="cache_unread", error_type=type(exc).__name__)
