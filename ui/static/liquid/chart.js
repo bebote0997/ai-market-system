@@ -34,16 +34,87 @@
     return isFinite(n) ? n : null;
   }
 
-  function clock(iso) {
-    if (!iso) return "--:--";
-    var date = new Date(iso);
-    if (isNaN(date.getTime())) return "--:--";
-    var parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false
+  function toDate(value) {
+    if (value == null || value === "") return null;
+    if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+    if (typeof value === "number" && isFinite(value)) {
+      return new Date(value > 1e12 ? value : value * 1000);
+    }
+    var ms = Date.parse(value);
+    return isFinite(ms) ? new Date(ms) : null;
+  }
+
+  function formatEt(value) {
+    var date = toDate(value);
+    if (!date) return "";
+    var parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true
     }).formatToParts(date);
     var map = {};
     parts.forEach(function (part) { map[part.type] = part.value; });
-    return (map.hour || "--") + ":" + (map.minute || "--");
+    if (!map.hour || !map.minute) return "";
+    return map.hour + ":" + map.minute + " " + (map.dayPeriod || "").replace(/\./g, "").toUpperCase() + " ET";
+  }
+
+  function formatEtTick(time, tickMarkType) {
+    var date = toDate(time);
+    if (!date) return "";
+    var type = tickMarkType;
+    var kinds = window.LightweightCharts && window.LightweightCharts.TickMarkType;
+    var year = kinds ? kinds.Year : 0;
+    var month = kinds ? kinds.Month : 1;
+    var day = kinds ? kinds.DayOfMonth : 2;
+    if (type === year || type === 0) {
+      return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric" }).format(date);
+    }
+    if (type === month || type === 1) {
+      return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", year: "numeric" }).format(date);
+    }
+    if (type === day || type === 2) {
+      return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(date);
+    }
+    var text = formatEt(date);
+    return text.replace(" ET", "");
+  }
+
+  function nyWeekdayHour(date) {
+    var parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(date);
+    var map = {};
+    parts.forEach(function (part) { map[part.type] = part.value; });
+    return { weekday: map.weekday, minutes: (Number(map.hour) * 60) + Number(map.minute) };
+  }
+
+  function fxMarketClosed(now) {
+    var date = toDate(now) || new Date();
+    var slot = nyWeekdayHour(date);
+    if (slot.weekday === "Sat") return true;
+    if (slot.weekday === "Fri") return slot.minutes >= 17 * 60;
+    if (slot.weekday === "Sun") return slot.minutes < 17 * 60;
+    return false;
+  }
+
+  function chartStatus(data, now) {
+    var next = bars(data && data.candles);
+    if (!next.length) return "sin datos";
+    var last = formatEt(next[next.length - 1].time);
+    if (fxMarketClosed(now)) {
+      return last ? "mercado cerrado · última vela " + last : "mercado cerrado";
+    }
+    if (data.stale) {
+      return last ? "sin conexión · última vela " + last : "sin conexión";
+    }
+    var read = formatEt(data.last_update) || last;
+    var bid = data.bid != null && data.bid !== "" ? "Bid " + data.bid + " · " : "";
+    return bid + (read ? "última lectura " + read : "última lectura");
   }
 
   function bars(rows) {
@@ -64,12 +135,6 @@
     var n = toNum(value);
     if (n == null) return "0.00";
     return (n < 0 ? "−" : "") + Math.abs(n).toFixed(2);
-  }
-
-  function lastClock(statusEl) {
-    var text = statusEl ? statusEl.textContent : "";
-    var found = text && text.match(/(\d{2}:\d{2})$/);
-    return found ? found[1] : "--:--";
   }
 
   function bind() {
@@ -99,7 +164,15 @@
       },
       grid: { vertLines: { color: colors.stroke }, horzLines: { color: colors.stroke } },
       rightPriceScale: { borderColor: colors.stroke },
-      timeScale: { borderColor: colors.stroke, timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: colors.stroke,
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: function (time, tickMarkType) { return formatEtTick(time, tickMarkType); }
+      },
+      localization: {
+        timeFormatter: function (time) { return formatEt(time); }
+      },
       crosshair: { mode: 0 },
       handleScroll: { pressedMouseMove: true, mouseWheel: true, horzTouchDrag: true, vertTouchDrag: false },
       handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: false }
@@ -117,6 +190,12 @@
     var lines = [];
     var lastBars = [];
     window.__aifChart = chart;
+
+    function scaleMargins() {
+      var narrow = (el.clientWidth || window.innerWidth || 1280) <= 414;
+      return narrow ? { top: 0.14, bottom: 0.22 } : { top: 0.10, bottom: 0.12 };
+    }
+    chart.priceScale("right").applyOptions({ scaleMargins: scaleMargins() });
 
     function clearLines() {
       lines.forEach(function (line) {
@@ -153,6 +232,7 @@
       if (stop != null) specs.push({ price: stop, color: colors.neg, lineStyle: 2, title: "SL " + stop });
       if (target != null) specs.push({ price: target, color: colors.pos, lineStyle: 2, title: "TP " + target });
       var ext = specs.map(function (spec) { return spec.price; });
+      var margins = scaleMargins();
       series.applyOptions({
         autoscaleInfoProvider: function (orig) {
           var range = orig();
@@ -163,6 +243,7 @@
           return { priceRange: { minValue: lo - pad, maxValue: hi + pad }, margins: range.margins };
         }
       });
+      chart.priceScale("right").applyOptions({ scaleMargins: margins });
       specs.forEach(function (spec) {
         lines.push(series.createPriceLine({
           price: spec.price,
@@ -188,13 +269,7 @@
       }
       drawLines(data.position || null);
       setPosition(data.position || null);
-      var hhmm = clock(data.last_update);
-      if (data.stale || !data.last_update) {
-        setStatus("sin datos · última lectura " + hhmm);
-      } else {
-        var bid = data.bid != null && data.bid !== "" ? "Bid " + data.bid + " · " : "";
-        setStatus(bid + "última lectura " + hhmm);
-      }
+      setStatus(chartStatus(data, new Date()));
     }
 
     function select(next) {
@@ -235,7 +310,7 @@
         if (!res.ok) throw new Error("chart");
         return res.json();
       }).then(paint).catch(function () {
-        setStatus("sin datos · última lectura " + lastClock(statusEl));
+        setStatus(chartStatus({ candles: lastBars, stale: true, last_update: null }, new Date()));
       });
     }
 
