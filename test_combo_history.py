@@ -510,6 +510,21 @@ class FlatFlagBackfillTests(unittest.TestCase):
         self.assertEqual(result["pending"], 0)
         self.assertFalse(result["fetched"])
 
+    def test_the_nov_25_flag_is_logged_even_when_it_is_not_pending(self):
+        store = MemoryFlags()
+        put(store, "combo_lon_2026-11-25", {"status": "done", "exited": False})
+        broker = FakeBroker(store, FakeHistoryClient([]))
+        with self.assertLogs("ai_floor.session_combo", level="INFO") as logs:
+            backfill_combo_history(broker, now=datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc))
+        text = "\n".join(logs.output)
+        self.assertIn("event=HISTORY_FLAG", text)
+        self.assertIn("key=combo_lon_2026-11-25", text)
+        self.assertIn("status=done", text)
+        self.assertIn("has_ticket=no", text)
+        self.assertIn("has_pnl=no", text)
+        self.assertIn("opened_at=none", text)
+        self.assertIsNotNone(store.get_flag("exness_closed_deals"))
+
     def test_missing_prices_are_filled_and_stored_prices_are_not_blanked(self):
         store = MemoryFlags()
         key = "combo_lon_2026-11-23"

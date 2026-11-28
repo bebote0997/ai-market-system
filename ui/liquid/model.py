@@ -911,6 +911,13 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     if total_amount is None:
         total_text, total_tone = _gap(now), ""
     legs = _legs(flags, now)
+    from execution.combo_history import extra_rows_from_deals
+    shown = {leg["position_id"] for leg in legs
+             if leg.get("position_id") and _closed_leg(leg, now) and _shown_in_history(leg)}
+    added = extra_rows_from_deals(flags, shown, now)
+    for row in added:
+        row["side"] = _side(row.pop("_side", None))
+    legs = legs + added
     book = _book_from_snapshot(snap, book)
     if book is None:
         book = _book_from_marks(flags, now)
@@ -1002,7 +1009,7 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
     title = LABEL if broker_is_exness(env) else "Jt Trading Floor"
     armed = real_execution_armed(env) is True
     trades = "0" if clock.get("waiting") is not False else str(clock.get("trades") or 0)
-    return {
+    view = {
         "title": title, "version": VERSION, "safety": live_badge(env) or OFF_SAFETY,
         "live": armed, "safety_short": "Ejecución real activa" if armed else "Ejecución real desactivada",
         "clock": long_date_et(now), "now_epoch": str(int(now.timestamp())), "currency": currency,
@@ -1023,3 +1030,26 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
                    "state_line": _brake_state_line(flags, brakes, known, currency)},
         "history": _history(legs, currency, now), "system": system, "unavailable": unavailable, "banner": None,
     }
+    return _log_history_view(view, added)
+
+
+_view_logged = False
+
+
+def _log_history_view(view, added):
+    """Once per process. No amounts. The next deploy compares this line with the nine real tickets."""
+    global _view_logged
+    if _view_logged:
+        return view
+    _view_logged = True
+    import logging
+    rows = (view.get("history") or {}).get("rows") or []
+    tickets = [row.get("ticket") for row in rows if row.get("ticket") and row.get("ticket") != MISSING]
+    ranges = (view.get("curve") or {}).get("ranges") or {}
+    points = (ranges.get("30") or {}).get("points") or []
+    logging.getLogger("ai_floor.session_combo").info(
+        "component=session_combo event=HISTORY_VIEW rows=%s tickets=%s curve_points=%s source=exness_flags",
+        len(rows), ",".join(tickets), len(points))
+    logging.getLogger("ai_floor.session_combo").info(
+        "component=session_combo event=HISTORY_DEALS_MERGE added=%s", len(added))
+    return view
