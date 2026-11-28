@@ -1,5 +1,11 @@
 # Agent Changelog
 
+## 2026-11-28 — la gráfica G3 versiona chart.js para no servir el script en caché
+
+- Causa confirmada: `GET /liquid-assets/chart.js` ya devolvía el JS de G3 (mismo hash que el repo, con «mercado cerrado» y el formateo ET), pero el HTML lo pedía en una URL sin versión y el middleware lo enviaba con `Cache-Control: public, max-age=86400`. Recargar la página no cambia esa URL, así que el navegador seguía con el script de G2 («sin datos · última lectura 00:54» y el eje en UTC). El CSS va en línea, por eso el layout a 414 px sí se actualizó. El JSON no faltaba: las velas se pintaban con los mismos campos.
+- El panel ahora carga `/liquid-assets/chart.js?v=<hash>` y `/liquid-assets/lightweight-charts.js?v=<hash>`, con el SHA-256 del archivo. El GET sigue sin cookie. Sin cambio de env, estrategia, frenos, secretos ni operaciones.
+
+
 ## 2026-11-28 — gráfica G3: estado real, eje en ET y TP visible a 414 px
 
 - El rótulo sigue el estado real: con velas y mercado cerrado, «mercado cerrado · última vela [hora] ET»; con mercado abierto y el socket caído, «sin conexión · última vela [hora] ET»; «sin datos» solo si no hay velas. El cierre es viernes 17:00 ET hasta domingo 17:00 ET, con DST, el mismo horario de `friday_window`.

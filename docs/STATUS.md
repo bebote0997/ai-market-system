@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-28 (rama `fix/liquid-chart-g3`, sobre `ab5f1b3`). Fase G3 de la gráfica: rótulo según mercado cerrado o socket caído, eje y lecturas en ET, y en 414 px la barra inferior no cubre el TP. Sin cambio de env, estrategia, frenos ni secretos._
+_Última actualización: 2026-11-28 (rama `fix/liquid-chart-g3-asset-cache`, sobre `93d5526`). Los scripts de la gráfica se piden con un hash de contenido para que una caché de 24 h no deje el JS viejo. Sin cambio de env, estrategia, frenos ni secretos._
+
+_Anterior: 2026-11-28 (rama `fix/liquid-chart-g3`, sobre `ab5f1b3`). Fase G3 de la gráfica: rótulo según mercado cerrado o socket caído, eje y lecturas en ET, y en 414 px la barra inferior no cubre el TP. Sin cambio de env, estrategia, frenos ni secretos._
 
 _Anterior: 2026-11-28 (rama `fix/liquid-chart-friday-cache`, sobre `8885024`). La caché de la gráfica pide las velas M5 cerradas aunque no haya ticks, y guarda la hora de esa lectura si no había una previa. Así el fin de semana muestra el viernes y no «--:--». Sin cambio de env, estrategia, frenos ni secretos._
 
