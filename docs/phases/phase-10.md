@@ -1,5 +1,7 @@
 # Fase 10 — Command Center / Display V2
 
+**Adenda 2026-11-28 (presentación, fase G2, no recertifica):** gráfica M5 de solo lectura en Posiciones (lightweight-charts 5.3 vendida, sondeo GET cada 5 s, atribución TradingView). Incluye la caché y el GET de G1. El HTML pasa por el camino vivo de `st.html`. No cambia el estado CERTIFIED, ni órdenes, ni frenos, ni Render.
+
 **Adenda 2026-11-28 (presentación, no recertifica):** un deal cerrado cuyo ticket no está en una fila visible se añade desde el cache de deals. La 440549 se muestra como cierre manual HQ. La gráfica de Rendimiento tiene alto propio. No cambia el estado CERTIFIED ni Render.
 
 **Adenda 2026-11-28 (presentación, no recertifica):** el Historial se ordena por la hora de cierre, la más reciente primero, y desempata por ticket. Un ticket al que le faltan entrada, salida, lado o lotes se completa con el deal, sin pisar un precio ya guardado. No cambia el estado CERTIFIED ni Render.

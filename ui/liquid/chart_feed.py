@@ -9,12 +9,16 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 
 from execution.chart_cache import FLAG, SYMBOLS, _empty
 from ui.auth import REMEMBER_COOKIE, password_strong_enough, remember_token_valid, remote_dashboard_enabled
 
 
+
 _PATH = re.compile(r"^/chart/([A-Za-z]{6})\.json$")
+_ASSET_PATH = re.compile(r"^/liquid-assets/(lightweight-charts|chart)\.js$")
+_ASSET_ROOT = Path(__file__).resolve().parents[1] / "static" / "liquid"
 _CANDLE_KEYS = ("time", "open", "high", "low", "close")
 _POSITION_KEYS = ("entry", "stop", "target", "side", "floating")
 
@@ -133,6 +137,20 @@ def _body(payload):
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
+def asset_answer(method, path):
+    """``(status, body, content_type)`` for the vendored chart scripts, or None."""
+    path = str(path or "").split("?", 1)[0]
+    found = _ASSET_PATH.match(path)
+    if found is None:
+        return None
+    if str(method or "").upper() != "GET":
+        return 405, b"", "text/plain; charset=utf-8"
+    target = (_ASSET_ROOT / (found.group(1) + ".js")).resolve()
+    if target.parent != _ASSET_ROOT.resolve() or not target.is_file():
+        return 404, b"", "text/plain; charset=utf-8"
+    return 200, target.read_bytes(), "application/javascript; charset=utf-8"
+
+
 def answer(method, path, headers, env, *, now=None, cache=None):
     """``(status, body_bytes)`` for ``/chart/...``, or None when the path is not the chart."""
     path = str(path or "").split("?", 1)[0]
@@ -161,10 +179,22 @@ class ChartFeedMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path") or ""
+        method = scope.get("method")
+        asset = asset_answer(method, path)
+        if asset is not None:
+            status, body, content_type = asset
+            await send({"type": "http.response.start", "status": status, "headers": [
+                (b"content-type", content_type.encode("ascii")),
+                (b"cache-control", b"public, max-age=86400" if status == 200 else b"no-store"),
+                (b"allow", b"GET"),
+                (b"x-content-type-options", b"nosniff"),
+            ]})
+            await send({"type": "http.response.body", "body": body})
+            return
         if not path.startswith("/chart/"):
             await self.app(scope, receive, send)
             return
-        status, body = answer(scope.get("method"), path, scope.get("headers") or (), os.environ)
+        status, body = answer(method, path, scope.get("headers") or (), os.environ)
         if status is None:
             await self.app(scope, receive, send)
             return

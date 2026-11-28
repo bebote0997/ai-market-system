@@ -1,4 +1,4 @@
-"""Fase G1: read-only chart cache and GET /chart/<SYMBOL>.json. No orders."""
+"""Fase G1/G2: read-only chart cache, GET /chart/<SYMBOL>.json and the Posiciones chart. No orders."""
 import asyncio
 import inspect
 import json
@@ -287,9 +287,13 @@ class OrderPathTests(unittest.TestCase):
         text = "\n".join([
             (ROOT / "execution" / "chart_cache.py").read_text(encoding="utf-8"),
             (ROOT / "ui" / "liquid" / "chart_feed.py").read_text(encoding="utf-8"),
+            (ROOT / "ui" / "static" / "liquid" / "chart.js").read_text(encoding="utf-8"),
             inspect.getsource(ExnessSession.refresh_chart),
             inspect.getsource(OperationalRuntime.refresh_chart_cache),
         ])
+        render = (ROOT / "ui" / "liquid" / "render.py").read_text(encoding="utf-8")
+        for banned in ("close_market", "mutate", "submit_plan", "open_market"):
+            self.assertNotIn(banned, render, banned)
         for banned in ("close_market", "mutate", "submit_plan", "open_market", "get_json("):
             if banned == "get_json(":
                 feed = (ROOT / "ui" / "liquid" / "chart_feed.py").read_text(encoding="utf-8")
@@ -299,6 +303,138 @@ class OrderPathTests(unittest.TestCase):
         poll = inspect.getsource(OperationalRuntime.process_operator_requests)
         self.assertLess(poll.index("self.pace_exness(at)"), poll.index("self.refresh_chart_cache(at)"))
         self.assertEqual(SYMBOLS, ("USDJPY", "EURUSD"))
+
+
+
+# Streamlit 1.65 HtmlWithJs (`st.html(..., unsafe_allow_javascript=True)`):
+# SANITIZE_HTML_BASE_OPTIONS = {USE_PROFILES: {html: true}, FORCE_BODY: true}
+# plus ADD_TAGS: script, style and ADD_ATTR: src, type, async, defer, nonce,
+# crossorigin, referrerpolicy, integrity. The html profile drops SVG/MathML.
+# Canvas stays because it is an HTML element. The live panel uses this path
+# (`ui/liquid/page.py` `_draw`).
+_HTML_PROFILE_DROP = (
+    "svg", "math", "polyline", "polygon", "path", "defs", "linearGradient",
+    "clipPath", "g", "line", "rect", "circle", "ellipse", "use", "symbol",
+)
+
+
+def live_html_sanitize(html):
+    """Drop SVG/MathML the way Streamlit 1.65's html profile does, keep script/canvas."""
+    import re
+    out = html
+    for tag in _HTML_PROFILE_DROP:
+        out = re.sub(rf"<{tag}\b[^>]*>.*?</{tag}>", "", out, flags=re.I | re.S)
+        out = re.sub(rf"<{tag}\b[^>]*/?>", "", out, flags=re.I)
+    return out
+
+
+class PositionsChartTests(unittest.TestCase):
+    def test_posiciones_includes_the_read_only_chart_and_survives_the_live_sanitizer(self):
+        from ui.liquid.render import SECTIONS, fragment
+        from test_liquid_glass import _view
+
+        view = _view()
+        html = fragment(view, section="Posiciones")
+        self.assertEqual(SECTIONS, ("Inicio", "Posiciones", "Historial", "Riesgo", "Sistema"))
+        self.assertIn('class="live-chart"', html)
+        self.assertIn('data-symbol="USDJPY"', html)
+        self.assertIn("Sin posición · 0.00 USC", html)
+        self.assertIn("Powered by", html)
+        self.assertIn("https://www.tradingview.com", html)
+        self.assertIn('src="/liquid-assets/lightweight-charts.js"', html)
+        self.assertIn('src="/liquid-assets/chart.js"', html)
+        self.assertIn('data-chart-symbol="EURUSD"', html)
+        self.assertNotIn("data-panel=\"Gráfica\"", html)
+        self.assertEqual(html.count("<section data-panel="), 5)
+        for banned in ("close_market", "operate", "cantidad", "quantity", "type=\"number\"", "method=\"post\""):
+            self.assertNotIn(banned, html.lower() if banned != "type=\"number\"" else html)
+
+        planted = html.replace(
+            'class="live-chart"',
+            'class="live-chart"><svg class="would-vanish"><polyline points="0,0 1,1"/></svg><canvas class="chart-canvas"',
+            1,
+        )
+        cleaned = live_html_sanitize(planted)
+        self.assertIn('src="/liquid-assets/lightweight-charts.js"', cleaned)
+        self.assertIn('src="/liquid-assets/chart.js"', cleaned)
+        self.assertIn('class="live-chart"', cleaned)
+        self.assertIn("<script", cleaned)
+        self.assertIn('class="chart-canvas"', cleaned)
+        self.assertNotIn("<svg", cleaned.lower())
+        self.assertNotIn("polyline", cleaned.lower())
+        self.assertNotIn('class="would-vanish"', cleaned)
+
+    def test_chart_script_polls_the_get_endpoint_and_draws_readonly_lines(self):
+        source = (ROOT / "ui" / "static" / "liquid" / "chart.js").read_text(encoding="utf-8")
+        self.assertIn("5000", source)
+        self.assertIn("/chart/", source)
+        self.assertIn("credentials: \"same-origin\"", source)
+        self.assertIn("createPriceLine", source)
+        self.assertIn("axisPressedMouseMove: false", source)
+        self.assertIn("Sin posición · 0.00 USC", source)
+        self.assertIn("sin datos · última lectura", source)
+        self.assertIn("method: \"GET\"", source)
+        for banned in ("close_market", "mutate", "submit_plan", "open_market", "method: \"POST\"", "fetch("):
+            if banned == "fetch(":
+                self.assertIn('fetch("/chart/"', source)
+                self.assertEqual(source.count("fetch("), 1)
+                continue
+            self.assertNotIn(banned, source, banned)
+
+    def test_vendored_library_is_lightweight_charts_5_3_0(self):
+        lib = (ROOT / "ui" / "static" / "liquid" / "lightweight-charts.js").read_text(encoding="utf-8")
+        self.assertIn("TradingView Lightweight Charts", lib)
+        self.assertIn("v5.3.0", lib)
+        self.assertIn("window.LightweightCharts=", lib.replace(" ", ""))
+        self.assertTrue((ROOT / "ui" / "static" / "liquid" / "LIGHTWEIGHT_CHARTS_LICENSE").is_file())
+        self.assertIn("Apache License", (ROOT / "ui" / "static" / "liquid" / "LIGHTWEIGHT_CHARTS_LICENSE").read_text(encoding="utf-8"))
+
+
+class AssetTests(unittest.TestCase):
+    def test_get_serves_the_vendored_scripts_and_other_methods_are_405(self):
+        from ui.liquid.chart_feed import asset_answer
+
+        status, body, typ = asset_answer("GET", "/liquid-assets/lightweight-charts.js")
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", typ)
+        self.assertIn(b"5.3.0", body)
+        status, body, typ = asset_answer("GET", "/liquid-assets/chart.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"createPriceLine", body)
+        self.assertEqual(asset_answer("POST", "/liquid-assets/chart.js")[0], 405)
+        self.assertEqual(asset_answer("GET", "/liquid-assets/../chart_feed.py"), None)
+        self.assertEqual(asset_answer("GET", "/liquid-assets/secret.js"), None)
+
+    def test_middleware_serves_assets_without_the_cookie(self):
+        called = []
+
+        async def app(scope, receive, send):
+            called.append(scope.get("path"))
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"dashboard"})
+
+        async def once(method, path):
+            sent = []
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            await ChartFeedMiddleware(app)({"type": "http", "method": method, "path": path, "headers": []}, receive, send)
+            return sent
+
+        sent = asyncio.run(once("GET", "/liquid-assets/chart.js"))
+        self.assertEqual(sent[0]["status"], 200)
+        self.assertIn(b"createPriceLine", sent[1]["body"])
+        self.assertEqual(called, [])
+        sent = asyncio.run(once("PUT", "/liquid-assets/lightweight-charts.js"))
+        self.assertEqual(sent[0]["status"], 405)
+        self.assertEqual(called, [])
+        sent = asyncio.run(once("GET", "/positions"))
+        self.assertEqual(called, ["/positions"])
+
 
 
 if __name__ == "__main__":

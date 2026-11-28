@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-28 (rama `cursor/historial-deals-chart-385b`, sobre `15da7c4`). El panel lee las mismas flags que el backfill escribe. Un cierre de Exness que ninguna fila visible ya muestra se añade desde la copia de deals. La 440549 sale como cierre manual HQ. La curva lleva alto propio para que no quede en cero. Sin merge, sin deploy, sin Render._
+_Última actualización: 2026-11-28 (rama `fix/liquid-chart-g2-p1`, sobre `264b08e`). Fase G2 de la gráfica, en la pestaña Posiciones: lightweight-charts 5.3 vendida, sondeo GET cada 5 s, atribución TradingView, líneas SL/TP de solo lectura y estados vacío/sin datos. El test cubre el camino vivo de `st.html` (perfil html, script y canvas). G1 queda reaplicada sobre este main. Cinco pestañas. Sin cambio de estrategia, frenos, secretos, órdenes ni Render env._
+
+_Anterior: 2026-11-28 (rama `cursor/historial-deals-chart-385b`, sobre `15da7c4`). El panel lee las mismas flags que el backfill escribe. Un cierre de Exness que ninguna fila visible ya muestra se añade desde la copia de deals. La 440549 sale como cierre manual HQ. La curva lleva alto propio para que no quede en cero. Sin merge, sin deploy, sin Render._
 
 _Anterior: 2026-11-28 (rama `cursor/historial-live-curve-385b`, sobre `62188b0`). El Historial se ordena por la hora de cierre, la más reciente primero, y desempata por ticket. Si falta entrada, salida, lado o lotes y hay ticket, el backfill los rellena del deal y no borra un precio ya guardado. La curva arranca en el balance de inicio del ciclo (30086 en la vista previa). Sin merge, sin deploy, sin Render._
 
