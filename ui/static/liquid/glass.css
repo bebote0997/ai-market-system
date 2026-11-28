@@ -176,5 +176,10 @@ tr.skip td{color:var(--lg-muted);font-size:11px;padding:3px 0;border-top:1px das
 .live-chart-card .chart-note{font-size:11px;color:var(--lg-muted);margin:8px 0 0}
 .live-chart-card .chart-note a{color:var(--lg-accent)}
 @media (max-width:900px){
-.live-chart{height:min(48vh,360px);min-height:220px}
+.live-chart{height:min(36vh,280px);min-height:200px}
+.live-chart-card{margin-bottom:12px;padding-bottom:18px}
+}
+@media (max-width:414px){
+.live-chart{height:min(34vh,260px);min-height:200px}
+.live-chart-card{padding-bottom:20px}
 }

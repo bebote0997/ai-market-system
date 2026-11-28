@@ -1,5 +1,14 @@
 # Agent Changelog
 
+## 2026-11-28 — gráfica G3: estado real, eje en ET y TP visible a 414 px
+
+- El rótulo sigue el estado real: con velas y mercado cerrado, «mercado cerrado · última vela [hora] ET»; con mercado abierto y el socket caído, «sin conexión · última vela [hora] ET»; «sin datos» solo si no hay velas. El cierre es viernes 17:00 ET hasta domingo 17:00 ET, con DST, el mismo horario de `friday_window`.
+- El eje de tiempo y la hora de lectura se muestran en America/New_York (4:50 PM ET, no 21:50 UTC).
+- En 414 px el gráfico es más bajo y deja margen inferior para que la barra no cubra la línea de TP. La posición de prueba es solo local, no se abre una operación en vivo.
+- Sin cambio de env, estrategia, frenos, secretos ni operaciones.
+
+
+
 ## 2026-11-28 — la gráfica de Posiciones carga las velas M5 cerradas aunque no haya ticks
 
 - Causa: `ChartCache._pull` no pedía velas cerradas si el libro de cotizaciones estaba en stale. Tras el deploy del sábado, el socket caía (`STREAM_DROP`, `EXNESS_DISCONNECTED reason=quote_stale`) y no había un flag `chart_feed` previo. El publicaba un vacío; `GET /chart/USDJPY.json` devolvía velas `[]` y `last_update` nulo. El panel pintaba el canvas sin velas y «sin datos · última lectura --:--».

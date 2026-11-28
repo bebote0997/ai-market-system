@@ -406,7 +406,8 @@ class PositionsChartTests(unittest.TestCase):
         self.assertIn("createPriceLine", source)
         self.assertIn("axisPressedMouseMove: false", source)
         self.assertIn("Sin posición · 0.00 USC", source)
-        self.assertIn("sin datos · última lectura", source)
+        self.assertIn("sin datos", source)
+        self.assertIn("mercado cerrado · última vela", source)
         self.assertIn("method: \"GET\"", source)
         for banned in ("close_market", "mutate", "submit_plan", "open_market", "method: \"POST\"", "fetch("):
             if banned == "fetch(":
