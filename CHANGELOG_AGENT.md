@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-28 — la 440549 entra desde los deals, y la curva tiene alto
+
+- El Historial sigue saliendo de las flags. Un cierre del cache `exness_closed_deals` cuyo ticket no está en una fila visible se añade. No se duplica. La 440549, confirmada por HQ, queda `hq_manual` («cierre manual HQ»). Si no hay motivo de ese día, el texto es «cierre manual».
+- Al arrancar, el backfill deja una línea del flag `combo_lon_2026-11-25` (sin importes) y refresca el cache de deals. El panel escribe una vez `HISTORY_VIEW` y `HISTORY_DEALS_MERGE`.
+- El SVG de Rendimiento lleva ancho y alto. Sin eso, `height:auto` lo dejaba en cero dentro del panel. Si no hay puntos, el texto sigue siendo «sin datos».
+- Sin merge y sin deploy.
+
 ## 2026-11-28 — Historial por hora de cierre, y precios que no se borran
 
 - Las filas se ordenan por la hora de cierre, la más reciente primero, en todas las páginas. Si dos cierran a la vez, queda arriba el ticket mayor.

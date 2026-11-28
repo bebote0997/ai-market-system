@@ -79,7 +79,7 @@ def _chart(points):
     label = _e(points[-1].get("text") or points[-1].get("y") or "")
     label_y = Decimal(14)
     return (
-        f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
+        f'<svg class="equity" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="Curva de equity">'
         f'<defs><linearGradient id="lg-area" x1="0" y1="0" x2="0" y2="1">'
         f'<stop offset="0" stop-color="#2563eb" stop-opacity="0.35"/>'
         f'<stop offset="1" stop-color="#2563eb" stop-opacity="0.02"/></linearGradient></defs>'

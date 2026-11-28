@@ -100,6 +100,7 @@ h2.with-link .linkish{color:#fff;padding:0}
 .check{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--lg-stroke)}
 .tabs{display:none}
 svg{width:100%;height:auto;display:block}
+svg.equity{width:100%;height:auto;aspect-ratio:640/220;min-height:220px}
 .chart-note{font-size:12px;font-weight:700;margin-top:6px}
 @media (max-width:900px){
 .shell{grid-template-columns:minmax(0,1fr)}

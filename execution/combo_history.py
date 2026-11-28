@@ -21,6 +21,12 @@ NY = ZoneInfo("America/New_York")
 _MATCH_SECONDS = 120
 # Tickets closed before #104 stored no exit_reason. Motivo comes from Floor logs, not from Exness
 # (deal.reason was empty). Do not invent fix_30m: 382026 was a manual HQ close.
+# HQ confirmed the 25 Nov 2026 close of position 440549 was manual. The deal reason was empty.
+# This is the only ticket forced here. Any other ticket keeps the flag's own reason.
+TICKET_EXIT_OVERRIDE = {"440549": "hq_manual"}
+CLOSED_DEALS_FLAG = "exness_closed_deals"
+LONDON_FLAG_KEY = "combo_lon_2026-11-25"
+
 KNOWN_EXIT_REASONS = {
     "341984": "london_1100",
     "357063": "london_1100",
@@ -621,6 +627,126 @@ def remember_exit(state, ticket=None, *, key=None, broker=None, deals=None, get_
     return fill_state_from_deals(state, deals or (), key=key)
 
 
+def _json_deals(deals):
+    rows = []
+    for deal in deals or ():
+        if not isinstance(deal, dict):
+            continue
+        rows.append({
+            "type": deal.get("type"),
+            "position_id": str(deal.get("position_id") or "").strip() or None,
+            "price": deal.get("price"),
+            "profit": deal.get("profit"),
+            "instrument": deal.get("instrument"),
+            "direction": deal.get("direction"),
+            "volume": deal.get("volume"),
+            "create_time": deal.get("create_time"),
+            "event_time": deal.get("event_time"),
+            "open_time": deal.get("open_time"),
+        })
+    return rows
+
+
+def store_closed_deals(store, deals):
+    """The panel reads this cache. It does not call Exness itself."""
+    if store is None or not callable(getattr(store, "set_flag", None)):
+        return
+    store.set_flag(CLOSED_DEALS_FLAG, json.dumps(_json_deals(deals), sort_keys=True))
+
+
+def log_london_flag(store):
+    """One non-secret line for the 25 Nov flag, even when it is not pending."""
+    raw = None
+    try:
+        raw = store.get_flag(LONDON_FLAG_KEY) if store is not None else None
+    except Exception:  # noqa: BLE001
+        raw = None
+    state = _load_state(raw) if isinstance(raw, str) else None
+    if not state:
+        LOG.info("component=session_combo event=HISTORY_FLAG key=%s status=absent exited=none "
+                 "side=none symbol=none has_ticket=no has_pnl=no opened_at=none", LONDON_FLAG_KEY)
+        return
+    LOG.info("component=session_combo event=HISTORY_FLAG key=%s status=%s exited=%s side=%s symbol=%s "
+             "has_ticket=%s has_pnl=%s opened_at=%s",
+             LONDON_FLAG_KEY, state.get("status"), state.get("exited"),
+             state.get("side") or "none", state.get("symbol") or "none",
+             "no" if _no_ticket(state) else "yes",
+             "yes" if _present(state.get("pnl")) else "no",
+             state.get("opened_at") or "none")
+
+
+def _reason_on_day(flags, day):
+    if not isinstance(flags, dict) or day is None:
+        return None
+    for prefix in ("combo_lon_", "combo_fix_"):
+        raw = flags.get(prefix + day.isoformat())
+        state = _load_state(raw) if isinstance(raw, str) else None
+        reason = state.get("exit_reason") if isinstance(state, dict) else None
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()
+    return None
+
+
+def extra_rows_from_deals(flags, shown, now):
+    """Closed deals whose ticket is not already a visible flag row. One ticket, one row."""
+    raw = flags.get(CLOSED_DEALS_FLAG) if isinstance(flags, dict) else None
+    try:
+        deals = json.loads(raw) if isinstance(raw, str) else []
+    except (TypeError, ValueError):
+        deals = []
+    if not isinstance(deals, list):
+        return []
+    grouped = {}
+    for deal in deals:
+        if not isinstance(deal, dict):
+            continue
+        ticket = str(deal.get("position_id") or "").strip()
+        if ticket:
+            grouped.setdefault(ticket, []).append(deal)
+    taken = {str(item) for item in shown or () if item}
+    rows = []
+    for ticket, items in grouped.items():
+        if ticket in taken:
+            continue
+        opens = [item for item in items if item.get("type") == "open"]
+        closes = [item for item in items if item.get("type") == "close"]
+        if not closes:
+            continue
+        closes.sort(key=lambda item: _deal_time(item) or datetime.min.replace(tzinfo=timezone.utc))
+        closed = _deal_time(closes[-1])
+        if closed is None or closed > now:
+            continue
+        day = closed.astimezone(NY).date()
+        if day < HISTORY_START:
+            continue
+        opened = _deal_time(opens[0]) if opens else None
+        sample = opens[0] if opens else closes[-1]
+        symbol = str(sample.get("instrument") or "").strip().upper()
+        if len(symbol) != 6 or not symbol.isalpha():
+            continue
+        amounts = []
+        for deal in closes:
+            amount = profit_amount(deal.get("profit"))
+            if amount is None:
+                amounts = None
+                break
+            amounts.append(amount)
+        reason = TICKET_EXIT_OVERRIDE.get(ticket) or _reason_on_day(flags, day) or "cierre_manual"
+        rows.append({
+            "key": "deal_" + ticket, "kind": "london" if symbol == LONDON_SYMBOL else "fix",
+            "day": day, "status": "done", "symbol": symbol,
+            "_side": _deal_side(opens[0].get("direction")) if opens else None,
+            "position_id": ticket,
+            "volume": _dec(opens[0].get("volume")) if opens else None,
+            "opened_at": opened, "exit_at": closed, "exited": True,
+            "entry": _dec(opens[0].get("price")) if opens else None,
+            "exit_price": _dec(closes[-1].get("price")),
+            "exit_reason": reason,
+            "pnl": None if not amounts else sum(amounts, Decimal(0)),
+        })
+    return rows
+
+
 def backfill_combo_history(broker, *, now=None, get_json=None):
     """Idempotent GET-only backfill of closed combo flags. Never raises to the caller."""
     result = {"updated": 0, "pending": 0, "fetched": False}
@@ -628,6 +754,7 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
         store = getattr(broker, "flag_store", None)
         if store is None or not callable(getattr(store, "get_flag", None)):
             return result
+        log_london_flag(store)
         if now is None:
             clock = getattr(broker, "_clock", None)
             now = clock() if callable(clock) else datetime.now(timezone.utc)
@@ -726,6 +853,15 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
             _pending_line(key, state)
         result["pending"] = len(pending)
         _log("ok", updated=result["updated"], pending=result["pending"])
+        try:
+            client = history_client(broker)
+            if client is not None:
+                start = datetime(HISTORY_START.year, HISTORY_START.month, HISTORY_START.day, tzinfo=timezone.utc)
+                end = now + timedelta(hours=1)
+                cached = fetch_deals(client, start, end, get_json=get_json)
+                store_closed_deals(store, cached)
+        except Exception as exc:  # noqa: BLE001 - the panel keeps the previous cache
+            _log("skip", reason="cache_unread", error_type=type(exc).__name__)
         return result
     except Exception as exc:  # noqa: BLE001 - a history miss must not break the session
         _log("failed", reason="read_failed", error_type=type(exc).__name__,
