@@ -118,6 +118,10 @@ def _signed(amount, currency):
     if amount > 0:
         return "+" + text, "pos"
     if amount < 0:
+        # El menos va en el USC y en el USD: «−139.89 USC · −1.40 USD».
+        if " · " in text:
+            left, right = text.split(" · ", 1)
+            return f"−{left} · −{right}", "neg"
         return "−" + text, "neg"
     return text, "flat"
 

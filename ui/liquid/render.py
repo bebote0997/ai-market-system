@@ -277,18 +277,21 @@ def _brakes_card(view):
             f'<div class="split brake-split"><div>{rows}</div>{shield}</div></article>')
 
 
-def _chart_card(view, key, title):
+def _chart_card(view, key, title, *, show_title=True):
     ranges = view["curve"].get("ranges") or {}
     curve = ranges.get(key) or view["curve"]
     if curve.get("state") != "ok":
         body = f'<p class="na">{_e(MISSING)}</p><p class="hint">No hay una serie de equity guardada en ese rango.</p>'
     else:
         body = _chart(curve["points"])
-    hidden = "" if key in ("30", "all") else " hidden"
-    attr = f' data-chart="{key}"' if key != "home" else ""
+    # Al abrir el Historial solo se ve 30 días. «all» no sale junto con esa gráfica.
     if key == "home":
         hidden, attr = "", ""
-    return f'<div{attr}{hidden}><h2>{_e(title)}</h2>{body}</div>'
+    else:
+        attr = f' data-chart="{key}"'
+        hidden = "" if key == "30" else " hidden"
+    head = f"<h2>{_e(title)}</h2>" if show_title and title else ""
+    return f"<div{attr}{hidden}>{head}{body}</div>"
 
 
 def _system_card(view, compact=False):
@@ -387,7 +390,7 @@ def _history_page(view):
     ranges = "" if not has_curve else "".join(
         f'<button type="button" data-range="{key}"{" aria-current=\"page\"" if key == "30" else ""}>{_e(label)}</button>'
         for key, label in RANGES)
-    charts = "".join(_chart_card(view, key, "Rendimiento") for key in ("30", "90", "365", "all")) if has_curve else (
+    charts = "".join(_chart_card(view, key, "Rendimiento", show_title=False) for key in ("30", "90", "365", "all")) if has_curve else (
         f'<p class="na">{_e(MISSING)}</p><p class="hint">No hay una serie de equity guardada.</p>')
     custom = f'<div data-chart="custom" hidden><p class="na">{_e(MISSING)}</p><p class="hint">El rango personalizado filtra la tabla. El gráfico no se inventa.</p></div>'
     table = _trade_table(view["history"]["rows"], tagged=True) if view["history"]["rows"] else '<p class="hint">Sin operaciones cerradas en el registro.</p>'

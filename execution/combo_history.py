@@ -217,6 +217,29 @@ def fill_state_from_deals(state, deals, key=None):
     return changed
 
 
+def _fill_times_from_deals(state, deals):
+    """Horario de entrada y salida del propio deal, solo si el flag no lo tiene."""
+    ticket = str((state or {}).get("position_id") or "").strip()
+    if not ticket:
+        return
+    opens, closes = [], []
+    for deal in deals or ():
+        if not isinstance(deal, dict) or str(deal.get("position_id") or "").strip() != ticket:
+            continue
+        if deal.get("type") == "open":
+            opens.append(deal)
+        elif deal.get("type") == "close":
+            closes.append(deal)
+    if not state.get("opened_at") and opens:
+        stamp = _deal_time(opens[0])
+        if stamp is not None:
+            state["opened_at"] = stamp.astimezone(timezone.utc).isoformat()
+    if not state.get("exit_at") and closes:
+        stamp = _deal_time(closes[-1])
+        if stamp is not None:
+            state["exit_at"] = stamp.astimezone(timezone.utc).isoformat()
+
+
 def _aware(value):
     if isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None:
         return value.astimezone(timezone.utc)
@@ -257,6 +280,26 @@ def _incomplete(state):
 def _filled_open(state):
     """Pata ``filled`` que el flag aún no dio por salida."""
     return (state or {}).get("status") == "filled" and (state or {}).get("exited") is not True
+
+
+def _no_ticket(state):
+    return not str((state or {}).get("position_id") or "").strip()
+
+
+def _blank_terminal(state):
+    """Cerrada en el flag, pero sin ticket: el Historial no puede pintarla."""
+    return _incomplete(state) and _no_ticket(state)
+
+
+def _with_london_symbol(state, key):
+    """combo_lon_ sin par es USDJPY. No se guarda si el ticket no se cruza."""
+    if str((state or {}).get("symbol") or "").strip():
+        return state
+    if not str(key or "").startswith("combo_lon_"):
+        return state
+    guessed = dict(state)
+    guessed["symbol"] = "USDJPY"
+    return guessed
 
 
 def _row_ticket(row):
@@ -484,21 +527,26 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
         if not isinstance(now, datetime) or now.tzinfo is None:
             now = datetime.now(timezone.utc)
         today = now.astimezone(timezone.utc).date()
-        loaded, flat = [], []
+        loaded, flat, blank = [], [], []
         for key, raw in _iter_combo_keys(store, today):
             state = _load_state(raw)
             if state is None:
                 continue
-            if _incomplete(state):
+            if _blank_terminal(state):
+                blank.append((key, state))
+            elif _incomplete(state):
                 loaded.append((key, state))
             elif _filled_open(state):
                 flat.append((key, state))
-        rows = open_rows(broker) if flat else None
+        rows = open_rows(broker) if (flat or blank) else None
         # Una pata filled que ya no está en el libro se cierra aquí. El backfill viejo solo miraba patas ya cerradas.
         waiting = [(key, state) for key, state in flat if rows is not None and not _still_held(state, rows)]
+        # Sin ticket también hay que pedir deals: si no, updated=0 y pending=0 y la fila no sale.
         need_deals = [(key, state) for key, state in loaded if str(state.get("position_id") or "").strip()]
         need_deals.extend(waiting)
-        result["pending"] = len(loaded) + len(waiting)
+        if rows is not None:
+            need_deals.extend(blank)
+        result["pending"] = len(loaded) + len(waiting) + len(blank)
         deals = []
         if need_deals:
             client = history_client(broker)
@@ -518,9 +566,32 @@ def backfill_combo_history(broker, *, now=None, get_json=None):
                 continue
             store.set_flag(key, _dump(state))
             result["updated"] += 1
+        for key, state in blank:
+            # Sin libro no se cruza. Sin un único ticket no se reescribe el done vacío.
+            if rows is None:
+                continue
+            guessed = _with_london_symbol(state, key)
+            if not str(guessed.get("symbol") or "").strip():
+                continue
+            ticket = resolve_closed_ticket(guessed, key, deals, rows)
+            if not ticket:
+                continue
+            filled = dict(guessed)
+            filled["position_id"] = ticket
+            fill_state_from_deals(filled, deals, key=key)
+            _fill_times_from_deals(filled, deals)
+            if _no_ticket(filled) or not _present(filled.get("pnl")):
+                continue
+            state.clear()
+            state.update(filled)
+            store.set_flag(key, _dump(state))
+            result["updated"] += 1
         still = 0
         for key, state in loaded:
             if _incomplete(state) and str(state.get("position_id") or "").strip():
+                still += 1
+        for key, state in blank:
+            if _no_ticket(state) or not _present(state.get("pnl")):
                 still += 1
         if rows is None:
             still += len(flat)

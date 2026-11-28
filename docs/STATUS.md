@@ -1,6 +1,8 @@
 # STATUS — AI Trading Floor V2
 
-_Última actualización: 2026-11-27 (rama `cursor/historial-book-square-385b`, sobre `ea25569`). El Historial pinta la pata del 25 nov que sigue `filled` sin ticket: la tabla y el resumen usan las mismas operaciones. Lotes, entrada, salida y motivo salen del flag (`cierre 11:00 ET`, `cierre manual HQ`). Un libro vacío ya publicado muestra 0.00; sin lectura sigue «sin datos». El encabezado del #111 sigue. Sin merge, sin deploy, sin Render._
+_Última actualización: 2026-11-28 (rama `cursor/historial-blank-chart-usd-385b`, sobre `77a4fc8`). Una pata ya `done` (o `filled` con salida) sin ticket ni P/L se cruza por el día, igual que una `waiting`. En `combo_lon_` sin par se asume USDJPY. Si no hay ticket, no se reescribe el flag y sigue pendiente. El Historial abre con un solo «Rendimiento» y solo la gráfica de 30 días. El USD de una pérdida lleva el mismo menos que el USC. Sin merge, sin deploy, sin Render._
+
+_Anterior: 2026-11-27 (rama `cursor/historial-book-square-385b`, sobre `ea25569`). El Historial pinta la pata del 25 nov que sigue `filled` sin ticket: la tabla y el resumen usan las mismas operaciones. Lotes, entrada, salida y motivo salen del flag (`cierre 11:00 ET`, `cierre manual HQ`). Un libro vacío ya publicado muestra 0.00; sin lectura sigue «sin datos». El encabezado del #111 sigue. Sin merge, sin deploy, sin Render._
 
 _Anterior: 2026-11-27 (rama `cursor/liquid-header-layout-42b1`, en main `ea25569`). Encabezado del panel: sin el texto «Exness Standard Cent (USC)»; el distintivo queda a la derecha del logo, en la misma fila; el logo de la cabecera es más grande. El fondo del menú arranca oculto y no tapa la página. La barra inferior no cubre el final de la pestaña. Riesgo separa las dos tarjetas. Al cambiar de pestaña la vista vuelve arriba. Sin merge, sin deploy, sin Render._
 

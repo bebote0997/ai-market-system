@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-28 — backfill sin ticket, un Rendimiento, menos en el USD
+
+- Una pata terminal sin `position_id` (el `combo_lon_2026-11-25` en vivo) entra al mismo cruce que una `waiting`: deals del día, y en `combo_lon_` sin par se asume USDJPY. El deal 440549 rellena lado, lotes, entrada, salida, P/L y `hq_manual`. Sin ticket resuelto el flag no se vuelve a marcar `done` y `pending` sigue por encima de cero.
+- El Historial tiene un solo `<h2>Rendimiento</h2>`. Al abrir solo se ve la gráfica de 30 días.
+- Una pérdida pinta el menos en el USC y en el USD (`−139.89 USC · −1.40 USD`). Los topes y las ganancias no cambian.
+- Sin cambio de órdenes, frenos, variables de entorno ni Render. Sin merge y sin deploy.
+
 ## 2026-11-27 — historial y libro vacío cuadran
 
 - La tabla y el resumen del Historial salen de las mismas patas cerradas. La del 25 nov (sigue `filled`, sin ticket, P/L como importe del deal) entra y suma. Un Fix sin par ni P/L no se pinta. Una pata abierta tampoco.
