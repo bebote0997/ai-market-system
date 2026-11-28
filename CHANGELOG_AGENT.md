@@ -1,5 +1,12 @@
 # Agent Changelog
 
+## 2026-11-28 — la gráfica de Posiciones carga las velas M5 cerradas aunque no haya ticks
+
+- Causa: `ChartCache._pull` no pedía velas cerradas si el libro de cotizaciones estaba en stale. Tras el deploy del sábado, el socket caía (`STREAM_DROP`, `EXNESS_DISCONNECTED reason=quote_stale`) y no había un flag `chart_feed` previo. El publicaba un vacío; `GET /chart/USDJPY.json` devolvía velas `[]` y `last_update` nulo. El panel pintaba el canvas sin velas y «sin datos · última lectura --:--».
+- El GET de velas M5 cerradas (USDJPY / EURUSD, cada 30 s) sigue saliendo aunque el socket esté caído, para mostrar el último viernes. Si no había `last_update`, se guarda la hora de esa lectura. `stale` sigue en verdadero. Sin cambio de env, estrategia, frenos ni secretos.
+
+
+
 ## 2026-11-28 — gráfica en vivo, fase G2 (pestaña Posiciones)
 
 - La pestaña Posiciones muestra un gráfico M5 de solo lectura (USDJPY / EURUSD). La librería es lightweight-charts 5.3, vendida en el repo (Apache-2.0, atribución TradingView). El panel pide `GET /chart/<SYMBOL>.json` cada 5 s; el navegador no llama a Exness. Las líneas de entrada, SL y TP salen de la foto del ciclo (`sltp`), no de datos del navegador. Sin posición: «Sin posición · 0.00 USC». Si el feed está viejo: «sin datos · última lectura HH:MM» y las velas se quedan congeladas.

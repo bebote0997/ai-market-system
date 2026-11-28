@@ -237,10 +237,11 @@ class ChartCache:
     def _pull(self, at, client):
         if client is None or not self._due(at) or not _candle_room(client):
             return
+        # Closed M5 bars are still fetched when the quote socket is down (weekend, or
+        # a deploy after the close). Only the in-progress bar needs live ticks.
         live = [symbol for symbol in SYMBOLS if not self._stale.get(symbol, True)]
-        if not live:
-            return
-        symbol = live[self._turn % len(live)]
+        roster = live or list(SYMBOLS)
+        symbol = roster[self._turn % len(roster)]
         account = getattr(client, "account_id", None)
         if not isinstance(account, str) or not account.isdigit():
             return
@@ -258,6 +259,10 @@ class ChartCache:
             LOG.info("component=chart_cache event=CHART_GAP symbol=%s reason=%s", symbol, reason)
             return
         self._merge(symbol, bars, boundary)
+        if not self._last_update.get(symbol):
+            self._last_update[symbol] = at.astimezone(timezone.utc).isoformat()
+        LOG.info("component=chart_cache event=CHART_CACHE symbol=%s candles=%s stale=%s",
+                 symbol, len(self._closed[symbol]), self._stale.get(symbol, True))
 
     def _merge(self, symbol, bars, boundary):
         limit = boundary.isoformat()

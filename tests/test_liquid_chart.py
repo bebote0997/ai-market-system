@@ -151,8 +151,42 @@ class CacheTests(unittest.TestCase):
         self.assertTrue(stale["stale"])
         self.assertEqual(stale["last_update"], fresh["last_update"])
         self.assertEqual(stale["bid"], fresh["bid"])
-        self.assertEqual(client.paths, [])
+        self.assertTrue(client.paths)  # closed M5 bars are still read; the quote socket is not required
         self.assertEqual(stale["position"]["stop"], "1.07000")
+
+
+    def test_a_cold_start_with_no_quotes_still_loads_closed_candles_and_a_read_time(self):
+        """Live Saturday shape: fresh process, quote socket down, no prior flag.
+
+        The cache must still GET the last closed M5 bars (Friday) and stamp last_update
+        so the panel does not show an empty chart and «última lectura --:--».
+        """
+        from execution.exness_stream import QuoteBook
+        boundary = floor_m5_utc(NOW)
+        client = _Client(_bars(CLOSED_BARS, boundary))
+        cache = ChartCache()
+        cache.refresh(NOW, client=client, quotes=QuoteBook(), desk={"positions": [], "orders": []})
+        view = cache.view("USDJPY")
+        self.assertTrue(client.paths)
+        self.assertGreaterEqual(len(view["candles"]), 2)
+        self.assertTrue(all(row["time"] < boundary.isoformat() for row in view["candles"]))
+        self.assertEqual(view["last_update"], NOW.isoformat())
+        self.assertTrue(view["stale"])
+        self.assertIsNone(view["bid"])
+        self.assertIsNone(view["position"])
+        # A second due refresh walks the other symbol; the first series stays in the published flag.
+        later = NOW + timedelta(seconds=30)
+        cache.refresh(later, client=client, quotes=QuoteBook(), desk={"positions": [], "orders": []})
+        euro = cache.view("EURUSD")
+        self.assertGreaterEqual(len(euro["candles"]), 2)
+        self.assertEqual(euro["last_update"], later.isoformat())
+        self.assertTrue(euro["stale"])
+        published = {}
+        cache.publish(type("S", (), {"set_flag": lambda self, key, value: published.update({key: value})})())
+        payload = json.loads(published["chart_feed"])
+        self.assertTrue(payload["symbols"]["USDJPY"]["candles"])
+        self.assertTrue(payload["symbols"]["USDJPY"]["last_update"])
+        self.assertTrue(payload["symbols"]["USDJPY"]["stale"])
 
     def test_unset_flag_is_on_and_zero_does_not_call_the_broker(self):
         self.assertTrue(chart_cache_enabled({}))
