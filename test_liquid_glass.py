@@ -259,8 +259,11 @@ class RenderSmokeTests(unittest.TestCase):
         self.assertNotIn("Cerrar posición", html)
         self.assertNotIn(BANNER, html)
         lowered = html.lower()
+        self.assertIn("https://www.tradingview.com", lowered)
+        self.assertIn('rel="noopener noreferrer"', html)
+        stripped = lowered.replace("https://www.tradingview.com", "")
         for banned in ("transition", "animation", "@keyframes", "<form", 'type="submit"', "cerrar", "set_flag", "http://", "https://"):
-            self.assertNotIn(banned, lowered, banned)
+            self.assertNotIn(banned, stripped, banned)
         self.assertNotIn("<", Path("ui/static/liquid/panel.js").read_text(encoding="utf-8"))
 
     def test_header_hides_the_cent_label_and_pins_the_badge_to_the_logo(self):

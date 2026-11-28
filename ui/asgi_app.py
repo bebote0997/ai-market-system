@@ -6,6 +6,9 @@ import streamlit as st
 from starlette.middleware import Middleware
 
 from ui.demo_refresher import lifespan
+from ui.liquid.chart_feed import ChartFeedMiddleware
 from ui.security_headers import SecurityHeadersMiddleware
 
-app = st.App("app.py", middleware=[Middleware(SecurityHeadersMiddleware)], lifespan=lifespan)
+# Security headers stay outside the chart route, so a chart response gets them too.
+app = st.App("app.py", middleware=[Middleware(SecurityHeadersMiddleware), Middleware(ChartFeedMiddleware)],
+             lifespan=lifespan)

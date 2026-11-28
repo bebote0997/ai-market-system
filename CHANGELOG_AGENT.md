@@ -1,5 +1,21 @@
 # Agent Changelog
 
+## 2026-11-28 — gráfica en vivo, fase G2 (pestaña Posiciones)
+
+- La pestaña Posiciones muestra un gráfico M5 de solo lectura (USDJPY / EURUSD). La librería es lightweight-charts 5.3, vendida en el repo (Apache-2.0, atribución TradingView). El panel pide `GET /chart/<SYMBOL>.json` cada 5 s; el navegador no llama a Exness. Las líneas de entrada, SL y TP salen de la foto del ciclo (`sltp`), no de datos del navegador. Sin posición: «Sin posición · 0.00 USC». Si el feed está viejo: «sin datos · última lectura HH:MM» y las velas se quedan congeladas.
+- El HTML entra por `st.html(..., unsafe_allow_javascript=True)`. Los scripts se cargan con `src` en `/liquid-assets/`, que sobrevive al perfil html de Streamlit 1.65; no se usa SVG en línea. Siguen cinco pestañas. No hay botones de operar ni de cantidad.
+- Incluye la fase G1 reaplicada sobre `main` (`264b08e`): caché del ciclo y el mismo GET. `AI_FLOOR_CHART_CACHE` no se añade en Render (si no está, la caché queda encendida).
+- Sin cambio de estrategia, frenos, secretos ni operaciones.
+
+
+
+## 2026-11-27 — gráfica en vivo, fase G1 (solo lectura, sin UI)
+
+- Caché en el servicio (`execution/chart_cache.py`, enganchada desde `ExnessSession.refresh_chart` y `OperationalRuntime.refresh_chart_cache`). Hasta 150 velas M5 cerradas por USDJPY y EURUSD. Un GET `/v1/market-data/accounts/{id}/candles` cada 30 s (`timeframe=M5`, `price_type=bid`), por el mismo cliente que el ciclo: si la ventana de 2/s ya está llena, no envía. La vela en curso se arma con el bid del libro de cotizaciones. La posición copia entrada, lado y P/L flotante de la foto del ciclo; SL y TP salen solo de la orden `sltp`.
+- `GET /chart/USDJPY.json` y `GET /chart/EURUSD.json` (`ui/liquid/chart_feed.py`), con la cookie `aif_remember` del panel. POST, PUT, PATCH y DELETE responden 405. El cuerpo no lleva llave, id de cuenta ni host. El navegador no llama a Exness.
+- `AI_FLOOR_CHART_CACHE=0` apaga esos GET. Si la variable no está, la caché queda encendida y `manage` no cambia.
+- Sin merge, sin deploy, sin cambio de Render ni de órdenes.
+
 ## 2026-11-28 — la curva de Rendimiento usa el P/L realizado en cada cierre
 
 - Causa: `desk_from_book` (`execution/exness_desk.py`) guarda el equity actual a la hora del ciclo; `attach_desk` lo añade a `ui_snapshots.curve`. `build_dashboard` prefería esa serie si tenía dos o más puntos, y no usaba `_history_curve`. En vivo eran 9 puntos en 30,644.60, eje 27/11→27/11.

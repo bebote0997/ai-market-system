@@ -386,6 +386,35 @@ def _inicio(view):
     return mobile + desktop
 
 
+
+def _chart_default_symbol(view):
+    """USDJPY unless the open book already has EURUSD or USDJPY."""
+    block = view.get("positions") or {}
+    if block.get("state") == "rows":
+        for row in block.get("rows") or []:
+            symbol = "".join(ch for ch in str(row.get("symbol") or "") if ch.isalpha()).upper()
+            if symbol in ("USDJPY", "EURUSD"):
+                return symbol
+    return "USDJPY"
+
+
+def _live_chart_card(view):
+    chosen = _chart_default_symbol(view)
+    buttons = "".join(
+        f'<button type="button" data-chart-symbol="{symbol}"'
+        f'{" aria-current=\"page\"" if symbol == chosen else ""}>{symbol}</button>'
+        for symbol in ("USDJPY", "EURUSD"))
+    return (
+        '<article class="card live-chart-card"><h2>Gráfico en vivo</h2>'
+        f'<div class="chart-toolbar"><div class="filters">{buttons}</div>'
+        '<p class="hint chart-status" data-chart-status></p></div>'
+        '<p class="hint chart-position" data-chart-position>Sin posición · 0.00 USC</p>'
+        f'<div class="live-chart" data-symbol="{chosen}" role="img" aria-label="Gráfico M5"></div>'
+        '<p class="chart-note">Powered by <a href="https://www.tradingview.com" '
+        'target="_blank" rel="noopener noreferrer">TradingView</a></p></article>'
+    )
+
+
 def _positions_page(view):
     block = view["positions"]
     head = (f'<div class="kpis three">{_kpi("P/L flotante", {"text": block["floating"], "main": block["floating"], "sub": "Suma de las abiertas", "tone": block["floating_tone"], "minor": ""})}'
@@ -405,7 +434,7 @@ def _positions_page(view):
             lines = "".join(f'<span>{_e(label)}</span><b>{_e(value)}</b>' for label, value in fields)
             cards.append(f'<article class="card"><h2>{_e(row["symbol"])}</h2><div class="kv">{lines}</div></article>')
         body = "".join(cards)
-    return head + body
+    return head + _live_chart_card(view) + body
 
 
 def _stat(label, value, tone=""):
@@ -482,7 +511,7 @@ def fragment(view, *, section="Inicio", theme=None):
         f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
         f'</div></header>{body}'
         f'<p class="hint">Solo lectura. Este panel no cierra operaciones ni cambia frenos.</p>'
-        f'</div></div><nav class="tabs" aria-label="Secciones">{nav}</nav><script>{_script()}</script></div>'
+        f'</div></div><nav class="tabs" aria-label="Secciones">{nav}</nav><script>{_script()}</script><script src="/liquid-assets/lightweight-charts.js"></script><script src="/liquid-assets/chart.js"></script></div>'
     )
 
 

@@ -1,5 +1,7 @@
 # Fase 10 — Command Center / Display V2
 
+**Adenda 2026-11-28 (presentación, fase G2, no recertifica):** gráfica M5 de solo lectura en Posiciones (lightweight-charts 5.3 vendida, sondeo GET cada 5 s, atribución TradingView). Incluye la caché y el GET de G1. El HTML pasa por el camino vivo de `st.html`. No cambia el estado CERTIFIED, ni órdenes, ni frenos, ni Render.
+
 **Adenda 2026-11-28 (presentación, no recertifica):** un deal cerrado cuyo ticket no está en una fila visible se añade desde el cache de deals. La 440549 se muestra como cierre manual HQ. La gráfica de Rendimiento tiene alto propio. No cambia el estado CERTIFIED ni Render.
 
 **Adenda 2026-11-28 (presentación, no recertifica):** el Historial se ordena por la hora de cierre, la más reciente primero, y desempata por ticket. Un ticket al que le faltan entrada, salida, lado o lotes se completa con el deal, sin pisar un precio ya guardado. No cambia el estado CERTIFIED ni Render.
@@ -11,6 +13,7 @@
 **Adenda 2026-11-27 (presentación, no recertifica):** el Historial incluye la pata cerrada que el flag aún marca `filled` sin ticket, y lee el P/L aunque venga como importe del deal o como suma de partes. El resumen sale de esas mismas filas. Lotes, entrada, salida y motivo se copian del flag. Un Fix sin par ni P/L no se pinta. Si la foto no trae `positions` pero el ciclo ya publicó un libro vacío en `exness_live_marks`, el flotante es 0.00. Sin esa lectura, o si es vieja o el enlace está caído, sigue «sin datos». No cambia el estado CERTIFIED ni Render.
 
 **Adenda 2026-11-27 (presentación, encabezado, no recertifica):** el encabezado deja de mostrar «Exness Standard Cent (USC)»; las cifras en USC siguen. El distintivo de ejecución queda a la derecha del logo. El fondo `.aif-backdrop` arranca oculto, se cierra con Escape, al tocarlo y al cambiar de pestaña, y no recibe toques con el menú cerrado. El contenido tiene padding inferior de la barra más el área segura. Riesgo separa «Estrategia de hoy» y «Frenos de riesgo». Cambiar de pestaña vuelve arriba. No cambia el estado CERTIFIED ni Render.
+**Adenda 2026-11-27 (presentación, fase G1, no recertifica):** caché de solo lectura para la gráfica de Posiciones. Un GET de velas M5 cada 30 s (USDJPY y EURUSD, solo velas cerradas; la vela en curso sale de los ticks). `GET /chart/<SYMBOL>.json` detrás de la contraseña del panel. No cambia el estado CERTIFIED, ni órdenes, ni Render.
 
 **Adenda 2026-11-27 (presentación, fase 3, no recertifica):** mismo Liquid Glass, logo 1, tema en el lateral (escritorio) o en Configuración > Sistema (móvil). Un Fix omitido se guarda como `skipped` y no sale como fila vacía. El enlace se renueva cada 30 s sin otra llamada al broker. El despliegue usa el id de instancia que Render ya inyecta. Sin bloque de servidor, ping ni tiempo activo. Libro vacío: P/L 0.00 y consumo del tope 0. No cambia el estado CERTIFIED ni Render.
 

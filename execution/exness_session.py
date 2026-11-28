@@ -144,6 +144,35 @@ class ExnessSession:
             if cache is not None:
                 cache(False)
 
+    def refresh_chart(self, at):
+        """One closed M5 GET, at most every 30 s, on the cycle's client. No order is sent.
+
+        ``AI_FLOOR_CHART_CACHE=0`` skips the read. Unset leaves it on and does not change ``manage``.
+        """
+        from execution.chart_cache import ChartCache, chart_cache_enabled
+        if not chart_cache_enabled(self._env):
+            return None
+        cache = getattr(self, "_chart_cache", None)
+        if cache is None:
+            cache = self._chart_cache = ChartCache()
+        transport = getattr(self.broker, "_transport", None)
+        client = getattr(transport, "_client", None)
+        quotes = getattr(transport, "quotes", None)
+        try:
+            cache.refresh(at, client=client, quotes=quotes, desk=getattr(self, "desk", None))
+        except Exception as exc:  # noqa: BLE001 - a chart read must not stop the poll
+            LOG.warning("component=exness event=CHART_CACHE_FAILED error_type=%s detail=%s",
+                        type(exc).__name__, safe_detail(exc))
+            return None
+        store = getattr(getattr(self.broker, "_brakes", None), "_store", None)
+        if store is not None and hasattr(store, "set_flag"):
+            try:
+                cache.publish(store)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("component=exness event=CHART_PUBLISH_FAILED error_type=%s detail=%s",
+                            type(exc).__name__, safe_detail(exc))
+        return cache
+
     def _remember_desk(self, at):
         """Keep the book ``note_link`` already cached. Reading the cache is not a new broker call."""
         book = getattr(self.broker, "_read_cache", None)

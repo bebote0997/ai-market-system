@@ -168,3 +168,13 @@ tr.skip td{color:var(--lg-muted);font-size:11px;padding:3px 0;border-top:1px das
 .lg:not([data-open="1"]) .aif-backdrop{display:none !important;pointer-events:none !important}
 .lg[data-open="1"] .aif-backdrop{display:block !important;pointer-events:auto !important;position:fixed;inset:0;z-index:4;background:rgba(8,16,32,.46)}
 [data-panel="Riesgo"] > .card + .card{margin-top:14px}
+
+.live-chart-card .chart-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.live-chart-card .chart-toolbar .filters{margin:0}
+.live-chart{height:min(52vh,420px);min-height:260px;width:100%}
+.live-chart-card .chart-position{margin:0 0 8px;font-weight:750}
+.live-chart-card .chart-note{font-size:11px;color:var(--lg-muted);margin:8px 0 0}
+.live-chart-card .chart-note a{color:var(--lg-accent)}
+@media (max-width:900px){
+.live-chart{height:min(48vh,360px);min-height:220px}
+}
