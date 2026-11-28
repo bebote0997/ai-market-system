@@ -531,8 +531,30 @@ class HistorySquareTests(unittest.TestCase):
         self.assertIn("20.19", html)
         self.assertIn("Ganancia bruta", html)
         self.assertNotIn("Ganancia total", html)
+        self.assertIn("−139.89 USC · −1.40 USD", html)
+        self.assertNotIn("−139.89 USC · 1.40 USD", html)
         self.assertNotIn("Sin operación", html)
         self.assertEqual(len(symbols), 9)
+
+    def test_rendimiento_has_one_heading_and_opens_on_thirty_days(self):
+        from ui.liquid.preview import example_view
+        html = fragment(example_view(), section="Historial")
+        self.assertEqual(html.count("<h2>Rendimiento</h2>"), 1)
+        self.assertIn('data-chart="30"', html)
+        self.assertNotIn('data-chart="30" hidden', html)
+        self.assertIn('data-chart="all" hidden', html)
+        self.assertIn('data-chart="90" hidden', html)
+        self.assertIn('data-chart="365" hidden', html)
+
+    def test_a_loss_signs_both_the_usc_and_the_usd(self):
+        from decimal import Decimal
+        from ui.liquid.model import _signed
+        text, tone = _signed(Decimal("-139.89"), "USC")
+        self.assertEqual(text, "−139.89 USC · −1.40 USD")
+        self.assertEqual(tone, "neg")
+        plus, plus_tone = _signed(Decimal("181.46"), "USC")
+        self.assertEqual(plus, "+181.46 USC · 1.81 USD")
+        self.assertEqual(plus_tone, "pos")
 
     def test_closed_leg_keeps_lots_entry_exit_and_reason(self):
         now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
