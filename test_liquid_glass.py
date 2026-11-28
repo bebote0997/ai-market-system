@@ -545,6 +545,42 @@ class HistorySquareTests(unittest.TestCase):
         self.assertIn('data-chart="all" hidden', html)
         self.assertIn('data-chart="90" hidden', html)
         self.assertIn('data-chart="365" hidden', html)
+        view = example_view()
+        points = view["curve"]["points"]
+        self.assertEqual(view["curve"]["state"], "ok")
+        self.assertEqual(view["curve"]["ranges"]["30"]["state"], "ok")
+        self.assertEqual(len(points), 10)
+        self.assertEqual(points[0]["equity"], "10000")
+        self.assertEqual(points[-1]["equity"], "10558.67")
+        self.assertIn("558.67", view["history"]["stats"]["net"])
+        self.assertIn("558.60", view["kpis"]["total"]["text"])
+        self.assertIn('data-range="30"', html)
+        self.assertNotIn("No hay una serie de equity guardada", html)
+        self.assertIn("<svg", html)
+
+    def test_a_short_stored_curve_uses_the_closed_history(self):
+        flags = {
+            "exness_brake_start": "10000",
+            "exness_launch_start": "2026-11-16T21:00:00+00:00",
+            "combo_lon_2026-11-18": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "pnl": "-84.08",
+                "exit_at": "2026-11-18T16:00:13+00:00",
+            }),
+            "combo_lon_2026-11-19": json.dumps({
+                "status": "done", "exited": True, "symbol": "USDJPY", "pnl": "146.19",
+                "exit_at": "2026-11-19T16:00:07+00:00",
+            }),
+        }
+        now = datetime(2026, 11, 27, 21, 0, tzinfo=timezone.utc)
+        one = _view(now=now, flags=flags, curve=[{"at": "2026-11-20T12:00:00+00:00", "equity": "1"}])
+        self.assertEqual(one["curve"]["state"], "ok")
+        self.assertEqual(one["curve"]["points"][0]["equity"], "10000")
+        self.assertEqual(one["curve"]["points"][-1]["equity"], "10062.11")
+        kept = _view(now=now, flags=flags, curve=[
+            {"at": "2026-11-18T16:00:00+00:00", "equity": "10000"},
+            {"at": "2026-11-19T16:00:00+00:00", "equity": "10010"},
+        ])
+        self.assertEqual(kept["curve"]["points"][-1]["equity"], "10010")
 
     def test_a_loss_signs_both_the_usc_and_the_usd(self):
         from decimal import Decimal

@@ -467,6 +467,40 @@ def _strategy(legs, now):
     }
 
 
+def _history_curve(legs, now, start_balance, start_at):
+    """P/L realizado acumulado por hora de cierre, anclado al balance de inicio del ciclo.
+
+    Sin serie guardada (o con menos de dos puntos) esta es la curva. No inventa precios.
+    Si el flag no trae reloj, el punto cae a las 11:00 ET de la fecha que ya está en la clave.
+    """
+    if start_balance is None:
+        return None
+    chosen = []
+    for leg in legs:
+        if leg.get("pnl") is None or not _closed_leg(leg, now) or not _shown_in_history(leg):
+            continue
+        stamp = leg.get("exit_at") or leg.get("opened_at")
+        day = leg.get("day")
+        if stamp is None and day is not None:
+            stamp = datetime(day.year, day.month, day.day, 16, 0, tzinfo=timezone.utc)
+        if stamp is None or stamp > now:
+            continue
+        rank = 0 if leg.get("kind") == "london" else 1
+        chosen.append((stamp, rank, leg.get("key") or "", leg["pnl"]))
+    if not chosen:
+        return None
+    chosen.sort()
+    anchor = start_at if start_at is not None and start_at <= chosen[0][0] else chosen[0][0] - timedelta(minutes=1)
+    if anchor > now:
+        return None
+    equity = start_balance
+    points = [{"at": anchor.isoformat(), "equity": format(equity, "f")}]
+    for stamp, _rank, _key, pnl in chosen:
+        equity += pnl
+        points.append({"at": stamp.isoformat(), "equity": format(equity, "f")})
+    return points if len(points) >= 2 else None
+
+
 def _curve(curve, now, currency):
     points = []
     if not isinstance(curve, (list, tuple)):
@@ -873,6 +907,10 @@ def build_dashboard(*, env=None, now=None, flags=None, account_reader=None, book
         book = _book_from_marks(flags, now)
     if curve is None and isinstance(snap.get("curve"), (list, tuple)):
         curve = snap.get("curve")
+    if _curve(curve, now, currency).get("state") != "ok":
+        derived = _history_curve(legs, now, _money(brakes.get("brake_start")), _aware(flags.get("exness_launch_start") if isinstance(flags, dict) else None))
+        if derived:
+            curve = derived
     positions = _positions(book, legs, currency, now)
     for row in positions["rows"]:
         row.pop("_profit", None)
