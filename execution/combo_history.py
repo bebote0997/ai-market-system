@@ -701,15 +701,15 @@ def _date_es(day):
     return "%s %s" % (day.day, _MONTHS_ES[day.month - 1])
 
 
-def prior_history_note(flags, currency="USC"):
-    """One line for closes before HISTORY_START, or None when their P/L sums to 0."""
+def prior_history_closes(flags):
+    """Closes before HISTORY_START: (total P/L, ((day, symbol), ...))."""
     raw = flags.get(CLOSED_DEALS_FLAG) if isinstance(flags, dict) else None
     try:
         deals = json.loads(raw) if isinstance(raw, str) else (raw or [])
     except (TypeError, ValueError):
         deals = []
     if not isinstance(deals, list):
-        return None
+        return Decimal(0), ()
     grouped = {}
     for deal in deals:
         if not isinstance(deal, dict):
@@ -747,6 +747,18 @@ def prior_history_note(flags, currency="USC"):
             continue
         total += pnl
         parts.append((day, symbol))
+    return total, tuple(sorted(set(parts)))
+
+
+def prior_history_pnl(flags):
+    """Realized P/L of closes before HISTORY_START, or 0 when there are none."""
+    total, parts = prior_history_closes(flags)
+    return total if parts else Decimal(0)
+
+
+def prior_history_note(flags, currency="USC"):
+    """One line for closes before HISTORY_START, or None when their P/L sums to 0."""
+    total, parts = prior_history_closes(flags)
     if total == 0 or not parts:
         return None
     parts = sorted(set(parts))
