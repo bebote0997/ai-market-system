@@ -1,5 +1,6 @@
 """Pantallas Liquid Glass estáticas. Sin movimiento. Navegación, tema, filtros y CSV quedan en el navegador."""
 import base64
+import hashlib
 from decimal import Decimal
 from functools import lru_cache
 from html import escape
@@ -10,6 +11,13 @@ from ui.liquid.model import MISSING
 _ROOT = Path(__file__).resolve().parents[1] / "static" / "liquid"
 SECTIONS = ("Inicio", "Posiciones", "Historial", "Riesgo", "Sistema")
 RANGES = (("30", "30 Días"), ("90", "90 Días"), ("365", "1 Año"), ("all", "Todo"), ("custom", "Personalizado"))
+
+
+
+def asset_src(name):
+    """URL of a vendored script, with a content hash so a cached copy cannot outlive a change."""
+    digest = hashlib.sha256((_ROOT / name).read_bytes()).hexdigest()[:12]
+    return f"/liquid-assets/{name}?v={digest}"
 
 
 def _css():
@@ -511,7 +519,7 @@ def fragment(view, *, section="Inicio", theme=None):
         f'<div class="tools"><span class="{live}">{_e(view["safety_short"])}</span>'
         f'</div></header>{body}'
         f'<p class="hint">Solo lectura. Este panel no cierra operaciones ni cambia frenos.</p>'
-        f'</div></div><nav class="tabs" aria-label="Secciones">{nav}</nav><script>{_script()}</script><script src="/liquid-assets/lightweight-charts.js"></script><script src="/liquid-assets/chart.js"></script></div>'
+        f'</div></div><nav class="tabs" aria-label="Secciones">{nav}</nav><script>{_script()}</script><script src="{asset_src('lightweight-charts.js')}"></script><script src="{asset_src('chart.js')}"></script></div>'
     )
 
 

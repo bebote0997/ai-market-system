@@ -1,5 +1,7 @@
 # Fase 10 — Command Center / Display V2
 
+**Adenda 2026-11-28 (presentación, gráfica G3, no recertifica):** los scripts de `/liquid-assets/` se piden con un hash de contenido porque se cachean 24 h. No cambia el estado CERTIFIED, ni órdenes, ni frenos, ni Render env.
+
 **Adenda 2026-11-28 (presentación, fase G3, no recertifica):** rótulo de la gráfica según el horario real (vie 17:00 ET–dom 17:00 ET, con DST), eje en ET, y la barra de 414 px no cubre el TP. No cambia el estado CERTIFIED, ni órdenes, ni frenos, ni Render env.
 
 **Adenda 2026-11-28 (presentación, gráfica Posiciones, no recertifica):** la caché pide las velas M5 cerradas aunque el feed de ticks esté caído, y deja la hora de esa lectura. No cambia el estado CERTIFIED, ni órdenes, ni frenos, ni Render env.

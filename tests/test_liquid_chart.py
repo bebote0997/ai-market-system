@@ -2,6 +2,8 @@
 import asyncio
 import inspect
 import json
+import re
+import hashlib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import tempfile
@@ -375,8 +377,9 @@ class PositionsChartTests(unittest.TestCase):
         self.assertIn("Sin posición · 0.00 USC", html)
         self.assertIn("Powered by", html)
         self.assertIn("https://www.tradingview.com", html)
-        self.assertIn('src="/liquid-assets/lightweight-charts.js"', html)
-        self.assertIn('src="/liquid-assets/chart.js"', html)
+        from ui.liquid.render import asset_src
+        self.assertIn(f'src="{asset_src("lightweight-charts.js")}"', html)
+        self.assertIn(f'src="{asset_src("chart.js")}"', html)
         self.assertIn('data-chart-symbol="EURUSD"', html)
         self.assertNotIn("data-panel=\"Gráfica\"", html)
         self.assertEqual(html.count("<section data-panel="), 5)
@@ -389,8 +392,8 @@ class PositionsChartTests(unittest.TestCase):
             1,
         )
         cleaned = live_html_sanitize(planted)
-        self.assertIn('src="/liquid-assets/lightweight-charts.js"', cleaned)
-        self.assertIn('src="/liquid-assets/chart.js"', cleaned)
+        self.assertIn(f'src="{asset_src("lightweight-charts.js")}"', cleaned)
+        self.assertIn(f'src="{asset_src("chart.js")}"', cleaned)
         self.assertIn('class="live-chart"', cleaned)
         self.assertIn("<script", cleaned)
         self.assertIn('class="chart-canvas"', cleaned)
@@ -469,6 +472,73 @@ class AssetTests(unittest.TestCase):
         self.assertEqual(called, [])
         sent = asyncio.run(once("GET", "/positions"))
         self.assertEqual(called, ["/positions"])
+
+
+
+    def test_asset_get_accepts_a_version_query_and_ignores_its_value(self):
+        from ui.liquid.chart_feed import asset_answer
+        from ui.liquid.render import asset_src
+
+        src = asset_src("chart.js")
+        self.assertTrue(src.startswith("/liquid-assets/chart.js?v="))
+        status, body, typ = asset_answer("GET", src)
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", typ)
+        self.assertIn(b"createPriceLine", body)
+        plain = asset_answer("GET", "/liquid-assets/chart.js")
+        self.assertEqual(plain[0], 200)
+        self.assertEqual(plain[1], body)
+
+    def test_cached_chart_scripts_are_addressed_with_a_content_hash(self):
+        """A long-lived cache on /liquid-assets/*.js must not be paired with a bare URL.
+
+        Live G3 after 93d5526 served the new chart.js, but the panel still pointed
+        at /liquid-assets/chart.js with Cache-Control: public, max-age=86400, so a
+        reload of the page kept the previous day's script (old rótulo and UTC axis).
+        """
+        from ui.liquid.chart_feed import ChartFeedMiddleware
+        from ui.liquid.render import SECTIONS, asset_src, fragment
+        from test_liquid_glass import _view
+
+        html = fragment(_view(), section="Posiciones")
+        chart = asset_src("chart.js")
+        lib = asset_src("lightweight-charts.js")
+        self.assertRegex(chart, r"^/liquid-assets/chart\.js\?v=[a-f0-9]{12}$")
+        self.assertRegex(lib, r"^/liquid-assets/lightweight-charts\.js\?v=[a-f0-9]{12}$")
+        digest = hashlib.sha256((ROOT / "ui" / "static" / "liquid" / "chart.js").read_bytes()).hexdigest()[:12]
+        self.assertEqual(chart, f"/liquid-assets/chart.js?v={digest}")
+        self.assertIn(f'src="{chart}"', html)
+        self.assertIn(f'src="{lib}"', html)
+        self.assertIsNone(re.search(r'src="/liquid-assets/chart\.js(?:["\s>]|$)', html))
+        self.assertIsNone(re.search(r'src="/liquid-assets/lightweight-charts\.js(?:["\s>]|$)', html))
+        cleaned = live_html_sanitize(html)
+        self.assertIn(f'src="{chart}"', cleaned)
+        self.assertIn(f'src="{lib}"', cleaned)
+
+        sent = []
+
+        async def app(scope, receive, send):
+            raise AssertionError("dashboard must not handle chart assets")
+
+        async def once():
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            await ChartFeedMiddleware(app)(
+                {"type": "http", "method": "GET", "path": "/liquid-assets/chart.js", "headers": []},
+                receive,
+                send,
+            )
+
+        asyncio.run(once())
+        headers = {k.decode("ascii"): v.decode("ascii") for k, v in sent[0]["headers"]}
+        self.assertEqual(sent[0]["status"], 200)
+        self.assertEqual(headers["cache-control"], "public, max-age=86400")
+        self.assertGreaterEqual(SECTIONS.count("Posiciones"), 1)
+
 
 
 
